@@ -72,6 +72,10 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_actions_token ON actions(approval_token);
             CREATE INDEX IF NOT EXISTS idx_users_key     ON users(api_key);
         """)
+        try:
+            db.execute("ALTER TABLE actions ADD COLUMN consequence_level TEXT DEFAULT 'routine'")
+        except Exception:
+            pass  # column already exists
 
 init_db()
 print(f"[Mighty] RESEND_API_KEY={'set' if RESEND_API_KEY else 'NOT SET'}", flush=True)
@@ -134,11 +138,11 @@ def fmt_time(iso_str):
         return iso_str[:16]
 
 STATUS_BADGE = {
-    "logged":   ('<span class="badge badge-logged">Logged</span>', "#6b7280"),
-    "pending":  ('<span class="badge badge-pending">Pending ⏳</span>', "#d97706"),
-    "approved": ('<span class="badge badge-approved">Approved ✓</span>', "#16a34a"),
-    "denied":   ('<span class="badge badge-denied">Denied ✗</span>', "#dc2626"),
-    "timeout":  ('<span class="badge badge-timeout">Timed out</span>', "#9ca3af"),
+    "logged":   '<span class="badge badge-logged">Logged</span>',
+    "pending":  '<span class="badge badge-pending">Pending</span>',
+    "approved": '<span class="badge badge-approved">Authorized</span>',
+    "denied":   '<span class="badge badge-denied">Rejected</span>',
+    "timeout":  '<span class="badge badge-timeout">Timed out</span>',
 }
 
 
@@ -350,58 +354,68 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Dashboard — Mighty</title>
+<title>Mighty</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-body{display:flex;flex-direction:column;min-height:100vh}
-.topbar{background:#1a1a2e;color:#fff;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
-.topbar-logo{display:flex;align-items:center;gap:10px}
-.topbar-logo-mark{width:24px;height:24px;background:linear-gradient(135deg,#7c3aed,#4f46e5);border-radius:6px;display:flex;align-items:center;justify-content:center}
+body{display:flex;flex-direction:column;min-height:100vh;background:#f8f7f5}
+.topbar{background:#fff;border-bottom:1px solid #e5e3df;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.topbar-logo{display:flex;align-items:center;gap:8px}
+.topbar-logo-mark{width:26px;height:26px;background:linear-gradient(135deg,#7c3aed,#4f46e5);border-radius:7px;display:flex;align-items:center;justify-content:center}
 .topbar-logo-mark svg{width:14px;height:14px}
-.topbar-name{font-size:15px;font-weight:700;color:#fff}
-.topbar-email{font-size:12px;color:rgba(255,255,255,0.5)}
+.topbar-name{font-size:15px;font-weight:700;color:#1a1a1a}
 .topbar-right{display:flex;align-items:center;gap:16px}
-.btn-logout{font-size:12px;color:rgba(255,255,255,0.5);background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
-.btn-logout:hover{background:rgba(255,255,255,0.1);color:#fff}
-.main{flex:1;display:grid;grid-template-columns:340px 1fr;gap:0;max-width:1200px;width:100%;margin:0 auto;padding:28px 24px;gap:24px}
+.topbar-email{font-size:12px;color:#aaa}
+.btn-logout{font-size:12px;color:#888;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
+.btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
+.main{flex:1;display:grid;grid-template-columns:280px 1fr;gap:24px;max-width:1100px;width:100%;margin:0 auto;padding:28px 24px}
 @media(max-width:768px){.main{grid-template-columns:1fr}}
-.sidebar{display:flex;flex-direction:column;gap:16px}
+.sidebar{display:flex;flex-direction:column;gap:14px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:20px}
-.card-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#aaa;margin-bottom:14px}
-.api-key-row{display:flex;align-items:center;gap:8px}
-.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:#1a1a1a;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.btn-copy{font-size:11px;font-weight:600;padding:6px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;white-space:nowrap;transition:background 0.12s}
-.btn-copy:hover{background:#ede9fe}
-.prompt-box{font-family:ui-monospace,monospace;font-size:11px;color:#444;background:#f8f7f5;border:1px solid #e5e3df;border-radius:8px;padding:12px;white-space:pre-wrap;line-height:1.6;max-height:220px;overflow-y:auto;margin-bottom:10px}
-.btn-copy-prompt{font-size:12px;font-weight:600;padding:8px 14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;width:100%;transition:background 0.12s}
+.setup-heading{font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:6px}
+.setup-sub{font-size:13px;color:#888;line-height:1.5;margin-bottom:16px}
+.btn-copy-prompt{width:100%;padding:11px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;cursor:pointer}
 .btn-copy-prompt:hover{background:#6d28d9}
-.feed{display:flex;flex-direction:column;gap:12px}
-.pending-section{margin-bottom:8px}
-.pending-title{font-size:12px;font-weight:700;color:#d97706;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px;display:flex;align-items:center;gap:6px}
-.pending-dot{width:7px;height:7px;border-radius:50%;background:#f59e0b;animation:pulse 1.5s infinite}
+details{margin-top:12px}
+summary{font-size:12px;color:#aaa;cursor:pointer;user-select:none;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"\\25B8 "}
+details[open] summary::before{content:"\\25BE "}
+.api-key-wrap{margin-top:10px;display:flex;align-items:center;gap:8px}
+.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#888;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:7px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-copy-key{font-size:11px;font-weight:600;padding:5px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;white-space:nowrap;cursor:pointer;transition:background 0.12s}
+.btn-copy-key:hover{background:#ede9fe}
+.prompt-hidden{display:none}
+.feed-title{font-size:17px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
+.feed-sub{font-size:13px;color:#aaa;margin-bottom:20px}
+.feed{display:flex;flex-direction:column;gap:10px}
+.pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#d97706;display:flex;align-items:center;gap:6px;margin-bottom:10px}
+.pending-dot{width:6px;height:6px;border-radius:50%;background:#f59e0b;animation:pulse 1.5s infinite;flex-shrink:0}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
-.action-card{background:#fff;border:1px solid #e5e3df;border-radius:10px;overflow:hidden;transition:box-shadow 0.12s}
-.action-card:hover{box-shadow:0 2px 12px rgba(0,0,0,0.08)}
-.action-card.is-pending{border-color:#fbbf24;box-shadow:0 0 0 1px #fbbf24}
-.action-header{padding:14px 16px 10px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.action-card{background:#fff;border:1px solid #e5e3df;border-radius:10px;overflow:hidden}
+.action-card:hover{box-shadow:0 2px 10px rgba(0,0,0,0.06)}
+.action-card.is-pending{border-color:#fbbf24}
+.action-top{padding:14px 16px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.action-id{font-size:10px;font-family:ui-monospace,monospace;color:#ccc;letter-spacing:0.5px;margin-bottom:4px}
 .action-label{font-size:14px;font-weight:600;color:#1a1a1a;line-height:1.4}
-.action-type{font-size:11px;color:#aaa;margin-top:2px;font-family:ui-monospace,monospace}
-.action-meta{text-align:right;flex-shrink:0}
-.action-time{font-size:11px;color:#bbb;margin-top:4px}
-.action-fields{padding:0 16px 12px;display:flex;flex-direction:column;gap:6px}
-.field-row{display:flex;gap:8px;font-size:12px}
-.field-key{color:#aaa;font-weight:600;min-width:80px;flex-shrink:0}
+.action-badges{display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+.action-time{font-size:11px;color:#ccc;margin-top:4px;text-align:right}
+.action-fields{padding:10px 16px 14px;display:flex;flex-direction:column;gap:5px}
+.field-row{display:flex;gap:10px;font-size:12px}
+.field-key{color:#bbb;font-weight:600;min-width:80px;flex-shrink:0}
 .field-val{color:#555;line-height:1.4;word-break:break-word}
-.action-decision{padding:12px 16px;border-top:1px solid #f0ede8;display:flex;gap:8px}
-.btn-approve{flex:1;padding:9px;background:#16a34a;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:600;transition:background 0.12s}
-.btn-approve:hover{background:#15803d}
-.btn-deny{flex:1;padding:9px;background:#fff;color:#dc2626;border:1.5px solid #fecaca;border-radius:7px;font-size:13px;font-weight:600;transition:all 0.12s}
-.btn-deny:hover{background:#fef2f2}
-.empty-feed{text-align:center;padding:60px 20px;color:#bbb;font-size:14px}
-.empty-feed-icon{font-size:32px;margin-bottom:12px;opacity:0.4}
-.content-title{font-size:16px;font-weight:700;margin-bottom:4px}
-.content-sub{font-size:13px;color:#888;margin-bottom:20px}
+.action-buttons{padding:12px 16px;border-top:1px solid #f0ede8;display:flex;gap:8px}
+.btn-authorize{flex:1;padding:9px;background:#16a34a;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s}
+.btn-authorize:hover{background:#15803d}
+.btn-reject{flex:1;padding:9px;background:#fff;color:#dc2626;border:1.5px solid #fecaca;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s}
+.btn-reject:hover{background:#fef2f2}
+.clevel-sensitive{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:#eff6ff;color:#2563eb;letter-spacing:0.3px}
+.clevel-consequential{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:#fffbeb;color:#d97706;letter-spacing:0.3px}
+.clevel-critical{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:#fef2f2;color:#dc2626;letter-spacing:0.3px}
+.empty-state{text-align:center;padding:60px 20px;color:#ccc}
+.empty-state-icon{width:40px;height:40px;background:#f3f0ff;border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}
+.empty-state-title{font-size:15px;font-weight:600;color:#888;margin-bottom:6px}
+.empty-state-sub{font-size:13px;color:#bbb;line-height:1.6}
 </style>
 </head>
 <body>
@@ -419,36 +433,25 @@ body{display:flex;flex-direction:column;min-height:100vh}
 </div>
 
 <div class="main">
-  <!-- Sidebar -->
   <div class="sidebar">
     <div class="card">
-      <div class="card-title">Your API Key</div>
-      <div class="api-key-row">
-        <div class="api-key-val" id="apiKeyVal">{api_key}</div>
-        <button class="btn-copy" onclick="copyKey()">Copy</button>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title">System Prompt</div>
-      <div class="prompt-box" id="promptBox">{prompt}</div>
-      <button class="btn-copy-prompt" onclick="copyPrompt()">Copy system prompt</button>
-      <div style="font-size:11px;color:#bbb;margin-top:10px;line-height:1.6">Paste this into your Claude Project's custom instructions. Your agent will log actions and request your approval before taking consequential steps.</div>
-    </div>
-    <div class="card" style="background:#faf5ff;border-color:#e9d5ff">
-      <div class="card-title" style="color:#7c3aed">How it works</div>
-      <div style="font-size:12px;color:#555;line-height:1.7">
-        1. Agent logs routine actions silently<br>
-        2. Before anything consequential, it requests your approval<br>
-        3. A card appears here — approve or deny from your phone or desktop<br>
-        4. Agent waits up to 5 min for your decision
-      </div>
+      <div class="setup-heading">Connect your agent</div>
+      <div class="setup-sub">Paste this into your Claude project's custom instructions to get started.</div>
+      <button class="btn-copy-prompt" onclick="copyPrompt(this)">Copy system prompt</button>
+      <textarea class="prompt-hidden" id="promptBox">{prompt}</textarea>
+      <details>
+        <summary>Advanced</summary>
+        <div class="api-key-wrap">
+          <div class="api-key-val" id="apiKeyVal">{api_key}</div>
+          <button class="btn-copy-key" onclick="copyKey(this)">Copy</button>
+        </div>
+      </details>
     </div>
   </div>
 
-  <!-- Main feed -->
   <div>
-    <div class="content-title">Authorization Log</div>
-    <div class="content-sub">All actions your agents have logged or requested approval for</div>
+    <div class="feed-title">Authorization Log</div>
+    <div class="feed-sub">Actions your agents have taken or requested your approval for</div>
     <div class="feed" id="feed">
       {feed_html}
     </div>
@@ -456,15 +459,15 @@ body{display:flex;flex-direction:column;min-height:100vh}
 </div>
 
 <script>
-function copyKey() {
-  navigator.clipboard.writeText(document.getElementById('apiKeyVal').textContent.trim());
-  event.target.textContent = 'Copied!';
-  setTimeout(() => event.target.textContent = 'Copy', 1500);
+function copyPrompt(btn) {
+  navigator.clipboard.writeText(document.getElementById('promptBox').value);
+  btn.textContent = 'Copied!';
+  setTimeout(() => btn.textContent = 'Copy system prompt', 1800);
 }
-function copyPrompt() {
-  navigator.clipboard.writeText(document.getElementById('promptBox').textContent);
-  event.target.textContent = 'Copied!';
-  setTimeout(() => event.target.textContent = 'Copy system prompt', 1500);
+function copyKey(btn) {
+  navigator.clipboard.writeText(document.getElementById('apiKeyVal').textContent.trim());
+  btn.textContent = 'Copied!';
+  setTimeout(() => btn.textContent = 'Copy', 1800);
 }
 function decide(actionId, decision) {
   fetch('/dashboard/decide/' + actionId, {
@@ -473,7 +476,6 @@ function decide(actionId, decision) {
     body: JSON.stringify({decision})
   }).then(() => location.reload());
 }
-// Auto-refresh every 4s so pending cards appear without manual reload
 var hasPending = document.querySelectorAll('.is-pending').length > 0;
 if (hasPending) {
   setInterval(() => location.reload(), 4000);
@@ -620,7 +622,13 @@ def build_prompt(api_key, url):
 
 def build_feed_html(actions, base):
     if not actions:
-        return '<div class="empty-feed"><div class="empty-feed-icon">✦</div>No actions yet.<br>Paste the system prompt into Claude to get started.</div>'
+        return '''<div class="empty-state">
+  <div class="empty-state-icon">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2L3 6v8l7 4 7-4V6l-7-4z" stroke="#7c3aed" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 2v12M3 6l7 4 7-4" stroke="#7c3aed" stroke-width="1.5" stroke-linejoin="round"/></svg>
+  </div>
+  <div class="empty-state-title">No actions yet</div>
+  <div class="empty-state-sub">Copy the system prompt from the sidebar<br>and paste it into your Claude project to get started.</div>
+</div>'''
     html = []
     pending = [a for a in actions if a["status"] == "pending"]
     rest    = [a for a in actions if a["status"] != "pending"]
@@ -635,7 +643,16 @@ def build_feed_html(actions, base):
     return "\n".join(html)
 
 def action_card_html(a, base, show_buttons):
-    badge, _ = STATUS_BADGE.get(a["status"], ('', ''))
+    badge = STATUS_BADGE.get(a["status"], "")
+    # Consequence level badge (only show if not routine)
+    clevel = ""
+    try:
+        lvl = a["consequence_level"] if "consequence_level" in a.keys() else "routine"
+    except Exception:
+        lvl = "routine"
+    if lvl and lvl != "routine":
+        clevel = f'<span class="clevel-{lvl}">{lvl.title()}</span>'
+    # Fields
     fields_html = ""
     if a["fields"]:
         try:
@@ -646,21 +663,26 @@ def action_card_html(a, base, show_buttons):
         except Exception:
             pass
     pending_cls = " is-pending" if a["status"] == "pending" else ""
-    approve_url = f'{base}/approve/{a["approval_token"]}' if a["approval_token"] else ""
+    auth_id = f'AUTH-{a["id"][:6].upper()}'
     btns = ""
     if show_buttons:
-        btns = f'''<div class="action-decision">
-          <button class="btn-approve" onclick="decide('{a["id"]}','approve')">Approve</button>
-          <button class="btn-deny"    onclick="decide('{a["id"]}','deny')">Deny</button>
+        btns = f'''<div class="action-buttons">
+          <button class="btn-authorize" onclick="decide('{a["id"]}','approve')">Authorize</button>
+          <button class="btn-reject"    onclick="decide('{a["id"]}','deny')">Reject</button>
         </div>'''
-        if approve_url:
-            btns += f'<div style="padding:0 16px 12px;font-size:11px;color:#bbb">Or open <a href="{approve_url}" target="_blank" style="color:#7c3aed">approval link</a> on your phone</div>'
     return f'''<div class="action-card{pending_cls}">
-      <div class="action-header">
-        <div><div class="action-label">{a["label"]}</div><div class="action-type">{a["action_type"]}</div></div>
-        <div class="action-meta">{badge}<div class="action-time">{fmt_time(a["created_at"])}</div></div>
+      <div class="action-top">
+        <div>
+          <div class="action-id">{auth_id}</div>
+          <div class="action-label">{a["label"]}</div>
+        </div>
+        <div class="action-badges">
+          {clevel}
+          {badge}
+          <div class="action-time">{fmt_time(a["created_at"])}</div>
+        </div>
       </div>
-      {'<div class="action-fields">' + fields_html + '</div>' if fields_html else ''}
+      {'<div class="action-fields">' + fields_html + '</div>' if fields_html else '<div style="height:14px"></div>'}
       {btns}
     </div>'''
 
@@ -740,8 +762,8 @@ def approve_page(token):
       <div class="card-type">{row["action_type"]}</div>
       {'<div class="card-fields">' + fields_html + '</div>' if fields_html else ''}
       <div class="card-actions">
-        <button class="btn-approve" onclick="submit('approve')">Approve</button>
-        <button class="btn-deny"    onclick="submit('deny')">Deny</button>
+        <button class="btn-approve" onclick="submit('approve')">Authorize</button>
+        <button class="btn-deny"    onclick="submit('deny')">Reject</button>
       </div>
       <div class="timeout-note">This request will time out in 5 minutes if not decided.</div>
       <script>
@@ -749,7 +771,7 @@ def approve_page(token):
         fetch('/approve/{token}', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{decision:dec}})}})
           .then(r=>r.json()).then(d=>{{
             document.querySelector('.card').innerHTML =
-              '<div class="outcome ' + d.status + '">' + (d.status==='approved'?'✓ Approved':'✗ Denied') + '</div>';
+              '<div class="outcome ' + d.status + '">' + (d.status==='approved'?'Authorized':'Rejected') + '</div>';
           }});
       }}
       </script>"""
@@ -781,16 +803,17 @@ def api_record():
     user, data = api_user()
     if not user:
         return jsonify({"error": "Invalid or missing api_key"}), 401
-    action_type = data.get("action_type", "other")
-    label       = data.get("label", "Action")
-    fields      = data.get("fields")
-    outcome     = data.get("outcome", "completed")
-    action_id   = secrets.token_hex(16)
+    action_type       = data.get("action_type", "other")
+    label             = data.get("label", "Action")
+    fields            = data.get("fields")
+    outcome           = data.get("outcome", "completed")
+    consequence_level = data.get("consequence_level", "routine")
+    action_id         = secrets.token_hex(16)
     get_db().execute(
-        "INSERT INTO actions (id,user_id,action_type,label,fields,status,outcome,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO actions (id,user_id,action_type,label,fields,status,outcome,consequence_level,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
         (action_id, user["id"], action_type, label,
-         json.dumps(fields) if fields else None, "logged", outcome, iso()),
+         json.dumps(fields) if fields else None, "logged", outcome, consequence_level, iso()),
     )
     get_db().commit()
     return jsonify({"status": "logged", "record_id": action_id})
@@ -801,19 +824,20 @@ def api_authorize():
     user, data = api_user()
     if not user:
         return jsonify({"error": "Invalid or missing api_key"}), 401
-    action_type    = data.get("action_type", "other")
-    label          = data.get("label", "Action")
-    fields         = data.get("fields")
-    action_id      = secrets.token_hex(16)
-    approval_token = secrets.token_urlsafe(24)
-    expires_at     = (utcnow() + timedelta(seconds=TIMEOUT_SEC)).isoformat()
+    action_type       = data.get("action_type", "other")
+    label             = data.get("label", "Action")
+    fields            = data.get("fields")
+    consequence_level = data.get("consequence_level", "routine")
+    action_id         = secrets.token_hex(16)
+    approval_token    = secrets.token_urlsafe(24)
+    expires_at        = (utcnow() + timedelta(seconds=TIMEOUT_SEC)).isoformat()
     get_db().execute(
         "INSERT INTO actions "
-        "(id,user_id,action_type,label,fields,status,approval_token,created_at,expires_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "(id,user_id,action_type,label,fields,status,approval_token,consequence_level,created_at,expires_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (action_id, user["id"], action_type, label,
          json.dumps(fields) if fields else None,
-         "pending", approval_token, iso(), expires_at),
+         "pending", approval_token, consequence_level, iso(), expires_at),
     )
     get_db().commit()
     url          = base_url()
