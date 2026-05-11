@@ -15,9 +15,8 @@ Env vars (all optional):
   PORT          — Port to listen on (default: 5004)
 """
 
-import os, json, secrets, hashlib, sqlite3, threading, smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import os, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error
+
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, session, redirect, g, make_response
@@ -28,8 +27,7 @@ app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 DATABASE        = os.environ.get("DATABASE_PATH", "mighty.db")
 PORT            = int(os.environ.get("PORT", 5004))
 TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
-GMAIL_USER = os.environ.get("GMAIL_USER", "")
-GMAIL_PASS = os.environ.get("GMAIL_PASS", "")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -76,7 +74,7 @@ def init_db():
         """)
 
 init_db()
-print(f"[Mighty] GMAIL_USER={'set' if GMAIL_USER else 'NOT SET'}, GMAIL_PASS={'set' if GMAIL_PASS else 'NOT SET'}", flush=True)
+print(f"[Mighty] RESEND_API_KEY={'set' if RESEND_API_KEY else 'NOT SET'}", flush=True)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -147,9 +145,9 @@ STATUS_BADGE = {
 # ── Email notifications ───────────────────────────────────────────────────────
 
 def send_authorization_email(to_email, label, action_type, fields, approval_url):
-    """Send an authorization request email via Gmail SMTP. Runs in a background thread."""
-    if not GMAIL_USER or not GMAIL_PASS:
-        print("[Mighty] Email skipped — GMAIL_USER or GMAIL_PASS not set", flush=True)
+    """Send an authorization request email via Resend API. Runs in a background thread."""
+    if not RESEND_API_KEY:
+        print("[Mighty] Email skipped — RESEND_API_KEY not set", flush=True)
         return
 
     # Build fields rows
@@ -189,22 +187,32 @@ def send_authorization_email(to_email, label, action_type, fields, approval_url)
 </body>
 </html>"""
 
+    payload = json.dumps({
+        "from":    "Mighty <onboarding@resend.dev>",
+        "to":      [to_email],
+        "subject": f"Action needed: {label}",
+        "html":    html,
+    }).encode()
+
     def _send():
         try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"Action needed: {label}"
-            msg["From"]    = f"Mighty <{GMAIL_USER}>"
-            msg["To"]      = to_email
-            msg.attach(MIMEText(html, "html"))
-            with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
-                smtp.ehlo()
-                smtp.starttls()
-                smtp.login(GMAIL_USER, GMAIL_PASS)
-                smtp.sendmail(GMAIL_USER, to_email, msg.as_string())
+            req = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type":  "application/json",
+                },
+            )
+            urllib.request.urlopen(req, timeout=10)
+            print("[Mighty] Email sent successfully", flush=True)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()
+            print(f"[Mighty] Email send failed: HTTP {e.code} — {body}", flush=True)
         except Exception as e:
             print(f"[Mighty] Email send failed: {e}", flush=True)
 
-    _send()  # synchronous for debugging
+    threading.Thread(target=_send, daemon=True).start()
 
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
