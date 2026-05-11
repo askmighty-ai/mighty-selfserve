@@ -204,7 +204,7 @@ def send_authorization_email(to_email, label, action_type, fields, approval_url)
         except Exception as e:
             print(f"[Mighty] Email send failed: {e}", flush=True)
 
-    threading.Thread(target=_send, daemon=True).start()
+    _send()  # synchronous for debugging
 
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
