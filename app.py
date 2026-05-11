@@ -76,6 +76,7 @@ def init_db():
         """)
 
 init_db()
+print(f"[Mighty] GMAIL_USER={'set' if GMAIL_USER else 'NOT SET'}, GMAIL_PASS={'set' if GMAIL_PASS else 'NOT SET'}", flush=True)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -148,6 +149,7 @@ STATUS_BADGE = {
 def send_authorization_email(to_email, label, action_type, fields, approval_url):
     """Send an authorization request email via Gmail SMTP. Runs in a background thread."""
     if not GMAIL_USER or not GMAIL_PASS:
+        print("[Mighty] Email skipped — GMAIL_USER or GMAIL_PASS not set", flush=True)
         return
 
     # Build fields rows
