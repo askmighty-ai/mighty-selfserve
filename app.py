@@ -15,7 +15,7 @@ Env vars (all optional):
   PORT          — Port to listen on (default: 5004)
 """
 
-import os, json, secrets, hashlib, sqlite3
+import os, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, session, redirect, g, make_response
@@ -23,9 +23,11 @@ from flask import Flask, request, jsonify, session, redirect, g, make_response
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
-DATABASE    = os.environ.get("DATABASE_PATH", "mighty.db")
-PORT        = int(os.environ.get("PORT", 5004))
-TIMEOUT_SEC = 300  # pending authorization expires after 5 minutes
+DATABASE        = os.environ.get("DATABASE_PATH", "mighty.db")
+PORT            = int(os.environ.get("PORT", 5004))
+TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
+RESEND_API_KEY  = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM     = os.environ.get("RESEND_FROM", "Mighty <notifications@resend.dev>")
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -137,6 +139,100 @@ STATUS_BADGE = {
     "denied":   ('<span class="badge badge-denied">Denied ✗</span>', "#dc2626"),
     "timeout":  ('<span class="badge badge-timeout">Timed out</span>', "#9ca3af"),
 }
+
+
+# ── Email notifications ───────────────────────────────────────────────────────
+
+def send_authorization_email(to_email, label, action_type, fields, approval_url):
+    """Send an authorization request email via Resend. Runs in a background thread."""
+    if not RESEND_API_KEY:
+        return
+
+    # Build fields HTML
+    fields_html = ""
+    if fields:
+        try:
+            for k, v in (fields if isinstance(fields, list) else json.loads(fields)):
+                fields_html += f"""
+                <tr>
+                  <td style="padding:6px 0;color:#888;font-size:13px;width:120px;vertical-align:top">{k}</td>
+                  <td style="padding:6px 0;color:#1a1a1a;font-size:13px">{v}</td>
+                </tr>"""
+        except Exception:
+            pass
+
+    fields_section = f"""
+        <table style="width:100%;border-collapse:collapse;margin:16px 0">
+          {fields_html}
+        </table>""" if fields_html else ""
+
+    html = f"""<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#f8f7f5;font-family:'Inter',sans-serif">
+  <div style="max-width:480px;margin:40px auto;padding:0 16px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:24px">
+      <div style="width:28px;height:28px;background:linear-gradient(135deg,#7c3aed,#4f46e5);border-radius:7px"></div>
+      <span style="font-size:16px;font-weight:700;color:#1a1a1a">Mighty</span>
+    </div>
+    <div style="background:#fff;border:1px solid #e5e3df;border-radius:16px;overflow:hidden">
+      <div style="background:#fffbeb;border-bottom:1px solid #fde68a;padding:12px 20px">
+        <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#92400e">
+          ⏳ Authorization Required
+        </span>
+      </div>
+      <div style="padding:20px">
+        <div style="font-size:18px;font-weight:700;color:#1a1a1a;line-height:1.4;margin-bottom:4px">
+          {label}
+        </div>
+        <div style="font-size:12px;color:#aaa;font-family:monospace;margin-bottom:8px">
+          {action_type}
+        </div>
+        {fields_section}
+        <div style="font-size:12px;color:#888;margin-bottom:20px">
+          Your AI agent is waiting. This request expires in 5 minutes.
+        </div>
+        <div style="display:flex;gap:10px">
+          <a href="{approval_url}" style="flex:1;display:block;padding:13px;background:#16a34a;color:#fff;text-decoration:none;border-radius:10px;font-size:15px;font-weight:700;text-align:center">
+            Approve
+          </a>
+          <a href="{approval_url}" style="flex:1;display:block;padding:13px;background:#fff;color:#dc2626;text-decoration:none;border:2px solid #fecaca;border-radius:10px;font-size:15px;font-weight:700;text-align:center">
+            Deny
+          </a>
+        </div>
+        <div style="text-align:center;margin-top:12px;font-size:11px;color:#bbb">
+          Both buttons open the same page — choose there.
+        </div>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:16px;font-size:11px;color:#bbb">
+      Sent by Mighty · <a href="{approval_url.split('/approve/')[0]}/dashboard" style="color:#bbb">Open dashboard</a>
+    </div>
+  </div>
+</body>
+</html>"""
+
+    payload = json.dumps({
+        "from":    RESEND_FROM,
+        "to":      [to_email],
+        "subject": f"Action needed: {label}",
+        "html":    html,
+    }).encode()
+
+    def _send():
+        try:
+            req = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type":  "application/json",
+                },
+            )
+            urllib.request.urlopen(req, timeout=10)
+        except Exception:
+            pass  # never let email failure break the API response
+
+    threading.Thread(target=_send, daemon=True).start()
 
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
@@ -740,11 +836,20 @@ def api_authorize():
          "pending", approval_token, iso(), expires_at),
     )
     get_db().commit()
-    url = base_url()
+    url          = base_url()
+    approval_url = f"{url}/approve/{approval_token}"
+    # Fire-and-forget email notification
+    send_authorization_email(
+        to_email=user["email"],
+        label=label,
+        action_type=action_type,
+        fields=fields,
+        approval_url=approval_url,
+    )
     return jsonify({
         "status":       "pending",
         "request_id":   action_id,
-        "approval_url": f"{url}/approve/{approval_token}",
+        "approval_url": approval_url,
         "poll_url":     f"{url}/api/status/{action_id}",
         "expires_in":   TIMEOUT_SEC,
     })
