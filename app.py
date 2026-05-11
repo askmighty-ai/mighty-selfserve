@@ -27,7 +27,7 @@ DATABASE        = os.environ.get("DATABASE_PATH", "mighty.db")
 PORT            = int(os.environ.get("PORT", 5004))
 TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
 RESEND_API_KEY  = os.environ.get("RESEND_API_KEY", "")
-RESEND_FROM     = os.environ.get("RESEND_FROM", "Mighty <notifications@resend.dev>")
+RESEND_FROM     = os.environ.get("RESEND_FROM", "Mighty <onboarding@resend.dev>")
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -229,8 +229,8 @@ def send_authorization_email(to_email, label, action_type, fields, approval_url)
                 },
             )
             urllib.request.urlopen(req, timeout=10)
-        except Exception:
-            pass  # never let email failure break the API response
+        except Exception as e:
+            print(f"[Mighty] Email send failed: {e}", flush=True)
 
     threading.Thread(target=_send, daemon=True).start()
 
