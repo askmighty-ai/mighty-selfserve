@@ -27,7 +27,8 @@ app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 DATABASE        = os.environ.get("DATABASE_PATH", "mighty.db")
 PORT            = int(os.environ.get("PORT", 5004))
 TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+POSTMARK_API_KEY = os.environ.get("POSTMARK_API_KEY", "")
+POSTMARK_FROM    = os.environ.get("POSTMARK_FROM", "Mighty <noreply@mighty.ai>")
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -76,9 +77,17 @@ def init_db():
             db.execute("ALTER TABLE actions ADD COLUMN consequence_level TEXT DEFAULT 'routine'")
         except Exception:
             pass  # column already exists
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN notify_email INTEGER DEFAULT 1")
+        except Exception:
+            pass  # column already exists
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN notify_ntfy INTEGER DEFAULT 1")
+        except Exception:
+            pass  # column already exists
 
 init_db()
-print(f"[Mighty] RESEND_API_KEY={'set' if RESEND_API_KEY else 'NOT SET'}", flush=True)
+print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -149,9 +158,9 @@ STATUS_BADGE = {
 # ── Email notifications ───────────────────────────────────────────────────────
 
 def send_authorization_email(to_email, label, action_type, fields, approval_url):
-    """Send an authorization request email via Resend API. Runs in a background thread."""
-    if not RESEND_API_KEY:
-        print("[Mighty] Email skipped — RESEND_API_KEY not set", flush=True)
+    """Send an authorization request email via Postmark API. Runs in a background thread."""
+    if not POSTMARK_API_KEY:
+        print("[Mighty] Email skipped — POSTMARK_API_KEY not set", flush=True)
         return
 
     # Build fields rows
@@ -192,20 +201,21 @@ def send_authorization_email(to_email, label, action_type, fields, approval_url)
 </html>"""
 
     payload = json.dumps({
-        "from":    "Mighty <onboarding@resend.dev>",
-        "to":      [to_email],
-        "subject": f"Action needed: {label}",
-        "html":    html,
+        "From":     POSTMARK_FROM,
+        "To":       to_email,
+        "Subject":  f"Action needed: {label}",
+        "HtmlBody": html,
     }).encode()
 
     def _send():
         try:
             req = urllib.request.Request(
-                "https://api.resend.com/emails",
+                "https://api.postmarkapp.com/email",
                 data=payload,
                 headers={
-                    "Authorization": f"Bearer {RESEND_API_KEY}",
-                    "Content-Type":  "application/json",
+                    "X-Postmark-Server-Token": POSTMARK_API_KEY,
+                    "Content-Type":            "application/json",
+                    "Accept":                  "application/json",
                 },
             )
             urllib.request.urlopen(req, timeout=10)
@@ -469,6 +479,9 @@ details[open] summary::before{content:"\\25BE "}
     </div>
     <span class="topbar-name">Mighty</span>
   </div>
+  <div id="pending-badge" style="display:{pending_display};background:#fef3c7;border:1px solid #fde68a;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#92400e">
+    ⏳ {pending_count} waiting
+  </div>
   <div class="topbar-right">
     <span class="topbar-email">{email}</span>
     <form method="POST" action="/logout" style="margin:0"><button class="btn-logout" type="submit">Sign out</button></form>
@@ -543,6 +556,26 @@ details[open] summary::before{content:"\\25BE "}
   </div>
 </div>
 
+<div style="max-width:1140px;width:100%;margin:0 auto;padding:0 24px 32px">
+  <div class="card" style="max-width:420px">
+    <div class="setup-heading">Notifications</div>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444;font-weight:400">
+        <input type="checkbox" id="notif-email" {notify_email} style="width:16px;height:16px;accent-color:#7c3aed">
+        Email me when action needed
+      </label>
+      <div>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444;font-weight:400">
+          <input type="checkbox" id="notif-ntfy" {notify_ntfy} style="width:16px;height:16px;accent-color:#7c3aed">
+          Push via ntfy app
+        </label>
+        <div style="margin-top:5px;margin-left:26px;font-size:11px;color:#aaa">Your topic: <span style="color:#7c3aed;font-family:ui-monospace,monospace">{ntfy_topic}</span></div>
+      </div>
+    </div>
+    <button id="notif-save" class="btn-action" onclick="saveNotificationSettings()">Save</button>
+  </div>
+</div>
+
 <script>
 function switchTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -572,6 +605,19 @@ function decide(actionId, decision) {
     body: JSON.stringify({decision})
   }).then(() => location.reload());
 }
+function saveNotificationSettings() {
+  var email = document.getElementById('notif-email').checked;
+  var ntfy  = document.getElementById('notif-ntfy').checked;
+  fetch('/dashboard/notifications', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({email, ntfy})
+  }).then(() => {
+    var btn = document.getElementById('notif-save');
+    btn.textContent = 'Saved!';
+    setTimeout(() => btn.textContent = 'Save', 1800);
+  });
+}
 var hasPending = document.querySelectorAll('.is-pending').length > 0;
 if (hasPending) {
   setInterval(() => location.reload(), 4000);
@@ -596,7 +642,7 @@ APPROVE_HTML = """<!DOCTYPE html>
 <style>
 """ + BASE_CSS + """
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;background:#f8f7f5}
-.wrap{width:100%;max-width:440px}
+.wrap{width:100%;max-width:480px}
 .brand{display:flex;align-items:center;gap:8px;margin-bottom:20px;justify-content:center}
 .brand-mark{width:28px;height:28px;background:linear-gradient(135deg,#7c3aed,#4f46e5);border-radius:7px;display:flex;align-items:center;justify-content:center}
 .brand-mark svg{width:16px;height:16px}
@@ -612,10 +658,10 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 .field-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#bbb;margin-bottom:2px}
 .field-value{font-size:13px;color:#1a1a1a;line-height:1.5;word-break:break-word}
 .card-actions{padding:16px 20px;display:flex;gap:10px}
-.btn-approve{flex:1;padding:13px;background:#16a34a;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;transition:background 0.12s}
+.btn-approve{flex:1;padding:16px;background:#16a34a;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:700;transition:background 0.12s;touch-action:manipulation}
 .btn-approve:hover{background:#15803d}
 .btn-approve:active{transform:scale(0.98)}
-.btn-deny{flex:1;padding:13px;background:#fff;color:#dc2626;border:2px solid #fecaca;border-radius:10px;font-size:15px;font-weight:700;transition:all 0.12s}
+.btn-deny{flex:1;padding:16px;background:#fff;color:#dc2626;border:2px solid #fecaca;border-radius:10px;font-size:16px;font-weight:700;transition:all 0.12s;touch-action:manipulation}
 .btn-deny:hover{background:#fef2f2}
 .btn-deny:active{transform:scale(0.98)}
 .outcome{text-align:center;padding:28px 20px;font-size:15px;font-weight:600}
@@ -803,13 +849,24 @@ def dashboard():
     mcp_config = build_mcp_config(user["api_key"], url)
     feed       = build_feed_html(acts, url)
     topic      = ntfy_topic(user["api_key"])
+    pending_count   = db.execute(
+        "SELECT COUNT(*) FROM actions WHERE user_id=? AND status='pending'",
+        (session["user_id"],),
+    ).fetchone()[0]
+    pending_display = "flex" if pending_count > 0 else "none"
+    notify_email_checked = "checked" if user["notify_email"] else ""
+    notify_ntfy_checked  = "checked" if user["notify_ntfy"] else ""
     return (DASHBOARD_HTML
-            .replace("{email}",      user["email"])
-            .replace("{api_key}",    user["api_key"])
-            .replace("{prompt}",     prompt)
-            .replace("{mcp_config}", mcp_config)
-            .replace("{ntfy_topic}", topic)
-            .replace("{feed_html}",  feed))
+            .replace("{email}",         user["email"])
+            .replace("{api_key}",       user["api_key"])
+            .replace("{prompt}",        prompt)
+            .replace("{mcp_config}",    mcp_config)
+            .replace("{ntfy_topic}",    topic)
+            .replace("{feed_html}",     feed)
+            .replace("{pending_count}", str(pending_count))
+            .replace("{pending_display}", pending_display)
+            .replace("{notify_email}",  notify_email_checked)
+            .replace("{notify_ntfy}",   notify_ntfy_checked))
 
 @app.route("/download/mighty_mcp.py")
 @require_login
@@ -863,6 +920,20 @@ def has_pending():
     ).fetchone()
     return jsonify({"pending": bool(row)})
 
+@app.route("/dashboard/notifications", methods=["POST"])
+@require_login
+def update_notifications():
+    data = request.get_json(force=True)
+    db = get_db()
+    db.execute(
+        "UPDATE users SET notify_email=?, notify_ntfy=? WHERE id=?",
+        (1 if data.get("email") else 0,
+         1 if data.get("ntfy") else 0,
+         session["user_id"])
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
 
 # ── Token-based approval page (no login required) ─────────────────────────────
 
@@ -888,6 +959,7 @@ def approve_page(token):
                 fields_html += f'<div style="margin-bottom:12px"><div class="field-label">{k}</div><div class="field-value">{val}</div></div>'
         except Exception:
             pass
+    expires_at_val = row["expires_at"] or ""
     body = f"""
       <div class="card-header"><div class="card-header-dot"></div><span class="card-header-text">Authorization Required</span></div>
       <div class="card-headline">{row["label"]}</div>
@@ -898,6 +970,7 @@ def approve_page(token):
         <button class="btn-deny"    onclick="submit('deny')">Reject</button>
       </div>
       <div class="timeout-note">This request will time out in 5 minutes if not decided.</div>
+      <div id="expiry-timer" style="text-align:center;padding:0 20px 14px;font-size:12px;color:#aaa"></div>
       <script>
       function submit(dec) {{
         fetch('/approve/{token}', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{decision:dec}})}})
@@ -906,6 +979,23 @@ def approve_page(token):
               '<div class="outcome ' + d.status + '">' + (d.status==='approved'?'Authorized':'Rejected') + '</div>';
           }});
       }}
+      (function() {{
+        var expiresAt = new Date('{expires_at_val}');
+        function updateTimer() {{
+          var now = new Date();
+          var diffMs = expiresAt - now;
+          if (diffMs <= 0) {{
+            document.getElementById('expiry-timer').textContent = 'Expired';
+            return;
+          }}
+          var mins = Math.floor(diffMs / 60000);
+          var secs = Math.floor((diffMs % 60000) / 1000);
+          document.getElementById('expiry-timer').textContent =
+            'Expires in ' + mins + 'm ' + secs + 's';
+          setTimeout(updateTimer, 1000);
+        }}
+        updateTimer();
+      }})();
       </script>"""
     return APPROVE_HTML.replace("{body}", body)
 
@@ -974,21 +1064,23 @@ def api_authorize():
     get_db().commit()
     url          = base_url()
     approval_url = f"{url}/approve/{approval_token}"
-    # Push notification via ntfy.sh
-    send_ntfy_notification(
-        api_key=user["api_key"],
-        label=label,
-        action_type=action_type,
-        approval_url=approval_url,
-    )
-    # Email notification via Resend (fallback, may fail from Railway IPs)
-    send_authorization_email(
-        to_email=user["email"],
-        label=label,
-        action_type=action_type,
-        fields=fields,
-        approval_url=approval_url,
-    )
+    # Push notification via ntfy.sh (if user has enabled it)
+    if user["notify_ntfy"]:
+        send_ntfy_notification(
+            api_key=user["api_key"],
+            label=label,
+            action_type=action_type,
+            approval_url=approval_url,
+        )
+    # Email notification via Postmark (if user has enabled it)
+    if user["notify_email"]:
+        send_authorization_email(
+            to_email=user["email"],
+            label=label,
+            action_type=action_type,
+            fields=fields,
+            approval_url=approval_url,
+        )
     return jsonify({
         "status":       "pending",
         "request_id":   action_id,
