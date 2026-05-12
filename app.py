@@ -29,6 +29,7 @@ PORT            = int(os.environ.get("PORT", 5004))
 TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
 POSTMARK_API_KEY = os.environ.get("POSTMARK_API_KEY", "")
 POSTMARK_FROM    = os.environ.get("POSTMARK_FROM", "Mighty <noreply@mighty.ai>")
+NOTIFY_EMAIL_OVERRIDE = os.environ.get("NOTIFY_EMAIL", "")  # override recipient for sandbox testing
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -1075,7 +1076,7 @@ def api_authorize():
     # Email notification via Postmark (if user has enabled it)
     if user["notify_email"]:
         send_authorization_email(
-            to_email=user["email"],
+            to_email=NOTIFY_EMAIL_OVERRIDE or user["email"],
             label=label,
             action_type=action_type,
             fields=fields,
