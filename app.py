@@ -970,6 +970,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 
   </div>
 </div>
+<script type="application/json" id="__mighty_onboarding_data__">MIGHTY_ONBOARDING_DATA</script>
 <script>
 var currentStep = 0;
 var selectedAgent = null;
@@ -1000,10 +1001,11 @@ function selectAgent(agent) {
   renderSetup(agent);
 }
 
-var MCP_CONFIG = {mcp_config_json};
-var SYSTEM_PROMPT = {system_prompt_json};
-var API_KEY = {api_key_json};
-var BASE_URL = {base_url_json};
+var _d = JSON.parse(document.getElementById('__mighty_onboarding_data__').textContent);
+var MCP_CONFIG   = _d.mcp_config;
+var SYSTEM_PROMPT = _d.system_prompt;
+var API_KEY      = _d.api_key;
+var BASE_URL     = _d.base_url;
 
 function renderSetup(agent) {
   var title = document.getElementById('setup-title');
@@ -1459,23 +1461,23 @@ def onboarding():
     user = get_db().execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
     url  = base_url()
     import json as _json
-    mcp_config_json   = _json.dumps(build_mcp_config(user["api_key"], url))
-    system_prompt_json = _json.dumps(build_prompt(user["api_key"], url))
-    api_key_json      = _json.dumps(user["api_key"])
-    base_url_json     = _json.dumps(url)
     test_curl = (
         f'curl -X POST {url}/api/authorize \\\n'
         f'  -H "Content-Type: application/json" \\\n'
         f'  -d \'{{"api_key":"{user["api_key"]}","action_type":"test","label":"Connection test"}}\''
     )
-    ntfy_url = f"https://ntfy.sh/{ntfy_topic(user['api_key'])}"
+    ntfy_url  = f"https://ntfy.sh/{ntfy_topic(user['api_key'])}"
+    # Inject data safely via a JSON script element — avoids JS syntax issues
+    onboarding_data = _json.dumps({
+        "mcp_config":    build_mcp_config(user["api_key"], url),
+        "system_prompt": build_prompt(user["api_key"], url),
+        "api_key":       user["api_key"],
+        "base_url":      url,
+    })
     return (ONBOARDING_HTML
-            .replace("{mcp_config_json}",    mcp_config_json)
-            .replace("{system_prompt_json}", system_prompt_json)
-            .replace("{api_key_json}",       api_key_json)
-            .replace("{base_url_json}",      base_url_json)
-            .replace("{test_curl}",          test_curl)
-            .replace("{ntfy_url}",           ntfy_url))
+            .replace("MIGHTY_ONBOARDING_DATA", onboarding_data)
+            .replace("{test_curl}",            test_curl)
+            .replace("{ntfy_url}",             ntfy_url))
 
 @app.route("/onboarding/complete", methods=["POST"])
 @require_login
