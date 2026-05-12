@@ -410,9 +410,11 @@ body{display:flex;flex-direction:column;min-height:100vh;background:#f8f7f5}
 .tab-content{display:none}.tab-content.active{display:block}
 .step{display:flex;gap:10px;margin-bottom:14px}
 .step-num{width:20px;height:20px;border-radius:50%;background:#f3f0ff;color:#7c3aed;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.step-body{min-width:0;flex:1}
 .step-title{font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px}
 .step-hint{font-size:11px;color:#aaa;line-height:1.5;margin-top:4px}
-.code-box{font-family:ui-monospace,monospace;font-size:10px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;margin:6px 0}
+.code-box{font-family:ui-monospace,monospace;font-size:10px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;margin:6px 0;max-width:100%;box-sizing:border-box}
+.path-box{font-family:ui-monospace,monospace;font-size:10px;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;word-break:break-all;line-height:1.5;margin:6px 0}
 .btn-action{width:100%;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;transition:background 0.12s;cursor:pointer;margin-bottom:4px}
 .btn-action:hover{background:#6d28d9}
 .btn-secondary{width:100%;padding:9px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:8px;font-size:13px;font-weight:600;transition:background 0.12s;cursor:pointer;text-decoration:none;display:block;text-align:center}
@@ -486,7 +488,7 @@ details[open] summary::before{content:"\\25BE "}
       <div id="tab-mcp" class="tab-content active">
         <div class="step">
           <div class="step-num">1</div>
-          <div>
+          <div class="step-body">
             <div class="step-title">Download the MCP server</div>
             <div class="step-hint" style="margin-bottom:8px">A small Python file — no install required.</div>
             <a href="/download/mighty_mcp.py" class="btn-secondary">⬇ Download mighty_mcp.py</a>
@@ -495,10 +497,10 @@ details[open] summary::before{content:"\\25BE "}
         </div>
         <div class="step">
           <div class="step-num">2</div>
-          <div>
+          <div class="step-body">
             <div class="step-title">Add to Claude Desktop config</div>
             <div class="step-hint" style="margin-bottom:6px">Open this file and paste the config below:</div>
-            <div class="code-box" style="color:#7c3aed;word-break:break-all;white-space:pre-wrap;margin-bottom:6px">~/Library/Application Support/Claude/&#8203;claude_desktop_config.json</div>
+            <div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>
             <div class="code-box" id="mcpConfigBox">{mcp_config}</div>
             <button class="btn-action" onclick="copyMcpConfig(this)">Copy config</button>
             <div class="step-hint">Replace YOUR_USERNAME with your Mac username, then restart Claude Desktop.</div>
@@ -506,10 +508,10 @@ details[open] summary::before{content:"\\25BE "}
         </div>
         <div class="step">
           <div class="step-num">3</div>
-          <div>
+          <div class="step-body">
             <div class="step-title">Get notified on your phone</div>
             <div class="step-hint" style="margin-bottom:8px">Install the free <strong>ntfy</strong> app, then subscribe to your personal topic:</div>
-            <div class="code-box" style="color:#7c3aed;word-break:break-all;white-space:pre-wrap;margin-bottom:6px">https://ntfy.sh/{ntfy_topic}</div>
+            <div class="path-box">https://ntfy.sh/{ntfy_topic}</div>
             <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="btn-secondary" style="margin-bottom:6px">Open in browser to test</a>
             <div class="step-hint">You'll get a push notification with an approve/deny link every time your agent needs your permission.</div>
           </div>
