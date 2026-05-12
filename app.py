@@ -73,6 +73,18 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_actions_user  ON actions(user_id);
             CREATE INDEX IF NOT EXISTS idx_actions_token ON actions(approval_token);
             CREATE INDEX IF NOT EXISTS idx_users_key     ON users(api_key);
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL,
+                subscription TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
         """)
         try:
             db.execute("ALTER TABLE actions ADD COLUMN consequence_level TEXT DEFAULT 'routine'")
@@ -86,9 +98,37 @@ def init_db():
             db.execute("ALTER TABLE users ADD COLUMN notify_ntfy INTEGER DEFAULT 1")
         except Exception:
             pass  # column already exists
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN notify_push INTEGER DEFAULT 1")
+        except Exception:
+            pass  # column already exists
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
+
+
+# ── VAPID key management ──────────────────────────────────────────────────────
+
+def get_vapid_keys():
+    with sqlite3.connect(DATABASE) as db:
+        db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        row = db.execute("SELECT value FROM settings WHERE key='vapid_private'").fetchone()
+        if row:
+            priv = db.execute("SELECT value FROM settings WHERE key='vapid_private'").fetchone()[0]
+            pub  = db.execute("SELECT value FROM settings WHERE key='vapid_public'").fetchone()[0]
+            return priv, pub
+        from py_vapid import Vapid
+        v = Vapid()
+        v.generate_keys()
+        priv = v.private_pem().decode()
+        pub  = v.public_key_urlsafe
+        db.execute("INSERT OR REPLACE INTO settings VALUES ('vapid_private', ?)", (priv,))
+        db.execute("INSERT OR REPLACE INTO settings VALUES ('vapid_public', ?)", (pub,))
+        db.commit()
+        return priv, pub
+
+VAPID_PRIVATE, VAPID_PUBLIC = get_vapid_keys()
+print(f"[Mighty] VAPID public key: {VAPID_PUBLIC[:20]}...", flush=True)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -257,6 +297,48 @@ def send_ntfy_notification(api_key, label, action_type, approval_url):
             print(f"[Mighty] ntfy notification sent to topic {topic}", flush=True)
         except Exception as e:
             print(f"[Mighty] ntfy notification failed: {e}", flush=True)
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
+def send_web_push(user_id, title, body, url, action_id=None):
+    """Send a Web Push notification to all subscriptions for a user."""
+    rows = get_db().execute(
+        "SELECT subscription FROM push_subscriptions WHERE user_id=?", (user_id,)
+    ).fetchall()
+    if not rows:
+        print(f"[Mighty] No push subscriptions for user {user_id[:8]}", flush=True)
+        return
+
+    actions = []
+    if action_id:
+        actions = [{"action": "open", "title": "Review"}]
+
+    payload = json.dumps({
+        "title":   title,
+        "body":    body,
+        "url":     url,
+        "tag":     f"mighty-{action_id[:8] if action_id else 'notif'}",
+        "actions": actions,
+    })
+
+    def _send():
+        from pywebpush import webpush, WebPushException
+        for row in rows:
+            try:
+                sub = json.loads(row["subscription"])
+                webpush(
+                    subscription_info=sub,
+                    data=payload,
+                    vapid_private_key=VAPID_PRIVATE,
+                    vapid_claims={"sub": "mailto:noreply@mighty.ai"},
+                    content_encoding="aes128gcm",
+                )
+                print(f"[Mighty] Web push sent to user {user_id[:8]}", flush=True)
+            except WebPushException as e:
+                print(f"[Mighty] Web push failed: {e}", flush=True)
+            except Exception as e:
+                print(f"[Mighty] Web push error: {e}", flush=True)
 
     threading.Thread(target=_send, daemon=True).start()
 
@@ -572,8 +654,16 @@ details[open] summary::before{content:"\\25BE "}
         </label>
         <div style="margin-top:5px;margin-left:26px;font-size:11px;color:#aaa">Your topic: <span style="color:#7c3aed;font-family:ui-monospace,monospace">{ntfy_topic}</span></div>
       </div>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+        <input type="checkbox" id="notif-push" {notify_push} style="width:16px;height:16px;accent-color:#7c3aed">
+        <span style="font-size:13px;color:#1a1a1a">Browser &amp; phone push notifications</span>
+      </label>
     </div>
     <button id="notif-save" class="btn-action" onclick="saveNotificationSettings()">Save</button>
+    <button id="push-enable-btn" class="btn-secondary" style="margin-top:10px" onclick="enablePush()">
+      Enable push notifications
+    </button>
+    <div id="push-status" style="font-size:11px;color:#aaa;margin-top:6px"></div>
   </div>
 </div>
 
@@ -609,10 +699,11 @@ function decide(actionId, decision) {
 function saveNotificationSettings() {
   var email = document.getElementById('notif-email').checked;
   var ntfy  = document.getElementById('notif-ntfy').checked;
+  var push  = document.getElementById('notif-push').checked;
   fetch('/dashboard/notifications', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({email, ntfy})
+    body: JSON.stringify({email, ntfy, push})
   }).then(() => {
     var btn = document.getElementById('notif-save');
     btn.textContent = 'Saved!';
@@ -628,6 +719,56 @@ if (hasPending) {
       if (d.pending) location.reload();
     });
   }, 4000);
+}
+
+// Web Push
+var swReg = null;
+if ('serviceWorker' in navigator && 'PushManager' in window) {
+  navigator.serviceWorker.register('/sw.js').then(function(reg) {
+    swReg = reg;
+    reg.pushManager.getSubscription().then(function(sub) {
+      var btn = document.getElementById('push-enable-btn');
+      var status = document.getElementById('push-status');
+      if (sub) {
+        if (btn) btn.textContent = 'Push enabled ✓';
+        if (status) status.textContent = 'You will receive push notifications in this browser.';
+      }
+    });
+  });
+}
+
+function enablePush() {
+  if (!swReg) { alert('Your browser does not support push notifications.'); return; }
+  fetch('/api/push/vapid-public-key').then(r => r.json()).then(function(d) {
+    var appKey = d.key;
+    var converted = urlB64ToUint8Array(appKey);
+    swReg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: converted
+    }).then(function(sub) {
+      fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({subscription: sub.toJSON()})
+      }).then(function() {
+        var btn = document.getElementById('push-enable-btn');
+        var status = document.getElementById('push-status');
+        if (btn) btn.textContent = 'Push enabled ✓';
+        if (status) status.textContent = 'You will receive push notifications in this browser.';
+      });
+    }).catch(function(e) {
+      document.getElementById('push-status').textContent = 'Could not enable: ' + e.message;
+    });
+  });
+}
+
+function urlB64ToUint8Array(base64String) {
+  var padding = '='.repeat((4 - base64String.length % 4) % 4);
+  var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  var rawData = atob(base64);
+  var outputArray = new Uint8Array(rawData.length);
+  for (var i = 0; i < rawData.length; i++) { outputArray[i] = rawData.charCodeAt(i); }
+  return outputArray;
 }
 </script>
 </body>
@@ -857,6 +998,7 @@ def dashboard():
     pending_display = "flex" if pending_count > 0 else "none"
     notify_email_checked = "checked" if user["notify_email"] else ""
     notify_ntfy_checked  = "checked" if user["notify_ntfy"] else ""
+    notify_push_checked  = "checked" if user["notify_push"] else ""
     return (DASHBOARD_HTML
             .replace("{email}",         user["email"])
             .replace("{api_key}",       user["api_key"])
@@ -867,7 +1009,8 @@ def dashboard():
             .replace("{pending_count}", str(pending_count))
             .replace("{pending_display}", pending_display)
             .replace("{notify_email}",  notify_email_checked)
-            .replace("{notify_ntfy}",   notify_ntfy_checked))
+            .replace("{notify_ntfy}",   notify_ntfy_checked)
+            .replace("{notify_push}",   notify_push_checked))
 
 @app.route("/download/mighty_mcp.py")
 @require_login
@@ -927,9 +1070,10 @@ def update_notifications():
     data = request.get_json(force=True)
     db = get_db()
     db.execute(
-        "UPDATE users SET notify_email=?, notify_ntfy=? WHERE id=?",
+        "UPDATE users SET notify_email=?, notify_ntfy=?, notify_push=? WHERE id=?",
         (1 if data.get("email") else 0,
          1 if data.get("ntfy") else 0,
+         1 if data.get("push") else 0,
          session["user_id"])
     )
     db.commit()
@@ -1082,6 +1226,15 @@ def api_authorize():
             fields=fields,
             approval_url=approval_url,
         )
+    # Web Push notification
+    if user["notify_push"]:
+        send_web_push(
+            user_id=user["id"],
+            title=f"Action needed: {action_type}",
+            body=label,
+            url=approval_url,
+            action_id=action_id,
+        )
     return jsonify({
         "status":       "pending",
         "request_id":   action_id,
@@ -1105,6 +1258,82 @@ def api_status(action_id):
     if not row:
         return jsonify({"error": "not found"}), 404
     return jsonify({"status": row["status"], "decided_at": row["decided_at"]})
+
+
+# ── Service worker ────────────────────────────────────────────────────────────
+
+SW_JS = r"""
+self.addEventListener('push', function(e) {
+  var data = e.data ? e.data.json() : {};
+  var title   = data.title   || 'Action needed';
+  var body    = data.body    || 'Your agent needs permission.';
+  var url     = data.url     || '/dashboard';
+  var actions = data.actions || [];
+  e.waitUntil(
+    self.registration.showNotification(title, {
+      body:    body,
+      icon:    '/static/icon.png',
+      badge:   '/static/icon.png',
+      tag:     data.tag || 'mighty-auth',
+      renotify: true,
+      requireInteraction: true,
+      actions: actions,
+      data:    { url: url }
+    })
+  );
+});
+
+self.addEventListener('notificationclick', function(e) {
+  e.notification.close();
+  var url = e.notification.data.url;
+  if (e.action === 'deny') {
+    url = url.replace('/approve/', '/deny/');
+    fetch(url, {method:'POST'}).catch(function(){});
+    return;
+  }
+  e.waitUntil(clients.openWindow(e.notification.data.url));
+});
+"""
+
+@app.route("/sw.js")
+def service_worker():
+    resp = make_response(SW_JS)
+    resp.headers["Content-Type"] = "application/javascript"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+
+# ── Push subscription endpoints ───────────────────────────────────────────────
+
+@app.route("/api/push/subscribe", methods=["POST"])
+@require_login
+def push_subscribe():
+    data = request.get_json(force=True)
+    sub  = data.get("subscription")
+    if not sub:
+        return jsonify({"error": "missing subscription"}), 400
+    sub_str = json.dumps(sub)
+    db = get_db()
+    # Remove old subscriptions for this user first (one per user for simplicity)
+    db.execute("DELETE FROM push_subscriptions WHERE user_id=?", (session["user_id"],))
+    sub_id = secrets.token_hex(8)
+    db.execute(
+        "INSERT INTO push_subscriptions (id,user_id,subscription,created_at) VALUES (?,?,?,?)",
+        (sub_id, session["user_id"], sub_str, iso())
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+@app.route("/api/push/unsubscribe", methods=["POST"])
+@require_login
+def push_unsubscribe():
+    get_db().execute("DELETE FROM push_subscriptions WHERE user_id=?", (session["user_id"],))
+    get_db().commit()
+    return jsonify({"ok": True})
+
+@app.route("/api/push/vapid-public-key")
+def vapid_public_key():
+    return jsonify({"key": VAPID_PUBLIC})
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
