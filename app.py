@@ -1757,6 +1757,21 @@ def health():
     return jsonify({"ok": True})
 
 
+# ── Dev reset (protected by secret key) ───────────────────────────────────────
+
+@app.route("/admin/reset-all-users", methods=["POST"])
+def admin_reset():
+    secret = request.headers.get("X-Reset-Secret", "")
+    if not secret or secret != os.environ.get("RESET_SECRET", ""):
+        return jsonify({"error": "forbidden"}), 403
+    db = get_db()
+    db.execute("DELETE FROM push_subscriptions")
+    db.execute("DELETE FROM actions")
+    db.execute("DELETE FROM users")
+    db.commit()
+    return jsonify({"ok": True, "message": "All users and actions deleted"})
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
