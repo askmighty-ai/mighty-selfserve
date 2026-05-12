@@ -317,7 +317,7 @@ def send_ntfy_notification(api_key, label, action_type, approval_url):
 def send_web_push(user_id, title, body, url, action_id=None):
     """Send a Web Push notification to all subscriptions for a user."""
     rows = get_db().execute(
-        "SELECT subscription FROM push_subscriptions WHERE user_id=?", (user_id,)
+        "SELECT id, subscription FROM push_subscriptions WHERE user_id=?", (user_id,)
     ).fetchall()
     if not rows:
         print(f"[Mighty] No push subscriptions for user {user_id[:8]}", flush=True)
@@ -335,11 +335,15 @@ def send_web_push(user_id, title, body, url, action_id=None):
         "actions": actions,
     })
 
+    sub_ids  = [r["id"] for r in rows]
+    sub_data = [(r["id"], json.loads(r["subscription"])) for r in rows]
+
     def _send():
         from pywebpush import webpush, WebPushException
-        for row in rows:
+        import sqlite3 as _sqlite3
+        stale_ids = []
+        for sub_id, sub in sub_data:
             try:
-                sub = json.loads(row["subscription"])
                 webpush(
                     subscription_info=sub,
                     data=payload,
@@ -349,9 +353,20 @@ def send_web_push(user_id, title, body, url, action_id=None):
                 )
                 print(f"[Mighty] Web push sent to user {user_id[:8]}", flush=True)
             except WebPushException as e:
-                print(f"[Mighty] Web push failed: {e}", flush=True)
+                resp = e.response
+                status = resp.status_code if resp is not None else 0
+                print(f"[Mighty] Web push failed ({status}): {e}", flush=True)
+                if status in (404, 410, 403):
+                    # Subscription expired or invalid — remove it
+                    stale_ids.append(sub_id)
             except Exception as e:
                 print(f"[Mighty] Web push error: {e}", flush=True)
+        if stale_ids:
+            with _sqlite3.connect(DATABASE) as db:
+                db.executemany("DELETE FROM push_subscriptions WHERE id=?",
+                               [(sid,) for sid in stale_ids])
+                db.commit()
+            print(f"[Mighty] Removed {len(stale_ids)} stale subscription(s)", flush=True)
 
     threading.Thread(target=_send, daemon=True).start()
 
@@ -752,25 +767,30 @@ if ('serviceWorker' in navigator && 'PushManager' in window) {
 
 function enablePush() {
   if (!swReg) { alert('Your browser does not support push notifications.'); return; }
+  var status = document.getElementById('push-status');
+  if (status) status.textContent = 'Setting up...';
   fetch('/api/push/vapid-public-key').then(r => r.json()).then(function(d) {
-    var appKey = d.key;
-    var converted = urlB64ToUint8Array(appKey);
-    swReg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: converted
+    var converted = urlB64ToUint8Array(d.key);
+    // Always unsubscribe first so we get a fresh subscription tied to the current VAPID key
+    swReg.pushManager.getSubscription().then(function(existing) {
+      return existing ? existing.unsubscribe() : Promise.resolve(true);
+    }).then(function() {
+      return swReg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: converted
+      });
     }).then(function(sub) {
-      fetch('/api/push/subscribe', {
+      return fetch('/api/push/subscribe', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({subscription: sub.toJSON()})
-      }).then(function() {
-        var btn = document.getElementById('push-enable-btn');
-        var status = document.getElementById('push-status');
-        if (btn) btn.textContent = 'Push enabled ✓';
-        if (status) status.textContent = 'You will receive push notifications in this browser.';
       });
+    }).then(function() {
+      var btn = document.getElementById('push-enable-btn');
+      if (btn) btn.textContent = 'Push enabled ✓';
+      if (status) status.textContent = 'You will receive push notifications in this browser.';
     }).catch(function(e) {
-      document.getElementById('push-status').textContent = 'Could not enable: ' + e.message;
+      if (status) status.textContent = 'Could not enable: ' + e.message;
     });
   });
 }
