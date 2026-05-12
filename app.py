@@ -102,6 +102,10 @@ def init_db():
             db.execute("ALTER TABLE users ADD COLUMN notify_push INTEGER DEFAULT 1")
         except Exception:
             pass  # column already exists
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN onboarded INTEGER DEFAULT 0")
+        except Exception:
+            pass
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -600,6 +604,7 @@ details[open] summary::before{content:"\\25BE "}
 </div>
 
 <div class="main">
+  {onboarding_banner}
   <div class="sidebar">
     <div class="card">
       <div class="setup-heading">Connect your agent</div>
@@ -807,6 +812,332 @@ function urlB64ToUint8Array(base64String) {
 </body>
 </html>"""
 
+ONBOARDING_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Get started — Mighty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
+.wrap{width:100%;max-width:520px}
+.logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:32px}
+.logo-mark{width:32px;height:32px;background:linear-gradient(135deg,#7c3aed,#4f46e5);border-radius:8px;display:flex;align-items:center;justify-content:center}
+.logo-mark svg{width:18px;height:18px}
+.logo-name{font-size:18px;font-weight:700}
+.progress{display:flex;gap:6px;justify-content:center;margin-bottom:28px}
+.progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s}
+.progress-dot.active{background:#7c3aed}
+.progress-dot.done{background:#c4b5fd}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:32px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
+.step{display:none}.step.active{display:block}
+.step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#a78bfa;margin-bottom:8px}
+.step-title{font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:8px;line-height:1.3}
+.step-sub{font-size:14px;color:#888;line-height:1.6;margin-bottom:24px}
+.agent-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:24px}
+.agent-card{border:2px solid #e5e3df;border-radius:12px;padding:16px 12px;text-align:center;cursor:pointer;transition:all 0.15s}
+.agent-card:hover{border-color:#c4b5fd;background:#faf5ff}
+.agent-card.selected{border-color:#7c3aed;background:#f5f3ff}
+.agent-icon{font-size:24px;margin-bottom:8px}
+.agent-name{font-size:13px;font-weight:600;color:#1a1a1a}
+.agent-desc{font-size:11px;color:#aaa;margin-top:3px;line-height:1.4}
+.setup-steps{display:flex;flex-direction:column;gap:16px;margin-bottom:24px}
+.setup-step{display:flex;gap:12px}
+.setup-step-num{width:24px;height:24px;border-radius:50%;background:#f3f0ff;color:#7c3aed;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.setup-step-body{flex:1;min-width:0}
+.setup-step-title{font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px}
+.setup-step-hint{font-size:12px;color:#aaa;line-height:1.5}
+.code-box{font-family:ui-monospace,monospace;font-size:10px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;margin:6px 0;max-width:100%}
+.path-box{font-family:ui-monospace,monospace;font-size:10px;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:8px 10px;word-break:break-all;margin:6px 0}
+.btn{width:100%;padding:12px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.12s}
+.btn-primary{background:#7c3aed;color:#fff}.btn-primary:hover{background:#6d28d9}
+.btn-secondary{background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff}.btn-secondary:hover{background:#ede9fe}
+.btn-copy{font-size:11px;font-weight:600;padding:5px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer;transition:background 0.12s;white-space:nowrap}
+.btn-copy:hover{background:#ede9fe}
+.btn-row{display:flex;gap:10px;margin-top:8px}
+.test-waiting{text-align:center;padding:24px;background:#f8f7f5;border-radius:12px;margin-bottom:20px}
+.test-spinner{width:36px;height:36px;border:3px solid #e5e3df;border-top-color:#7c3aed;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.test-connected{text-align:center;padding:24px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;margin-bottom:20px;display:none}
+.test-connected-icon{font-size:32px;margin-bottom:8px}
+.push-status{font-size:12px;color:#aaa;margin-top:8px;min-height:18px}
+.skip{text-align:center;margin-top:16px}
+.skip a{font-size:12px;color:#bbb;text-decoration:none}.skip a:hover{color:#888}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo">
+    <div class="logo-mark"><svg viewBox="0 0 20 20" fill="none"><path d="M10 2L3 6v8l7 4 7-4V6l-7-4z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 2v12M3 6l7 4 7-4" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg></div>
+    <span class="logo-name">Mighty</span>
+  </div>
+  <div class="progress">
+    <div class="progress-dot active" id="dot-0"></div>
+    <div class="progress-dot" id="dot-1"></div>
+    <div class="progress-dot" id="dot-2"></div>
+    <div class="progress-dot" id="dot-3"></div>
+    <div class="progress-dot" id="dot-4"></div>
+  </div>
+  <div class="card">
+
+    <!-- Step 0: Welcome -->
+    <div class="step active" id="step-0">
+      <div class="step-label">Welcome</div>
+      <div class="step-title">You're in control of your AI agents.</div>
+      <div class="step-sub">Mighty sits between your agent and the real world. Before it sends an email, makes a purchase, or changes a file — it asks you first. You approve or reject in seconds, from anywhere.</div>
+      <button class="btn btn-primary" onclick="goTo(1)">Get started →</button>
+      <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
+    </div>
+
+    <!-- Step 1: Pick agent -->
+    <div class="step" id="step-1">
+      <div class="step-label">Step 1 of 4</div>
+      <div class="step-title">What are you using Mighty with?</div>
+      <div class="step-sub">Pick your agent — we'll give you the exact setup steps.</div>
+      <div class="agent-grid">
+        <div class="agent-card" onclick="selectAgent('claude')">
+          <div class="agent-icon">⚡</div>
+          <div class="agent-name">Claude Desktop</div>
+          <div class="agent-desc">MCP plugin</div>
+        </div>
+        <div class="agent-card" onclick="selectAgent('chatgpt')">
+          <div class="agent-icon">🤖</div>
+          <div class="agent-name">ChatGPT</div>
+          <div class="agent-desc">System prompt</div>
+        </div>
+        <div class="agent-card" onclick="selectAgent('custom')">
+          <div class="agent-icon">🛠</div>
+          <div class="agent-name">Custom agent</div>
+          <div class="agent-desc">API / code</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btn-next-agent" onclick="goTo(2)" disabled style="opacity:0.4">Continue →</button>
+      <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
+    </div>
+
+    <!-- Step 2: Setup -->
+    <div class="step" id="step-2">
+      <div class="step-label">Step 2 of 4</div>
+      <div class="step-title" id="setup-title">Connect your agent</div>
+      <div class="step-sub" id="setup-sub"></div>
+      <div id="setup-content"></div>
+      <button class="btn btn-primary" onclick="goTo(3)">I've done this →</button>
+      <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
+    </div>
+
+    <!-- Step 3: Test -->
+    <div class="step" id="step-3">
+      <div class="step-label">Step 3 of 4</div>
+      <div class="step-title">Let's make sure it works</div>
+      <div class="step-sub" id="test-sub">Ask your agent to do something that needs approval — like send an email. Mighty will pause it and ask you first. We'll detect it automatically.</div>
+      <div class="test-waiting" id="test-waiting">
+        <div class="test-spinner"></div>
+        <div style="font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px">Waiting for your agent…</div>
+        <div style="font-size:12px;color:#aaa">Or run the test command below in your terminal</div>
+      </div>
+      <div class="test-connected" id="test-connected">
+        <div class="test-connected-icon">✅</div>
+        <div style="font-size:15px;font-weight:700;color:#16a34a;margin-bottom:4px">Connected!</div>
+        <div style="font-size:13px;color:#555">Mighty received a request from your agent.</div>
+      </div>
+      <div class="setup-step-body" style="margin-bottom:16px">
+        <div style="font-size:12px;color:#aaa;margin-bottom:4px">Or test manually from Terminal:</div>
+        <div style="display:flex;align-items:flex-start;gap:8px">
+          <div class="code-box" id="test-curl" style="flex:1;font-size:9px">{test_curl}</div>
+          <button class="btn-copy" onclick="copyCurl(this)" style="margin-top:6px">Copy</button>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btn-test-continue" onclick="goTo(4)">Continue →</button>
+      <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
+    </div>
+
+    <!-- Step 4: Notifications -->
+    <div class="step" id="step-4">
+      <div class="step-label">Step 4 of 4</div>
+      <div class="step-title">Get notified instantly</div>
+      <div class="step-sub">When your agent needs approval, you'll get a push notification — even when this tab is closed. Click Allow when your browser asks.</div>
+      <button class="btn btn-primary" id="push-btn" onclick="enablePush()" style="margin-bottom:12px">Enable push notifications</button>
+      <div class="push-status" id="push-status"></div>
+      <div style="margin-top:20px;padding-top:20px;border-top:1px solid #f0ede8">
+        <div style="font-size:12px;color:#aaa;margin-bottom:8px">Also want notifications on your phone? Install the free <strong style="color:#555">ntfy</strong> app and subscribe to:</div>
+        <div class="path-box">{ntfy_url}</div>
+      </div>
+      <button class="btn btn-primary" onclick="finish()" style="margin-top:20px">Go to my dashboard →</button>
+      <div class="skip"><a href="/onboarding/skip">Skip, go to dashboard</a></div>
+    </div>
+
+  </div>
+</div>
+<script>
+var currentStep = 0;
+var selectedAgent = null;
+var swReg = null;
+var testPollTimer = null;
+
+if ('serviceWorker' in navigator && 'PushManager' in window) {
+  navigator.serviceWorker.register('/sw.js').then(function(reg) { swReg = reg; });
+}
+
+function goTo(n) {
+  document.getElementById('step-' + currentStep).classList.remove('active');
+  document.getElementById('dot-' + currentStep).classList.remove('active');
+  document.getElementById('dot-' + currentStep).classList.add('done');
+  currentStep = n;
+  document.getElementById('step-' + n).classList.add('active');
+  document.getElementById('dot-' + n).classList.add('active');
+  if (n === 3) startTestPoll();
+  if (n !== 3 && testPollTimer) { clearInterval(testPollTimer); testPollTimer = null; }
+}
+
+function selectAgent(agent) {
+  selectedAgent = agent;
+  document.querySelectorAll('.agent-card').forEach(function(c) { c.classList.remove('selected'); });
+  event.currentTarget.classList.add('selected');
+  var btn = document.getElementById('btn-next-agent');
+  btn.disabled = false; btn.style.opacity = '1';
+  renderSetup(agent);
+}
+
+var MCP_CONFIG = {mcp_config_json};
+var SYSTEM_PROMPT = {system_prompt_json};
+var API_KEY = {api_key_json};
+var BASE_URL = {base_url_json};
+
+function renderSetup(agent) {
+  var title = document.getElementById('setup-title');
+  var sub = document.getElementById('setup-sub');
+  var content = document.getElementById('setup-content');
+  if (agent === 'claude') {
+    title.textContent = 'Connect Claude Desktop';
+    sub.textContent = 'Install the Mighty MCP server so Claude can request your approval before acting.';
+    content.innerHTML = '<div class="setup-steps">' +
+      '<div class="setup-step"><div class="setup-step-num">1</div><div class="setup-step-body">' +
+      '<div class="setup-step-title">Download the MCP server</div>' +
+      '<a href="/download/mighty_mcp.py" class="btn-copy" style="display:inline-block;margin-top:4px">⬇ Download mighty_mcp.py</a>' +
+      '<div class="setup-step-hint">Save it to your home folder (~/)</div></div></div>' +
+      '<div class="setup-step"><div class="setup-step-num">2</div><div class="setup-step-body">' +
+      '<div class="setup-step-title">Open this file and paste the config</div>' +
+      '<div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>' +
+      '<div style="display:flex;align-items:flex-start;gap:8px">' +
+      '<div class="code-box" id="mcp-config-box" style="flex:1">' + escHtml(JSON.stringify(JSON.parse(MCP_CONFIG), null, 2)) + '</div>' +
+      '<button class="btn-copy" onclick="copyEl(\'mcp-config-box\',this)" style="margin-top:6px">Copy</button></div>' +
+      '<div class="setup-step-hint">Replace YOUR_USERNAME with your Mac username</div></div></div>' +
+      '<div class="setup-step"><div class="setup-step-num">3</div><div class="setup-step-body">' +
+      '<div class="setup-step-title">Restart Claude Desktop</div>' +
+      '<div class="setup-step-hint">Quit and reopen the app for the MCP server to load.</div></div></div>' +
+      '</div>';
+  } else if (agent === 'chatgpt') {
+    title.textContent = 'Connect ChatGPT';
+    sub.textContent = 'Add the Mighty system prompt to a ChatGPT Project or Custom GPT.';
+    content.innerHTML = '<div class="setup-steps">' +
+      '<div class="setup-step"><div class="setup-step-num">1</div><div class="setup-step-body">' +
+      '<div class="setup-step-title">Open ChatGPT → your Project or Custom GPT</div>' +
+      '<div class="setup-step-hint">Go to the project or GPT you want to connect. Open its instructions/system prompt.</div></div></div>' +
+      '<div class="setup-step"><div class="setup-step-num">2</div><div class="setup-step-body">' +
+      '<div class="setup-step-title">Paste the Mighty system prompt</div>' +
+      '<div style="display:flex;align-items:flex-start;gap:8px">' +
+      '<textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto">' + escHtml(SYSTEM_PROMPT) + '</textarea>' +
+      '<button class="btn-copy" onclick="copyEl(\'prompt-box\',this)" style="margin-top:6px">Copy</button></div>' +
+      '<div class="setup-step-hint">Add it at the top of the existing instructions.</div></div></div>' +
+      '<div class="setup-step"><div class="setup-step-num">3</div><div class="setup-step-body">' +
+      '<div class="setup-step-title">Save</div>' +
+      '<div class="setup-step-hint">That\'s it — no plugin or download needed.</div></div></div>' +
+      '</div>';
+  } else {
+    title.textContent = 'Connect your custom agent';
+    sub.textContent = 'Add your API key and the Mighty system prompt to your agent.';
+    content.innerHTML = '<div class="setup-steps">' +
+      '<div class="setup-step"><div class="setup-step-num">1</div><div class="setup-step-body">' +
+      '<div class="setup-step-title">Your API key</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-top:4px">' +
+      '<div class="path-box" id="api-key-box" style="margin:0;flex:1">' + escHtml(API_KEY) + '</div>' +
+      '<button class="btn-copy" onclick="copyEl(\'api-key-box\',this)">Copy</button></div></div></div>' +
+      '<div class="setup-step"><div class="setup-step-num">2</div><div class="setup-step-body">' +
+      '<div class="setup-step-title">Add the system prompt to your agent</div>' +
+      '<div style="display:flex;align-items:flex-start;gap:8px">' +
+      '<textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto">' + escHtml(SYSTEM_PROMPT) + '</textarea>' +
+      '<button class="btn-copy" onclick="copyEl(\'prompt-box2\',this)" style="margin-top:6px">Copy</button></div>' +
+      '<div class="setup-step-hint">Or use the Python/JS SDK — see the <a href="' + BASE_URL + '/docs" target="_blank" style="color:#7c3aed">API docs</a>.</div></div></div>' +
+      '</div>';
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function copyEl(id, btn) {
+  var el = document.getElementById(id);
+  var text = el.tagName === 'TEXTAREA' ? el.value : el.textContent;
+  navigator.clipboard.writeText(text);
+  btn.textContent = 'Copied!';
+  setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
+}
+
+function copyCurl(btn) {
+  navigator.clipboard.writeText(document.getElementById('test-curl').textContent);
+  btn.textContent = 'Copied!';
+  setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
+}
+
+function startTestPoll() {
+  testPollTimer = setInterval(function() {
+    fetch('/dashboard/has-pending').then(function(r) { return r.json(); }).then(function(d) {
+      if (d.pending) {
+        clearInterval(testPollTimer);
+        document.getElementById('test-waiting').style.display = 'none';
+        document.getElementById('test-connected').style.display = 'block';
+      }
+    });
+  }, 2000);
+}
+
+function enablePush() {
+  if (!swReg) {
+    document.getElementById('push-status').textContent = 'Push not supported in this browser.';
+    return;
+  }
+  document.getElementById('push-status').textContent = 'Setting up…';
+  fetch('/api/push/vapid-public-key').then(function(r) { return r.json(); }).then(function(d) {
+    var converted = urlB64ToUint8Array(d.key);
+    swReg.pushManager.getSubscription().then(function(existing) {
+      return existing ? existing.unsubscribe() : Promise.resolve(true);
+    }).then(function() {
+      return swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: converted });
+    }).then(function(sub) {
+      return fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({subscription: sub.toJSON()})
+      });
+    }).then(function() {
+      document.getElementById('push-btn').textContent = 'Notifications enabled ✓';
+      document.getElementById('push-status').textContent = 'You\'re all set.';
+    }).catch(function(e) {
+      document.getElementById('push-status').textContent = 'Could not enable: ' + e.message;
+    });
+  });
+}
+
+function urlB64ToUint8Array(b) {
+  var pad = '='.repeat((4 - b.length % 4) % 4);
+  var base64 = (b + pad).replace(/-/g,'+').replace(/_/g,'/');
+  var raw = atob(base64); var out = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function finish() {
+  fetch('/onboarding/complete', {method:'POST'}).then(function() {
+    window.location.href = '/dashboard';
+  });
+}
+</script>
+</body>
+</html>"""
+
 APPROVE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -891,7 +1222,7 @@ def signup():
     db.commit()
     session["user_id"] = uid
     session["email"]   = email
-    return redirect("/dashboard")
+    return redirect("/onboarding")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -1032,6 +1363,12 @@ def dashboard():
     notify_email_checked = "checked" if user["notify_email"] else ""
     notify_ntfy_checked  = "checked" if user["notify_ntfy"] else ""
     notify_push_checked  = "checked" if user["notify_push"] else ""
+    onboarding_banner = ""
+    if not user["onboarded"]:
+        onboarding_banner = '''<div style="grid-column:1/-1;background:#fef3c7;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:4px">
+  <div style="font-size:13px;color:#92400e">⚡ Finish setting up Mighty to connect your first agent.</div>
+  <a href="/onboarding" style="font-size:13px;font-weight:600;color:#7c3aed;white-space:nowrap">Complete setup →</a>
+</div>'''
     return (DASHBOARD_HTML
             .replace("{email}",         user["email"])
             .replace("{api_key}",       user["api_key"])
@@ -1043,7 +1380,8 @@ def dashboard():
             .replace("{pending_display}", pending_display)
             .replace("{notify_email}",  notify_email_checked)
             .replace("{notify_ntfy}",   notify_ntfy_checked)
-            .replace("{notify_push}",   notify_push_checked))
+            .replace("{notify_push}",   notify_push_checked)
+            .replace("{onboarding_banner}", onboarding_banner))
 
 @app.route("/download/mighty_mcp.py")
 @require_login
@@ -1111,6 +1449,47 @@ def update_notifications():
     )
     db.commit()
     return jsonify({"ok": True})
+
+
+# ── Onboarding wizard ────────────────────────────────────────────────────────
+
+@app.route("/onboarding")
+@require_login
+def onboarding():
+    user = get_db().execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    url  = base_url()
+    import json as _json
+    mcp_config_json   = _json.dumps(build_mcp_config(user["api_key"], url))
+    system_prompt_json = _json.dumps(build_prompt(user["api_key"], url))
+    api_key_json      = _json.dumps(user["api_key"])
+    base_url_json     = _json.dumps(url)
+    test_curl = (
+        f'curl -X POST {url}/api/authorize \\\n'
+        f'  -H "Content-Type: application/json" \\\n'
+        f'  -d \'{{"api_key":"{user["api_key"]}","action_type":"test","label":"Connection test"}}\''
+    )
+    ntfy_url = f"https://ntfy.sh/{ntfy_topic(user['api_key'])}"
+    return (ONBOARDING_HTML
+            .replace("{mcp_config_json}",    mcp_config_json)
+            .replace("{system_prompt_json}", system_prompt_json)
+            .replace("{api_key_json}",       api_key_json)
+            .replace("{base_url_json}",      base_url_json)
+            .replace("{test_curl}",          test_curl)
+            .replace("{ntfy_url}",           ntfy_url))
+
+@app.route("/onboarding/complete", methods=["POST"])
+@require_login
+def onboarding_complete():
+    get_db().execute("UPDATE users SET onboarded=1 WHERE id=?", (session["user_id"],))
+    get_db().commit()
+    return jsonify({"ok": True})
+
+@app.route("/onboarding/skip")
+@require_login
+def onboarding_skip():
+    get_db().execute("UPDATE users SET onboarded=1 WHERE id=?", (session["user_id"],))
+    get_db().commit()
+    return redirect("/dashboard")
 
 
 # ── Token-based approval page (no login required) ─────────────────────────────
