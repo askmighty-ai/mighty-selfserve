@@ -399,7 +399,7 @@ body{display:flex;flex-direction:column;min-height:100vh;background:#f8f7f5}
 .topbar-email{font-size:12px;color:#aaa}
 .btn-logout{font-size:12px;color:#888;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
 .btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
-.main{flex:1;display:grid;grid-template-columns:280px 1fr;gap:24px;max-width:1100px;width:100%;margin:0 auto;padding:28px 24px}
+.main{flex:1;display:grid;grid-template-columns:320px 1fr;gap:24px;max-width:1140px;width:100%;margin:0 auto;padding:28px 24px}
 @media(max-width:768px){.main{grid-template-columns:1fr}}
 .sidebar{display:flex;flex-direction:column;gap:14px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:20px}
@@ -498,7 +498,7 @@ details[open] summary::before{content:"\\25BE "}
           <div>
             <div class="step-title">Add to Claude Desktop config</div>
             <div class="step-hint" style="margin-bottom:6px">Open this file and paste the config below:</div>
-            <div class="code-box" style="color:#7c3aed;overflow-x:auto;white-space:nowrap;margin-bottom:6px">~/Library/Application Support/Claude/claude_desktop_config.json</div>
+            <div class="code-box" style="color:#7c3aed;word-break:break-all;white-space:pre-wrap;margin-bottom:6px">~/Library/Application Support/Claude/&#8203;claude_desktop_config.json</div>
             <div class="code-box" id="mcpConfigBox">{mcp_config}</div>
             <button class="btn-action" onclick="copyMcpConfig(this)">Copy config</button>
             <div class="step-hint">Replace YOUR_USERNAME with your Mac username, then restart Claude Desktop.</div>
@@ -509,7 +509,7 @@ details[open] summary::before{content:"\\25BE "}
           <div>
             <div class="step-title">Get notified on your phone</div>
             <div class="step-hint" style="margin-bottom:8px">Install the free <strong>ntfy</strong> app, then subscribe to your personal topic:</div>
-            <div class="code-box" style="color:#7c3aed;overflow-x:auto;white-space:nowrap;margin-bottom:6px">https://ntfy.sh/{ntfy_topic}</div>
+            <div class="code-box" style="color:#7c3aed;word-break:break-all;white-space:pre-wrap;margin-bottom:6px">https://ntfy.sh/{ntfy_topic}</div>
             <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="btn-secondary" style="margin-bottom:6px">Open in browser to test</a>
             <div class="step-hint">You'll get a push notification with an approve/deny link every time your agent needs your permission.</div>
           </div>
