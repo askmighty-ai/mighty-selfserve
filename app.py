@@ -467,7 +467,7 @@ details[open] summary::before{content:"\\25BE "}
           <div>
             <div class="step-title">Add to Claude Desktop config</div>
             <div class="step-hint" style="margin-bottom:6px">Open this file and paste the config below:</div>
-            <div class="step-hint" style="font-family:ui-monospace,monospace;color:#7c3aed;margin-bottom:6px">~/Library/Application Support/Claude/claude_desktop_config.json</div>
+            <div class="step-hint" style="font-family:ui-monospace,monospace;color:#7c3aed;margin-bottom:6px;word-break:break-all;overflow-wrap:anywhere">~/Library/Application Support/Claude/claude_desktop_config.json</div>
             <div class="code-box" id="mcpConfigBox">{mcp_config}</div>
             <button class="btn-action" onclick="copyMcpConfig(this)">Copy config</button>
             <div class="step-hint">Replace YOUR_USERNAME with your Mac username, then restart Claude Desktop.</div>
@@ -665,18 +665,18 @@ def build_prompt(api_key, url):
 
 def build_mcp_config(api_key, url):
     return (
-        '{{\n'
-        '  "mcpServers": {{\n'
-        '    "mighty": {{\n'
+        '{\n'
+        '  "mcpServers": {\n'
+        '    "mighty": {\n'
         '      "command": "python3",\n'
         '      "args": ["/Users/YOUR_USERNAME/mighty_mcp.py"],\n'
-        '      "env": {{\n'
+        '      "env": {\n'
         f'        "MIGHTY_API_KEY": "{api_key}",\n'
         f'        "MIGHTY_BASE_URL": "{url}"\n'
-        '      }}\n'
-        '    }}\n'
-        '  }}\n'
-        '}}'
+        '      }\n'
+        '    }\n'
+        '  }\n'
+        '}'
     )
 
 def build_feed_html(actions, base):
