@@ -372,10 +372,20 @@ body{display:flex;flex-direction:column;min-height:100vh;background:#f8f7f5}
 @media(max-width:768px){.main{grid-template-columns:1fr}}
 .sidebar{display:flex;flex-direction:column;gap:14px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:20px}
-.setup-heading{font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:6px}
-.setup-sub{font-size:13px;color:#888;line-height:1.5;margin-bottom:16px}
-.btn-copy-prompt{width:100%;padding:11px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;cursor:pointer}
-.btn-copy-prompt:hover{background:#6d28d9}
+.setup-heading{font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:14px}
+.tab-bar{display:flex;gap:4px;background:#f3f4f6;border-radius:8px;padding:3px;margin-bottom:16px}
+.tab{flex:1;padding:6px 10px;border:none;background:none;border-radius:6px;font-size:12px;font-weight:600;color:#888;cursor:pointer;transition:all 0.12s}
+.tab.active{background:#fff;color:#1a1a1a;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+.tab-content{display:none}.tab-content.active{display:block}
+.step{display:flex;gap:10px;margin-bottom:14px}
+.step-num{width:20px;height:20px;border-radius:50%;background:#f3f0ff;color:#7c3aed;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.step-title{font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px}
+.step-hint{font-size:11px;color:#aaa;line-height:1.5;margin-top:4px}
+.code-box{font-family:ui-monospace,monospace;font-size:10px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;margin:6px 0}
+.btn-action{width:100%;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;transition:background 0.12s;cursor:pointer;margin-bottom:4px}
+.btn-action:hover{background:#6d28d9}
+.btn-secondary{width:100%;padding:9px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:8px;font-size:13px;font-weight:600;transition:background 0.12s;cursor:pointer;text-decoration:none;display:block;text-align:center}
+.btn-secondary:hover{background:#ede9fe;text-decoration:none}
 details{margin-top:12px}
 summary{font-size:12px;color:#aaa;cursor:pointer;user-select:none;list-style:none}
 summary::-webkit-details-marker{display:none}
@@ -436,16 +446,48 @@ details[open] summary::before{content:"\\25BE "}
   <div class="sidebar">
     <div class="card">
       <div class="setup-heading">Connect your agent</div>
-      <div class="setup-sub">Paste this into your Claude project's custom instructions to get started.</div>
-      <button class="btn-copy-prompt" onclick="copyPrompt(this)">Copy system prompt</button>
-      <textarea class="prompt-hidden" id="promptBox">{prompt}</textarea>
-      <details>
-        <summary>Advanced</summary>
-        <div class="api-key-wrap">
-          <div class="api-key-val" id="apiKeyVal">{api_key}</div>
-          <button class="btn-copy-key" onclick="copyKey(this)">Copy</button>
+      <div class="tab-bar">
+        <button class="tab active" onclick="switchTab('mcp',this)">Claude Desktop</button>
+        <button class="tab" onclick="switchTab('api',this)">Other / API</button>
+      </div>
+
+      <!-- Claude Desktop tab -->
+      <div id="tab-mcp" class="tab-content active">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div>
+            <div class="step-title">Download the MCP server</div>
+            <div class="step-hint" style="margin-bottom:8px">A small Python file — no install required.</div>
+            <a href="/download/mighty_mcp.py" class="btn-secondary">⬇ Download mighty_mcp.py</a>
+            <div class="step-hint">Save it to your home folder (~/).</div>
+          </div>
         </div>
-      </details>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div>
+            <div class="step-title">Add to Claude Desktop config</div>
+            <div class="step-hint" style="margin-bottom:6px">Open this file and paste the config below:</div>
+            <div class="step-hint" style="font-family:ui-monospace,monospace;color:#7c3aed;margin-bottom:6px">~/Library/Application Support/Claude/claude_desktop_config.json</div>
+            <div class="code-box" id="mcpConfigBox">{mcp_config}</div>
+            <button class="btn-action" onclick="copyMcpConfig(this)">Copy config</button>
+            <div class="step-hint">Replace YOUR_USERNAME with your Mac username, then restart Claude Desktop.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- API / Other tab -->
+      <div id="tab-api" class="tab-content">
+        <div style="font-size:13px;color:#888;margin-bottom:12px;line-height:1.5">Paste this into your agent's system prompt.</div>
+        <button class="btn-action" onclick="copyPrompt(this)">Copy system prompt</button>
+        <textarea class="prompt-hidden" id="promptBox">{prompt}</textarea>
+        <details style="margin-top:12px">
+          <summary>Show API key</summary>
+          <div class="api-key-wrap">
+            <div class="api-key-val" id="apiKeyVal">{api_key}</div>
+            <button class="btn-copy-key" onclick="copyKey(this)">Copy</button>
+          </div>
+        </details>
+      </div>
     </div>
   </div>
 
@@ -459,6 +501,17 @@ details[open] summary::before{content:"\\25BE "}
 </div>
 
 <script>
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+function copyMcpConfig(btn) {
+  navigator.clipboard.writeText(document.getElementById('mcpConfigBox').textContent);
+  btn.textContent = 'Copied!';
+  setTimeout(() => btn.textContent = 'Copy config', 1800);
+}
 function copyPrompt(btn) {
   navigator.clipboard.writeText(document.getElementById('promptBox').value);
   btn.textContent = 'Copied!';
@@ -600,24 +653,30 @@ def logout():
 
 def build_prompt(api_key, url):
     return (
-        f"MIGHTY AUTHORIZATION — read and follow these rules every session.\n\n"
-        f"Before any consequential action (sending messages or emails, making purchases,\n"
-        f"modifying important files, calling external APIs, sharing data with third parties),\n"
-        f"you MUST request authorization:\n\n"
+        f"MIGHTY AUTHORIZATION — follow every session.\n\n"
+        f"Before any consequential action (emails, purchases, file edits, external APIs):\n"
         f"  POST {url}/api/authorize\n"
-        f"  {{\"api_key\":\"{api_key}\",\"action_type\":\"<category>\",\n"
-        f"   \"label\":\"<what you are about to do>\",\n"
-        f"   \"fields\":[[\"Key\",\"Value\"],...]  }}\n\n"
-        f"Response handling:\n"
-        f"  approved → proceed\n"
-        f"  denied   → stop, tell the user it was denied\n"
-        f"  pending  → poll GET {url}/api/status/<request_id> every 3s\n"
-        f"             until approved / denied / timeout (5 min)\n\n"
-        f"For routine actions that don't need approval, log them:\n\n"
+        f"  {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<description>\",\"fields\":[[\"Key\",\"Val\"]]}}\n"
+        f"  → approved: proceed | denied: stop | pending: poll GET {url}/api/status/<id> every 3s\n\n"
+        f"Routine actions (log silently):\n"
         f"  POST {url}/api/record\n"
-        f"  {{\"api_key\":\"{api_key}\",\"action_type\":\"<category>\",\n"
-        f"   \"label\":\"<what happened>\",\"outcome\":\"completed\",\n"
-        f"   \"fields\":[[\"Key\",\"Value\"],...]  }}"
+        f"  {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<description>\",\"outcome\":\"completed\"}}"
+    )
+
+def build_mcp_config(api_key, url):
+    return (
+        '{{\n'
+        '  "mcpServers": {{\n'
+        '    "mighty": {{\n'
+        '      "command": "python3",\n'
+        '      "args": ["/Users/YOUR_USERNAME/mighty_mcp.py"],\n'
+        '      "env": {{\n'
+        f'        "MIGHTY_API_KEY": "{api_key}",\n'
+        f'        "MIGHTY_BASE_URL": "{url}"\n'
+        '      }}\n'
+        '    }}\n'
+        '  }}\n'
+        '}}'
     )
 
 def build_feed_html(actions, base):
@@ -696,14 +755,42 @@ def dashboard():
         "SELECT * FROM actions WHERE user_id=? ORDER BY created_at DESC LIMIT 100",
         (session["user_id"],),
     ).fetchall()
-    url   = base_url()
-    prompt = build_prompt(user["api_key"], url)
-    feed   = build_feed_html(acts, url)
+    url        = base_url()
+    prompt     = build_prompt(user["api_key"], url)
+    mcp_config = build_mcp_config(user["api_key"], url)
+    feed       = build_feed_html(acts, url)
     return (DASHBOARD_HTML
-            .replace("{email}",   user["email"])
-            .replace("{api_key}", user["api_key"])
-            .replace("{prompt}",  prompt)
-            .replace("{feed_html}", feed))
+            .replace("{email}",      user["email"])
+            .replace("{api_key}",    user["api_key"])
+            .replace("{prompt}",     prompt)
+            .replace("{mcp_config}", mcp_config)
+            .replace("{feed_html}",  feed))
+
+@app.route("/download/mighty_mcp.py")
+@require_login
+def download_mcp():
+    user = get_db().execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    api_key  = user["api_key"]
+    base     = base_url()
+    # Read the MCP server from disk if available, otherwise return a minimal version
+    script_path = os.path.join(os.path.dirname(__file__), "mighty_mcp.py")
+    if os.path.exists(script_path):
+        with open(script_path) as f:
+            script = f.read()
+        # Inject credentials as defaults
+        script = script.replace(
+            'os.environ.get("MIGHTY_API_KEY", "")',
+            f'os.environ.get("MIGHTY_API_KEY", "{api_key}")'
+        ).replace(
+            'os.environ.get("MIGHTY_BASE_URL", "")',
+            f'os.environ.get("MIGHTY_BASE_URL", "{base}")'
+        )
+    else:
+        script = f'# Mighty MCP Server\n# API Key: {api_key}\n# Visit {base} for setup instructions\n'
+    resp = make_response(script)
+    resp.headers["Content-Disposition"] = "attachment; filename=mighty_mcp.py"
+    resp.headers["Content-Type"] = "text/x-python"
+    return resp
 
 @app.route("/dashboard/decide/<action_id>", methods=["POST"])
 @require_login
