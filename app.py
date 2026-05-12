@@ -219,6 +219,37 @@ def send_authorization_email(to_email, label, action_type, fields, approval_url)
     threading.Thread(target=_send, daemon=True).start()
 
 
+def ntfy_topic(api_key):
+    """Derive a stable, user-specific ntfy.sh topic from their API key."""
+    return "mighty-" + api_key[:12]
+
+
+def send_ntfy_notification(api_key, label, action_type, approval_url):
+    """Send a push notification via ntfy.sh. No account or API key required."""
+    topic = ntfy_topic(api_key)
+
+    def _send():
+        try:
+            payload = label.encode()
+            req = urllib.request.Request(
+                f"https://ntfy.sh/{topic}",
+                data=payload,
+                headers={
+                    "Title":    f"Action needed: {action_type}",
+                    "Priority": "high",
+                    "Tags":     "rotating_light",
+                    "Click":    approval_url,
+                    "Actions":  f"view, Review & Decide, {approval_url}",
+                },
+            )
+            urllib.request.urlopen(req, timeout=10)
+            print(f"[Mighty] ntfy notification sent to topic {topic}", flush=True)
+        except Exception as e:
+            print(f"[Mighty] ntfy notification failed: {e}", flush=True)
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
 # ── HTML ──────────────────────────────────────────────────────────────────────
 
 BASE_CSS = """
@@ -467,10 +498,20 @@ details[open] summary::before{content:"\\25BE "}
           <div>
             <div class="step-title">Add to Claude Desktop config</div>
             <div class="step-hint" style="margin-bottom:6px">Open this file and paste the config below:</div>
-            <div class="step-hint" style="font-family:ui-monospace,monospace;color:#7c3aed;margin-bottom:6px;word-break:break-all;overflow-wrap:anywhere">~/Library/Application Support/Claude/claude_desktop_config.json</div>
+            <div class="code-box" style="color:#7c3aed;overflow-x:auto;white-space:nowrap;margin-bottom:6px">~/Library/Application Support/Claude/claude_desktop_config.json</div>
             <div class="code-box" id="mcpConfigBox">{mcp_config}</div>
             <button class="btn-action" onclick="copyMcpConfig(this)">Copy config</button>
             <div class="step-hint">Replace YOUR_USERNAME with your Mac username, then restart Claude Desktop.</div>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div>
+            <div class="step-title">Get notified on your phone</div>
+            <div class="step-hint" style="margin-bottom:8px">Install the free <strong>ntfy</strong> app, then subscribe to your personal topic:</div>
+            <div class="code-box" style="color:#7c3aed;overflow-x:auto;white-space:nowrap;margin-bottom:6px">https://ntfy.sh/{ntfy_topic}</div>
+            <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="btn-secondary" style="margin-bottom:6px">Open in browser to test</a>
+            <div class="step-hint">You'll get a push notification with an approve/deny link every time your agent needs your permission.</div>
           </div>
         </div>
       </div>
@@ -759,11 +800,13 @@ def dashboard():
     prompt     = build_prompt(user["api_key"], url)
     mcp_config = build_mcp_config(user["api_key"], url)
     feed       = build_feed_html(acts, url)
+    topic      = ntfy_topic(user["api_key"])
     return (DASHBOARD_HTML
             .replace("{email}",      user["email"])
             .replace("{api_key}",    user["api_key"])
             .replace("{prompt}",     prompt)
             .replace("{mcp_config}", mcp_config)
+            .replace("{ntfy_topic}", topic)
             .replace("{feed_html}",  feed))
 
 @app.route("/download/mighty_mcp.py")
@@ -929,7 +972,14 @@ def api_authorize():
     get_db().commit()
     url          = base_url()
     approval_url = f"{url}/approve/{approval_token}"
-    # Fire-and-forget email notification
+    # Push notification via ntfy.sh
+    send_ntfy_notification(
+        api_key=user["api_key"],
+        label=label,
+        action_type=action_type,
+        approval_url=approval_url,
+    )
+    # Email notification via Resend (fallback, may fail from Railway IPs)
     send_authorization_email(
         to_email=user["email"],
         label=label,
