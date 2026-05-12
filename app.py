@@ -118,10 +118,13 @@ def get_vapid_keys():
             pub  = db.execute("SELECT value FROM settings WHERE key='vapid_public'").fetchone()[0]
             return priv, pub
         from py_vapid import Vapid
+        import base64
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
         v = Vapid()
         v.generate_keys()
         priv = v.private_pem().decode()
-        pub  = v.public_key_urlsafe
+        pub_bytes = v.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+        pub  = base64.urlsafe_b64encode(pub_bytes).rstrip(b'=').decode()
         db.execute("INSERT OR REPLACE INTO settings VALUES ('vapid_private', ?)", (priv,))
         db.execute("INSERT OR REPLACE INTO settings VALUES ('vapid_public', ?)", (pub,))
         db.commit()
