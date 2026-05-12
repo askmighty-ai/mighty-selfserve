@@ -110,25 +110,35 @@ print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", f
 # ── VAPID key management ──────────────────────────────────────────────────────
 
 def get_vapid_keys():
+    """Return (private_key_base64url, public_key_base64url) — generating once and caching in DB."""
+    import base64
+    from py_vapid import Vapid
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    def _generate(db):
+        v = Vapid()
+        v.generate_keys()
+        # Raw 32-byte EC private scalar → base64url (what pywebpush 2.x expects)
+        priv_int   = v.private_key.private_numbers().private_value
+        priv       = base64.urlsafe_b64encode(priv_int.to_bytes(32, 'big')).rstrip(b'=').decode()
+        # Uncompressed EC point → base64url (what browsers expect as applicationServerKey)
+        pub_bytes  = v.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+        pub        = base64.urlsafe_b64encode(pub_bytes).rstrip(b'=').decode()
+        db.execute("INSERT OR REPLACE INTO settings VALUES ('vapid_private', ?)", (priv,))
+        db.execute("INSERT OR REPLACE INTO settings VALUES ('vapid_public',  ?)", (pub,))
+        db.commit()
+        return priv, pub
+
     with sqlite3.connect(DATABASE) as db:
         db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         row = db.execute("SELECT value FROM settings WHERE key='vapid_private'").fetchone()
-        if row:
-            priv = db.execute("SELECT value FROM settings WHERE key='vapid_private'").fetchone()[0]
+        if row and not row[0].startswith('-----BEGIN'):
+            # Already stored in correct raw base64url format
+            priv = row[0]
             pub  = db.execute("SELECT value FROM settings WHERE key='vapid_public'").fetchone()[0]
             return priv, pub
-        from py_vapid import Vapid
-        import base64
-        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        v = Vapid()
-        v.generate_keys()
-        priv = v.private_pem().decode()
-        pub_bytes = v.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
-        pub  = base64.urlsafe_b64encode(pub_bytes).rstrip(b'=').decode()
-        db.execute("INSERT OR REPLACE INTO settings VALUES ('vapid_private', ?)", (priv,))
-        db.execute("INSERT OR REPLACE INTO settings VALUES ('vapid_public', ?)", (pub,))
-        db.commit()
-        return priv, pub
+        # First run, or old PEM format — generate fresh keys
+        return _generate(db)
 
 VAPID_PRIVATE, VAPID_PUBLIC = get_vapid_keys()
 print(f"[Mighty] VAPID public key: {VAPID_PUBLIC[:20]}...", flush=True)
