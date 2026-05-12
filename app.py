@@ -922,7 +922,98 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
       <div class="step-label">Step 2 of 4</div>
       <div class="step-title" id="setup-title">Connect your agent</div>
       <div class="step-sub" id="setup-sub"></div>
-      <div id="setup-content"></div>
+
+      <!-- Claude Desktop setup panel -->
+      <div id="setup-claude" class="agent-setup" style="display:none">
+        <div class="setup-steps">
+          <div class="setup-step">
+            <div class="setup-step-num">1</div>
+            <div class="setup-step-body">
+              <div class="setup-step-title">Download the MCP server</div>
+              <a href="/download/mighty_mcp.py" class="btn-copy" style="display:inline-block;margin-top:4px">⬇ Download mighty_mcp.py</a>
+              <div class="setup-step-hint">Save it to your home folder (~/)</div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <div class="setup-step-num">2</div>
+            <div class="setup-step-body">
+              <div class="setup-step-title">Open this file and paste the config</div>
+              <div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>
+              <div style="display:flex;align-items:flex-start;gap:8px">
+                <div class="code-box" id="mcp-config-box" style="flex:1"></div>
+                <button class="btn-copy" onclick="copyBox('mcp-config-box',this)" style="margin-top:6px">Copy</button>
+              </div>
+              <div class="setup-step-hint">Replace YOUR_USERNAME with your Mac username</div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <div class="setup-step-num">3</div>
+            <div class="setup-step-body">
+              <div class="setup-step-title">Restart Claude Desktop</div>
+              <div class="setup-step-hint">Quit and reopen the app for the MCP server to load.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ChatGPT setup panel -->
+      <div id="setup-chatgpt" class="agent-setup" style="display:none">
+        <div class="setup-steps">
+          <div class="setup-step">
+            <div class="setup-step-num">1</div>
+            <div class="setup-step-body">
+              <div class="setup-step-title">Open ChatGPT → your Project or Custom GPT</div>
+              <div class="setup-step-hint">Go to the project or GPT you want to connect. Open its instructions/system prompt.</div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <div class="setup-step-num">2</div>
+            <div class="setup-step-body">
+              <div class="setup-step-title">Paste the Mighty system prompt</div>
+              <div style="display:flex;align-items:flex-start;gap:8px">
+                <textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto"></textarea>
+                <button class="btn-copy" onclick="copyBox('prompt-box',this)" style="margin-top:6px">Copy</button>
+              </div>
+              <div class="setup-step-hint">Add it at the top of the existing instructions.</div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <div class="setup-step-num">3</div>
+            <div class="setup-step-body">
+              <div class="setup-step-title">Save</div>
+              <div class="setup-step-hint">That's it — no plugin or download needed.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Custom agent setup panel -->
+      <div id="setup-custom" class="agent-setup" style="display:none">
+        <div class="setup-steps">
+          <div class="setup-step">
+            <div class="setup-step-num">1</div>
+            <div class="setup-step-body">
+              <div class="setup-step-title">Your API key</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                <div class="path-box" id="api-key-box" style="margin:0;flex:1"></div>
+                <button class="btn-copy" onclick="copyBox('api-key-box',this)">Copy</button>
+              </div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <div class="setup-step-num">2</div>
+            <div class="setup-step-body">
+              <div class="setup-step-title">Add the system prompt to your agent</div>
+              <div style="display:flex;align-items:flex-start;gap:8px">
+                <textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto"></textarea>
+                <button class="btn-copy" onclick="copyBox('prompt-box2',this)" style="margin-top:6px">Copy</button>
+              </div>
+              <div class="setup-step-hint">Or use the Python/JS SDK — see the <a id="docs-link" href="#" target="_blank" style="color:#7c3aed">API docs</a>.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <button class="btn btn-primary" onclick="goTo(3)">I've done this →</button>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
@@ -1007,70 +1098,44 @@ var SYSTEM_PROMPT = _d.system_prompt;
 var API_KEY      = _d.api_key;
 var BASE_URL     = _d.base_url;
 
+// Populate dynamic content into pre-rendered panels on page load
+(function() {
+  // MCP config box
+  var mcpEl = document.getElementById('mcp-config-box');
+  if (mcpEl) mcpEl.textContent = JSON.stringify(JSON.parse(MCP_CONFIG), null, 2);
+  // System prompt textareas
+  var p1 = document.getElementById('prompt-box');
+  if (p1) p1.value = SYSTEM_PROMPT;
+  var p2 = document.getElementById('prompt-box2');
+  if (p2) p2.value = SYSTEM_PROMPT;
+  // API key box
+  var akEl = document.getElementById('api-key-box');
+  if (akEl) akEl.textContent = API_KEY;
+  // Docs link
+  var dlEl = document.getElementById('docs-link');
+  if (dlEl) dlEl.href = BASE_URL + '/docs';
+})();
+
+var AGENT_TITLES = {
+  claude:  'Connect Claude Desktop',
+  chatgpt: 'Connect ChatGPT',
+  custom:  'Connect your custom agent'
+};
+var AGENT_SUBS = {
+  claude:  'Install the Mighty MCP server so Claude can request your approval before acting.',
+  chatgpt: 'Add the Mighty system prompt to a ChatGPT Project or Custom GPT.',
+  custom:  'Add your API key and the Mighty system prompt to your agent.'
+};
+
 function renderSetup(agent) {
-  var title = document.getElementById('setup-title');
-  var sub = document.getElementById('setup-sub');
-  var content = document.getElementById('setup-content');
-  if (agent === 'claude') {
-    title.textContent = 'Connect Claude Desktop';
-    sub.textContent = 'Install the Mighty MCP server so Claude can request your approval before acting.';
-    content.innerHTML = '<div class="setup-steps">' +
-      '<div class="setup-step"><div class="setup-step-num">1</div><div class="setup-step-body">' +
-      '<div class="setup-step-title">Download the MCP server</div>' +
-      '<a href="/download/mighty_mcp.py" class="btn-copy" style="display:inline-block;margin-top:4px">⬇ Download mighty_mcp.py</a>' +
-      '<div class="setup-step-hint">Save it to your home folder (~/)</div></div></div>' +
-      '<div class="setup-step"><div class="setup-step-num">2</div><div class="setup-step-body">' +
-      '<div class="setup-step-title">Open this file and paste the config</div>' +
-      '<div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>' +
-      '<div style="display:flex;align-items:flex-start;gap:8px">' +
-      '<div class="code-box" id="mcp-config-box" style="flex:1">' + escHtml(JSON.stringify(JSON.parse(MCP_CONFIG), null, 2)) + '</div>' +
-      '<button class="btn-copy" onclick="copyEl(\'mcp-config-box\',this)" style="margin-top:6px">Copy</button></div>' +
-      '<div class="setup-step-hint">Replace YOUR_USERNAME with your Mac username</div></div></div>' +
-      '<div class="setup-step"><div class="setup-step-num">3</div><div class="setup-step-body">' +
-      '<div class="setup-step-title">Restart Claude Desktop</div>' +
-      '<div class="setup-step-hint">Quit and reopen the app for the MCP server to load.</div></div></div>' +
-      '</div>';
-  } else if (agent === 'chatgpt') {
-    title.textContent = 'Connect ChatGPT';
-    sub.textContent = 'Add the Mighty system prompt to a ChatGPT Project or Custom GPT.';
-    content.innerHTML = '<div class="setup-steps">' +
-      '<div class="setup-step"><div class="setup-step-num">1</div><div class="setup-step-body">' +
-      '<div class="setup-step-title">Open ChatGPT → your Project or Custom GPT</div>' +
-      '<div class="setup-step-hint">Go to the project or GPT you want to connect. Open its instructions/system prompt.</div></div></div>' +
-      '<div class="setup-step"><div class="setup-step-num">2</div><div class="setup-step-body">' +
-      '<div class="setup-step-title">Paste the Mighty system prompt</div>' +
-      '<div style="display:flex;align-items:flex-start;gap:8px">' +
-      '<textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto">' + escHtml(SYSTEM_PROMPT) + '</textarea>' +
-      '<button class="btn-copy" onclick="copyEl(\'prompt-box\',this)" style="margin-top:6px">Copy</button></div>' +
-      '<div class="setup-step-hint">Add it at the top of the existing instructions.</div></div></div>' +
-      '<div class="setup-step"><div class="setup-step-num">3</div><div class="setup-step-body">' +
-      '<div class="setup-step-title">Save</div>' +
-      '<div class="setup-step-hint">That\'s it — no plugin or download needed.</div></div></div>' +
-      '</div>';
-  } else {
-    title.textContent = 'Connect your custom agent';
-    sub.textContent = 'Add your API key and the Mighty system prompt to your agent.';
-    content.innerHTML = '<div class="setup-steps">' +
-      '<div class="setup-step"><div class="setup-step-num">1</div><div class="setup-step-body">' +
-      '<div class="setup-step-title">Your API key</div>' +
-      '<div style="display:flex;align-items:center;gap:8px;margin-top:4px">' +
-      '<div class="path-box" id="api-key-box" style="margin:0;flex:1">' + escHtml(API_KEY) + '</div>' +
-      '<button class="btn-copy" onclick="copyEl(\'api-key-box\',this)">Copy</button></div></div></div>' +
-      '<div class="setup-step"><div class="setup-step-num">2</div><div class="setup-step-body">' +
-      '<div class="setup-step-title">Add the system prompt to your agent</div>' +
-      '<div style="display:flex;align-items:flex-start;gap:8px">' +
-      '<textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto">' + escHtml(SYSTEM_PROMPT) + '</textarea>' +
-      '<button class="btn-copy" onclick="copyEl(\'prompt-box2\',this)" style="margin-top:6px">Copy</button></div>' +
-      '<div class="setup-step-hint">Or use the Python/JS SDK — see the <a href="' + BASE_URL + '/docs" target="_blank" style="color:#7c3aed">API docs</a>.</div></div></div>' +
-      '</div>';
-  }
+  document.getElementById('setup-title').textContent = AGENT_TITLES[agent] || 'Connect your agent';
+  document.getElementById('setup-sub').textContent   = AGENT_SUBS[agent]   || '';
+  document.querySelectorAll('.agent-setup').forEach(function(el) { el.style.display = 'none'; });
+  var panel = document.getElementById('setup-' + agent);
+  if (panel) panel.style.display = 'block';
 }
 
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function copyEl(id, btn) {
+function copyBox(id, btn) {
   var el = document.getElementById(id);
   var text = el.tagName === 'TEXTAREA' ? el.value : el.textContent;
   navigator.clipboard.writeText(text);
