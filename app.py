@@ -788,7 +788,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       </div>
       <div class="btn-row" style="margin-top:12px">
         <button class="btn btn-secondary" onclick="goTo(0)">← Back</button>
-        <button class="btn btn-primary" id="btn-next-agent" onclick="continueFromAgent()" disabled style="opacity:0.4;flex:1">Continue →</button>
+        <button class="btn btn-primary" id="btn-next-agent" onclick="continueFromAgent()" disabled style="background:#c4b5fd;cursor:not-allowed;flex:1">Continue →</button>
       </div>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
@@ -993,7 +993,7 @@ function selectAgent(agent) {
   document.querySelectorAll('.agent-card').forEach(function(c) { c.classList.remove('selected'); });
   event.currentTarget.classList.add('selected');
   var btn = document.getElementById('btn-next-agent');
-  btn.disabled = false; btn.style.opacity = '1';
+  btn.disabled = false; btn.style.background = ''; btn.style.cursor = '';
   renderSetup(agent);
 }
 
