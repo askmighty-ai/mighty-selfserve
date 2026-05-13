@@ -404,8 +404,8 @@ LANDING_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:440px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
-.logo-mark{width:32px;height:32px;background:linear-gradient(160deg,#1e3a8a,#0ea5e9);border-radius:8px;display:flex;align-items:center;justify-content:center}
-.logo-mark svg{width:18px;height:18px}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
+.logo-mark svg{width:32px;height:32px}
 .logo-name{font-size:18px;font-weight:700;color:#1a1a1a}
 .logo-tag{font-size:11px;color:#aaa;font-weight:500}
 h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#1a1a1a}
@@ -427,10 +427,21 @@ input:focus{outline:none;border-color:#7c3aed}
 <div class="card">
   <div class="logo">
     <div class="logo-mark">
-      <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/>
-        <rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/>
-        <rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/>
+      <svg viewBox="0 0 36 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0">
+            <stop offset="0%" stop-color="#1a2f6e"/>
+            <stop offset="55%" stop-color="#2563eb"/>
+            <stop offset="100%" stop-color="#60a5fa"/>
+          </linearGradient>
+          <linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0">
+            <stop offset="0%" stop-color="#3b82f6"/>
+            <stop offset="100%" stop-color="#a5b4fc"/>
+          </linearGradient>
+        </defs>
+        <path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+        <path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/>
       </svg>
     </div>
     <div><div class="logo-name">Mighty</div><div class="logo-tag">Self-Serve</div></div>
@@ -468,8 +479,8 @@ LOGIN_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
-.logo-mark{width:32px;height:32px;background:linear-gradient(160deg,#1e3a8a,#0ea5e9);border-radius:8px;display:flex;align-items:center;justify-content:center}
-.logo-mark svg{width:18px;height:18px}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
+.logo-mark svg{width:32px;height:32px}
 .logo-name{font-size:18px;font-weight:700;color:#1a1a1a}
 h1{font-size:20px;font-weight:700;margin-bottom:20px}
 label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
@@ -485,10 +496,21 @@ input:focus{outline:none;border-color:#7c3aed}
 <div class="card">
   <div class="logo">
     <div class="logo-mark">
-      <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/>
-        <rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/>
-        <rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/>
+      <svg viewBox="0 0 36 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0">
+            <stop offset="0%" stop-color="#1a2f6e"/>
+            <stop offset="55%" stop-color="#2563eb"/>
+            <stop offset="100%" stop-color="#60a5fa"/>
+          </linearGradient>
+          <linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0">
+            <stop offset="0%" stop-color="#3b82f6"/>
+            <stop offset="100%" stop-color="#a5b4fc"/>
+          </linearGradient>
+        </defs>
+        <path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+        <path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/>
       </svg>
     </div>
     <div class="logo-name">Mighty</div>
@@ -519,8 +541,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 body{display:flex;flex-direction:column;min-height:100vh;background:#f8f7f5}
 .topbar{background:#fff;border-bottom:1px solid #e5e3df;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .topbar-logo{display:flex;align-items:center;gap:8px}
-.topbar-logo-mark{width:26px;height:26px;background:linear-gradient(160deg,#1e3a8a,#0ea5e9);border-radius:7px;display:flex;align-items:center;justify-content:center}
-.topbar-logo-mark svg{width:14px;height:14px}
+.topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
+.topbar-logo-mark svg{width:26px;height:26px}
 .topbar-name{font-size:15px;font-weight:700;color:#1a1a1a}
 .topbar-right{display:flex;align-items:center;gap:16px}
 .topbar-email{font-size:12px;color:#aaa}
@@ -597,7 +619,7 @@ details[open] summary::before{content:"\\25BE "}
 <div class="topbar">
   <div class="topbar-logo">
     <div class="topbar-logo-mark">
-      <svg viewBox="0 0 20 20" fill="none"><path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/><rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/><rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/></svg>
+      <svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
     </div>
     <span class="topbar-name">Mighty</span>
   </div>
@@ -752,8 +774,8 @@ ONBOARDING_HTML = """<!DOCTYPE html>
 body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
 .wrap{width:100%;max-width:520px}
 .logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:32px}
-.logo-mark{width:32px;height:32px;background:linear-gradient(160deg,#1e3a8a,#0ea5e9);border-radius:8px;display:flex;align-items:center;justify-content:center}
-.logo-mark svg{width:18px;height:18px}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
+.logo-mark svg{width:32px;height:32px}
 .logo-name{font-size:18px;font-weight:700}
 .progress{display:flex;gap:6px;justify-content:center;margin-bottom:28px}
 .progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s}
@@ -798,7 +820,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 <body>
 <div class="wrap">
   <div class="logo">
-    <div class="logo-mark"><svg viewBox="0 0 20 20" fill="none"><path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/><rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/><rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/></svg></div>
+    <div class="logo-mark"><svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg></div>
     <span class="logo-name">Mighty</span>
   </div>
   <div class="progress">
@@ -1145,8 +1167,8 @@ APPROVE_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;background:#f8f7f5}
 .wrap{width:100%;max-width:480px}
 .brand{display:flex;align-items:center;gap:8px;margin-bottom:20px;justify-content:center}
-.brand-mark{width:28px;height:28px;background:linear-gradient(160deg,#1e3a8a,#0ea5e9);border-radius:7px;display:flex;align-items:center;justify-content:center}
-.brand-mark svg{width:16px;height:16px}
+.brand-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center}
+.brand-mark svg{width:28px;height:28px}
 .brand-name{font-size:16px;font-weight:700;color:#1a1a1a}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08)}
 .card-header{background:#fffbeb;border-bottom:1px solid #fde68a;padding:16px 20px;display:flex;align-items:center;gap:10px}
@@ -1176,7 +1198,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 <div class="wrap">
   <div class="brand">
     <div class="brand-mark">
-      <svg viewBox="0 0 20 20" fill="none"><path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/><rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/><rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/></svg>
+      <svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
     </div>
     <span class="brand-name">Mighty</span>
   </div>
