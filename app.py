@@ -553,6 +553,11 @@ details[open] summary::before{content:"\\25BE "}
 .api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#888;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:7px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn-copy-key{font-size:11px;font-weight:600;padding:5px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;white-space:nowrap;cursor:pointer;transition:background 0.12s}
 .btn-copy-key:hover{background:#ede9fe}
+.status-row{display:flex;align-items:center;gap:12px;padding:2px 0}
+.status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:2px}
+.status-green{background:#16a34a;box-shadow:0 0 0 3px #dcfce7}
+.status-title{font-size:14px;font-weight:600;color:#1a1a1a}
+.status-sub{font-size:12px;color:#aaa;margin-top:2px}
 .prompt-hidden{display:none}
 .feed-title{font-size:17px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
 .feed-sub{font-size:13px;color:#aaa;margin-bottom:20px}
@@ -605,63 +610,7 @@ details[open] summary::before{content:"\\25BE "}
 
 <div class="main">
   {onboarding_banner}
-  <div class="sidebar">
-    <div class="card">
-      <div class="setup-heading">Connect your agent</div>
-      <div class="tab-bar">
-        <button class="tab active" onclick="switchTab('mcp',this)">Claude Desktop</button>
-        <button class="tab" onclick="switchTab('api',this)">Other / API</button>
-      </div>
-
-      <!-- Claude Desktop tab -->
-      <div id="tab-mcp" class="tab-content active">
-        <div class="step">
-          <div class="step-num">1</div>
-          <div class="step-body">
-            <div class="step-title">Download the MCP server</div>
-            <div class="step-hint" style="margin-bottom:8px">A small Python file — no install required.</div>
-            <a href="/download/mighty_mcp.py" class="btn-secondary">⬇ Download mighty_mcp.py</a>
-            <div class="step-hint">Save it to your home folder (~/).</div>
-          </div>
-        </div>
-        <div class="step">
-          <div class="step-num">2</div>
-          <div class="step-body">
-            <div class="step-title">Add to Claude Desktop config</div>
-            <div class="step-hint" style="margin-bottom:6px">Open this file and paste the config below:</div>
-            <div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>
-            <div class="code-box" id="mcpConfigBox">{mcp_config}</div>
-            <button class="btn-action" onclick="copyMcpConfig(this)">Copy config</button>
-            <div class="step-hint">Replace YOUR_USERNAME with your Mac username, then restart Claude Desktop.</div>
-          </div>
-        </div>
-        <div class="step">
-          <div class="step-num">3</div>
-          <div class="step-body">
-            <div class="step-title">Get notified on your phone</div>
-            <div class="step-hint" style="margin-bottom:8px">Install the free <strong>ntfy</strong> app, then subscribe to your personal topic:</div>
-            <div class="path-box">https://ntfy.sh/{ntfy_topic}</div>
-            <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="btn-secondary" style="margin-bottom:6px">Open in browser to test</a>
-            <div class="step-hint">You'll get a push notification with an approve/deny link every time your agent needs your permission.</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- API / Other tab -->
-      <div id="tab-api" class="tab-content">
-        <div style="font-size:13px;color:#888;margin-bottom:12px;line-height:1.5">Paste this into your agent's system prompt.</div>
-        <button class="btn-action" onclick="copyPrompt(this)">Copy system prompt</button>
-        <textarea class="prompt-hidden" id="promptBox">{prompt}</textarea>
-        <details style="margin-top:12px">
-          <summary>Show API key</summary>
-          <div class="api-key-wrap">
-            <div class="api-key-val" id="apiKeyVal">{api_key}</div>
-            <button class="btn-copy-key" onclick="copyKey(this)">Copy</button>
-          </div>
-        </details>
-      </div>
-    </div>
-  </div>
+  {sidebar_content}
 
   <div>
     <div class="feed-title">Authorization Log</div>
@@ -669,34 +618,6 @@ details[open] summary::before{content:"\\25BE "}
     <div class="feed" id="feed">
       {feed_html}
     </div>
-  </div>
-</div>
-
-<div style="max-width:1140px;width:100%;margin:0 auto;padding:0 24px 32px">
-  <div class="card" style="max-width:420px">
-    <div class="setup-heading">Notifications</div>
-    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px">
-      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444;font-weight:400">
-        <input type="checkbox" id="notif-email" {notify_email} style="width:16px;height:16px;accent-color:#7c3aed">
-        Email me when action needed
-      </label>
-      <div>
-        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444;font-weight:400">
-          <input type="checkbox" id="notif-ntfy" {notify_ntfy} style="width:16px;height:16px;accent-color:#7c3aed">
-          Push via ntfy app
-        </label>
-        <div style="margin-top:5px;margin-left:26px;font-size:11px;color:#aaa">Your topic: <span style="color:#7c3aed;font-family:ui-monospace,monospace">{ntfy_topic}</span></div>
-      </div>
-      <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-        <input type="checkbox" id="notif-push" {notify_push} style="width:16px;height:16px;accent-color:#7c3aed">
-        <span style="font-size:13px;color:#1a1a1a">Browser &amp; phone push notifications</span>
-      </label>
-    </div>
-    <button id="notif-save" class="btn-action" onclick="saveNotificationSettings()">Save</button>
-    <button id="push-enable-btn" class="btn-secondary" style="margin-top:10px" onclick="enablePush()">
-      Enable push notifications
-    </button>
-    <div id="push-status" style="font-size:11px;color:#aaa;margin-top:6px"></div>
   </div>
 </div>
 
@@ -760,30 +681,33 @@ if ('serviceWorker' in navigator && 'PushManager' in window) {
   navigator.serviceWorker.register('/sw.js').then(function(reg) {
     swReg = reg;
     reg.pushManager.getSubscription().then(function(sub) {
-      var btn = document.getElementById('push-enable-btn');
       var status = document.getElementById('push-status');
+      var btn = document.getElementById('push-enable-btn');
       if (sub) {
-        if (btn) btn.textContent = 'Push enabled ✓';
-        if (status) status.textContent = 'You will receive push notifications in this browser.';
+        if (status) { status.textContent = 'Active ✓'; status.style.color = '#16a34a'; }
+        if (btn) btn.style.display = 'none';
+      } else if (Notification.permission === 'denied') {
+        if (status) status.textContent = 'Blocked — allow in browser settings to enable.';
+        if (btn) btn.style.display = 'none';
+      } else {
+        if (btn) btn.style.display = 'inline-block';
       }
     });
   });
 }
 
 function enablePush() {
-  if (!swReg) { alert('Your browser does not support push notifications.'); return; }
+  if (!swReg) { return; }
   var status = document.getElementById('push-status');
+  var btn = document.getElementById('push-enable-btn');
   if (status) status.textContent = 'Setting up...';
+  if (btn) btn.style.display = 'none';
   fetch('/api/push/vapid-public-key').then(r => r.json()).then(function(d) {
     var converted = urlB64ToUint8Array(d.key);
-    // Always unsubscribe first so we get a fresh subscription tied to the current VAPID key
     swReg.pushManager.getSubscription().then(function(existing) {
       return existing ? existing.unsubscribe() : Promise.resolve(true);
     }).then(function() {
-      return swReg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: converted
-      });
+      return swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: converted });
     }).then(function(sub) {
       return fetch('/api/push/subscribe', {
         method: 'POST',
@@ -791,11 +715,15 @@ function enablePush() {
         body: JSON.stringify({subscription: sub.toJSON()})
       });
     }).then(function() {
-      var btn = document.getElementById('push-enable-btn');
-      if (btn) btn.textContent = 'Push enabled ✓';
-      if (status) status.textContent = 'You will receive push notifications in this browser.';
+      if (status) { status.textContent = 'Active ✓'; status.style.color = '#16a34a'; }
+      if (btn) btn.style.display = 'none';
     }).catch(function(e) {
-      if (status) status.textContent = 'Could not enable: ' + e.message;
+      if (Notification.permission === 'denied') {
+        if (status) status.textContent = 'Blocked — allow in browser settings to enable.';
+      } else {
+        if (status) status.textContent = 'Could not enable: ' + e.message;
+      }
+      if (btn) btn.style.display = 'inline-block';
     });
   });
 }
@@ -1427,27 +1355,129 @@ def dashboard():
         (session["user_id"],),
     ).fetchone()[0]
     pending_display = "flex" if pending_count > 0 else "none"
+    is_connected    = len(acts) > 0 or bool(user["onboarded"])
+
     notify_email_checked = "checked" if user["notify_email"] else ""
-    notify_ntfy_checked  = "checked" if user["notify_ntfy"] else ""
-    notify_push_checked  = "checked" if user["notify_push"] else ""
+    notify_ntfy_checked  = "checked" if user["notify_ntfy"]  else ""
+    notify_push_checked  = "checked" if user["notify_push"]  else ""
+
     onboarding_banner = ""
     if not user["onboarded"]:
-        onboarding_banner = '''<div style="grid-column:1/-1;background:#fef3c7;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:4px">
-  <div style="font-size:13px;color:#92400e">⚡ Finish setting up Mighty to connect your first agent.</div>
-  <a href="/onboarding" style="font-size:13px;font-weight:600;color:#7c3aed;white-space:nowrap">Complete setup →</a>
-</div>'''
+        onboarding_banner = (
+            '<div style="grid-column:1/-1;background:#fef3c7;border:1px solid #fde68a;'
+            'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
+            'justify-content:space-between;gap:16px;margin-bottom:4px">'
+            '<div style="font-size:13px;color:#92400e">'
+            '&#9889; Finish setting up Mighty to connect your first agent.</div>'
+            '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#7c3aed;white-space:nowrap">'
+            'Complete setup &#8594;</a></div>'
+        )
+
+    # Setup tabs HTML (shared between both sidebar states)
+    api_key_val = user["api_key"]
+    setup_tabs = (
+        '<div class="tab-bar">'
+        '<button class="tab active" onclick="switchTab(\'mcp\',this)">Claude Desktop</button>'
+        '<button class="tab" onclick="switchTab(\'api\',this)">Other / API</button>'
+        '</div>'
+        '<div id="tab-mcp" class="tab-content active">'
+        '<div class="step"><div class="step-num">1</div><div class="step-body">'
+        '<div class="step-title">Download the MCP server</div>'
+        '<div class="step-hint" style="margin-bottom:8px">A small Python file — no install required.</div>'
+        '<a href="/download/mighty_mcp.py" class="btn-secondary">&#8595; Download mighty_mcp.py</a>'
+        '<div class="step-hint">Save it to your home folder (~/).</div>'
+        '</div></div>'
+        '<div class="step"><div class="step-num">2</div><div class="step-body">'
+        '<div class="step-title">Add to Claude Desktop config</div>'
+        '<div class="step-hint" style="margin-bottom:6px">Open this file and paste the config below:</div>'
+        '<div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>'
+        '<div class="code-box" id="mcpConfigBox">' + mcp_config + '</div>'
+        '<button class="btn-action" onclick="copyMcpConfig(this)">Copy config</button>'
+        '<div class="step-hint">Replace YOUR_USERNAME with your Mac username, then restart Claude Desktop.</div>'
+        '</div></div>'
+        '<div class="step"><div class="step-num">3</div><div class="step-body">'
+        '<div class="step-title">Get notified on your phone</div>'
+        '<div class="step-hint" style="margin-bottom:8px">Install the free <strong>ntfy</strong> app, then subscribe to:</div>'
+        '<div class="path-box">https://ntfy.sh/' + topic + '</div>'
+        '<a href="https://ntfy.sh/' + topic + '" target="_blank" class="btn-secondary" style="margin-bottom:6px">Open in browser to test</a>'
+        '</div></div>'
+        '</div>'
+        '<div id="tab-api" class="tab-content">'
+        '<div style="font-size:13px;color:#888;margin-bottom:12px;line-height:1.5">'
+        "Paste this into your agent's system prompt.</div>"
+        '<button class="btn-action" onclick="copyPrompt(this)">Copy system prompt</button>'
+        '<textarea class="prompt-hidden" id="promptBox">' + prompt + '</textarea>'
+        '<details style="margin-top:12px"><summary>Show API key</summary>'
+        '<div class="api-key-wrap">'
+        '<div class="api-key-val" id="apiKeyVal">' + api_key_val + '</div>'
+        '<button class="btn-copy-key" onclick="copyKey(this)">Copy</button>'
+        '</div></details>'
+        '</div>'
+    )
+
+    # Connect card — two states
+    if is_connected:
+        connect_card = (
+            '<div class="card">'
+            '<div class="status-row">'
+            '<div class="status-dot status-green"></div>'
+            '<div>'
+            '<div class="status-title">Mighty is active</div>'
+            '<div class="status-sub">Your agent is connected</div>'
+            '</div></div>'
+            '<details style="margin-top:14px">'
+            '<summary>Set up another agent</summary>'
+            '<div style="margin-top:12px">' + setup_tabs + '</div>'
+            '</details>'
+            '</div>'
+        )
+    else:
+        connect_card = (
+            '<div class="card">'
+            '<div class="setup-heading">Connect your agent</div>'
+            + setup_tabs +
+            '</div>'
+        )
+
+    # Notifications card
+    notif_card = (
+        '<div class="card">'
+        '<div class="setup-heading">Notifications</div>'
+        '<div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px">'
+        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444">'
+        '<input type="checkbox" id="notif-email" ' + notify_email_checked + ' style="width:16px;height:16px;accent-color:#7c3aed">'
+        'Email me when action needed</label>'
+        '<div>'
+        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444">'
+        '<input type="checkbox" id="notif-ntfy" ' + notify_ntfy_checked + ' style="width:16px;height:16px;accent-color:#7c3aed">'
+        'Push via ntfy app</label>'
+        '<div style="margin-top:4px;margin-left:26px;font-size:11px;color:#aaa">Topic: '
+        '<a href="https://ntfy.sh/' + topic + '" target="_blank" '
+        'style="color:#7c3aed;font-family:ui-monospace,monospace">' + topic + '</a></div>'
+        '</div>'
+        '<div>'
+        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444">'
+        '<input type="checkbox" id="notif-push" ' + notify_push_checked + ' style="width:16px;height:16px;accent-color:#7c3aed">'
+        'Browser push notifications</label>'
+        '<div id="push-status" style="margin-top:4px;margin-left:26px;font-size:11px;color:#aaa;min-height:16px"></div>'
+        '<button id="push-enable-btn" onclick="enablePush()" '
+        'style="display:none;margin-top:6px;margin-left:26px;font-size:11px;font-weight:600;'
+        'padding:4px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer">'
+        'Enable &#8594;</button>'
+        '</div>'
+        '</div>'
+        '<button id="notif-save" class="btn-action" onclick="saveNotificationSettings()">Save</button>'
+        '</div>'
+    )
+
+    sidebar_content = '<div class="sidebar">' + connect_card + notif_card + '</div>'
+
     return (DASHBOARD_HTML
-            .replace("{email}",         user["email"])
-            .replace("{api_key}",       user["api_key"])
-            .replace("{prompt}",        prompt)
-            .replace("{mcp_config}",    mcp_config)
-            .replace("{ntfy_topic}",    topic)
-            .replace("{feed_html}",     feed)
-            .replace("{pending_count}", str(pending_count))
-            .replace("{pending_display}", pending_display)
-            .replace("{notify_email}",  notify_email_checked)
-            .replace("{notify_ntfy}",   notify_ntfy_checked)
-            .replace("{notify_push}",   notify_push_checked)
+            .replace("{email}",             user["email"])
+            .replace("{feed_html}",         feed)
+            .replace("{pending_count}",     str(pending_count))
+            .replace("{pending_display}",   pending_display)
+            .replace("{sidebar_content}",   sidebar_content)
             .replace("{onboarding_banner}", onboarding_banner))
 
 @app.route("/download/mighty_mcp.py")
