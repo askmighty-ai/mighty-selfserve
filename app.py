@@ -654,13 +654,12 @@ function autoSave() {
   saveNotificationSettings();
 }
 function saveNotificationSettings() {
-  var email = document.getElementById('notif-email').checked;
   var ntfy  = document.getElementById('notif-ntfy').checked;
   var push  = document.getElementById('notif-push').checked;
   fetch('/dashboard/notifications', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({email, ntfy, push})
+    body: JSON.stringify({email: false, ntfy, push})
   });
 }
 var hasPending = document.querySelectorAll('.is-pending').length > 0;
@@ -1474,16 +1473,6 @@ def dashboard():
         'font-family:ui-monospace,monospace;background:#f8f7f5;border:1px solid #e5e3df;'
         'border-radius:6px;padding:7px 10px;text-decoration:none;word-break:break-all">'
         'ntfy.sh/' + topic + ' &#8599;</a>'
-        '</div>'
-
-        # Email — tertiary
-        '<div>'
-        '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">'
-        '<input type="checkbox" id="notif-email" ' + notify_email_checked + ' onchange="autoSave()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">'
-        '<div>'
-        '<div style="font-size:13px;font-weight:500;color:#1a1a1a">Email alerts</div>'
-        '<div style="font-size:11px;color:#aaa;margin-top:1px">Sent to ' + user_email + '</div>'
-        '</div></label>'
         '</div>'
 
         '</div>'  # close card
