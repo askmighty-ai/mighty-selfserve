@@ -446,7 +446,7 @@ input:focus{outline:none;border-color:#7c3aed}
     <label>Email</label>
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
     <label>Password</label>
-    <input type="password" name="password" placeholder="Choose a password" required autocomplete="new-password">
+    <input type="password" name="password" placeholder="Choose a password" required autocomplete="new-password" minlength="6" maxlength="128">
     <button class="btn-primary" type="submit">Create free account →</button>
   </form>
   <div class="footer">Already have an account? <a href="/login">Sign in</a></div>
@@ -493,7 +493,7 @@ input:focus{outline:none;border-color:#7c3aed}
     <label>Email</label>
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
     <label>Password</label>
-    <input type="password" name="password" placeholder="Your password" required autocomplete="current-password">
+    <input type="password" name="password" placeholder="Your password" required autocomplete="current-password" maxlength="128">
     <button class="btn-primary" type="submit">Sign in →</button>
   </form>
   <div class="footer">No account? <a href="/">Sign up free</a></div>
@@ -655,19 +655,17 @@ function saveNotificationSettings() {
   fetch('/dashboard/notifications', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({email: false, ntfy, push})
+    body: JSON.stringify({ntfy, push})
   });
 }
-var hasPending = document.querySelectorAll('.is-pending').length > 0;
-if (hasPending) {
-  setInterval(() => location.reload(), 4000);
-} else {
-  setInterval(() => {
-    fetch('/dashboard/has-pending').then(r => r.json()).then(d => {
-      if (d.pending) location.reload();
-    });
-  }, 4000);
-}
+var lastPending = document.querySelectorAll('.is-pending').length > 0;
+setInterval(function() {
+  fetch('/dashboard/has-pending').then(function(r) { return r.json(); }).then(function(d) {
+    if (d.pending !== lastPending) {
+      location.reload();
+    }
+  }).catch(function() {});
+}, 5000);
 
 // Web Push
 var swReg = null;
@@ -835,7 +833,10 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
           <div class="agent-desc">API / code</div>
         </div>
       </div>
-      <button class="btn btn-primary" id="btn-next-agent" onclick="goTo(2)" disabled style="opacity:0.4">Continue →</button>
+      <div class="btn-row" style="margin-top:4px">
+        <button class="btn btn-secondary" onclick="goTo(0)">← Back</button>
+        <button class="btn btn-primary" id="btn-next-agent" onclick="goTo(2)" disabled style="opacity:0.4;flex:1">Continue →</button>
+      </div>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
 
@@ -936,7 +937,10 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
         </div>
       </div>
 
-      <button class="btn btn-primary" onclick="goTo(3)">I've done this →</button>
+      <div class="btn-row" style="margin-top:4px">
+        <button class="btn btn-secondary" onclick="goTo(1)">← Back</button>
+        <button class="btn btn-primary" onclick="goTo(3)" style="flex:1">I've done this →</button>
+      </div>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
 
@@ -962,7 +966,10 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
           <button class="btn-copy" onclick="copyCurl(this)" style="margin-top:6px">Copy</button>
         </div>
       </div>
-      <button class="btn btn-primary" id="btn-test-continue" onclick="goTo(4)">Continue →</button>
+      <div class="btn-row" style="margin-top:4px">
+        <button class="btn btn-secondary" onclick="goTo(2)">← Back</button>
+        <button class="btn btn-primary" id="btn-test-continue" onclick="goTo(4)" style="flex:1">Continue →</button>
+      </div>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
 
@@ -977,7 +984,10 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
         <div style="font-size:12px;color:#aaa;margin-bottom:8px">Also want notifications on your phone? Install the free <strong style="color:#555">ntfy</strong> app and subscribe to:</div>
         <div class="path-box">{ntfy_url}</div>
       </div>
-      <button class="btn btn-primary" onclick="finish()" style="margin-top:20px">Go to my dashboard →</button>
+      <div class="btn-row" style="margin-top:20px">
+        <button class="btn btn-secondary" onclick="goTo(3)">← Back</button>
+        <button class="btn btn-primary" onclick="finish()" style="flex:1">Go to my dashboard →</button>
+      </div>
       <div class="skip"><a href="/onboarding/skip">Skip, go to dashboard</a></div>
     </div>
 
@@ -1072,8 +1082,9 @@ function copyCurl(btn) {
 }
 
 function startTestPoll() {
+  var since = Math.floor(Date.now() / 1000);
   testPollTimer = setInterval(function() {
-    fetch('/dashboard/has-pending').then(function(r) { return r.json(); }).then(function(d) {
+    fetch('/dashboard/has-pending?since=' + since).then(function(r) { return r.json(); }).then(function(d) {
       if (d.pending) {
         clearInterval(testPollTimer);
         document.getElementById('test-waiting').style.display = 'none';
@@ -1237,7 +1248,7 @@ def login():
 @app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
-    return redirect("/login")
+    return redirect("/")
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -1323,7 +1334,6 @@ def action_card_html(a, base, show_buttons):
     return f'''<div class="action-card{pending_cls}">
       <div class="action-top">
         <div>
-          <div class="action-id">{auth_id}</div>
           <div class="action-label">{a["label"]}</div>
         </div>
         <div class="action-badges">
@@ -1356,7 +1366,7 @@ def dashboard():
         (session["user_id"],),
     ).fetchone()[0]
     pending_display = "flex" if pending_count > 0 else "none"
-    is_connected    = len(acts) > 0 or bool(user["onboarded"])
+    is_connected    = len(acts) > 0
 
     notify_email_checked = "checked" if user["notify_email"] else ""
     notify_ntfy_checked  = "checked" if user["notify_ntfy"]  else ""
@@ -1541,10 +1551,24 @@ def decide(action_id):
 @require_login
 def has_pending():
     expire_pending()
-    row = get_db().execute(
-        "SELECT 1 FROM actions WHERE user_id=? AND status='pending' LIMIT 1",
-        (session["user_id"],),
-    ).fetchone()
+    since = request.args.get("since")
+    if since:
+        try:
+            since_dt = datetime.fromtimestamp(float(since), tz=timezone.utc).isoformat()
+            row = get_db().execute(
+                "SELECT 1 FROM actions WHERE user_id=? AND status='pending' AND created_at > ? LIMIT 1",
+                (session["user_id"], since_dt),
+            ).fetchone()
+        except (ValueError, OSError):
+            row = get_db().execute(
+                "SELECT 1 FROM actions WHERE user_id=? AND status='pending' LIMIT 1",
+                (session["user_id"],),
+            ).fetchone()
+    else:
+        row = get_db().execute(
+            "SELECT 1 FROM actions WHERE user_id=? AND status='pending' LIMIT 1",
+            (session["user_id"],),
+        ).fetchone()
     return jsonify({"pending": bool(row)})
 
 @app.route("/dashboard/notifications", methods=["POST"])
@@ -1811,8 +1835,7 @@ self.addEventListener('notificationclick', function(e) {
   e.notification.close();
   var url = e.notification.data.url;
   if (e.action === 'deny') {
-    url = url.replace('/approve/', '/deny/');
-    fetch(url, {method:'POST'}).catch(function(){});
+    fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({decision:'deny'})}).catch(function(){});
     return;
   }
   e.waitUntil(clients.openWindow(e.notification.data.url));
@@ -1836,15 +1859,26 @@ def push_subscribe():
     sub  = data.get("subscription")
     if not sub:
         return jsonify({"error": "missing subscription"}), 400
-    sub_str = json.dumps(sub)
+    sub_str  = json.dumps(sub)
+    endpoint = sub.get("endpoint", "")
     db = get_db()
-    # Remove old subscriptions for this user first (one per user for simplicity)
-    db.execute("DELETE FROM push_subscriptions WHERE user_id=?", (session["user_id"],))
-    sub_id = secrets.token_hex(8)
-    db.execute(
-        "INSERT INTO push_subscriptions (id,user_id,subscription,created_at) VALUES (?,?,?,?)",
-        (sub_id, session["user_id"], sub_str, iso())
-    )
+    # Check if subscription with this endpoint already exists for the user
+    existing = db.execute(
+        "SELECT id FROM push_subscriptions WHERE user_id=? AND subscription LIKE ?",
+        (session["user_id"], f'%{endpoint}%')
+    ).fetchone()
+    if existing:
+        # Update the existing record (keys may have rotated)
+        db.execute(
+            "UPDATE push_subscriptions SET subscription=?, created_at=? WHERE id=?",
+            (sub_str, iso(), existing["id"])
+        )
+    else:
+        sub_id = secrets.token_hex(8)
+        db.execute(
+            "INSERT INTO push_subscriptions (id,user_id,subscription,created_at) VALUES (?,?,?,?)",
+            (sub_id, session["user_id"], sub_str, iso())
+        )
     db.commit()
     return jsonify({"ok": True})
 
