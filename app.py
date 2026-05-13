@@ -582,7 +582,7 @@ details[open] summary::before{content:"\\25BE "}
 .clevel-sensitive{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:#eff6ff;color:#2563eb;letter-spacing:0.3px}
 .clevel-consequential{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:#fffbeb;color:#d97706;letter-spacing:0.3px}
 .clevel-critical{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:#fef2f2;color:#dc2626;letter-spacing:0.3px}
-.empty-state{text-align:center;padding:60px 20px;color:#ccc}
+.empty-state{text-align:center;padding:40px 20px;color:#ccc}
 .empty-state-icon{width:40px;height:40px;background:#f3f0ff;border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}
 .empty-state-title{font-size:15px;font-weight:600;color:#888;margin-bottom:6px}
 .empty-state-sub{font-size:13px;color:#bbb;line-height:1.6}
@@ -611,7 +611,7 @@ details[open] summary::before{content:"\\25BE "}
 
   <div class="feed-col">
     <div class="feed-title">Authorization Log</div>
-    <div class="feed-sub">Actions your agents have taken or requested your approval for</div>
+    <div class="feed-sub">Agent actions and approval requests appear here</div>
     <div class="feed" id="feed">
       {feed_html}
     </div>
@@ -1500,7 +1500,49 @@ def dashboard():
         '</div>'  # close card
     )
 
-    sidebar_content = '<div class="sidebar">' + connect_card + notif_card + '</div>'
+    if len(acts) == 0:
+        # Compact empty-state sidebar — fits on screen without any scrolling
+        compact_connect = (
+            '<div class="card">'
+            '<div class="setup-heading">Connect your agent</div>'
+            '<p style="font-size:13px;color:#888;line-height:1.5;margin-bottom:14px">'
+            'A few minutes of setup connects Mighty to your agent.</p>'
+            '<a href="/onboarding" style="display:block;text-align:center;padding:10px;'
+            'background:#7c3aed;color:#fff;border-radius:8px;font-size:13px;font-weight:600;'
+            'text-decoration:none;margin-bottom:4px">Launch setup wizard &#8594;</a>'
+            '<details style="margin-top:12px">'
+            '<summary style="font-size:12px;color:#aaa;cursor:pointer;list-style:none;padding:4px 0">'
+            '<span style="font-size:10px">&#9658;</span> Manual setup</summary>'
+            '<div style="margin-top:10px">' + setup_tabs + '</div>'
+            '</details>'
+            '</div>'
+        )
+        compact_notif = (
+            '<div class="card">'
+            '<div class="setup-heading" style="margin-bottom:10px">Notifications</div>'
+            '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:4px 0">'
+            '<input type="checkbox" id="notif-push" ' + notify_push_checked + ' onchange="autoSave()" '
+            'style="width:15px;height:15px;accent-color:#7c3aed;flex-shrink:0">'
+            '<div><div style="font-size:13px;font-weight:500;color:#1a1a1a">Browser alerts</div>'
+            '<div style="font-size:11px;color:#aaa">Desktop popup for approvals</div></div>'
+            '</label>'
+            '<div id="push-status" style="margin-left:25px;font-size:11px;color:#aaa;min-height:12px"></div>'
+            '<button id="push-enable-btn" onclick="enablePush()" style="display:none;margin-top:4px;'
+            'margin-left:25px;font-size:11px;font-weight:600;padding:4px 10px;background:#f3f0ff;'
+            'color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer">'
+            'Allow notifications &#8594;</button>'
+            '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:4px 0;margin-top:6px">'
+            '<input type="checkbox" id="notif-ntfy" ' + notify_ntfy_checked + ' onchange="autoSave()" '
+            'style="width:15px;height:15px;accent-color:#7c3aed;flex-shrink:0">'
+            '<div><div style="font-size:13px;font-weight:500;color:#1a1a1a">Phone alerts</div>'
+            '<div style="font-size:11px;color:#aaa">via <a href="https://ntfy.sh/' + topic + '" '
+            'target="_blank" style="color:#7c3aed">ntfy</a> — subscribe on your phone</div></div>'
+            '</label>'
+            '</div>'
+        )
+        sidebar_content = '<div class="sidebar">' + compact_connect + compact_notif + '</div>'
+    else:
+        sidebar_content = '<div class="sidebar">' + connect_card + notif_card + '</div>'
 
     return (DASHBOARD_HTML
             .replace("{email}",             user["email"])
