@@ -977,9 +977,9 @@ function goTo(n) {
     startTestPoll();
     var testSub = document.getElementById('test-sub');
     var AGENT_TEST_SUBS = {
-      claude:  'In Claude Desktop, ask your agent to do something that needs approval. Mighty will intercept the request automatically.',
-      chatgpt: 'In your ChatGPT project, have the agent attempt a consequential action. If the system prompt is in place, it will call the Mighty API.',
-      custom:  'Trigger an action in your agent that calls the Mighty authorization API. We\'ll detect it automatically.'
+      claude:  "In Claude Desktop, ask your agent to do something that needs approval. Mighty will intercept the request automatically.",
+      chatgpt: "In your ChatGPT project, have the agent attempt a consequential action. If the system prompt is in place, it will call the Mighty API.",
+      custom:  "Trigger an action in your agent that calls the Mighty authorization API. Detection is automatic."
     };
     if (testSub && selectedAgent && AGENT_TEST_SUBS[selectedAgent]) {
       testSub.textContent = AGENT_TEST_SUBS[selectedAgent];
