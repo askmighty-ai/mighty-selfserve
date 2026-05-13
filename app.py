@@ -711,7 +711,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
 .code-box{font-family:ui-monospace,monospace;font-size:10px;color:#6b7280;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;overflow-y:auto;margin:5px 0;max-width:100%;max-height:82px}
 .path-box{font-family:ui-monospace,monospace;font-size:10px;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:7px 10px;word-break:break-all;margin:5px 0}
 .btn{width:100%;padding:11px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.12s}
-.btn-primary{background:#7c3aed;color:#fff}.btn-primary:hover{background:#6d28d9}
+.btn-primary{background:#7c3aed;color:#fff}.btn-primary:hover{background:#6d28d9}.btn-primary.btn-dim{background:#c4b5fd !important;cursor:not-allowed}
 .btn-secondary{background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff}.btn-secondary:hover{background:#ede9fe}
 .btn-copy{font-size:12px;font-weight:600;padding:5px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer;transition:background 0.12s;white-space:nowrap}
 .btn-copy:hover{background:#ede9fe}
@@ -788,7 +788,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       </div>
       <div class="btn-row" style="margin-top:12px">
         <button class="btn btn-secondary" onclick="goTo(0)">← Back</button>
-        <button class="btn btn-primary" id="btn-next-agent" onclick="continueFromAgent()" disabled style="background:#c4b5fd;cursor:not-allowed;flex:1">Continue →</button>
+        <button class="btn btn-primary btn-dim" id="btn-next-agent" onclick="continueFromAgent()" style="flex:1">Continue →</button>
       </div>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
@@ -993,7 +993,7 @@ function selectAgent(agent) {
   document.querySelectorAll('.agent-card').forEach(function(c) { c.classList.remove('selected'); });
   event.currentTarget.classList.add('selected');
   var btn = document.getElementById('btn-next-agent');
-  btn.disabled = false; btn.style.background = ''; btn.style.cursor = '';
+  btn.classList.remove('btn-dim');
   renderSetup(agent);
 }
 
@@ -1037,6 +1037,7 @@ function buildCheckpointPrompt(actions, agentType) {
 }
 
 function continueFromAgent() {
+  if (!selectedAgent) return;
   var selected = [];
   document.querySelectorAll('.cap-check:checked').forEach(function(cb) {
     if (CAPABILITY_ACTIONS[cb.value]) selected.push(CAPABILITY_ACTIONS[cb.value]);
