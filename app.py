@@ -31,6 +31,8 @@ POSTMARK_API_KEY = os.environ.get("POSTMARK_API_KEY", "")
 POSTMARK_FROM    = os.environ.get("POSTMARK_FROM", "Mighty <noreply@mighty.ai>")
 NOTIFY_EMAIL_OVERRIDE = os.environ.get("NOTIFY_EMAIL", "")  # override recipient for sandbox testing
 
+LOGO_ICON_B64 = "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"
+
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
@@ -405,7 +407,7 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:440px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.logo-mark svg{width:32px;height:32px}
+.logo-mark img{width:32px;height:32px;object-fit:contain}
 .logo-name{font-size:18px;font-weight:700;color:#1a1a1a}
 .logo-tag{font-size:11px;color:#aaa;font-weight:500}
 h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#1a1a1a}
@@ -427,22 +429,7 @@ input:focus{outline:none;border-color:#7c3aed}
 <div class="card">
   <div class="logo">
     <div class="logo-mark">
-      <svg viewBox="0 0 36 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0">
-            <stop offset="0%" stop-color="#1a2f6e"/>
-            <stop offset="55%" stop-color="#2563eb"/>
-            <stop offset="100%" stop-color="#60a5fa"/>
-          </linearGradient>
-          <linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0">
-            <stop offset="0%" stop-color="#3b82f6"/>
-            <stop offset="100%" stop-color="#a5b4fc"/>
-          </linearGradient>
-        </defs>
-        <path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/>
-        <path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/>
-      </svg>
+      <img src="/logo-icon.png" alt="Mighty">
     </div>
     <div><div class="logo-name">Mighty</div><div class="logo-tag">Self-Serve</div></div>
   </div>
@@ -480,7 +467,7 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.logo-mark svg{width:32px;height:32px}
+.logo-mark img{width:32px;height:32px;object-fit:contain}
 .logo-name{font-size:18px;font-weight:700;color:#1a1a1a}
 h1{font-size:20px;font-weight:700;margin-bottom:20px}
 label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
@@ -496,22 +483,7 @@ input:focus{outline:none;border-color:#7c3aed}
 <div class="card">
   <div class="logo">
     <div class="logo-mark">
-      <svg viewBox="0 0 36 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0">
-            <stop offset="0%" stop-color="#1a2f6e"/>
-            <stop offset="55%" stop-color="#2563eb"/>
-            <stop offset="100%" stop-color="#60a5fa"/>
-          </linearGradient>
-          <linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0">
-            <stop offset="0%" stop-color="#3b82f6"/>
-            <stop offset="100%" stop-color="#a5b4fc"/>
-          </linearGradient>
-        </defs>
-        <path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/>
-        <path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/>
-      </svg>
+      <img src="/logo-icon.png" alt="Mighty">
     </div>
     <div class="logo-name">Mighty</div>
   </div>
@@ -542,7 +514,7 @@ body{display:flex;flex-direction:column;min-height:100vh;background:#f8f7f5}
 .topbar{background:#fff;border-bottom:1px solid #e5e3df;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .topbar-logo{display:flex;align-items:center;gap:8px}
 .topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
-.topbar-logo-mark svg{width:26px;height:26px}
+.topbar-logo-mark img{width:26px;height:26px;object-fit:contain}
 .topbar-name{font-size:15px;font-weight:700;color:#1a1a1a}
 .topbar-right{display:flex;align-items:center;gap:16px}
 .topbar-email{font-size:12px;color:#aaa}
@@ -619,7 +591,7 @@ details[open] summary::before{content:"\\25BE "}
 <div class="topbar">
   <div class="topbar-logo">
     <div class="topbar-logo-mark">
-      <svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/><path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>
+      <img src="/logo-icon.png" alt="Mighty">
     </div>
     <span class="topbar-name">Mighty</span>
   </div>
@@ -775,7 +747,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 .wrap{width:100%;max-width:520px}
 .logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:32px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.logo-mark svg{width:32px;height:32px}
+.logo-mark img{width:32px;height:32px;object-fit:contain}
 .logo-name{font-size:18px;font-weight:700}
 .progress{display:flex;gap:6px;justify-content:center;margin-bottom:28px}
 .progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s}
@@ -820,7 +792,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 <body>
 <div class="wrap">
   <div class="logo">
-    <div class="logo-mark"><svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/><path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></div>
+    <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
     <span class="logo-name">Mighty</span>
   </div>
   <div class="progress">
@@ -1168,7 +1140,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 .wrap{width:100%;max-width:480px}
 .brand{display:flex;align-items:center;gap:8px;margin-bottom:20px;justify-content:center}
 .brand-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center}
-.brand-mark svg{width:28px;height:28px}
+.brand-mark img{width:28px;height:28px;object-fit:contain}
 .brand-name{font-size:16px;font-weight:700;color:#1a1a1a}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08)}
 .card-header{background:#fffbeb;border-bottom:1px solid #fde68a;padding:16px 20px;display:flex;align-items:center;gap:10px}
@@ -1198,7 +1170,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 <div class="wrap">
   <div class="brand">
     <div class="brand-mark">
-      <svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/><path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>
+      <img src="/logo-icon.png" alt="Mighty">
     </div>
     <span class="brand-name">Mighty</span>
   </div>
@@ -1212,6 +1184,13 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
+
+@app.route("/logo-icon.png")
+def logo_icon():
+    import base64
+    from flask import Response
+    return Response(base64.b64decode(LOGO_ICON_B64), mimetype="image/png",
+                    headers={"Cache-Control": "public, max-age=31536000"})
 
 @app.route("/")
 def landing():
