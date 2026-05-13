@@ -994,23 +994,23 @@ function toggleCap(label, key) {
 }
 
 function buildCheckpointPrompt(actions, agentType) {
-  var list = actions.map(function(a) { return '- ' + a; }).join('\n');
+  var list = actions.map(function(a) { return '- ' + a; }).join('\\n');
   if (agentType === 'claude') {
     return (
-      "MIGHTY AUTHORIZATION — follow every session.\n\n"
-      + "Before:\n" + list + "\n\n"
-      + "call request_authorization(action_type, label). Poll check_authorization every 3s until resolved.\n"
-      + "→ approved: proceed | denied or timeout: stop\n\n"
+      "MIGHTY AUTHORIZATION — follow every session.\\n\\n"
+      + "Before:\\n" + list + "\\n\\n"
+      + "call request_authorization(action_type, label). Poll check_authorization every 3s until resolved.\\n"
+      + "approved: proceed | denied or timeout: stop\\n\\n"
       + "For routine actions that don't need approval, call record_action to log them."
     );
   } else {
     return (
-      "MIGHTY AUTHORIZATION — follow every session.\n\n"
-      + "Before:\n" + list + "\n\n"
-      + "POST " + BASE_URL + "/api/authorize\n"
-      + '  {"api_key":"' + API_KEY + '","action_type":"<type>","label":"<desc>","fields":[["Key","Val"]]}\n'
-      + "→ approved: proceed | denied or timeout: stop | pending: poll GET " + BASE_URL + "/api/status/<id> every 3s\n\n"
-      + "Routine actions: POST " + BASE_URL + "/api/record\n"
+      "MIGHTY AUTHORIZATION — follow every session.\\n\\n"
+      + "Before:\\n" + list + "\\n\\n"
+      + "POST " + BASE_URL + "/api/authorize\\n"
+      + '  {"api_key":"' + API_KEY + '","action_type":"<type>","label":"<desc>","fields":[["Key","Val"]]}\\n'
+      + "approved: proceed | denied or timeout: stop | pending: poll GET " + BASE_URL + "/api/status/ID every 3s\\n\\n"
+      + "Routine actions: POST " + BASE_URL + "/api/record\\n"
       + '  {"api_key":"' + API_KEY + '","action_type":"<type>","label":"<desc>","outcome":"completed"}'
     );
   }
