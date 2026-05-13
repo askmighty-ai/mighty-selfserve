@@ -1181,7 +1181,7 @@ function enablePush() {
       });
     }).then(function() {
       document.getElementById('push-btn').textContent = 'Notifications enabled ✓';
-      document.getElementById('push-status').textContent = 'You\'re all set.';
+      document.getElementById('push-status').textContent = "You're all set.";
     }).catch(function(e) {
       document.getElementById('push-status').textContent = 'Could not enable: ' + e.message;
     });
