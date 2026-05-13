@@ -650,6 +650,9 @@ function decide(actionId, decision) {
     body: JSON.stringify({decision})
   }).then(() => location.reload());
 }
+function autoSave() {
+  saveNotificationSettings();
+}
 function saveNotificationSettings() {
   var email = document.getElementById('notif-email').checked;
   var ntfy  = document.getElementById('notif-ntfy').checked;
@@ -658,10 +661,6 @@ function saveNotificationSettings() {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({email, ntfy, push})
-  }).then(() => {
-    var btn = document.getElementById('notif-save');
-    btn.textContent = 'Saved!';
-    setTimeout(() => btn.textContent = 'Save', 1800);
   });
 }
 var hasPending = document.querySelectorAll('.is-pending').length > 0;
@@ -1276,7 +1275,7 @@ def build_feed_html(actions, base):
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2L3 6v8l7 4 7-4V6l-7-4z" stroke="#7c3aed" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 2v12M3 6l7 4 7-4" stroke="#7c3aed" stroke-width="1.5" stroke-linejoin="round"/></svg>
   </div>
   <div class="empty-state-title">No actions yet</div>
-  <div class="empty-state-sub">Copy the system prompt from the sidebar<br>and paste it into your Claude project to get started.</div>
+  <div class="empty-state-sub">When your agent logs an action or requests approval,<br>it will appear here.</div>
 </div>'''
     html = []
     pending = [a for a in actions if a["status"] == "pending"]
@@ -1440,34 +1439,54 @@ def dashboard():
         )
 
     # Notifications card
+    user_email = user["email"]
     notif_card = (
         '<div class="card">'
         '<div class="setup-heading">Notifications</div>'
-        '<div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px">'
-        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444">'
-        '<input type="checkbox" id="notif-email" ' + notify_email_checked + ' style="width:16px;height:16px;accent-color:#7c3aed">'
-        'Email me when action needed</label>'
+
+        # Browser push — primary
+        '<div style="padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #f0ede8">'
+        '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">'
+        '<input type="checkbox" id="notif-push" ' + notify_push_checked + ' onchange="autoSave()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">'
         '<div>'
-        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444">'
-        '<input type="checkbox" id="notif-ntfy" ' + notify_ntfy_checked + ' style="width:16px;height:16px;accent-color:#7c3aed">'
-        'Push via ntfy app</label>'
-        '<div style="margin-top:4px;margin-left:26px;font-size:11px;color:#aaa">Topic: '
-        '<a href="https://ntfy.sh/' + topic + '" target="_blank" '
-        'style="color:#7c3aed;font-family:ui-monospace,monospace">' + topic + '</a></div>'
-        '</div>'
-        '<div>'
-        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:#444">'
-        '<input type="checkbox" id="notif-push" ' + notify_push_checked + ' style="width:16px;height:16px;accent-color:#7c3aed">'
-        'Browser push notifications</label>'
-        '<div id="push-status" style="margin-top:4px;margin-left:26px;font-size:11px;color:#aaa;min-height:16px"></div>'
+        '<div style="font-size:13px;font-weight:500;color:#1a1a1a">Browser alerts</div>'
+        '<div style="font-size:11px;color:#aaa;margin-top:1px">Desktop popup when your agent needs a decision</div>'
+        '</div></label>'
+        '<div id="push-status" style="margin-top:6px;margin-left:26px;font-size:11px;color:#aaa;min-height:14px"></div>'
         '<button id="push-enable-btn" onclick="enablePush()" '
         'style="display:none;margin-top:6px;margin-left:26px;font-size:11px;font-weight:600;'
-        'padding:4px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer">'
-        'Enable &#8594;</button>'
+        'padding:5px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer">'
+        'Allow notifications &#8594;</button>'
         '</div>'
+
+        # Phone (ntfy) — secondary
+        '<div style="padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #f0ede8">'
+        '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">'
+        '<input type="checkbox" id="notif-ntfy" ' + notify_ntfy_checked + ' onchange="autoSave()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">'
+        '<div>'
+        '<div style="font-size:13px;font-weight:500;color:#1a1a1a">Phone alerts</div>'
+        '<div style="font-size:11px;color:#aaa;margin-top:1px;line-height:1.5">'
+        'Install the free <a href="https://ntfy.sh" target="_blank" style="color:#7c3aed">ntfy app</a>'
+        ', then tap this link on your phone:</div>'
+        '</div></label>'
+        '<a href="https://ntfy.sh/' + topic + '" target="_blank" '
+        'style="display:block;margin-top:8px;margin-left:26px;font-size:11px;color:#7c3aed;'
+        'font-family:ui-monospace,monospace;background:#f8f7f5;border:1px solid #e5e3df;'
+        'border-radius:6px;padding:7px 10px;text-decoration:none;word-break:break-all">'
+        'ntfy.sh/' + topic + ' &#8599;</a>'
         '</div>'
-        '<button id="notif-save" class="btn-action" onclick="saveNotificationSettings()">Save</button>'
+
+        # Email — tertiary
+        '<div>'
+        '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">'
+        '<input type="checkbox" id="notif-email" ' + notify_email_checked + ' onchange="autoSave()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">'
+        '<div>'
+        '<div style="font-size:13px;font-weight:500;color:#1a1a1a">Email alerts</div>'
+        '<div style="font-size:11px;color:#aaa;margin-top:1px">Sent to ' + user_email + '</div>'
+        '</div></label>'
         '</div>'
+
+        '</div>'  # close card
     )
 
     sidebar_content = '<div class="sidebar">' + connect_card + notif_card + '</div>'
