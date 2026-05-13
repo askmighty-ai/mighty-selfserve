@@ -440,8 +440,8 @@ input:focus{outline:none;border-color:#7c3aed}
           </linearGradient>
         </defs>
         <path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/>
-        <path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+        <path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+        <path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/>
       </svg>
     </div>
     <div><div class="logo-name">Mighty</div><div class="logo-tag">Self-Serve</div></div>
@@ -509,8 +509,8 @@ input:focus{outline:none;border-color:#7c3aed}
           </linearGradient>
         </defs>
         <path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/>
-        <path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+        <path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+        <path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/>
       </svg>
     </div>
     <div class="logo-name">Mighty</div>
@@ -619,7 +619,7 @@ details[open] summary::before{content:"\\25BE "}
 <div class="topbar">
   <div class="topbar-logo">
     <div class="topbar-logo-mark">
-      <svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
+      <svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/><path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>
     </div>
     <span class="topbar-name">Mighty</span>
   </div>
@@ -820,7 +820,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 <body>
 <div class="wrap">
   <div class="logo">
-    <div class="logo-mark"><svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg></div>
+    <div class="logo-mark"><svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/><path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></div>
     <span class="logo-name">Mighty</span>
   </div>
   <div class="progress">
@@ -1198,7 +1198,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 <div class="wrap">
   <div class="brand">
     <div class="brand-mark">
-      <svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 30L10 20A4 4 0 0 0 18 20L18 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/><path d="M18 30L18 20A4 4 0 0 0 26 20L26 30" stroke="#fff" stroke-opacity="0.9" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>
+      <svg viewBox="0 0 36 40" fill="none"><defs><linearGradient id="hf" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#1a2f6e"/><stop offset="55%" stop-color="#2563eb"/><stop offset="100%" stop-color="#60a5fa"/></linearGradient><linearGradient id="hs" x1="0" y1="1" x2="0.9" y2="0"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#a5b4fc"/></linearGradient></defs><path d="M18 1L33 10V30L18 39L3 30V10Z" fill="url(#hf)" stroke="url(#hs)" stroke-width="1.5" stroke-linejoin="round"/><path d="M9 31L9 20A4.5 4.5 0 0 1 18 20L18 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/><path d="M18 31L18 20A4.5 4.5 0 0 1 27 20L27 31" stroke="#fff" stroke-opacity="0.92" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>
     </div>
     <span class="brand-name">Mighty</span>
   </div>
