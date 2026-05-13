@@ -1427,6 +1427,10 @@ def dashboard():
             '<summary>Set up another agent</summary>'
             '<div style="margin-top:12px">' + setup_tabs + '</div>'
             '</details>'
+            '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f0ede8">'
+            '<a href="/onboarding" style="font-size:12px;color:#aaa;text-decoration:none">'
+            '&#8635; Revisit setup guide</a>'
+            '</div>'
             '</div>'
         )
     else:
