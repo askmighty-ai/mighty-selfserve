@@ -210,8 +210,8 @@ def fmt_time(iso_str):
 STATUS_BADGE = {
     "logged":   '<span class="badge badge-logged">Logged</span>',
     "pending":  '<span class="badge badge-pending">Pending</span>',
-    "approved": '<span class="badge badge-approved">Authorized</span>',
-    "denied":   '<span class="badge badge-denied">Rejected</span>',
+    "approved": '<span class="badge badge-approved">Approved</span>',
+    "denied":   '<span class="badge badge-denied">Denied</span>',
     "timeout":  '<span class="badge badge-timeout">Timed out</span>',
 }
 
@@ -410,7 +410,6 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.logo-tag{font-size:11px;color:#aaa;font-weight:500}
 h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#1a1a1a}
 .sub{font-size:14px;color:#666;line-height:1.6;margin-bottom:24px}
 .bullets{display:flex;flex-direction:column;gap:8px;margin-bottom:28px}
@@ -432,13 +431,13 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-mark">
       <img src="/logo-icon.png" alt="Mighty">
     </div>
-    <div><div class="logo-name">Mighty</div><div class="logo-tag">Self-Serve</div></div>
+    <div class="logo-name">Mighty</div>
   </div>
   <h1>Your AI agents, accountable.</h1>
   <p class="sub">A personal authorization layer for AI agents. Know what they do, approve what matters.</p>
   <div class="bullets">
     <div class="bullet"><div class="bullet-dot">1</div>Sign up and get a personal API key</div>
-    <div class="bullet"><div class="bullet-dot">2</div>Paste one system prompt into your Claude project</div>
+    <div class="bullet"><div class="bullet-dot">2</div>Add a system prompt to your agent — Claude, ChatGPT, or your own</div>
     <div class="bullet"><div class="bullet-dot">3</div>Every agent action is logged — and you approve the important ones</div>
   </div>
   <hr class="divider">
@@ -597,7 +596,7 @@ details[open] summary::before{content:"\\25BE "}
     <span class="topbar-name">Mighty</span>
   </div>
   <div id="pending-badge" style="display:{pending_display};background:#fef3c7;border:1px solid #fde68a;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#92400e">
-    ⏳ {pending_count} waiting
+    {pending_count} awaiting decision
   </div>
   <div class="topbar-right">
     <a href="/settings" style="font-size:12px;color:#6b7280;text-decoration:none">Settings</a>
@@ -611,8 +610,8 @@ details[open] summary::before{content:"\\25BE "}
   {sidebar_content}
 
   <div class="feed-col" {feed_col_hidden}>
-    <div class="feed-title">Authorization Log</div>
-    <div class="feed-sub">Agent actions and approval requests appear here</div>
+    <div class="feed-title">Activity Log</div>
+    <div class="feed-sub">Every action your agent takes or requests approval for</div>
     <div class="feed" id="feed">
       {feed_html}
     </div>
@@ -746,7 +745,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
     <div class="step active" id="step-0">
       <div class="step-label">Welcome</div>
       <div class="step-title">You're in control of your AI agents.</div>
-      <div class="step-sub">Mighty sits between your agent and the real world. Before it sends an email, makes a purchase, or changes a file — it asks you first. You approve or reject in seconds, from anywhere.</div>
+      <div class="step-sub">Mighty puts approval checkpoints in your agent's path. You define what's consequential — the agent pauses and waits for your decision. And every action is logged, in the agent's own words.</div>
       <button class="btn btn-primary" onclick="goTo(1)">Get started →</button>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
@@ -776,14 +775,14 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       <div style="margin-top:14px">
         <div style="font-size:12px;font-weight:600;color:#6b7280;margin-bottom:8px">What can your agent do? <span style="font-weight:400;color:#9ca3af">Select all that apply</span></div>
         <div class="cap-grid">
-          <label class="cap-card" onclick="toggleCap(this,'email')"><input type="checkbox" class="cap-check" value="email" style="display:none"><span class="cap-icon">✉️</span><div><div class="cap-name">Email</div><div class="cap-sub">Send, reply, forward</div></div></label>
-          <label class="cap-card" onclick="toggleCap(this,'calendar')"><input type="checkbox" class="cap-check" value="calendar" style="display:none"><span class="cap-icon">📅</span><div><div class="cap-name">Calendar</div><div class="cap-sub">Schedule, cancel meetings</div></div></label>
-          <label class="cap-card" onclick="toggleCap(this,'purchases')"><input type="checkbox" class="cap-check" value="purchases" style="display:none"><span class="cap-icon">🛒</span><div><div class="cap-name">Purchases</div><div class="cap-sub">Orders, transactions</div></div></label>
-          <label class="cap-card" onclick="toggleCap(this,'files')"><input type="checkbox" class="cap-check" value="files" style="display:none"><span class="cap-icon">📁</span><div><div class="cap-name">File management</div><div class="cap-sub">Create, edit, delete</div></div></label>
-          <label class="cap-card" onclick="toggleCap(this,'web')"><input type="checkbox" class="cap-check" value="web" style="display:none"><span class="cap-icon">🌐</span><div><div class="cap-name">Web &amp; forms</div><div class="cap-sub">Submit forms, browse</div></div></label>
-          <label class="cap-card" onclick="toggleCap(this,'code')"><input type="checkbox" class="cap-check" value="code" style="display:none"><span class="cap-icon">💻</span><div><div class="cap-name">Code execution</div><div class="cap-sub">Run scripts, modify systems</div></div></label>
-          <label class="cap-card" onclick="toggleCap(this,'social')"><input type="checkbox" class="cap-check" value="social" style="display:none"><span class="cap-icon">📢</span><div><div class="cap-name">Social media</div><div class="cap-sub">Post, publish content</div></div></label>
-          <label class="cap-card" onclick="toggleCap(this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></label>
+          <label class="cap-card" onclick="toggleCap(event,this,'email')"><input type="checkbox" class="cap-check" value="email" style="display:none"><span class="cap-icon">✉️</span><div><div class="cap-name">Email</div><div class="cap-sub">Send, reply, forward</div></div></label>
+          <label class="cap-card" onclick="toggleCap(event,this,'calendar')"><input type="checkbox" class="cap-check" value="calendar" style="display:none"><span class="cap-icon">📅</span><div><div class="cap-name">Calendar</div><div class="cap-sub">Schedule, cancel meetings</div></div></label>
+          <label class="cap-card" onclick="toggleCap(event,this,'purchases')"><input type="checkbox" class="cap-check" value="purchases" style="display:none"><span class="cap-icon">🛒</span><div><div class="cap-name">Purchases</div><div class="cap-sub">Orders, transactions</div></div></label>
+          <label class="cap-card" onclick="toggleCap(event,this,'files')"><input type="checkbox" class="cap-check" value="files" style="display:none"><span class="cap-icon">📁</span><div><div class="cap-name">File management</div><div class="cap-sub">Create, edit, delete</div></div></label>
+          <label class="cap-card" onclick="toggleCap(event,this,'web')"><input type="checkbox" class="cap-check" value="web" style="display:none"><span class="cap-icon">🌐</span><div><div class="cap-name">Web &amp; forms</div><div class="cap-sub">Submit forms, browse</div></div></label>
+          <label class="cap-card" onclick="toggleCap(event,this,'code')"><input type="checkbox" class="cap-check" value="code" style="display:none"><span class="cap-icon">💻</span><div><div class="cap-name">Code execution</div><div class="cap-sub">Run scripts, modify systems</div></div></label>
+          <label class="cap-card" onclick="toggleCap(event,this,'social')"><input type="checkbox" class="cap-check" value="social" style="display:none"><span class="cap-icon">📢</span><div><div class="cap-name">Social media</div><div class="cap-sub">Post, publish content</div></div></label>
+          <label class="cap-card" onclick="toggleCap(event,this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></label>
         </div>
         <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" style="width:100%;font-family:'Inter',sans-serif;font-size:12px;color:#1a1a1a;background:#f8f7f5;border:1px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s" onfocus="this.style.borderColor='#c4b5fd'" onblur="this.style.borderColor='#e5e3df'">
       </div>
@@ -816,8 +815,12 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
             <div class="setup-step-body">
               <div class="setup-step-title">Open this file and paste the config</div>
               <div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span style="font-size:11px;color:#9ca3af;white-space:nowrap">Your Mac username:</span>
+                <input id="mac-username" type="text" placeholder="e.g. john" style="flex:1;font-family:'Inter',sans-serif;font-size:11px;border:1px solid #e5e3df;border-radius:6px;padding:5px 8px;outline:none;background:#f8f7f5;color:#1a1a1a" oninput="updateMcpConfig(this.value)" onfocus="this.style.borderColor='#c4b5fd'" onblur="this.style.borderColor='#e5e3df'">
+              </div>
               <div style="display:flex;align-items:flex-start;gap:8px">
-                <div class="code-box" id="mcp-config-box" style="flex:1"></div>
+                <div class="code-box" id="mcp-config-box" style="flex:1;max-height:100px"></div>
                 <button class="btn-copy" onclick="copyBox('mcp-config-box',this)" style="margin-top:6px">Copy</button>
               </div>
             </div>
@@ -826,7 +829,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
             <div class="setup-step-num">3</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Restart Claude Desktop</div>
-              <div class="setup-step-hint">Quit and reopen — replace YOUR_USERNAME with your Mac username first.</div>
+              <div class="setup-step-hint">Quit and reopen Claude Desktop. (This setup is for macOS — on Windows, the config file is at <code style="font-size:9px;background:#f0ede8;padding:1px 4px;border-radius:3px">%APPDATA%\Claude\claude_desktop_config.json</code>)</div>
             </div>
           </div>
         </div>
@@ -934,7 +937,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       <button class="btn btn-primary" id="push-btn" onclick="enablePush()" style="margin-bottom:12px">Enable push notifications</button>
       <div class="push-status" id="push-status"></div>
       <div style="margin-top:20px;padding-top:20px;border-top:1px solid #f0ede8">
-        <div style="font-size:12px;color:#aaa;margin-bottom:8px">Also want notifications on your phone? Install the free <strong style="color:#555">ntfy</strong> app and subscribe to:</div>
+        <div style="font-size:12px;color:#aaa;margin-bottom:8px">Also want notifications on your phone? Install the free <a href="https://ntfy.sh" target="_blank" style="color:#555;font-weight:600">ntfy app</a> (iOS &amp; Android) and subscribe to your channel:</div>
         <div class="path-box">{ntfy_url}</div>
       </div>
       <div class="btn-row" style="margin-top:20px">
@@ -958,13 +961,30 @@ if ('serviceWorker' in navigator && 'PushManager' in window) {
 }
 
 function goTo(n) {
-  document.getElementById('step-' + currentStep).classList.remove('active');
-  document.getElementById('dot-' + currentStep).classList.remove('active');
-  document.getElementById('dot-' + currentStep).classList.add('done');
+  var prev = currentStep;
+  document.getElementById('step-' + prev).classList.remove('active');
+  document.getElementById('dot-' + prev).classList.remove('active');
+  if (n > prev) {
+    document.getElementById('dot-' + prev).classList.add('done');
+  } else {
+    document.getElementById('dot-' + prev).classList.remove('done');
+    document.getElementById('dot-' + n).classList.remove('done');
+  }
   currentStep = n;
   document.getElementById('step-' + n).classList.add('active');
   document.getElementById('dot-' + n).classList.add('active');
-  if (n === 3) startTestPoll();
+  if (n === 3) {
+    startTestPoll();
+    var testSub = document.getElementById('test-sub');
+    var AGENT_TEST_SUBS = {
+      claude:  'In Claude Desktop, ask your agent to do something that needs approval. Mighty will intercept the request automatically.',
+      chatgpt: 'In your ChatGPT project, have the agent attempt a consequential action. If the system prompt is in place, it will call the Mighty API.',
+      custom:  'Trigger an action in your agent that calls the Mighty authorization API. We\'ll detect it automatically.'
+    };
+    if (testSub && selectedAgent && AGENT_TEST_SUBS[selectedAgent]) {
+      testSub.textContent = AGENT_TEST_SUBS[selectedAgent];
+    }
+  }
   if (n !== 3 && testPollTimer) { clearInterval(testPollTimer); testPollTimer = null; }
 }
 
@@ -988,7 +1008,8 @@ var CAPABILITY_ACTIONS = {
   apis:      "calling external services or APIs that take real-world actions",
 };
 
-function toggleCap(label, key) {
+function toggleCap(e, label, key) {
+  e.preventDefault();
   label.classList.toggle('selected');
   label.querySelector('.cap-check').checked = label.classList.contains('selected');
 }
@@ -1074,6 +1095,17 @@ function renderSetup(agent) {
   document.querySelectorAll('.agent-setup').forEach(function(el) { el.style.display = 'none'; });
   var panel = document.getElementById('setup-' + agent);
   if (panel) panel.style.display = 'block';
+}
+
+function updateMcpConfig(username) {
+  var box = document.getElementById('mcp-config-box');
+  if (!box) return;
+  try {
+    var config = JSON.parse(MCP_CONFIG);
+    var u = username.trim() || 'YOUR_USERNAME';
+    config.mcpServers.mighty.args[0] = '/Users/' + u + '/mighty_mcp.py';
+    box.textContent = JSON.stringify(config, null, 2);
+  } catch(e) {}
 }
 
 function copyBox(id, btn) {
@@ -1360,7 +1392,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
   <div class="card">
     {body}
   </div>
-  <div style="text-align:center;margin-top:16px;font-size:12px;color:#bbb">Your AI agent is waiting for this decision.</div>
+  <div id="agent-waiting-note" style="text-align:center;margin-top:16px;font-size:12px;color:#bbb">Your AI agent is waiting for this decision.</div>
 </div>
 </body>
 </html>"""
@@ -1550,8 +1582,8 @@ def action_card_html(a, base, show_buttons):
     btns = ""
     if show_buttons:
         btns = f'''<div class="action-buttons">
-          <button class="btn-authorize" onclick="decide('{a["id"]}','approve')">Authorize</button>
-          <button class="btn-reject"    onclick="decide('{a["id"]}','deny')">Reject</button>
+          <button class="btn-authorize" onclick="decide('{a["id"]}','approve')">Approve</button>
+          <button class="btn-reject"    onclick="decide('{a["id"]}','deny')">Deny</button>
         </div>'''
     return f'''<div class="action-card{pending_cls}">
       <div class="action-top">
@@ -1598,7 +1630,7 @@ def dashboard():
             'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
             'justify-content:space-between;gap:16px;margin-bottom:4px">'
             '<div style="font-size:13px;color:#92400e">'
-            '&#9889; Finish setting up Mighty to connect your first agent.</div>'
+            'Finish setting up Mighty to connect your first agent.</div>'
             '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#7c3aed;white-space:nowrap">'
             'Complete setup &#8594;</a></div>'
         )
@@ -1878,7 +1910,7 @@ def approve_page(token):
         body = '<div class="outcome timeout">Authorization request not found.</div>'
         return APPROVE_HTML.replace("{body}", body)
     if row["status"] != "pending":
-        labels = {"approved": "✓ Approved", "denied": "✗ Denied", "timeout": "⏰ Timed out"}
+        labels = {"approved": "✓ Approved", "denied": "✗ Denied", "timeout": "Timed out"}
         label  = labels.get(row["status"], row["status"].title())
         body   = f'<div class="outcome {row["status"]}">{label}</div>'
         return APPROVE_HTML.replace("{body}", body)
@@ -1898,8 +1930,8 @@ def approve_page(token):
       <div class="card-type">{row["action_type"]}</div>
       {'<div class="card-fields">' + fields_html + '</div>' if fields_html else ''}
       <div class="card-actions">
-        <button class="btn-approve" onclick="submit('approve')">Authorize</button>
-        <button class="btn-deny"    onclick="submit('deny')">Reject</button>
+        <button class="btn-approve" onclick="submit('approve')">Approve</button>
+        <button class="btn-deny"    onclick="submit('deny')">Deny</button>
       </div>
       <div class="timeout-note">This request will time out in 5 minutes if not decided.</div>
       <div id="expiry-timer" style="text-align:center;padding:0 20px 14px;font-size:12px;color:#aaa"></div>
@@ -1908,7 +1940,9 @@ def approve_page(token):
         fetch('/approve/{token}', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{decision:dec}})}})
           .then(r=>r.json()).then(d=>{{
             document.querySelector('.card').innerHTML =
-              '<div class="outcome ' + d.status + '">' + (d.status==='approved'?'Authorized':'Rejected') + '</div>';
+              '<div class="outcome ' + d.status + '">' + (d.status==='approved'?'Approved':'Denied') + '</div>';
+            var note = document.getElementById('agent-waiting-note');
+            if (note) note.style.display = 'none';
           }});
       }}
       (function() {{
