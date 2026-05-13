@@ -1451,6 +1451,10 @@ def dashboard():
             '<div class="card">'
             '<div class="setup-heading">Connect your agent</div>'
             + setup_tabs +
+            '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f0ede8">'
+            '<a href="/onboarding" style="font-size:12px;color:#aaa;text-decoration:none">'
+            '&#8635; Launch setup wizard</a>'
+            '</div>'
             '</div>'
         )
 
