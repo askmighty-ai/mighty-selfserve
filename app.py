@@ -408,7 +408,7 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
-.logo-name{font-size:18px;font-weight:700;color:#1a1a1a}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .logo-tag{font-size:11px;color:#aaa;font-weight:500}
 h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#1a1a1a}
 .sub{font-size:14px;color:#666;line-height:1.6;margin-bottom:24px}
@@ -468,7 +468,7 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
-.logo-name{font-size:18px;font-weight:700;color:#1a1a1a}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:20px;font-weight:700;margin-bottom:20px}
 label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
 input[type=email],input[type=password]{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px}
@@ -515,7 +515,7 @@ body{display:flex;flex-direction:column;min-height:100vh;background:#f8f7f5}
 .topbar-logo{display:flex;align-items:center;gap:8px}
 .topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
 .topbar-logo-mark img{height:26px;width:auto}
-.topbar-name{font-size:15px;font-weight:700;color:#1a1a1a}
+.topbar-name{font-size:15px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .topbar-right{display:flex;align-items:center;gap:16px}
 .topbar-email{font-size:12px;color:#aaa}
 .btn-logout{font-size:12px;color:#888;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
@@ -748,7 +748,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 .logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:32px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
-.logo-name{font-size:18px;font-weight:700}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .progress{display:flex;gap:6px;justify-content:center;margin-bottom:28px}
 .progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s}
 .progress-dot.active{background:#7c3aed}
@@ -1141,7 +1141,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 .brand{display:flex;align-items:center;gap:8px;margin-bottom:20px;justify-content:center}
 .brand-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center}
 .brand-mark img{height:28px;width:auto}
-.brand-name{font-size:16px;font-weight:700;color:#1a1a1a}
+.brand-name{font-size:16px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08)}
 .card-header{background:#fffbeb;border-bottom:1px solid #fde68a;padding:16px 20px;display:flex;align-items:center;gap:10px}
 .card-header-dot{width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:pulse 1.5s infinite;flex-shrink:0}
