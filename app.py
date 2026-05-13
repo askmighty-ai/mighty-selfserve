@@ -429,8 +429,8 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-mark">
       <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/>
-        <rect x="4.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/>
-        <rect x="11.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/>
+        <rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/>
+        <rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/>
       </svg>
     </div>
     <div><div class="logo-name">Mighty</div><div class="logo-tag">Self-Serve</div></div>
@@ -487,8 +487,8 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-mark">
       <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/>
-        <rect x="4.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/>
-        <rect x="11.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/>
+        <rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/>
+        <rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/>
       </svg>
     </div>
     <div class="logo-name">Mighty</div>
@@ -597,7 +597,7 @@ details[open] summary::before{content:"\\25BE "}
 <div class="topbar">
   <div class="topbar-logo">
     <div class="topbar-logo-mark">
-      <svg viewBox="0 0 20 20" fill="none"><path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/><rect x="4.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/><rect x="11.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/></svg>
+      <svg viewBox="0 0 20 20" fill="none"><path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/><rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/><rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/></svg>
     </div>
     <span class="topbar-name">Mighty</span>
   </div>
@@ -798,7 +798,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 <body>
 <div class="wrap">
   <div class="logo">
-    <div class="logo-mark"><svg viewBox="0 0 20 20" fill="none"><path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/><rect x="4.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/><rect x="11.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/></svg></div>
+    <div class="logo-mark"><svg viewBox="0 0 20 20" fill="none"><path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/><rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/><rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/></svg></div>
     <span class="logo-name">Mighty</span>
   </div>
   <div class="progress">
@@ -1176,7 +1176,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 <div class="wrap">
   <div class="brand">
     <div class="brand-mark">
-      <svg viewBox="0 0 20 20" fill="none"><path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/><rect x="4.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/><rect x="11.75" y="6.5" width="3.5" height="7" rx="1.75" fill="#fff" fill-opacity="0.9"/></svg>
+      <svg viewBox="0 0 20 20" fill="none"><path d="M10 1L18.5 5.5v9L10 19 1.5 14.5v-9Z" stroke="#fff" stroke-width="1.2" stroke-opacity="0.9" stroke-linejoin="round"/><rect x="5" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/><rect x="12" y="6" width="3" height="8" rx="1" fill="#fff" fill-opacity="0.9"/></svg>
     </div>
     <span class="brand-name">Mighty</span>
   </div>
