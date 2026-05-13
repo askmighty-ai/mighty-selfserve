@@ -696,6 +696,13 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
 .agent-icon{font-size:24px;margin-bottom:8px}
 .agent-name{font-size:13px;font-weight:600;color:#1a1a1a}
 .agent-desc{font-size:12px;color:#9ca3af;margin-top:3px;line-height:1.4}
+.cap-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:10px}
+.cap-card{border:1.5px solid #e5e3df;border-radius:10px;padding:9px 11px;cursor:pointer;transition:all 0.15s;display:flex;align-items:flex-start;gap:9px;user-select:none}
+.cap-card:hover{border-color:#c4b5fd;background:#faf5ff}
+.cap-card.selected{border-color:#7c3aed;background:#f5f3ff}
+.cap-icon{font-size:16px;flex-shrink:0;line-height:1.2}
+.cap-name{font-size:12px;font-weight:600;color:#1a1a1a}
+.cap-sub{font-size:11px;color:#9ca3af;margin-top:1px;line-height:1.3}
 .setup-steps{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}
 .setup-step{display:flex;gap:12px}
 .setup-step-num{width:24px;height:24px;border-radius:50%;background:#f3f0ff;color:#7c3aed;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
@@ -767,10 +774,18 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
         </div>
       </div>
       <div style="margin-top:14px">
-        <div style="font-size:12px;font-weight:600;color:#6b7280;margin-bottom:6px">What does your agent do?</div>
-        <textarea id="agent-desc" placeholder="e.g. manages my email and calendar, books travel, places orders for office supplies" style="width:100%;font-family:'Inter',sans-serif;font-size:12px;color:#1a1a1a;background:#f8f7f5;border:1px solid #e5e3df;border-radius:8px;padding:10px;resize:none;height:60px;line-height:1.5;outline:none;transition:border 0.12s" onfocus="this.style.borderColor='#c4b5fd'" onblur="this.style.borderColor='#e5e3df'"></textarea>
-        <div id="agent-desc-warn" style="display:none;margin-top:6px;font-size:12px;color:#92400e;line-height:1.5;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px"></div>
-        <div style="font-size:11px;color:#9ca3af;margin-top:4px">We'll tailor the checkpoint instructions to your agent's specific capabilities.</div>
+        <div style="font-size:12px;font-weight:600;color:#6b7280;margin-bottom:8px">What can your agent do? <span style="font-weight:400;color:#9ca3af">Select all that apply</span></div>
+        <div class="cap-grid">
+          <label class="cap-card" onclick="toggleCap(this,'email')"><input type="checkbox" class="cap-check" value="email" style="display:none"><span class="cap-icon">✉️</span><div><div class="cap-name">Email</div><div class="cap-sub">Send, reply, forward</div></div></label>
+          <label class="cap-card" onclick="toggleCap(this,'calendar')"><input type="checkbox" class="cap-check" value="calendar" style="display:none"><span class="cap-icon">📅</span><div><div class="cap-name">Calendar</div><div class="cap-sub">Schedule, cancel meetings</div></div></label>
+          <label class="cap-card" onclick="toggleCap(this,'purchases')"><input type="checkbox" class="cap-check" value="purchases" style="display:none"><span class="cap-icon">🛒</span><div><div class="cap-name">Purchases</div><div class="cap-sub">Orders, transactions</div></div></label>
+          <label class="cap-card" onclick="toggleCap(this,'files')"><input type="checkbox" class="cap-check" value="files" style="display:none"><span class="cap-icon">📁</span><div><div class="cap-name">File management</div><div class="cap-sub">Create, edit, delete</div></div></label>
+          <label class="cap-card" onclick="toggleCap(this,'web')"><input type="checkbox" class="cap-check" value="web" style="display:none"><span class="cap-icon">🌐</span><div><div class="cap-name">Web &amp; forms</div><div class="cap-sub">Submit forms, browse</div></div></label>
+          <label class="cap-card" onclick="toggleCap(this,'code')"><input type="checkbox" class="cap-check" value="code" style="display:none"><span class="cap-icon">💻</span><div><div class="cap-name">Code execution</div><div class="cap-sub">Run scripts, modify systems</div></div></label>
+          <label class="cap-card" onclick="toggleCap(this,'social')"><input type="checkbox" class="cap-check" value="social" style="display:none"><span class="cap-icon">📢</span><div><div class="cap-name">Social media</div><div class="cap-sub">Post, publish content</div></div></label>
+          <label class="cap-card" onclick="toggleCap(this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></label>
+        </div>
+        <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" style="width:100%;font-family:'Inter',sans-serif;font-size:12px;color:#1a1a1a;background:#f8f7f5;border:1px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s" onfocus="this.style.borderColor='#c4b5fd'" onblur="this.style.borderColor='#e5e3df'">
       </div>
       <div class="btn-row" style="margin-top:12px">
         <button class="btn btn-secondary" onclick="goTo(0)">← Back</button>
@@ -962,43 +977,60 @@ function selectAgent(agent) {
   renderSetup(agent);
 }
 
+var CAPABILITY_ACTIONS = {
+  email:     "sending, replying to, or forwarding emails",
+  calendar:  "scheduling, rescheduling, or cancelling meetings or events",
+  purchases: "making purchases, placing orders, or completing financial transactions",
+  files:     "creating, editing, moving, or deleting files or documents",
+  web:       "submitting web forms or interacting with websites on your behalf",
+  code:      "running scripts or executing code that modifies systems",
+  social:    "posting or publishing content to social media or public channels",
+  apis:      "calling external services or APIs that take real-world actions",
+};
+
+function toggleCap(label, key) {
+  label.classList.toggle('selected');
+  label.querySelector('.cap-check').checked = label.classList.contains('selected');
+}
+
+function buildCheckpointPrompt(actions, agentType) {
+  var list = actions.map(function(a) { return '- ' + a; }).join('\n');
+  if (agentType === 'claude') {
+    return (
+      "MIGHTY AUTHORIZATION — follow every session.\n\n"
+      + "Before:\n" + list + "\n\n"
+      + "call request_authorization(action_type, label). Poll check_authorization every 3s until resolved.\n"
+      + "→ approved: proceed | denied or timeout: stop\n\n"
+      + "For routine actions that don't need approval, call record_action to log them."
+    );
+  } else {
+    return (
+      "MIGHTY AUTHORIZATION — follow every session.\n\n"
+      + "Before:\n" + list + "\n\n"
+      + "POST " + BASE_URL + "/api/authorize\n"
+      + '  {"api_key":"' + API_KEY + '","action_type":"<type>","label":"<desc>","fields":[["Key","Val"]]}\n'
+      + "→ approved: proceed | denied or timeout: stop | pending: poll GET " + BASE_URL + "/api/status/<id> every 3s\n\n"
+      + "Routine actions: POST " + BASE_URL + "/api/record\n"
+      + '  {"api_key":"' + API_KEY + '","action_type":"<type>","label":"<desc>","outcome":"completed"}'
+    );
+  }
+}
+
 function continueFromAgent() {
-  var desc    = (document.getElementById('agent-desc').value || '').trim();
-  var btn     = document.getElementById('btn-next-agent');
-  var warnEl  = document.getElementById('agent-desc-warn');
-  warnEl.style.display = 'none';
-  btn.textContent = 'Generating…';
-  btn.disabled = true;
-  btn.style.opacity = '0.7';
-  fetch('/onboarding/generate-prompt', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({description: desc})
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(d) {
-    SYSTEM_PROMPT = d.prompt;
+  var selected = [];
+  document.querySelectorAll('.cap-check:checked').forEach(function(cb) {
+    if (CAPABILITY_ACTIONS[cb.value]) selected.push(CAPABILITY_ACTIONS[cb.value]);
+  });
+  var other = (document.getElementById('cap-other').value || '').trim();
+  if (other) selected.push(other);
+  if (selected.length > 0) {
+    SYSTEM_PROMPT = buildCheckpointPrompt(selected, selectedAgent);
     var p1 = document.getElementById('prompt-box');
     if (p1) p1.value = SYSTEM_PROMPT;
     var p2 = document.getElementById('prompt-box2');
     if (p2) p2.value = SYSTEM_PROMPT;
-    btn.textContent = 'Continue →';
-    btn.disabled = false;
-    btn.style.opacity = '1';
-    if (d.warning) {
-      warnEl.textContent = d.warning + ' You can refine your description and try again, or continue and edit the prompt manually.';
-      warnEl.style.display = 'block';
-      // Don't auto-advance — let user refine or click Continue again
-    } else {
-      goTo(2);
-    }
-  })
-  .catch(function() {
-    btn.textContent = 'Continue →';
-    btn.disabled = false;
-    btn.style.opacity = '1';
-    goTo(2);
-  });
+  }
+  goTo(2);
 }
 
 var _d = JSON.parse(document.getElementById('__mighty_onboarding_data__').textContent);
