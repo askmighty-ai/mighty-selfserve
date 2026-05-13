@@ -609,7 +609,7 @@ details[open] summary::before{content:"\\25BE "}
 <div class="main">
   {sidebar_content}
 
-  <div class="feed-col">
+  <div class="feed-col" {feed_col_hidden}>
     <div class="feed-title">Authorization Log</div>
     <div class="feed-sub">Agent actions and approval requests appear here</div>
     <div class="feed" id="feed">
@@ -1516,39 +1516,63 @@ def dashboard():
         '</div>'
     )
 
-    # Sidebar card — single card, two states
-    if is_connected:
-        sidebar_card = (
-            '<div class="card">'
-            '<div class="status-row">'
-            '<div class="status-dot status-green"></div>'
-            '<div>'
-            '<div class="status-title">Mighty is active</div>'
-            '<div class="status-sub">Your agent is connected</div>'
-            '</div></div>'
-            '<details style="margin-top:14px">'
-            '<summary>Set up another agent</summary>'
+    if len(acts) == 0:
+        # Empty state: single centered panel — no two-column grid
+        sidebar_content = (
+            '<div style="grid-column:1/-1;display:flex;flex-direction:column;'
+            'align-items:center;justify-content:center;min-height:0;padding:40px 24px">'
+            '<div style="width:100%;max-width:400px">'
+            '<div style="font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:10px;text-align:center">'
+            'Connect your agent</div>'
+            '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px;text-align:center">'
+            'Before your agent sends an email, makes a purchase, or changes a file'
+            ' — Mighty asks you first.</div>'
+            '<a href="/onboarding" style="display:block;text-align:center;padding:12px;'
+            'background:#7c3aed;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
+            'text-decoration:none;margin-bottom:12px">Launch setup wizard &#8594;</a>'
+            '<details style="background:#fff;border:1px solid #e5e3df;border-radius:8px;padding:14px 16px">'
+            '<summary style="font-size:12px;color:#6b7280;cursor:pointer;list-style:none;text-align:center">'
+            'Manual setup</summary>'
             '<div style="margin-top:12px">' + setup_tabs + '</div>'
             '</details>'
             '</div>'
-        )
-    else:
-        sidebar_card = (
-            '<div class="card">'
-            '<div class="setup-heading">Connect your agent</div>'
-            '<p style="font-size:13px;color:#6b7280;line-height:1.5;margin-bottom:14px">'
-            'A few minutes of setup connects Mighty to your agent.</p>'
-            '<a href="/onboarding" style="display:block;text-align:center;padding:10px;'
-            'background:#7c3aed;color:#fff;border-radius:8px;font-size:13px;font-weight:600;'
-            'text-decoration:none">Launch setup wizard &#8594;</a>'
-            '<details style="margin-top:12px">'
-            '<summary>Manual setup</summary>'
-            '<div style="margin-top:10px">' + setup_tabs + '</div>'
-            '</details>'
             '</div>'
         )
-
-    sidebar_content = '<div class="sidebar">' + sidebar_card + '</div>'
+        feed_col_hidden = 'style="display:none"'
+    else:
+        # Active state: two-column layout
+        if is_connected:
+            sidebar_card = (
+                '<div class="card">'
+                '<div class="status-row">'
+                '<div class="status-dot status-green"></div>'
+                '<div>'
+                '<div class="status-title">Mighty is active</div>'
+                '<div class="status-sub">Your agent is connected</div>'
+                '</div></div>'
+                '<details style="margin-top:14px">'
+                '<summary>Set up another agent</summary>'
+                '<div style="margin-top:12px">' + setup_tabs + '</div>'
+                '</details>'
+                '</div>'
+            )
+        else:
+            sidebar_card = (
+                '<div class="card">'
+                '<div class="setup-heading">Connect your agent</div>'
+                '<p style="font-size:13px;color:#6b7280;line-height:1.5;margin-bottom:14px">'
+                'A few minutes of setup connects Mighty to your agent.</p>'
+                '<a href="/onboarding" style="display:block;text-align:center;padding:10px;'
+                'background:#7c3aed;color:#fff;border-radius:8px;font-size:13px;font-weight:600;'
+                'text-decoration:none">Launch setup wizard &#8594;</a>'
+                '<details style="margin-top:12px">'
+                '<summary>Manual setup</summary>'
+                '<div style="margin-top:10px">' + setup_tabs + '</div>'
+                '</details>'
+                '</div>'
+            )
+        sidebar_content = '<div class="sidebar">' + sidebar_card + '</div>'
+        feed_col_hidden = ''
 
     return (DASHBOARD_HTML
             .replace("{email}",             user["email"])
@@ -1556,6 +1580,7 @@ def dashboard():
             .replace("{pending_count}",     str(pending_count))
             .replace("{pending_display}",   pending_display)
             .replace("{sidebar_content}",   sidebar_content)
+            .replace("{feed_col_hidden}",   feed_col_hidden)
             .replace("{onboarding_banner}", onboarding_banner))
 
 @app.route("/settings")
