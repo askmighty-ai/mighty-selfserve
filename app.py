@@ -775,14 +775,14 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       <div style="margin-top:14px">
         <div style="font-size:12px;font-weight:600;color:#6b7280;margin-bottom:8px">What can your agent do? <span style="font-weight:400;color:#9ca3af">Select all that apply</span></div>
         <div class="cap-grid">
-          <label class="cap-card" onclick="toggleCap(event,this,'email')"><input type="checkbox" class="cap-check" value="email" style="display:none"><span class="cap-icon">✉️</span><div><div class="cap-name">Email</div><div class="cap-sub">Send, reply, forward</div></div></label>
-          <label class="cap-card" onclick="toggleCap(event,this,'calendar')"><input type="checkbox" class="cap-check" value="calendar" style="display:none"><span class="cap-icon">📅</span><div><div class="cap-name">Calendar</div><div class="cap-sub">Schedule, cancel meetings</div></div></label>
-          <label class="cap-card" onclick="toggleCap(event,this,'purchases')"><input type="checkbox" class="cap-check" value="purchases" style="display:none"><span class="cap-icon">🛒</span><div><div class="cap-name">Purchases</div><div class="cap-sub">Orders, transactions</div></div></label>
-          <label class="cap-card" onclick="toggleCap(event,this,'files')"><input type="checkbox" class="cap-check" value="files" style="display:none"><span class="cap-icon">📁</span><div><div class="cap-name">File management</div><div class="cap-sub">Create, edit, delete</div></div></label>
-          <label class="cap-card" onclick="toggleCap(event,this,'web')"><input type="checkbox" class="cap-check" value="web" style="display:none"><span class="cap-icon">🌐</span><div><div class="cap-name">Web &amp; forms</div><div class="cap-sub">Submit forms, browse</div></div></label>
-          <label class="cap-card" onclick="toggleCap(event,this,'code')"><input type="checkbox" class="cap-check" value="code" style="display:none"><span class="cap-icon">💻</span><div><div class="cap-name">Code execution</div><div class="cap-sub">Run scripts, modify systems</div></div></label>
-          <label class="cap-card" onclick="toggleCap(event,this,'social')"><input type="checkbox" class="cap-check" value="social" style="display:none"><span class="cap-icon">📢</span><div><div class="cap-name">Social media</div><div class="cap-sub">Post, publish content</div></div></label>
-          <label class="cap-card" onclick="toggleCap(event,this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></label>
+          <div class="cap-card" onclick="toggleCap(this,'email')"><input type="checkbox" class="cap-check" value="email" style="display:none"><span class="cap-icon">✉️</span><div><div class="cap-name">Email</div><div class="cap-sub">Send, reply, forward</div></div></div>
+          <div class="cap-card" onclick="toggleCap(this,'calendar')"><input type="checkbox" class="cap-check" value="calendar" style="display:none"><span class="cap-icon">📅</span><div><div class="cap-name">Calendar</div><div class="cap-sub">Schedule, cancel meetings</div></div></div>
+          <div class="cap-card" onclick="toggleCap(this,'purchases')"><input type="checkbox" class="cap-check" value="purchases" style="display:none"><span class="cap-icon">🛒</span><div><div class="cap-name">Purchases</div><div class="cap-sub">Orders, transactions</div></div></div>
+          <div class="cap-card" onclick="toggleCap(this,'files')"><input type="checkbox" class="cap-check" value="files" style="display:none"><span class="cap-icon">📁</span><div><div class="cap-name">File management</div><div class="cap-sub">Create, edit, delete</div></div></div>
+          <div class="cap-card" onclick="toggleCap(this,'web')"><input type="checkbox" class="cap-check" value="web" style="display:none"><span class="cap-icon">🌐</span><div><div class="cap-name">Web &amp; forms</div><div class="cap-sub">Submit forms, browse</div></div></div>
+          <div class="cap-card" onclick="toggleCap(this,'code')"><input type="checkbox" class="cap-check" value="code" style="display:none"><span class="cap-icon">💻</span><div><div class="cap-name">Code execution</div><div class="cap-sub">Run scripts, modify systems</div></div></div>
+          <div class="cap-card" onclick="toggleCap(this,'social')"><input type="checkbox" class="cap-check" value="social" style="display:none"><span class="cap-icon">📢</span><div><div class="cap-name">Social media</div><div class="cap-sub">Post, publish content</div></div></div>
+          <div class="cap-card" onclick="toggleCap(this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></div>
         </div>
         <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" style="width:100%;font-family:'Inter',sans-serif;font-size:12px;color:#1a1a1a;background:#f8f7f5;border:1px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s" onfocus="this.style.borderColor='#c4b5fd'" onblur="this.style.borderColor='#e5e3df'">
       </div>
@@ -1008,10 +1008,9 @@ var CAPABILITY_ACTIONS = {
   apis:      "calling external services or APIs that take real-world actions",
 };
 
-function toggleCap(e, label, key) {
-  e.preventDefault();
-  label.classList.toggle('selected');
-  label.querySelector('.cap-check').checked = label.classList.contains('selected');
+function toggleCap(el, key) {
+  el.classList.toggle('selected');
+  el.querySelector('.cap-check').checked = el.classList.contains('selected');
 }
 
 function buildCheckpointPrompt(actions, agentType) {
