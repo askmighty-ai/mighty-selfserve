@@ -599,6 +599,7 @@ details[open] summary::before{content:"\\25BE "}
     ⏳ {pending_count} waiting
   </div>
   <div class="topbar-right">
+    <a href="/settings" style="font-size:12px;color:#6b7280;text-decoration:none">Settings</a>
     <span class="topbar-email">{email}</span>
     <form method="POST" action="/logout" style="margin:0"><button class="btn-logout" type="submit">Sign out</button></form>
   </div>
@@ -646,18 +647,6 @@ function decide(actionId, decision) {
     body: JSON.stringify({decision})
   }).then(() => location.reload());
 }
-function autoSave() {
-  saveNotificationSettings();
-}
-function saveNotificationSettings() {
-  var ntfy  = document.getElementById('notif-ntfy').checked;
-  var push  = document.getElementById('notif-push').checked;
-  fetch('/dashboard/notifications', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ntfy, push})
-  });
-}
 var lastPending = document.querySelectorAll('.is-pending').length > 0;
 setInterval(function() {
   fetch('/dashboard/has-pending').then(function(r) { return r.json(); }).then(function(d) {
@@ -667,66 +656,9 @@ setInterval(function() {
   }).catch(function() {});
 }, 5000);
 
-// Web Push
-var swReg = null;
-if ('serviceWorker' in navigator && 'PushManager' in window) {
-  navigator.serviceWorker.register('/sw.js').then(function(reg) {
-    swReg = reg;
-    reg.pushManager.getSubscription().then(function(sub) {
-      var status = document.getElementById('push-status');
-      var btn = document.getElementById('push-enable-btn');
-      if (sub) {
-        if (status) { status.textContent = 'Active ✓'; status.style.color = '#16a34a'; }
-        if (btn) btn.style.display = 'none';
-      } else if (Notification.permission === 'denied') {
-        if (status) status.textContent = 'Blocked — allow in browser settings to enable.';
-        if (btn) btn.style.display = 'none';
-      } else {
-        if (btn) btn.style.display = 'inline-block';
-      }
-    });
-  });
-}
-
-function enablePush() {
-  if (!swReg) { return; }
-  var status = document.getElementById('push-status');
-  var btn = document.getElementById('push-enable-btn');
-  if (status) status.textContent = 'Setting up...';
-  if (btn) btn.style.display = 'none';
-  fetch('/api/push/vapid-public-key').then(r => r.json()).then(function(d) {
-    var converted = urlB64ToUint8Array(d.key);
-    swReg.pushManager.getSubscription().then(function(existing) {
-      return existing ? existing.unsubscribe() : Promise.resolve(true);
-    }).then(function() {
-      return swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: converted });
-    }).then(function(sub) {
-      return fetch('/api/push/subscribe', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({subscription: sub.toJSON()})
-      });
-    }).then(function() {
-      if (status) { status.textContent = 'Active ✓'; status.style.color = '#16a34a'; }
-      if (btn) btn.style.display = 'none';
-    }).catch(function(e) {
-      if (Notification.permission === 'denied') {
-        if (status) status.textContent = 'Blocked — allow in browser settings to enable.';
-      } else {
-        if (status) status.textContent = 'Could not enable: ' + e.message;
-      }
-      if (btn) btn.style.display = 'inline-block';
-    });
-  });
-}
-
-function urlB64ToUint8Array(base64String) {
-  var padding = '='.repeat((4 - base64String.length % 4) % 4);
-  var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  var rawData = atob(base64);
-  var outputArray = new Uint8Array(rawData.length);
-  for (var i = 0; i < rawData.length; i++) { outputArray[i] = rawData.charCodeAt(i); }
-  return outputArray;
+// Register SW for push delivery (notifications managed in /settings)
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
 }
 </script>
 </body>
@@ -1137,6 +1069,169 @@ function finish() {
 </body>
 </html>"""
 
+SETTINGS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Settings — Mighty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+""" + BASE_CSS + """
+body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f8f7f5}
+.topbar{background:#fff;border-bottom:1px solid #e5e3df;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.topbar-logo{display:flex;align-items:center;gap:8px}
+.topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
+.topbar-logo-mark img{height:26px;width:auto}
+.topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.topbar-right{display:flex;align-items:center;gap:16px}
+.topbar-email{font-size:12px;color:#9ca3af}
+.btn-logout{font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
+.btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
+.settings-body{flex:1;min-height:0;overflow-y:auto}
+.settings-wrap{max-width:520px;margin:0 auto;padding:32px 24px;display:flex;flex-direction:column;gap:16px}
+.page-title{font-size:18px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:24px}
+.section-title{font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:16px}
+.toggle-row{display:flex;align-items:flex-start;gap:12px;padding:12px 0}
+.toggle-row+.toggle-row{border-top:1px solid #f3f4f6}
+.toggle-label{font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:3px}
+.toggle-hint{font-size:12px;color:#6b7280;line-height:1.5}
+.api-key-wrap{display:flex;align-items:center;gap:8px;margin-top:4px}
+.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:10px;color:#6b7280;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-copy-key{font-size:12px;font-weight:600;padding:6px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;white-space:nowrap;cursor:pointer;transition:background 0.12s}
+.btn-copy-key:hover{background:#ede9fe}
+.push-status{font-size:12px;color:#6b7280;margin-top:6px;min-height:16px}
+.push-btn{font-size:12px;font-weight:600;padding:6px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer;transition:background 0.12s;display:none;margin-top:6px}
+.push-btn:hover{background:#ede9fe}
+.ntfy-link{display:inline-block;margin-top:6px;font-size:10px;font-family:ui-monospace,monospace;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-logo">
+    <div class="topbar-logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
+    <span class="topbar-name">Mighty</span>
+  </div>
+  <div class="topbar-right">
+    <a href="/dashboard" style="font-size:12px;color:#6b7280;text-decoration:none">&#8592; Dashboard</a>
+    <span class="topbar-email">{email}</span>
+    <form method="POST" action="/logout" style="margin:0"><button class="btn-logout" type="submit">Sign out</button></form>
+  </div>
+</div>
+
+<div class="settings-body">
+  <div class="settings-wrap">
+    <div class="page-title">Settings</div>
+
+    <div class="card">
+      <div class="section-title">Notifications</div>
+      <div class="toggle-row">
+        <input type="checkbox" id="notif-push" {push_checked} onchange="save()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
+        <div>
+          <div class="toggle-label">Browser alerts</div>
+          <div class="toggle-hint">Desktop popup when your agent needs a decision.</div>
+          <div id="push-status" class="push-status"></div>
+          <button id="push-enable-btn" class="push-btn" onclick="enablePush()">Allow notifications &#8594;</button>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <input type="checkbox" id="notif-ntfy" {ntfy_checked} onchange="save()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
+        <div>
+          <div class="toggle-label">Phone alerts</div>
+          <div class="toggle-hint">Install the free <a href="https://ntfy.sh" target="_blank" style="color:#7c3aed">ntfy app</a>, then subscribe to your channel on your phone.</div>
+          <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="ntfy-link">ntfy.sh/{ntfy_topic} &#8599;</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Connection</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Your API key — used in the MCP server config and system prompt.</div>
+      <div class="api-key-wrap">
+        <div class="api-key-val" id="apiKeyVal">{api_key}</div>
+        <button class="btn-copy-key" onclick="copyKey(this)">Copy</button>
+      </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f3f4f6">
+        <a href="/onboarding" style="font-size:13px;color:#7c3aed;text-decoration:none">&#8635; Re-run setup wizard</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var swReg = null;
+if ('serviceWorker' in navigator && 'PushManager' in window) {
+  navigator.serviceWorker.register('/sw.js').then(function(reg) {
+    swReg = reg;
+    reg.pushManager.getSubscription().then(function(sub) {
+      var status = document.getElementById('push-status');
+      var btn = document.getElementById('push-enable-btn');
+      if (sub) {
+        if (status) { status.textContent = 'Active ✓'; status.style.color = '#16a34a'; }
+        if (btn) btn.style.display = 'none';
+      } else if (Notification.permission === 'denied') {
+        if (status) status.textContent = 'Blocked — allow in browser settings to enable.';
+        if (btn) btn.style.display = 'none';
+      } else {
+        if (btn) btn.style.display = 'inline-block';
+      }
+    });
+  });
+}
+function save() {
+  fetch('/dashboard/notifications', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      ntfy: document.getElementById('notif-ntfy').checked,
+      push: document.getElementById('notif-push').checked
+    })
+  });
+}
+function enablePush() {
+  if (!swReg) return;
+  var status = document.getElementById('push-status');
+  var btn = document.getElementById('push-enable-btn');
+  if (status) status.textContent = 'Setting up…';
+  if (btn) btn.style.display = 'none';
+  fetch('/api/push/vapid-public-key').then(function(r) { return r.json(); }).then(function(d) {
+    var converted = urlB64ToUint8Array(d.key);
+    swReg.pushManager.getSubscription().then(function(e) {
+      return e ? e.unsubscribe() : Promise.resolve(true);
+    }).then(function() {
+      return swReg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:converted});
+    }).then(function(sub) {
+      return fetch('/api/push/subscribe', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({subscription:sub.toJSON()})});
+    }).then(function() {
+      if (status) { status.textContent = 'Active ✓'; status.style.color = '#16a34a'; }
+      if (btn) btn.style.display = 'none';
+    }).catch(function(e) {
+      if (Notification.permission === 'denied') {
+        if (status) status.textContent = 'Blocked — allow in browser settings.';
+      } else {
+        if (status) status.textContent = 'Could not enable: ' + e.message;
+        if (btn) btn.style.display = 'inline-block';
+      }
+    });
+  });
+}
+function copyKey(btn) {
+  navigator.clipboard.writeText(document.getElementById('apiKeyVal').textContent.trim());
+  btn.textContent = 'Copied!';
+  setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
+}
+function urlB64ToUint8Array(b) {
+  var pad = '='.repeat((4 - b.length % 4) % 4);
+  var base64 = (b + pad).replace(/-/g,'+').replace(/_/g,'/');
+  var raw = atob(base64); var out = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+</script>
+</body>
+</html>"""
+
 APPROVE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1323,7 +1418,6 @@ def action_card_html(a, base, show_buttons):
         except Exception:
             pass
     pending_cls = " is-pending" if a["status"] == "pending" else ""
-    auth_id = f'AUTH-{a["id"][:6].upper()}'
     btns = ""
     if show_buttons:
         btns = f'''<div class="action-buttons">
@@ -1367,9 +1461,6 @@ def dashboard():
     pending_display = "flex" if pending_count > 0 else "none"
     is_connected    = len(acts) > 0
 
-    notify_email_checked = "checked" if user["notify_email"] else ""
-    notify_ntfy_checked  = "checked" if user["notify_ntfy"]  else ""
-    notify_push_checked  = "checked" if user["notify_push"]  else ""
 
     onboarding_banner = ""
     if not user["onboarded"]:
@@ -1425,9 +1516,9 @@ def dashboard():
         '</div>'
     )
 
-    # Connect card — two states
+    # Sidebar card — single card, two states
     if is_connected:
-        connect_card = (
+        sidebar_card = (
             '<div class="card">'
             '<div class="status-row">'
             '<div class="status-dot status-green"></div>'
@@ -1439,108 +1530,25 @@ def dashboard():
             '<summary>Set up another agent</summary>'
             '<div style="margin-top:12px">' + setup_tabs + '</div>'
             '</details>'
-            '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f0ede8">'
-            '<a href="/onboarding" style="font-size:12px;color:#aaa;text-decoration:none">'
-            '&#8635; Revisit setup guide</a>'
-            '</div>'
             '</div>'
         )
     else:
-        connect_card = (
+        sidebar_card = (
             '<div class="card">'
             '<div class="setup-heading">Connect your agent</div>'
-            + setup_tabs +
-            '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f0ede8">'
-            '<a href="/onboarding" style="font-size:12px;color:#aaa;text-decoration:none">'
-            '&#8635; Launch setup wizard</a>'
-            '</div>'
-            '</div>'
-        )
-
-    # Notifications card
-    user_email = user["email"]
-    notif_card = (
-        '<div class="card">'
-        '<div class="setup-heading">Notifications</div>'
-
-        # Browser push — primary
-        '<div style="padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #f0ede8">'
-        '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">'
-        '<input type="checkbox" id="notif-push" ' + notify_push_checked + ' onchange="autoSave()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">'
-        '<div>'
-        '<div style="font-size:13px;font-weight:500;color:#1a1a1a">Browser alerts</div>'
-        '<div style="font-size:11px;color:#aaa;margin-top:1px">Desktop popup when your agent needs a decision</div>'
-        '</div></label>'
-        '<div id="push-status" style="margin-top:6px;margin-left:26px;font-size:11px;color:#aaa;min-height:14px"></div>'
-        '<button id="push-enable-btn" onclick="enablePush()" '
-        'style="display:none;margin-top:6px;margin-left:26px;font-size:11px;font-weight:600;'
-        'padding:5px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer">'
-        'Allow notifications &#8594;</button>'
-        '</div>'
-
-        # Phone (ntfy) — secondary
-        '<div style="padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #f0ede8">'
-        '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">'
-        '<input type="checkbox" id="notif-ntfy" ' + notify_ntfy_checked + ' onchange="autoSave()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">'
-        '<div>'
-        '<div style="font-size:13px;font-weight:500;color:#1a1a1a">Phone alerts</div>'
-        '<div style="font-size:11px;color:#aaa;margin-top:1px;line-height:1.5">'
-        'Install the free <a href="https://ntfy.sh" target="_blank" style="color:#7c3aed">ntfy app</a>'
-        ', then tap this link on your phone:</div>'
-        '</div></label>'
-        '<a href="https://ntfy.sh/' + topic + '" target="_blank" '
-        'style="display:block;margin-top:8px;margin-left:26px;font-size:11px;color:#7c3aed;'
-        'font-family:ui-monospace,monospace;background:#f8f7f5;border:1px solid #e5e3df;'
-        'border-radius:6px;padding:7px 10px;text-decoration:none;word-break:break-all">'
-        'ntfy.sh/' + topic + ' &#8599;</a>'
-        '</div>'
-
-        '</div>'  # close card
-    )
-
-    if len(acts) == 0:
-        # Compact empty-state sidebar — fits on screen without any scrolling
-        compact_connect = (
-            '<div class="card">'
-            '<div class="setup-heading">Connect your agent</div>'
-            '<p style="font-size:13px;color:#888;line-height:1.5;margin-bottom:14px">'
+            '<p style="font-size:13px;color:#6b7280;line-height:1.5;margin-bottom:14px">'
             'A few minutes of setup connects Mighty to your agent.</p>'
             '<a href="/onboarding" style="display:block;text-align:center;padding:10px;'
             'background:#7c3aed;color:#fff;border-radius:8px;font-size:13px;font-weight:600;'
-            'text-decoration:none;margin-bottom:4px">Launch setup wizard &#8594;</a>'
+            'text-decoration:none">Launch setup wizard &#8594;</a>'
             '<details style="margin-top:12px">'
-            '<summary style="font-size:12px;color:#aaa;cursor:pointer;list-style:none;padding:4px 0">'
-            '<span style="font-size:10px">&#9658;</span> Manual setup</summary>'
+            '<summary>Manual setup</summary>'
             '<div style="margin-top:10px">' + setup_tabs + '</div>'
             '</details>'
             '</div>'
         )
-        compact_notif = (
-            '<div class="card">'
-            '<div class="setup-heading" style="margin-bottom:10px">Notifications</div>'
-            '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:4px 0">'
-            '<input type="checkbox" id="notif-push" ' + notify_push_checked + ' onchange="autoSave()" '
-            'style="width:15px;height:15px;accent-color:#7c3aed;flex-shrink:0">'
-            '<div><div style="font-size:13px;font-weight:500;color:#1a1a1a">Browser alerts</div>'
-            '<div style="font-size:11px;color:#aaa">Desktop popup for approvals</div></div>'
-            '</label>'
-            '<div id="push-status" style="margin-left:25px;font-size:11px;color:#aaa;min-height:12px"></div>'
-            '<button id="push-enable-btn" onclick="enablePush()" style="display:none;margin-top:4px;'
-            'margin-left:25px;font-size:11px;font-weight:600;padding:4px 10px;background:#f3f0ff;'
-            'color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer">'
-            'Allow notifications &#8594;</button>'
-            '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:4px 0;margin-top:6px">'
-            '<input type="checkbox" id="notif-ntfy" ' + notify_ntfy_checked + ' onchange="autoSave()" '
-            'style="width:15px;height:15px;accent-color:#7c3aed;flex-shrink:0">'
-            '<div><div style="font-size:13px;font-weight:500;color:#1a1a1a">Phone alerts</div>'
-            '<div style="font-size:11px;color:#aaa">via <a href="https://ntfy.sh/' + topic + '" '
-            'target="_blank" style="color:#7c3aed">ntfy</a> — subscribe on your phone</div></div>'
-            '</label>'
-            '</div>'
-        )
-        sidebar_content = '<div class="sidebar">' + compact_connect + compact_notif + '</div>'
-    else:
-        sidebar_content = '<div class="sidebar">' + connect_card + notif_card + '</div>'
+
+    sidebar_content = '<div class="sidebar">' + sidebar_card + '</div>'
 
     return (DASHBOARD_HTML
             .replace("{email}",             user["email"])
@@ -1549,6 +1557,19 @@ def dashboard():
             .replace("{pending_display}",   pending_display)
             .replace("{sidebar_content}",   sidebar_content)
             .replace("{onboarding_banner}", onboarding_banner))
+
+@app.route("/settings")
+@require_login
+def settings():
+    db   = get_db()
+    user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    topic = ntfy_topic(user["api_key"])
+    return (SETTINGS_HTML
+            .replace("{email}",      user["email"])
+            .replace("{api_key}",    user["api_key"])
+            .replace("{ntfy_topic}", topic)
+            .replace("{push_checked}", "checked" if user["notify_push"] else "")
+            .replace("{ntfy_checked}", "checked" if user["notify_ntfy"]  else ""))
 
 @app.route("/download/mighty_mcp.py")
 @require_login
