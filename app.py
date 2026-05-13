@@ -510,7 +510,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-body{display:flex;flex-direction:column;min-height:100vh;background:#f8f7f5}
+body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f8f7f5}
 .topbar{background:#fff;border-bottom:1px solid #e5e3df;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .topbar-logo{display:flex;align-items:center;gap:8px}
 .topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
@@ -520,9 +520,10 @@ body{display:flex;flex-direction:column;min-height:100vh;background:#f8f7f5}
 .topbar-email{font-size:12px;color:#aaa}
 .btn-logout{font-size:12px;color:#888;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
 .btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
-.main{flex:1;display:grid;grid-template-columns:320px 1fr;gap:24px;max-width:1140px;width:100%;margin:0 auto;padding:28px 24px}
+.main{flex:1;min-height:0;display:grid;grid-template-columns:320px 1fr;gap:24px;max-width:1140px;width:100%;margin:0 auto;padding:28px 24px;box-sizing:border-box}
 @media(max-width:768px){.main{grid-template-columns:1fr}}
-.sidebar{display:flex;flex-direction:column;gap:14px}
+.sidebar{display:flex;flex-direction:column;gap:14px;overflow-y:auto}
+.feed-col{overflow-y:auto;min-height:0;padding-bottom:28px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:20px}
 .setup-heading{font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:14px}
 .tab-bar{display:flex;gap:4px;background:#f3f4f6;border-radius:8px;padding:3px;margin-bottom:16px}
@@ -604,11 +605,11 @@ details[open] summary::before{content:"\\25BE "}
   </div>
 </div>
 
+{onboarding_banner}
 <div class="main">
-  {onboarding_banner}
   {sidebar_content}
 
-  <div>
+  <div class="feed-col">
     <div class="feed-title">Authorization Log</div>
     <div class="feed-sub">Actions your agents have taken or requested your approval for</div>
     <div class="feed" id="feed">
