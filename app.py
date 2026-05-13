@@ -744,47 +744,47 @@ ONBOARDING_HTML = """<!DOCTYPE html>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100vh;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px 24px}
 .wrap{width:100%;max-width:520px;display:flex;flex-direction:column;flex:1;min-height:0}
-.logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:16px;flex-shrink:0}
-.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.logo-mark img{height:32px;width:auto}
-.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.progress{display:flex;gap:6px;justify-content:center;margin-bottom:16px;flex-shrink:0}
+.logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:12px;flex-shrink:0}
+.logo-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center}
+.logo-mark img{height:28px;width:auto}
+.logo-name{font-size:17px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.progress{display:flex;gap:6px;justify-content:center;margin-bottom:12px;flex-shrink:0}
 .progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s}
 .progress-dot.active{background:#7c3aed}
 .progress-dot.done{background:#c4b5fd}
-.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:28px 32px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:20px 24px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto}
 .step{display:none}.step.active{display:block}
-.step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#a78bfa;margin-bottom:8px}
-.step-title{font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:8px;line-height:1.3}
-.step-sub{font-size:14px;color:#888;line-height:1.6;margin-bottom:24px}
-.agent-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:24px}
+.step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#a78bfa;margin-bottom:6px}
+.step-title{font-size:20px;font-weight:700;color:#1a1a1a;margin-bottom:6px;line-height:1.3}
+.step-sub{font-size:13px;color:#888;line-height:1.5;margin-bottom:14px}
+.agent-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px}
 .agent-card{border:2px solid #e5e3df;border-radius:12px;padding:16px 12px;text-align:center;cursor:pointer;transition:all 0.15s}
 .agent-card:hover{border-color:#c4b5fd;background:#faf5ff}
 .agent-card.selected{border-color:#7c3aed;background:#f5f3ff}
 .agent-icon{font-size:24px;margin-bottom:8px}
 .agent-name{font-size:13px;font-weight:600;color:#1a1a1a}
 .agent-desc{font-size:11px;color:#aaa;margin-top:3px;line-height:1.4}
-.setup-steps{display:flex;flex-direction:column;gap:16px;margin-bottom:24px}
+.setup-steps{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}
 .setup-step{display:flex;gap:12px}
 .setup-step-num{width:24px;height:24px;border-radius:50%;background:#f3f0ff;color:#7c3aed;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
 .setup-step-body{flex:1;min-width:0}
 .setup-step-title{font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px}
 .setup-step-hint{font-size:12px;color:#aaa;line-height:1.5}
-.code-box{font-family:ui-monospace,monospace;font-size:10px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;margin:6px 0;max-width:100%}
-.path-box{font-family:ui-monospace,monospace;font-size:10px;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:8px 10px;word-break:break-all;margin:6px 0}
-.btn{width:100%;padding:12px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.12s}
+.code-box{font-family:ui-monospace,monospace;font-size:10px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;overflow-y:auto;margin:5px 0;max-width:100%;max-height:82px}
+.path-box{font-family:ui-monospace,monospace;font-size:10px;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:7px 10px;word-break:break-all;margin:5px 0}
+.btn{width:100%;padding:11px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.12s}
 .btn-primary{background:#7c3aed;color:#fff}.btn-primary:hover{background:#6d28d9}
 .btn-secondary{background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff}.btn-secondary:hover{background:#ede9fe}
 .btn-copy{font-size:11px;font-weight:600;padding:5px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer;transition:background 0.12s;white-space:nowrap}
 .btn-copy:hover{background:#ede9fe}
-.btn-row{display:flex;gap:10px;margin-top:8px}
-.test-waiting{text-align:center;padding:24px;background:#f8f7f5;border-radius:12px;margin-bottom:20px}
-.test-spinner{width:36px;height:36px;border:3px solid #e5e3df;border-top-color:#7c3aed;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px}
+.btn-row{display:flex;gap:10px;margin-top:6px}
+.test-waiting{text-align:center;padding:20px;background:#f8f7f5;border-radius:12px;margin-bottom:16px}
+.test-spinner{width:32px;height:32px;border:3px solid #e5e3df;border-top-color:#7c3aed;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 10px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.test-connected{text-align:center;padding:24px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;margin-bottom:20px;display:none}
-.test-connected-icon{font-size:32px;margin-bottom:8px}
-.push-status{font-size:12px;color:#aaa;margin-top:8px;min-height:18px}
-.skip{text-align:center;margin-top:16px}
+.test-connected{text-align:center;padding:20px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;margin-bottom:16px;display:none}
+.test-connected-icon{font-size:28px;margin-bottom:6px}
+.push-status{font-size:12px;color:#aaa;margin-top:6px;min-height:16px}
+.skip{text-align:center;margin-top:10px}
 .skip a{font-size:12px;color:#bbb;text-decoration:none}.skip a:hover{color:#888}
 </style>
 </head>
@@ -867,14 +867,13 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
                 <div class="code-box" id="mcp-config-box" style="flex:1"></div>
                 <button class="btn-copy" onclick="copyBox('mcp-config-box',this)" style="margin-top:6px">Copy</button>
               </div>
-              <div class="setup-step-hint">Replace YOUR_USERNAME with your Mac username</div>
             </div>
           </div>
           <div class="setup-step">
             <div class="setup-step-num">3</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Restart Claude Desktop</div>
-              <div class="setup-step-hint">Quit and reopen the app for the MCP server to load.</div>
+              <div class="setup-step-hint">Quit and reopen — replace YOUR_USERNAME with your Mac username first.</div>
             </div>
           </div>
         </div>
@@ -1055,7 +1054,7 @@ var AGENT_TITLES = {
   custom:  'Connect your custom agent'
 };
 var AGENT_SUBS = {
-  claude:  'Install the Mighty MCP server so Claude can request your approval before acting.',
+  claude:  'Download the MCP server, add it to your config, and restart Claude Desktop.',
   chatgpt: 'Add the Mighty system prompt to a ChatGPT Project or Custom GPT.',
   custom:  'Add your API key and the Mighty system prompt to your agent.'
 };
