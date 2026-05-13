@@ -742,17 +742,17 @@ ONBOARDING_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
-.wrap{width:100%;max-width:520px}
-.logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:32px}
+body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100vh;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px 24px}
+.wrap{width:100%;max-width:520px;display:flex;flex-direction:column;flex:1;min-height:0}
+.logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:16px;flex-shrink:0}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.progress{display:flex;gap:6px;justify-content:center;margin-bottom:28px}
+.progress{display:flex;gap:6px;justify-content:center;margin-bottom:16px;flex-shrink:0}
 .progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s}
 .progress-dot.active{background:#7c3aed}
 .progress-dot.done{background:#c4b5fd}
-.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:32px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:28px 32px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto}
 .step{display:none}.step.active{display:block}
 .step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#a78bfa;margin-bottom:8px}
 .step-title{font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:8px;line-height:1.3}
