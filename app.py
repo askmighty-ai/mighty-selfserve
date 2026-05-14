@@ -756,17 +756,17 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       <div class="step-title">What are you using Mighty with?</div>
       <div class="step-sub">Pick your agent — we'll give you the exact setup steps.</div>
       <div class="agent-grid">
-        <div class="agent-card" onclick="selectAgent('claude')">
+        <div class="agent-card" onclick="selectAgent(this,'claude')">
           <div class="agent-icon">⚡</div>
           <div class="agent-name">Claude Desktop</div>
           <div class="agent-desc">MCP plugin</div>
         </div>
-        <div class="agent-card" onclick="selectAgent('chatgpt')">
+        <div class="agent-card" onclick="selectAgent(this,'chatgpt')">
           <div class="agent-icon">🤖</div>
           <div class="agent-name">ChatGPT</div>
           <div class="agent-desc">System prompt</div>
         </div>
-        <div class="agent-card" onclick="selectAgent('custom')">
+        <div class="agent-card" onclick="selectAgent(this,'custom')">
           <div class="agent-icon">🛠</div>
           <div class="agent-name">Custom agent</div>
           <div class="agent-desc">API / code</div>
@@ -786,7 +786,8 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
         </div>
         <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" style="width:100%;font-family:'Inter',sans-serif;font-size:12px;color:#1a1a1a;background:#f8f7f5;border:1px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s" onfocus="this.style.borderColor='#c4b5fd'" onblur="this.style.borderColor='#e5e3df'">
       </div>
-      <div class="btn-row" style="margin-top:12px">
+      <div id="agent-nudge" style="display:none;font-size:12px;color:#7c3aed;text-align:center;margin-top:8px">Pick an agent type above to continue</div>
+      <div class="btn-row" style="margin-top:8px">
         <button class="btn btn-secondary" onclick="goTo(0)">← Back</button>
         <button class="btn btn-primary btn-dim" id="btn-next-agent" onclick="continueFromAgent()" style="flex:1">Continue →</button>
       </div>
@@ -830,6 +831,17 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
             <div class="setup-step-body">
               <div class="setup-step-title">Restart Claude Desktop</div>
               <div class="setup-step-hint">Quit and reopen Claude Desktop. (This setup is for macOS — on Windows, the config file is at <code style="font-size:9px;background:#f0ede8;padding:1px 4px;border-radius:3px">%APPDATA%\Claude\claude_desktop_config.json</code>)</div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <div class="setup-step-num">4</div>
+            <div class="setup-step-body">
+              <div class="setup-step-title">Add the checkpoint prompt to your Claude Project</div>
+              <div style="display:flex;align-items:flex-start;gap:8px">
+                <textarea id="prompt-box-claude" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto"></textarea>
+                <button class="btn-copy" onclick="copyBox('prompt-box-claude',this)" style="margin-top:6px">Copy</button>
+              </div>
+              <div class="setup-step-hint">Open your Claude Project → Instructions, and paste this at the top. It tells Claude when to call the Mighty tools.</div>
             </div>
           </div>
         </div>
@@ -988,12 +1000,11 @@ function goTo(n) {
   if (n !== 3 && testPollTimer) { clearInterval(testPollTimer); testPollTimer = null; }
 }
 
-function selectAgent(agent) {
+function selectAgent(el, agent) {
   selectedAgent = agent;
   document.querySelectorAll('.agent-card').forEach(function(c) { c.classList.remove('selected'); });
-  event.currentTarget.classList.add('selected');
-  var btn = document.getElementById('btn-next-agent');
-  btn.classList.remove('btn-dim');
+  el.classList.add('selected');
+  updateContinueBtn();
   renderSetup(agent);
 }
 
@@ -1011,10 +1022,23 @@ var CAPABILITY_ACTIONS = {
 function toggleCap(el, key) {
   el.classList.toggle('selected');
   el.querySelector('.cap-check').checked = el.classList.contains('selected');
+  updateContinueBtn();
+}
+
+function updateContinueBtn() {
+  var btn = document.getElementById('btn-next-agent');
+  var hasCap = document.querySelectorAll('.cap-check:checked').length > 0;
+  if (selectedAgent || hasCap) {
+    btn.classList.remove('btn-dim');
+  } else {
+    btn.classList.add('btn-dim');
+  }
 }
 
 function buildCheckpointPrompt(actions, agentType) {
-  var list = actions.map(function(a) { return '- ' + a; }).join('\\n');
+  var list = actions.length > 0
+    ? actions.map(function(a) { return '- ' + a; }).join('\\n')
+    : '- any consequential action (emails, purchases, file edits, external calls)';
   if (agentType === 'claude') {
     return (
       "MIGHTY AUTHORIZATION — follow every session.\\n\\n"
@@ -1037,20 +1061,30 @@ function buildCheckpointPrompt(actions, agentType) {
 }
 
 function continueFromAgent() {
-  if (!selectedAgent) return;
+  if (!selectedAgent) {
+    var nudge = document.getElementById('agent-nudge');
+    if (nudge) { nudge.style.display = 'block'; }
+    return;
+  }
+  var nudge = document.getElementById('agent-nudge');
+  if (nudge) nudge.style.display = 'none';
   var selected = [];
   document.querySelectorAll('.cap-check:checked').forEach(function(cb) {
     if (CAPABILITY_ACTIONS[cb.value]) selected.push(CAPABILITY_ACTIONS[cb.value]);
   });
   var other = (document.getElementById('cap-other').value || '').trim();
   if (other) selected.push(other);
-  if (selected.length > 0) {
+  // Update HTTP-style prompts for ChatGPT / Custom
+  if (selectedAgent !== 'claude') {
     SYSTEM_PROMPT = buildCheckpointPrompt(selected, selectedAgent);
     var p1 = document.getElementById('prompt-box');
     if (p1) p1.value = SYSTEM_PROMPT;
     var p2 = document.getElementById('prompt-box2');
     if (p2) p2.value = SYSTEM_PROMPT;
   }
+  // Always update MCP-style prompt for Claude Desktop
+  var p0 = document.getElementById('prompt-box-claude');
+  if (p0) p0.value = buildCheckpointPrompt(selected, 'claude');
   goTo(2);
 }
 
@@ -1070,6 +1104,9 @@ var BASE_URL     = _d.base_url;
   if (p1) p1.value = SYSTEM_PROMPT;
   var p2 = document.getElementById('prompt-box2');
   if (p2) p2.value = SYSTEM_PROMPT;
+  // Claude Desktop MCP-style prompt (separate from HTTP-API prompt)
+  var p0 = document.getElementById('prompt-box-claude');
+  if (p0) p0.value = buildCheckpointPrompt([], 'claude');
   // API key box
   var akEl = document.getElementById('api-key-box');
   if (akEl) akEl.textContent = API_KEY;
