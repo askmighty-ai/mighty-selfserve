@@ -906,9 +906,10 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
 .logo-mark img{height:28px;width:auto}
 .logo-name{font-size:17px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .progress{display:flex;gap:6px;justify-content:center;margin-bottom:12px;flex-shrink:0}
-.progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s}
-.progress-dot.active{background:#7c3aed}
-.progress-dot.done{background:#c4b5fd}
+.progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s;padding:6px;margin:-6px;background-clip:content-box}
+.progress-dot.active{background:#7c3aed;background-clip:content-box}
+.progress-dot.done{background:#c4b5fd;background-clip:content-box;cursor:pointer}
+.progress-dot.done:hover{background:#a78bfa;background-clip:content-box}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:20px 24px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto}
 .step{display:none}.step.active{display:block}
 .step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#a78bfa;margin-bottom:6px}
@@ -959,11 +960,11 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
     <span class="logo-name">Mighty</span>
   </div>
   <div class="progress">
-    <div class="progress-dot active" id="dot-0"></div>
-    <div class="progress-dot" id="dot-1"></div>
-    <div class="progress-dot" id="dot-2"></div>
-    <div class="progress-dot" id="dot-3"></div>
-    <div class="progress-dot" id="dot-4"></div>
+    <div class="progress-dot active" id="dot-0" onclick="dotNav(0)"></div>
+    <div class="progress-dot" id="dot-1" onclick="dotNav(1)"></div>
+    <div class="progress-dot" id="dot-2" onclick="dotNav(2)"></div>
+    <div class="progress-dot" id="dot-3" onclick="dotNav(3)"></div>
+    <div class="progress-dot" id="dot-4" onclick="dotNav(4)"></div>
   </div>
   <div class="card">
 
@@ -1202,6 +1203,11 @@ var testPollTimer = null;
 
 if ('serviceWorker' in navigator && 'PushManager' in window) {
   navigator.serviceWorker.register('/sw.js').then(function(reg) { swReg = reg; });
+}
+
+function dotNav(n) {
+  var dot = document.getElementById("dot-" + n);
+  if (dot && dot.classList.contains("done")) goTo(n);
 }
 
 function goTo(n) {
