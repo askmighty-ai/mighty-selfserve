@@ -2003,7 +2003,7 @@ def dashboard():
             'Welcome to Mighty</div>'
             '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
             'Set up Mighty to work with your agent in just a few steps. Once set up, '
-            'you will be able to see and respond to approval requests here.</div>'
+            'you will be able to see and respond to approval requests.</div>'
             '<a href="/onboarding" style="display:block;padding:13px 20px;'
             'background:#7c3aed;color:#fff;border-radius:10px;font-size:14px;font-weight:600;'
             'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
