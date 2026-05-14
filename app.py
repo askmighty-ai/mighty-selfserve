@@ -972,7 +972,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       <div class="step-label">Welcome</div>
       <div class="step-title">You're in control of your AI agents.</div>
       <div class="step-sub">Mighty puts approval checkpoints in your agent's path. You define what's consequential — the agent pauses and waits for your decision. And every action is logged, in the agent's own words.</div>
-      <button class="btn btn-primary" onclick="goTo(1)">Get started →</button>
+      <button class="btn btn-primary" onclick="goTo(1)">Begin setup →</button>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
 
@@ -2006,7 +2006,7 @@ def dashboard():
             'you will be able to see and respond to approval requests.</div>'
             '<a href="/onboarding" style="display:block;padding:13px 20px;'
             'background:#7c3aed;color:#fff;border-radius:10px;font-size:14px;font-weight:600;'
-            'text-decoration:none;margin-bottom:16px">Set up your agent &#8594;</a>'
+            'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
             '<a href="/settings" style="font-size:13px;color:#9ca3af;text-decoration:none">'
             'Settings &amp; API key</a>'
             '</div>'
