@@ -88,6 +88,14 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
             CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+            CREATE TABLE IF NOT EXISTS enterprise_leads (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                email      TEXT NOT NULL,
+                company    TEXT,
+                message    TEXT,
+                created_at TEXT NOT NULL
+            );
         """)
         try:
             db.execute("ALTER TABLE actions ADD COLUMN consequence_level TEXT DEFAULT 'routine'")
@@ -400,22 +408,226 @@ LANDING_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Mighty — Personal Authorization for AI Agents</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<title>Mighty — Your AI agents, accountable to you.</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+""" + BASE_CSS + """
+html{scroll-behavior:smooth}
+body{background:#fff;color:#1a1a1a}
+/* Nav */
+.nav{position:sticky;top:0;z-index:100;background:#fff;border-bottom:1px solid #e5e3df;height:60px;display:flex;align-items:center;padding:0 24px}
+.nav-inner{max-width:900px;margin:0 auto;width:100%;display:flex;align-items:center;justify-content:space-between}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
+.logo-mark img{height:32px;width:auto}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.nav-actions{display:flex;align-items:center;gap:16px}
+.nav-signin{font-size:14px;font-weight:500;color:#444;text-decoration:none}
+.nav-signin:hover{color:#7c3aed;text-decoration:none}
+.btn-nav{padding:8px 18px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 0.12s}
+.btn-nav:hover{background:#6d28d9;text-decoration:none;color:#fff}
+/* Hero */
+.hero{background:#fff;padding:100px 24px 80px;text-align:center}
+.hero-inner{max-width:700px;margin:0 auto}
+.hero h1{font-size:50px;font-weight:800;line-height:1.1;letter-spacing:-1px;color:#1a1a1a;margin-bottom:22px}
+.hero-sub{font-size:18px;color:#555;line-height:1.6;max-width:560px;margin:0 auto 36px}
+.hero-ctas{display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap;margin-bottom:28px}
+.btn-primary-lg{padding:14px 28px;background:#7c3aed;color:#fff;border:none;border-radius:9px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;transition:background 0.12s;display:inline-block}
+.btn-primary-lg:hover{background:#6d28d9;text-decoration:none;color:#fff}
+.hero-link{font-size:14px;color:#7c3aed;text-decoration:none;font-weight:500}
+.hero-link:hover{text-decoration:underline}
+.hero-chips{display:flex;align-items:center;justify-content:center;gap:18px;flex-wrap:wrap}
+.chip{font-size:13px;color:#555;font-weight:500}
+/* How it works */
+.hiw{background:#f8f7f5;padding:80px 24px}
+.hiw-inner{max-width:900px;margin:0 auto}
+.section-label{font-size:12px;font-weight:700;letter-spacing:1.5px;color:#7c3aed;text-transform:uppercase;margin-bottom:12px}
+.section-title{font-size:32px;font-weight:800;color:#1a1a1a;margin-bottom:48px}
+.steps{display:flex;flex-direction:column;gap:36px}
+.step{display:flex;align-items:flex-start;gap:24px}
+.step-num{width:40px;height:40px;border-radius:50%;background:#7c3aed;color:#fff;font-size:16px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.step-body h3{font-size:18px;font-weight:700;color:#1a1a1a;margin-bottom:6px}
+.step-body p{font-size:15px;color:#555;line-height:1.6}
+/* Features */
+.features{background:#fff;padding:80px 24px}
+.features-inner{max-width:900px;margin:0 auto}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+@media(max-width:700px){.cards{grid-template-columns:1fr}.hero h1{font-size:34px}.hero-ctas{flex-direction:column;gap:12px}}
+.fcard{background:#fff;border:1.5px solid #e5e3df;border-radius:14px;padding:28px 24px}
+.fcard h3{font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:10px}
+.fcard p{font-size:14px;color:#555;line-height:1.6}
+.fcard-icon{width:36px;height:36px;border-radius:10px;background:#f3f0ff;display:flex;align-items:center;justify-content:center;margin-bottom:16px;font-size:18px}
+/* Enterprise */
+.enterprise{background:#f3f0ff;padding:80px 24px}
+.enterprise-inner{max-width:640px;margin:0 auto;text-align:center}
+.enterprise h2{font-size:30px;font-weight:800;color:#1a1a1a;margin-bottom:14px}
+.enterprise-sub{font-size:16px;color:#555;line-height:1.6;margin-bottom:40px}
+.ent-form{background:#fff;border:1.5px solid #ddd6fe;border-radius:16px;padding:36px;text-align:left}
+.ent-form label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
+.ent-form input,.ent-form textarea{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:16px;font-family:inherit}
+.ent-form input:focus,.ent-form textarea:focus{outline:none;border-color:#7c3aed}
+.ent-form textarea{height:100px;resize:vertical}
+.btn-ent{width:100%;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;cursor:pointer}
+.btn-ent:hover{background:#6d28d9}
+.ent-thanks{display:none;text-align:center;padding:20px 0;font-size:15px;color:#16a34a;font-weight:600}
+/* Footer */
+.footer-bar{background:#fff;border-top:1px solid #e5e3df;padding:28px 24px;text-align:center;font-size:13px;color:#aaa}
+</style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="/" class="logo" style="text-decoration:none">
+      <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
+      <div class="logo-name">Mighty</div>
+    </a>
+    <div class="nav-actions">
+      <a href="/login" class="nav-signin">Sign in</a>
+      <a href="/signup" class="btn-nav">Get started free</a>
+    </div>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-inner">
+    <h1>Your AI agents, accountable to you.</h1>
+    <p class="hero-sub">Mighty adds approval checkpoints and a permanent activity log to any AI agent. Set it up once — your agents pause before consequential actions and wait for your decision.</p>
+    <div class="hero-ctas">
+      <a href="/signup" class="btn-primary-lg">Get started free &rarr;</a>
+      <a href="#enterprise" class="hero-link">Using Mighty across a team? Talk to us &rarr;</a>
+    </div>
+    <div class="hero-chips">
+      <span class="chip">&#10003; Works with Claude, ChatGPT &amp; custom agents</span>
+      <span class="chip">&#10003; 5-minute setup</span>
+      <span class="chip">&#10003; Free to start</span>
+    </div>
+  </div>
+</section>
+
+<!-- How it works -->
+<section class="hiw">
+  <div class="hiw-inner">
+    <div class="section-label">How it works</div>
+    <div class="section-title">Up and running in three steps</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Connect your agent</h3>
+          <p>Add the Mighty system prompt or MCP plugin. Takes about 5 minutes.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Agent pauses before acting</h3>
+          <p>When your agent is about to do something consequential — send an email, make a purchase, edit a file — it stops and asks.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>You decide. Everything is logged.</h3>
+          <p>Approve or deny from any device. Every action your agent takes or requests is recorded permanently.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Feature cards -->
+<section class="features">
+  <div class="features-inner">
+    <div class="section-label">What you get</div>
+    <div class="section-title" style="margin-bottom:36px">Built-in oversight for every agent</div>
+    <div class="cards">
+      <div class="fcard">
+        <div class="fcard-icon">&#9989;</div>
+        <h3>Approval checkpoints</h3>
+        <p>You define what is consequential. Your agent pauses and waits — approved: proceed, denied: stop.</p>
+      </div>
+      <div class="fcard">
+        <div class="fcard-icon">&#128196;</div>
+        <h3>Permanent audit log</h3>
+        <p>Every action your agent takes is logged with a timestamp, description, and your decision. Ready when you need it.</p>
+      </div>
+      <div class="fcard">
+        <div class="fcard-icon">&#128279;</div>
+        <h3>Any agent, any platform</h3>
+        <p>Claude Desktop (MCP), ChatGPT Projects, or your own custom agent via a simple HTTP API.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Enterprise -->
+<section class="enterprise" id="enterprise">
+  <div class="enterprise-inner">
+    <h2>Using AI agents across your organization?</h2>
+    <p class="enterprise-sub">When teams deploy AI agents at scale, Mighty's authorization layer becomes a governance and compliance tool. Audit trails, approval workflows, and oversight — built in from day one. Tell us about your use case.</p>
+    <div class="ent-form" id="ent-form-wrap">
+      <form id="ent-form">
+        <label>Full name</label>
+        <input type="text" id="ent-name" placeholder="Jane Smith" required>
+        <label>Work email</label>
+        <input type="email" id="ent-email" placeholder="jane@company.com" required>
+        <label>Company</label>
+        <input type="text" id="ent-company" placeholder="Acme Corp">
+        <label>Tell us about your use case <span style="font-weight:400;color:#aaa">(optional)</span></label>
+        <textarea id="ent-message" placeholder="We are deploying agents that..."></textarea>
+        <button type="submit" class="btn-ent">Get in touch &rarr;</button>
+      </form>
+      <div class="ent-thanks" id="ent-thanks">Thanks — we will be in touch within one business day.</div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<div class="footer-bar">&copy; 2025 Mighty &middot; Your agents, your control</div>
+
+<script>
+document.getElementById("ent-form").addEventListener("submit", function(e) {
+  e.preventDefault();
+  var name = document.getElementById("ent-name").value.trim();
+  var email = document.getElementById("ent-email").value.trim();
+  var company = document.getElementById("ent-company").value.trim();
+  var message = document.getElementById("ent-message").value.trim();
+  fetch("/enterprise-interest", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({"name": name, "email": email, "company": company, "message": message})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      document.getElementById("ent-form").style.display = "none";
+      document.getElementById("ent-thanks").style.display = "block";
+    }
+  });
+});
+</script>
+
+</body>
+</html>"""
+
+SIGNUP_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Create account — Mighty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
 body{display:flex;align-items:center;justify-content:center;padding:24px}
-.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:440px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#1a1a1a}
-.sub{font-size:14px;color:#666;line-height:1.6;margin-bottom:24px}
-.bullets{display:flex;flex-direction:column;gap:8px;margin-bottom:28px}
-.bullet{display:flex;align-items:flex-start;gap:10px;font-size:13px;color:#444;line-height:1.5}
-.bullet-dot{width:20px;height:20px;border-radius:50%;background:#f3f0ff;color:#7c3aed;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
-.divider{border:none;border-top:1px solid #f0ede8;margin:20px 0}
+h1{font-size:22px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
+.sub{font-size:14px;color:#666;margin-bottom:24px}
 label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
 input[type=email],input[type=password]{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px}
 input:focus{outline:none;border-color:#7c3aed}
@@ -423,31 +635,28 @@ input:focus{outline:none;border-color:#7c3aed}
 .btn-primary:hover{background:#6d28d9}
 .err{font-size:13px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:9px 12px;margin-bottom:14px}
 .footer{text-align:center;margin-top:20px;font-size:13px;color:#888}
+.back{display:block;font-size:13px;color:#888;margin-bottom:20px;text-decoration:none}
+.back:hover{color:#7c3aed;text-decoration:none}
 </style>
 </head>
 <body>
 <div class="card">
+  <a href="/" class="back">&larr; Back</a>
   <div class="logo">
     <div class="logo-mark">
       <img src="/logo-icon.png" alt="Mighty">
     </div>
     <div class="logo-name">Mighty</div>
   </div>
-  <h1>Your AI agents, accountable.</h1>
-  <p class="sub">A personal authorization layer for AI agents. Know what they do, approve what matters.</p>
-  <div class="bullets">
-    <div class="bullet"><div class="bullet-dot">1</div>Sign up and get a personal API key</div>
-    <div class="bullet"><div class="bullet-dot">2</div>Add a system prompt to your agent — Claude, ChatGPT, or your own</div>
-    <div class="bullet"><div class="bullet-dot">3</div>Every agent action is logged — and you approve the important ones</div>
-  </div>
-  <hr class="divider">
+  <h1>Create your account</h1>
+  <p class="sub">Free to start. Set up in minutes.</p>
   {error}
   <form method="POST" action="/signup">
     <label>Email</label>
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
     <label>Password</label>
     <input type="password" name="password" placeholder="Choose a password" required autocomplete="new-password" minlength="6" maxlength="128">
-    <button class="btn-primary" type="submit">Create free account →</button>
+    <button class="btn-primary" type="submit">Create free account &rarr;</button>
   </form>
   <div class="footer">Already have an account? <a href="/login">Sign in</a></div>
 </div>
@@ -1474,7 +1683,13 @@ def logo_icon():
 def landing():
     if "user_id" in session:
         return redirect("/dashboard")
-    return LANDING_HTML.replace("{error}", "")
+    return LANDING_HTML
+
+@app.route("/signup", methods=["GET"])
+def signup_page():
+    if "user_id" in session:
+        return redirect("/dashboard")
+    return SIGNUP_HTML.replace("{error}", "")
 
 @app.route("/signup", methods=["POST"])
 def signup():
@@ -1482,11 +1697,11 @@ def signup():
     password = request.form.get("password", "")
     if not email or not password or len(password) < 6:
         err = '<div class="err">Please enter a valid email and a password (6+ characters).</div>'
-        return LANDING_HTML.replace("{error}", err)
+        return SIGNUP_HTML.replace("{error}", err)
     db = get_db()
     if db.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
         err = '<div class="err">An account with that email already exists. <a href="/login">Sign in</a></div>'
-        return LANDING_HTML.replace("{error}", err)
+        return SIGNUP_HTML.replace("{error}", err)
     uid = secrets.token_hex(16)
     key = "mk_" + secrets.token_hex(20)
     db.execute(
@@ -1497,6 +1712,23 @@ def signup():
     session["user_id"] = uid
     session["email"]   = email
     return redirect("/onboarding")
+
+@app.route("/enterprise-interest", methods=["POST"])
+def enterprise_interest():
+    data    = request.get_json(force=True)
+    name    = data.get("name", "").strip()
+    email   = data.get("email", "").strip()
+    company = data.get("company", "").strip()
+    message = data.get("message", "").strip()
+    if not name or not email:
+        return jsonify({"error": "name and email required"}), 400
+    db = get_db()
+    db.execute(
+        "INSERT INTO enterprise_leads (id,name,email,company,message,created_at) VALUES (?,?,?,?,?,?)",
+        (secrets.token_hex(12), name, email, company, message, iso())
+    )
+    db.commit()
+    return jsonify({"ok": True})
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
