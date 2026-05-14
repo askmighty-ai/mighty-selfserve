@@ -15,14 +15,21 @@ Env vars (all optional):
   PORT          — Port to listen on (default: 5004)
 """
 
-import os, io, csv, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error
+import os, io, csv, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html
 
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, session, redirect, g, make_response
 
+def he(s):
+    """HTML-escape a value for safe insertion into HTML."""
+    return html.escape(str(s)) if s is not None else ""
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+app.config["SESSION_COOKIE_HTTPONLY"]  = True
+app.config["SESSION_COOKIE_SAMESITE"]  = "Lax"
+app.config["SESSION_COOKIE_SECURE"]    = os.environ.get("RAILWAY_ENVIRONMENT") == "production"
 
 DATABASE        = os.environ.get("DATABASE_PATH", "mighty.db")
 PORT            = int(os.environ.get("PORT", 5004))
@@ -578,7 +585,7 @@ body{background:#fff;color:#1a1a1a}
         <input type="text" id="ent-company" placeholder="Acme Corp">
         <label>Tell us about your use case <span style="font-weight:400;color:#aaa">(optional)</span></label>
         <textarea id="ent-message" placeholder="We are deploying agents that..."></textarea>
-        <button type="submit" class="btn-ent">Get in touch &rarr;</button>
+        <button type="submit" class="btn-ent" id="enterprise-submit-btn">Get in touch &rarr;</button>
       </form>
       <div class="ent-thanks" id="ent-thanks">Thanks — we will be in touch within one business day.</div>
     </div>
@@ -586,7 +593,8 @@ body{background:#fff;color:#1a1a1a}
 </section>
 
 <!-- Footer -->
-<div class="footer-bar">&copy; 2025 Mighty &middot; Your agents, your control</div>
+<div class="footer-bar">&copy; <span id="cy"></span> Mighty &middot; Your agents, your control</div>
+<script>document.getElementById("cy").textContent=new Date().getFullYear();</script>
 
 <script>
 document.getElementById("ent-form").addEventListener("submit", function(e) {
@@ -595,6 +603,8 @@ document.getElementById("ent-form").addEventListener("submit", function(e) {
   var email = document.getElementById("ent-email").value.trim();
   var company = document.getElementById("ent-company").value.trim();
   var message = document.getElementById("ent-message").value.trim();
+  var submitBtn = document.getElementById("enterprise-submit-btn");
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Sending..."; }
   fetch("/enterprise-interest", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -604,6 +614,9 @@ document.getElementById("ent-form").addEventListener("submit", function(e) {
       document.getElementById("ent-form").style.display = "none";
       document.getElementById("ent-thanks").style.display = "block";
     }
+  }).catch(function() {
+    document.getElementById("enterprise-submit-btn").textContent = "Error — please try again";
+    document.getElementById("enterprise-submit-btn").disabled = false;
   });
 });
 </script>
@@ -641,7 +654,7 @@ input:focus{outline:none;border-color:#7c3aed}
 </head>
 <body>
 <div class="card">
-  <a href="/" class="back">&larr; Back</a>
+  <a href="/" class="back">&larr; Home</a>
   <div class="logo">
     <div class="logo-mark">
       <img src="/logo-icon.png" alt="Mighty">
@@ -705,7 +718,10 @@ input:focus{outline:none;border-color:#7c3aed}
     <input type="password" name="password" placeholder="Your password" required autocomplete="current-password" maxlength="128">
     <button class="btn-primary" type="submit">Sign in →</button>
   </form>
-  <div class="footer">No account? <a href="/">Sign up free</a></div>
+  <div style="text-align:center;margin-top:12px;font-size:12px;color:#9ca3af">
+    Forgot your password? <a href="mailto:support@mighty.app" style="color:#7c3aed">Contact support</a>
+  </div>
+  <div class="footer">No account? <a href="/signup">Sign up free</a> &middot; <a href="/">← Home</a></div>
 </div>
 </body>
 </html>"""
@@ -798,12 +814,12 @@ details[open] summary::before{content:"\\25BE "}
 </head>
 <body>
 <div class="topbar">
-  <div class="topbar-logo">
+  <a href="/dashboard" style="text-decoration:none;display:flex;align-items:center;gap:8px">
     <div class="topbar-logo-mark">
       <img src="/logo-icon.png" alt="Mighty">
     </div>
     <span class="topbar-name">Mighty</span>
-  </div>
+  </a>
   <div id="pending-badge" style="display:{pending_display};background:#fef3c7;border:1px solid #fde68a;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#92400e">
     {pending_count} awaiting decision
   </div>
@@ -850,6 +866,7 @@ function copyKey(btn) {
   setTimeout(() => btn.textContent = 'Copy', 1800);
 }
 function decide(actionId, decision) {
+  document.querySelectorAll(".btn-authorize, .btn-reject").forEach(function(b) { b.disabled = true; });
   fetch('/dashboard/decide/' + actionId, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
@@ -1109,7 +1126,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
                 <textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto"></textarea>
                 <button class="btn-copy" onclick="copyBox('prompt-box2',this)" style="margin-top:6px">Copy</button>
               </div>
-              <div class="setup-step-hint">Or use the Python/JS SDK — see the <a id="docs-link" href="#" target="_blank" style="color:#7c3aed">API docs</a>.</div>
+              <div class="setup-step-hint">Or use the Python/JS SDK — see the <a id="docs-link" href="/settings" target="_blank" style="color:#7c3aed">API docs</a>.</div>
             </div>
           </div>
         </div>
@@ -1117,7 +1134,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
 
       <div class="btn-row" style="margin-top:4px">
         <button class="btn btn-secondary" onclick="goTo(1)">← Back</button>
-        <button class="btn btn-primary" onclick="goTo(3)" style="flex:1">I've done this →</button>
+        <button class="btn btn-primary" onclick="continueFromSetup()" style="flex:1">I've done this →</button>
       </div>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
@@ -1163,13 +1180,15 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       <div class="push-status" id="push-status"></div>
       <div style="margin-top:20px;padding-top:20px;border-top:1px solid #f0ede8">
         <div style="font-size:12px;color:#aaa;margin-bottom:8px">Also want notifications on your phone? Install the free <a href="https://ntfy.sh" target="_blank" style="color:#555;font-weight:600">ntfy app</a> (iOS &amp; Android) and subscribe to your channel:</div>
-        <div class="path-box">{ntfy_url}</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="path-box" id="ntfy-url-box" style="flex:1">{ntfy_url}</div>
+          <button class="btn-copy" onclick="copyBox('ntfy-url-box',this)">Copy</button>
+        </div>
       </div>
       <div class="btn-row" style="margin-top:20px">
         <button class="btn btn-secondary" onclick="goTo(3)">← Back</button>
         <button class="btn btn-primary" onclick="finish()" style="flex:1">Go to my dashboard →</button>
       </div>
-      <div class="skip"><a href="/onboarding/skip">Skip, go to dashboard</a></div>
     </div>
 
   </div>
@@ -1188,16 +1207,16 @@ if ('serviceWorker' in navigator && 'PushManager' in window) {
 function goTo(n) {
   var prev = currentStep;
   document.getElementById('step-' + prev).classList.remove('active');
-  document.getElementById('dot-' + prev).classList.remove('active');
-  if (n > prev) {
-    document.getElementById('dot-' + prev).classList.add('done');
-  } else {
-    document.getElementById('dot-' + prev).classList.remove('done');
-    document.getElementById('dot-' + n).classList.remove('done');
-  }
   currentStep = n;
   document.getElementById('step-' + n).classList.add('active');
-  document.getElementById('dot-' + n).classList.add('active');
+  // Update all dots based on new position
+  for (var i = 0; i <= 4; i++) {
+    var dot = document.getElementById("dot-" + i);
+    if (!dot) continue;
+    dot.classList.remove("active", "done");
+    if (i < n) dot.classList.add("done");
+    else if (i === n) dot.classList.add("active");
+  }
   if (n === 3) {
     startTestPoll();
     var testSub = document.getElementById('test-sub');
@@ -1312,6 +1331,19 @@ function continueFromAgent() {
   goTo(2);
 }
 
+function continueFromSetup() {
+  if (selectedAgent === "claude") {
+    var u = document.getElementById("mac-username");
+    if (u && (!u.value || !u.value.trim())) {
+      u.style.borderColor = "#dc2626";
+      u.placeholder = "Required — enter your Mac username";
+      u.focus();
+      return;
+    }
+  }
+  goTo(3);
+}
+
 var _d = JSON.parse(document.getElementById('__mighty_onboarding_data__').textContent);
 var MCP_CONFIG   = _d.mcp_config;
 var SYSTEM_PROMPT = _d.system_prompt;
@@ -1334,9 +1366,9 @@ var BASE_URL     = _d.base_url;
   // API key box
   var akEl = document.getElementById('api-key-box');
   if (akEl) akEl.textContent = API_KEY;
-  // Docs link
+  // Docs link — points to Settings (API key lives there)
   var dlEl = document.getElementById('docs-link');
-  if (dlEl) dlEl.href = BASE_URL + '/docs';
+  if (dlEl) dlEl.href = '/settings';
 })();
 
 var AGENT_TITLES = {
@@ -1506,7 +1538,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
         <input type="checkbox" id="notif-push" {push_checked} onchange="save()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
         <div>
           <div class="toggle-label">Browser alerts</div>
-          <div class="toggle-hint">Desktop popup when your agent needs a decision.</div>
+          <div class="toggle-hint">Desktop popup when your agent needs a decision. Click Allow notifications below to activate.</div>
           <div id="push-status" class="push-status"></div>
           <button id="push-enable-btn" class="push-btn" onclick="enablePush()">Allow notifications &#8594;</button>
         </div>
@@ -1517,6 +1549,13 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
           <div class="toggle-label">Phone alerts</div>
           <div class="toggle-hint">Install the free <a href="https://ntfy.sh" target="_blank" style="color:#7c3aed">ntfy app</a>, then subscribe to your channel on your phone.</div>
           <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="ntfy-link">ntfy.sh/{ntfy_topic} &#8599;</a>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <input type="checkbox" id="notif-email" {email_checked} onchange="save()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
+        <div>
+          <div class="toggle-label">Email alerts</div>
+          <div class="toggle-hint">Receive an email when your agent requests approval.</div>
         </div>
       </div>
     </div>
@@ -1572,7 +1611,8 @@ function save() {
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
       ntfy: document.getElementById('notif-ntfy').checked,
-      push: document.getElementById('notif-push').checked
+      push: document.getElementById('notif-push').checked,
+      email: document.getElementById('notif-email').checked
     })
   });
 }
@@ -1639,6 +1679,7 @@ APPROVE_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="theme-color" content="#7c3aed">
 <title>Authorize action — Mighty</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -1882,7 +1923,7 @@ def action_card_html(a, base, show_buttons):
     except Exception:
         lvl = "routine"
     if lvl and lvl != "routine":
-        clevel = f'<span class="clevel-{lvl}">{lvl.title()}</span>'
+        clevel = f'<span class="clevel-{he(lvl)}">{he(lvl.title())}</span>'
     # Fields
     fields_html = ""
     if a["fields"]:
@@ -1890,20 +1931,20 @@ def action_card_html(a, base, show_buttons):
             flist = json.loads(a["fields"])
             for k, v in flist:
                 val = v if isinstance(v, str) else json.dumps(v)
-                fields_html += f'<div class="field-row"><span class="field-key">{k}</span><span class="field-val">{val}</span></div>'
+                fields_html += f'<div class="field-row"><span class="field-key">{he(k)}</span><span class="field-val">{he(val)}</span></div>'
         except Exception:
             pass
     pending_cls = " is-pending" if a["status"] == "pending" else ""
     btns = ""
     if show_buttons:
         btns = f'''<div class="action-buttons">
-          <button class="btn-authorize" onclick="decide('{a["id"]}','approve')">Approve</button>
-          <button class="btn-reject"    onclick="decide('{a["id"]}','deny')">Deny</button>
+          <button class="btn-authorize" onclick="decide('{he(a["id"])}','approve')">Approve</button>
+          <button class="btn-reject"    onclick="decide('{he(a["id"])}','deny')">Deny</button>
         </div>'''
     return f'''<div class="action-card{pending_cls}">
       <div class="action-top">
         <div style="min-width:0;flex:1">
-          <div class="action-label">{a["label"]}</div>
+          <div class="action-label">{he(a["label"])}</div>
         </div>
         <div class="action-badges">
           {clevel}
@@ -1935,7 +1976,7 @@ def dashboard():
         (session["user_id"],),
     ).fetchone()[0]
     pending_display = "flex" if pending_count > 0 else "none"
-    is_connected    = len(acts) > 0
+    is_connected    = len(acts) > 0 and bool(user["onboarded"])
 
 
     onboarding_banner = ""
@@ -1960,8 +2001,12 @@ def dashboard():
             'display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:22px">&#9889;</div>'
             '<div style="font-size:20px;font-weight:700;color:#1a1a1a;margin-bottom:8px">'
             'No activity yet</div>'
-            '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
+            '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:12px">'
             'Once your agent is connected, every action it takes or requests approval for will appear here.</div>'
+            '<div style="font-size:12px;color:#9ca3af;line-height:1.6;margin-bottom:28px">'
+            'Note: Mighty only logs actions your agent can actually perform. '
+            'If your agent does not have email or calendar tools connected, '
+            'those actions will not appear here.</div>'
             '<a href="/onboarding" style="display:block;padding:13px 20px;'
             'background:#7c3aed;color:#fff;border-radius:10px;font-size:14px;font-weight:600;'
             'text-decoration:none;margin-bottom:12px">Set up your agent &#8594;</a>'
@@ -2018,11 +2063,12 @@ def settings():
     user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
     topic = ntfy_topic(user["api_key"])
     return (SETTINGS_HTML
-            .replace("{email}",      user["email"])
-            .replace("{api_key}",    user["api_key"])
-            .replace("{ntfy_topic}", topic)
-            .replace("{push_checked}", "checked" if user["notify_push"] else "")
-            .replace("{ntfy_checked}", "checked" if user["notify_ntfy"]  else ""))
+            .replace("{email}",        user["email"])
+            .replace("{api_key}",      user["api_key"])
+            .replace("{ntfy_topic}",   topic)
+            .replace("{push_checked}", "checked" if user["notify_push"]  else "")
+            .replace("{ntfy_checked}", "checked" if user["notify_ntfy"]   else "")
+            .replace("{email_checked}","checked" if user["notify_email"] else ""))
 
 @app.route("/settings/export-csv")
 @require_login
@@ -2039,10 +2085,19 @@ def export_csv():
     writer.writerow(["Date", "Action Type", "Description", "Details", "Status", "Outcome", "Decided At"])
     for row in rows:
         try:
-            fields_dict = json.loads(row["fields"]) if row["fields"] else {}
+            fields_raw = json.loads(row["fields"]) if row["fields"] else []
+            if isinstance(fields_raw, list):
+                details = "; ".join(
+                    "{}: {}".format(pair[0], pair[1])
+                    for pair in fields_raw
+                    if isinstance(pair, (list, tuple)) and len(pair) >= 2
+                )
+            elif isinstance(fields_raw, dict):
+                details = "; ".join("{}: {}".format(k, v) for k, v in fields_raw.items())
+            else:
+                details = ""
         except Exception:
-            fields_dict = {}
-        details = "; ".join("{}: {}".format(k, v) for k, v in fields_dict.items())
+            details = ""
         writer.writerow([
             row["created_at"],
             row["action_type"],
@@ -2233,24 +2288,27 @@ def approve_page(token):
         body = '<div class="outcome timeout">Authorization request not found.</div>'
         return APPROVE_HTML.replace("{body}", body)
     if row["status"] != "pending":
-        labels = {"approved": "✓ Approved", "denied": "✗ Denied", "timeout": "Timed out"}
-        label  = labels.get(row["status"], row["status"].title())
-        body   = f'<div class="outcome {row["status"]}">{label}</div>'
-        return APPROVE_HTML.replace("{body}", body)
+        labels = {"approved": "&#10003; Approved", "denied": "&#10007; Denied", "timeout": "Timed out"}
+        label  = labels.get(row["status"], he(row["status"].title()))
+        body   = f'<div class="outcome {he(row["status"])}">{label}</div>'
+        return APPROVE_HTML.replace("{body}", body).replace(
+            '<div id="agent-waiting-note"',
+            '<div id="agent-waiting-note" style="display:none"'
+        )
     # Build fields HTML
     fields_html = ""
     if row["fields"]:
         try:
             for k, v in json.loads(row["fields"]):
                 val = v if isinstance(v, str) else json.dumps(v)
-                fields_html += f'<div style="margin-bottom:12px"><div class="field-label">{k}</div><div class="field-value">{val}</div></div>'
+                fields_html += f'<div style="margin-bottom:12px"><div class="field-label">{he(k)}</div><div class="field-value">{he(val)}</div></div>'
         except Exception:
             pass
     expires_at_val = row["expires_at"] or ""
     body = f"""
       <div class="card-header"><div class="card-header-dot"></div><span class="card-header-text">Authorization Required</span></div>
-      <div class="card-headline">{row["label"]}</div>
-      <div class="card-type">{row["action_type"]}</div>
+      <div class="card-headline">{he(row["label"])}</div>
+      <div class="card-type">{he(row["action_type"])}</div>
       {'<div class="card-fields">' + fields_html + '</div>' if fields_html else ''}
       <div class="card-actions">
         <button class="btn-approve" onclick="submit('approve')">Approve</button>
@@ -2260,10 +2318,20 @@ def approve_page(token):
       <div id="expiry-timer" style="text-align:center;padding:0 20px 14px;font-size:12px;color:#aaa"></div>
       <script>
       function submit(dec) {{
+        document.querySelectorAll(".btn-approve, .btn-deny").forEach(function(b) {{ b.disabled = true; }});
         fetch('/approve/{token}', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{decision:dec}})}})
-          .then(r=>r.json()).then(d=>{{
+          .then(function(r) {{
+            if (!r.ok) {{
+              document.getElementById("agent-waiting-note").style.display = "none";
+              document.querySelector(".card-actions").innerHTML = '<div style="text-align:center;padding:20px;font-size:14px;color:#9ca3af">This request has already expired or been decided.</div>';
+              return;
+            }}
+            return r.json();
+          }}).then(function(d) {{
+            if (!d) return;
             document.querySelector('.card').innerHTML =
-              '<div class="outcome ' + d.status + '">' + (d.status==='approved'?'Approved':'Denied') + '</div>';
+              '<div class="outcome ' + d.status + '">' + (d.status==='approved'?'Approved':'Denied') + '</div>'
+              + '<div style="text-align:center;margin-top:16px"><a href="/dashboard" style="font-size:13px;color:#7c3aed;text-decoration:none">Go to dashboard →</a></div>';
             var note = document.getElementById('agent-waiting-note');
             if (note) note.style.display = 'none';
           }});
@@ -2416,8 +2484,8 @@ self.addEventListener('push', function(e) {
   e.waitUntil(
     self.registration.showNotification(title, {
       body:    body,
-      icon:    '/static/icon.png',
-      badge:   '/static/icon.png',
+      icon:    '/logo-icon.png',
+      badge:   '/logo-icon.png',
       tag:     data.tag || 'mighty-auth',
       renotify: true,
       requireInteraction: true,
