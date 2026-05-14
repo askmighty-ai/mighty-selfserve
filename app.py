@@ -258,8 +258,8 @@ def send_authorization_email(to_email, label, action_type, fields, approval_url)
       <span style="font-size:18px;font-weight:700;color:#1a1a1a">⚡ Mighty</span>
     </div>
     <div style="background:#fff;border:1px solid #e5e3df;border-radius:16px;overflow:hidden">
-      <div style="background:#fffbeb;border-bottom:1px solid #fde68a;padding:12px 20px">
-        <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#92400e">Authorization Required</span>
+      <div style="background:#f5f3ff;border-bottom:1px solid #e9d5ff;padding:12px 20px">
+        <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#5b21b6">Authorization Required</span>
       </div>
       <div style="padding:20px">
         <div style="font-size:18px;font-weight:700;color:#1a1a1a;line-height:1.4;margin-bottom:4px">{label}</div>
@@ -427,11 +427,11 @@ body{background:#fff;color:#1a1a1a}
 .logo{display:flex;align-items:center;gap:10px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
-.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .nav-actions{display:flex;align-items:center;gap:16px}
 .nav-signin{font-size:14px;font-weight:500;color:#444;text-decoration:none}
 .nav-signin:hover{color:#7c3aed;text-decoration:none}
-.btn-nav{padding:8px 18px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 0.12s}
+.btn-nav{padding:8px 18px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 0.12s}
 .btn-nav:hover{background:#6d28d9;text-decoration:none;color:#fff}
 /* Hero */
 .hero{background:#fff;padding:100px 24px 80px;text-align:center}
@@ -439,7 +439,7 @@ body{background:#fff;color:#1a1a1a}
 .hero h1{font-size:50px;font-weight:800;line-height:1.1;letter-spacing:-1px;color:#1a1a1a;margin-bottom:22px}
 .hero-sub{font-size:18px;color:#555;line-height:1.6;max-width:560px;margin:0 auto 36px}
 .hero-ctas{display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap;margin-bottom:28px}
-.btn-primary-lg{padding:14px 28px;background:#7c3aed;color:#fff;border:none;border-radius:9px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;transition:background 0.12s;display:inline-block}
+.btn-primary-lg{padding:14px 28px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;transition:background 0.12s;display:inline-block}
 .btn-primary-lg:hover{background:#6d28d9;text-decoration:none;color:#fff}
 .hero-link{font-size:14px;color:#7c3aed;text-decoration:none;font-weight:500}
 .hero-link:hover{text-decoration:underline}
@@ -460,7 +460,7 @@ body{background:#fff;color:#1a1a1a}
 .features-inner{max-width:900px;margin:0 auto}
 .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
 @media(max-width:700px){.cards{grid-template-columns:1fr}.hero h1{font-size:34px}.hero-ctas{flex-direction:column;gap:12px}}
-.fcard{background:#fff;border:1.5px solid #e5e3df;border-radius:14px;padding:28px 24px}
+.fcard{background:#fff;border:1.5px solid #e5e3df;border-radius:12px;padding:28px 24px}
 .fcard h3{font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:10px}
 .fcard p{font-size:14px;color:#555;line-height:1.6}
 .fcard-icon{width:36px;height:36px;border-radius:10px;background:#f3f0ff;display:flex;align-items:center;justify-content:center;margin-bottom:16px;font-size:18px}
@@ -478,7 +478,7 @@ body{background:#fff;color:#1a1a1a}
 .btn-ent:hover{background:#6d28d9}
 .ent-thanks{display:none;text-align:center;padding:20px 0;font-size:15px;color:#16a34a;font-weight:600}
 /* Footer */
-.footer-bar{background:#fff;border-top:1px solid #e5e3df;padding:28px 24px;text-align:center;font-size:13px;color:#aaa}
+.footer-bar{background:#fff;border-top:1px solid #e5e3df;padding:28px 24px;text-align:center;font-size:13px;color:#9ca3af}
 </style>
 </head>
 <body>
@@ -638,7 +638,7 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
-.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:22px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
 .sub{font-size:14px;color:#666;margin-bottom:24px}
 label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
@@ -690,7 +690,7 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
-.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:20px;font-weight:700;margin-bottom:20px}
 label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
 input[type=email],input[type=password]{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px}
@@ -740,7 +740,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .topbar-logo{display:flex;align-items:center;gap:8px}
 .topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
 .topbar-logo-mark img{height:26px;width:auto}
-.topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .topbar-right{display:flex;align-items:center;gap:16px}
 .topbar-email{font-size:12px;color:#9ca3af}
 .btn-logout{font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
@@ -784,8 +784,8 @@ details[open] summary::before{content:"\\25BE "}
 .feed-title{font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
 .feed-sub{font-size:12px;color:#6b7280;margin-bottom:20px}
 .feed{display:flex;flex-direction:column;gap:10px}
-.pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#d97706;display:flex;align-items:center;gap:6px;margin-bottom:10px}
-.pending-dot{width:6px;height:6px;border-radius:50%;background:#f59e0b;animation:pulse 1.5s infinite;flex-shrink:0}
+.pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#7c3aed;display:flex;align-items:center;gap:6px;margin-bottom:10px}
+.pending-dot{width:6px;height:6px;border-radius:50%;background:#7c3aed;animation:pulse 1.5s infinite;flex-shrink:0}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
 .action-card{background:#fff;border:1px solid #e5e3df;border-radius:10px;overflow:hidden}
 .action-card:hover{box-shadow:0 2px 10px rgba(0,0,0,0.06)}
@@ -799,9 +799,9 @@ details[open] summary::before{content:"\\25BE "}
 .field-key{color:#9ca3af;font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:0.5px;min-width:80px;flex-shrink:0;padding-top:1px}
 .field-val{color:#374151;line-height:1.4;word-break:break-word}
 .action-buttons{padding:12px 16px;border-top:1px solid #f0ede8;display:flex;gap:8px}
-.btn-authorize{flex:1;padding:9px;background:#16a34a;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s}
+.btn-authorize{flex:1;padding:9px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s}
 .btn-authorize:hover{background:#15803d}
-.btn-reject{flex:1;padding:9px;background:#fff;color:#dc2626;border:1.5px solid #fecaca;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s}
+.btn-reject{flex:1;padding:9px;background:#fff;color:#dc2626;border:1.5px solid #fecaca;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s}
 .btn-reject:hover{background:#fef2f2}
 .clevel-sensitive{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:#eff6ff;color:#2563eb;letter-spacing:0.3px}
 .clevel-consequential{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:#fffbeb;color:#d97706;letter-spacing:0.3px}
@@ -820,7 +820,7 @@ details[open] summary::before{content:"\\25BE "}
     </div>
     <span class="topbar-name">Mighty</span>
   </a>
-  <div id="pending-badge" style="display:{pending_display};background:#fef3c7;border:1px solid #fde68a;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#92400e">
+  <div id="pending-badge" style="display:{pending_display};background:#f3f0ff;border:1px solid #e9d5ff;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#5b21b6">
     {pending_count} awaiting decision
   </div>
   <div class="topbar-right">
@@ -899,22 +899,22 @@ ONBOARDING_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100vh;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px 24px}
-.wrap{width:100%;max-width:520px;display:flex;flex-direction:column;flex:1;min-height:0}
-.logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:12px;flex-shrink:0}
+body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh;overflow:auto;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px 24px}
+.wrap{width:100%;max-width:520px;display:flex;flex-direction:column;min-height:calc(100vh - 40px)}
+.logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:16px;flex-shrink:0}
 .logo-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:28px;width:auto}
-.logo-name{font-size:17px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.progress{display:flex;gap:6px;justify-content:center;margin-bottom:12px;flex-shrink:0}
+.logo-name{font-size:17px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.progress{display:flex;gap:6px;justify-content:center;margin-bottom:16px;flex-shrink:0}
 .progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s;padding:6px;margin:-6px;background-clip:content-box}
 .progress-dot.active{background:#7c3aed;background-clip:content-box}
 .progress-dot.done{background:#c4b5fd;background-clip:content-box;cursor:pointer}
 .progress-dot.done:hover{background:#a78bfa;background-clip:content-box}
-.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:20px 24px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:24px 28px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1}
 .step{display:none}.step.active{display:block}
-.step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#a78bfa;margin-bottom:6px}
-.step-title{font-size:20px;font-weight:700;color:#1a1a1a;margin-bottom:6px;line-height:1.3}
-.step-sub{font-size:13px;color:#6b7280;line-height:1.5;margin-bottom:14px}
+.step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#7c3aed;margin-bottom:8px}
+.step-title{font-size:20px;font-weight:700;color:#1a1a1a;margin-bottom:8px;line-height:1.3}
+.step-sub{font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:20px}
 .agent-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px}
 .agent-card{border:2px solid #e5e3df;border-radius:12px;padding:16px 12px;text-align:center;cursor:pointer;transition:all 0.15s}
 .agent-card:hover{border-color:#c4b5fd;background:#faf5ff}
@@ -937,7 +937,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
 .setup-step-hint{font-size:12px;color:#6b7280;line-height:1.5}
 .code-box{font-family:ui-monospace,monospace;font-size:10px;color:#6b7280;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;overflow-y:auto;margin:5px 0;max-width:100%;max-height:82px}
 .path-box{font-family:ui-monospace,monospace;font-size:10px;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:7px 10px;word-break:break-all;margin:5px 0}
-.btn{width:100%;padding:11px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.12s}
+.btn{width:100%;padding:11px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.12s}
 .btn-primary{background:#7c3aed;color:#fff}.btn-primary:hover{background:#6d28d9}.btn-primary.btn-dim{background:#c4b5fd !important;cursor:not-allowed}
 .btn-secondary{background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff}.btn-secondary:hover{background:#ede9fe}
 .btn-copy{font-size:12px;font-weight:600;padding:5px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer;transition:background 0.12s;white-space:nowrap}
@@ -974,7 +974,6 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       <div class="step-title">You're in control of your AI agents.</div>
       <div class="step-sub">Mighty puts approval checkpoints in your agent's path. You define what's consequential — the agent pauses and waits for your decision. And every action is logged, in the agent's own words.</div>
       <button class="btn btn-primary" onclick="goTo(1)">Begin setup →</button>
-      <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
 
     <!-- Step 1: Pick agent -->
@@ -1011,8 +1010,8 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
           <div class="cap-card" onclick="toggleCap(this,'social')"><input type="checkbox" class="cap-check" value="social" style="display:none"><span class="cap-icon">📢</span><div><div class="cap-name">Social media</div><div class="cap-sub">Post, publish content</div></div></div>
           <div class="cap-card" onclick="toggleCap(this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></div>
         </div>
-        <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" style="width:100%;font-family:'Inter',sans-serif;font-size:12px;color:#1a1a1a;background:#f8f7f5;border:1px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s" onfocus="this.style.borderColor='#c4b5fd'" onblur="this.style.borderColor='#e5e3df'">
-        <div id="cap-caveat" style="display:none;margin-top:10px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:12px;color:#92400e;line-height:1.5"></div>
+        <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;color:#1a1a1a;background:#fff;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+        <div id="cap-caveat" style="display:none;margin-top:10px;padding:10px 12px;background:#f3f0ff;border:1px solid #e9d5ff;border-radius:8px;font-size:12px;color:#5b21b6;line-height:1.5"></div>
       </div>
       <div id="agent-nudge" style="display:none;font-size:12px;color:#7c3aed;text-align:center;margin-top:8px">Pick an agent type above to continue</div>
       <div class="btn-row" style="margin-top:8px">
@@ -1046,7 +1045,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
               <div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                 <span style="font-size:11px;color:#9ca3af;white-space:nowrap">Your Mac username:</span>
-                <input id="mac-username" type="text" placeholder="e.g. john" style="flex:1;font-family:'Inter',sans-serif;font-size:11px;border:1px solid #e5e3df;border-radius:6px;padding:5px 8px;outline:none;background:#f8f7f5;color:#1a1a1a" oninput="updateMcpConfig(this.value)" onfocus="this.style.borderColor='#c4b5fd'" onblur="this.style.borderColor='#e5e3df'">
+                <input id="mac-username" type="text" placeholder="e.g. john" style="flex:1;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:6px 10px;outline:none;background:#fff;color:#1a1a1a" oninput="updateMcpConfig(this.value)" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
               </div>
               <div style="display:flex;align-items:flex-start;gap:8px">
                 <div class="code-box" id="mcp-config-box" style="flex:1;max-height:100px"></div>
@@ -1058,7 +1057,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
             <div class="setup-step-num">3</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Restart Claude Desktop</div>
-              <div class="setup-step-hint">Quit and reopen Claude Desktop. (This setup is for macOS — on Windows, the config file is at <code style="font-size:9px;background:#f0ede8;padding:1px 4px;border-radius:3px">%APPDATA%\Claude\claude_desktop_config.json</code>)</div>
+              <div class="setup-step-hint">Quit and reopen Claude Desktop. (This setup is for macOS — on Windows, the config file is at <code style="font-size:11px;background:#f0ede8;padding:1px 4px;border-radius:3px">%APPDATA%\Claude\claude_desktop_config.json</code>)</div>
             </div>
           </div>
           <div class="setup-step">
@@ -1066,7 +1065,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
             <div class="setup-step-body">
               <div class="setup-step-title">Add the checkpoint prompt to your Claude Project</div>
               <div style="display:flex;align-items:flex-start;gap:8px">
-                <textarea id="prompt-box-claude" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto"></textarea>
+                <textarea id="prompt-box-claude" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:90px;resize:none;overflow:auto"></textarea>
                 <button class="btn-copy" onclick="copyBox('prompt-box-claude',this)" style="margin-top:6px">Copy</button>
               </div>
               <div class="setup-step-hint">Open your Claude Project → Instructions, and paste this at the top. It tells Claude when to call the Mighty tools.</div>
@@ -1090,7 +1089,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
             <div class="setup-step-body">
               <div class="setup-step-title">Paste the Mighty system prompt</div>
               <div style="display:flex;align-items:flex-start;gap:8px">
-                <textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto"></textarea>
+                <textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:90px;resize:none;overflow:auto"></textarea>
                 <button class="btn-copy" onclick="copyBox('prompt-box',this)" style="margin-top:6px">Copy</button>
               </div>
               <div class="setup-step-hint">Add it at the top of the existing instructions.</div>
@@ -1124,7 +1123,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
             <div class="setup-step-body">
               <div class="setup-step-title">Add the system prompt to your agent</div>
               <div style="display:flex;align-items:flex-start;gap:8px">
-                <textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:9px;color:#555;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;height:80px;resize:none;overflow:auto"></textarea>
+                <textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:90px;resize:none;overflow:auto"></textarea>
                 <button class="btn-copy" onclick="copyBox('prompt-box2',this)" style="margin-top:6px">Copy</button>
               </div>
               <div class="setup-step-hint">Or use the Python/JS SDK — see the <a id="docs-link" href="/settings" target="_blank" style="color:#7c3aed">API docs</a>.</div>
@@ -1149,7 +1148,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
         <div class="test-spinner"></div>
         <div style="font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px">Waiting for your agent…</div>
         <div style="font-size:12px;color:#aaa">Or run the test command below in your terminal</div>
-        <div id="test-slow-note" style="display:none;margin-top:12px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:12px;color:#92400e;line-height:1.5;text-align:left">
+        <div id="test-slow-note" style="display:none;margin-top:12px;padding:10px 12px;background:#f3f0ff;border:1px solid #e9d5ff;border-radius:8px;font-size:12px;color:#5b21b6;line-height:1.5;text-align:left">
           <strong>Nothing showing up?</strong> Mighty only fires when your agent actually performs the action — not just describes it. Make sure your agent has the tools needed (email access, file permissions, etc.) to carry out what you asked. If it does not have those tools, it may promise to use Mighty but never actually trigger the flow.
         </div>
       </div>
@@ -1161,7 +1160,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
       <div class="setup-step-body" style="margin-bottom:16px">
         <div style="font-size:12px;color:#aaa;margin-bottom:4px">Or test manually from Terminal:</div>
         <div style="display:flex;align-items:flex-start;gap:8px">
-          <div class="code-box" id="test-curl" style="flex:1;font-size:9px">{test_curl}</div>
+          <div class="code-box" id="test-curl" style="flex:1;font-size:10px">{test_curl}</div>
           <button class="btn-copy" onclick="copyCurl(this)" style="margin-top:6px">Copy</button>
         </div>
       </div>
@@ -1190,6 +1189,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
         <button class="btn btn-secondary" onclick="goTo(3)">← Back</button>
         <button class="btn btn-primary" onclick="finish()" style="flex:1">Go to my dashboard →</button>
       </div>
+      <div class="skip"><a href="/onboarding/skip">Skip for now</a></div>
     </div>
 
   </div>
@@ -1497,7 +1497,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .topbar-logo{display:flex;align-items:center;gap:8px}
 .topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
 .topbar-logo-mark img{height:26px;width:auto}
-.topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .topbar-right{display:flex;align-items:center;gap:16px}
 .topbar-email{font-size:12px;color:#9ca3af}
 .btn-logout{font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
@@ -1518,15 +1518,17 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .push-status{font-size:12px;color:#6b7280;margin-top:6px;min-height:16px}
 .push-btn{font-size:12px;font-weight:600;padding:6px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer;transition:background 0.12s;display:none;margin-top:6px}
 .push-btn:hover{background:#ede9fe}
+.btn-danger{font-size:12px;font-weight:600;padding:8px 12px;background:#fff;color:#dc2626;border:1.5px solid #fecaca;border-radius:6px;white-space:nowrap;cursor:pointer;transition:all 0.12s;width:100%;text-align:left}
+.btn-danger:hover{background:#fef2f2}
 .ntfy-link{display:inline-block;margin-top:6px;font-size:10px;font-family:ui-monospace,monospace;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
 </style>
 </head>
 <body>
 <div class="topbar">
-  <div class="topbar-logo">
+  <a href="/dashboard" style="text-decoration:none;display:flex;align-items:center;gap:8px">
     <div class="topbar-logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
     <span class="topbar-name">Mighty</span>
-  </div>
+  </a>
   <div class="topbar-right">
     <a href="/dashboard" style="font-size:12px;color:#6b7280;text-decoration:none">&#8592; Dashboard</a>
     <span class="topbar-email">{email}</span>
@@ -1583,9 +1585,9 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
       <button class="btn-copy-key" onclick="window.location.href='/settings/export-csv'" style="margin-bottom:4px">Export activity log</button>
       <hr style="border:none;border-top:1px solid #f3f4f6;margin:16px 0">
       <div style="display:flex;flex-direction:column;gap:10px">
-        <button class="btn-copy-key" id="del-activity-btn" onclick="deleteActivity()" style="color:#dc2626;border-color:#fecaca">Delete all activity</button>
+        <button class="btn-danger" id="del-activity-btn" onclick="deleteActivity()">Delete all activity</button>
         <span id="del-activity-msg" style="font-size:12px;color:#16a34a;display:none">Activity deleted.</span>
-        <button class="btn-copy-key" onclick="deleteAccount()" style="color:#dc2626;border-color:#fecaca">Delete my account</button>
+        <button class="btn-danger" onclick="deleteAccount()">Delete my account</button>
       </div>
     </div>
   </div>
@@ -1695,29 +1697,29 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 .brand{display:flex;align-items:center;gap:8px;margin-bottom:20px;justify-content:center}
 .brand-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center}
 .brand-mark img{height:28px;width:auto}
-.brand-name{font-size:16px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#1e3a8a,#2563eb,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.brand-name{font-size:16px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08)}
-.card-header{background:#fffbeb;border-bottom:1px solid #fde68a;padding:16px 20px;display:flex;align-items:center;gap:10px}
-.card-header-dot{width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:pulse 1.5s infinite;flex-shrink:0}
+.card-header{background:#f5f3ff;border-bottom:1px solid #e9d5ff;padding:16px 20px;display:flex;align-items:center;gap:10px}
+.card-header-dot{width:8px;height:8px;border-radius:50%;background:#7c3aed;animation:pulse 1.5s infinite;flex-shrink:0}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
-.card-header-text{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#92400e}
+.card-header-text{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#5b21b6}
 .card-headline{font-size:18px;font-weight:700;color:#1a1a1a;padding:18px 20px 4px;line-height:1.4}
-.card-type{font-size:12px;color:#aaa;padding:0 20px 16px;font-family:ui-monospace,monospace}
+.card-type{font-size:12px;color:#9ca3af;padding:0 20px 16px;font-family:ui-monospace,monospace}
 .card-fields{padding:0 20px 16px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid #f0ede8}
-.field-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#bbb;margin-bottom:2px}
+.field-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#9ca3af;margin-bottom:2px}
 .field-value{font-size:13px;color:#1a1a1a;line-height:1.5;word-break:break-word}
 .card-actions{padding:16px 20px;display:flex;gap:10px}
-.btn-approve{flex:1;padding:16px;background:#16a34a;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:700;transition:background 0.12s;touch-action:manipulation}
+.btn-approve{flex:1;padding:16px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:700;transition:background 0.12s;touch-action:manipulation}
 .btn-approve:hover{background:#15803d}
 .btn-approve:active{transform:scale(0.98)}
-.btn-deny{flex:1;padding:16px;background:#fff;color:#dc2626;border:2px solid #fecaca;border-radius:10px;font-size:16px;font-weight:700;transition:all 0.12s;touch-action:manipulation}
+.btn-deny{flex:1;padding:16px;background:#fff;color:#dc2626;border:2px solid #fecaca;border-radius:8px;font-size:16px;font-weight:700;transition:all 0.12s;touch-action:manipulation}
 .btn-deny:hover{background:#fef2f2}
 .btn-deny:active{transform:scale(0.98)}
 .outcome{text-align:center;padding:28px 20px;font-size:15px;font-weight:600}
 .outcome.approved{color:#16a34a;background:#f0fdf4}
 .outcome.denied{color:#dc2626;background:#fef2f2}
 .outcome.timeout{color:#9ca3af;background:#f9fafb}
-.timeout-note{font-size:12px;color:#bbb;text-align:center;padding:10px 20px 16px;line-height:1.5}
+.timeout-note{font-size:12px;color:#9ca3af;text-align:center;padding:10px 20px 16px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -1731,7 +1733,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
   <div class="card">
     {body}
   </div>
-  <div id="agent-waiting-note" style="text-align:center;margin-top:16px;font-size:12px;color:#bbb">Your AI agent is waiting for this decision.</div>
+  <div id="agent-waiting-note" style="text-align:center;margin-top:16px;font-size:12px;color:#9ca3af">Your AI agent is waiting for this decision.</div>
 </div>
 </body>
 </html>"""
@@ -1988,10 +1990,10 @@ def dashboard():
     onboarding_banner = ""
     if not user["onboarded"]:
         onboarding_banner = (
-            '<div style="grid-column:1/-1;background:#fef3c7;border:1px solid #fde68a;'
+            '<div style="grid-column:1/-1;background:#f3f0ff;border:1px solid #e9d5ff;'
             'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
-            'justify-content:space-between;gap:16px;margin-bottom:4px">'
-            '<div style="font-size:13px;color:#92400e">'
+            'justify-content:space-between;gap:16px;margin-bottom:16px">'
+            '<div style="font-size:13px;color:#5b21b6">'
             'Finish setting up Mighty to connect your first agent.</div>'
             '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#7c3aed;white-space:nowrap">'
             'Complete setup &#8594;</a></div>'
@@ -2011,7 +2013,7 @@ def dashboard():
             'Set up Mighty to work with your agent in just a few steps. Once set up, '
             'you will be able to see and respond to approval requests.</div>'
             '<a href="/onboarding" style="display:block;padding:13px 20px;'
-            'background:#7c3aed;color:#fff;border-radius:10px;font-size:14px;font-weight:600;'
+            'background:#7c3aed;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
             'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
 ''
             '</div>'
@@ -2043,7 +2045,7 @@ def dashboard():
                 'Run the setup wizard to connect Claude Desktop, ChatGPT, or a custom agent.</p>'
                 '<a href="/onboarding" style="display:block;text-align:center;padding:10px;'
                 'background:#7c3aed;color:#fff;border-radius:8px;font-size:13px;font-weight:600;'
-                'text-decoration:none">Launch setup wizard &#8594;</a>'
+                'text-decoration:none">Set up another agent &#8594;</a>'
                 '</div>'
             )
         sidebar_content = '<div class="sidebar">' + sidebar_card + '</div>'
