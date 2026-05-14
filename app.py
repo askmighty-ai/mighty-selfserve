@@ -2006,7 +2006,7 @@ def dashboard():
             'you will be able to see and respond to approval requests.</div>'
             '<a href="/onboarding" style="display:block;padding:13px 20px;'
             'background:#7c3aed;color:#fff;border-radius:10px;font-size:14px;font-weight:600;'
-            'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
+            'text-decoration:none;margin-bottom:16px">Set up your agent &#8594;</a>'
             '<a href="/settings" style="font-size:13px;color:#9ca3af;text-decoration:none">'
             'Settings &amp; API key</a>'
             '</div>'
