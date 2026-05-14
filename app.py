@@ -15,7 +15,7 @@ Env vars (all optional):
   PORT          — Port to listen on (default: 5004)
 """
 
-import os, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error
+import os, io, csv, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error
 
 from datetime import datetime, timezone, timedelta
 from functools import wraps
@@ -1303,6 +1303,17 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
         <a href="/onboarding" style="font-size:13px;color:#7c3aed;text-decoration:none">&#8635; Re-run setup wizard</a>
       </div>
     </div>
+
+    <div class="card">
+      <div class="section-title">Data &amp; Privacy</div>
+      <button class="btn-copy-key" onclick="window.location.href='/settings/export-csv'" style="margin-bottom:4px">Export activity log</button>
+      <hr style="border:none;border-top:1px solid #f3f4f6;margin:16px 0">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn-copy-key" id="del-activity-btn" onclick="deleteActivity()" style="color:#dc2626;border-color:#fecaca">Delete all activity</button>
+        <span id="del-activity-msg" style="font-size:12px;color:#16a34a;display:none">Activity deleted.</span>
+        <button class="btn-copy-key" onclick="deleteAccount()" style="color:#dc2626;border-color:#fecaca">Delete my account</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1374,6 +1385,21 @@ function urlB64ToUint8Array(b) {
   var raw = atob(base64); var out = new Uint8Array(raw.length);
   for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
   return out;
+}
+function deleteActivity() {
+  if (!confirm("This will permanently delete your entire activity log. This cannot be undone.")) return;
+  fetch('/settings/delete-activity', {method: 'POST'}).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      var msg = document.getElementById('del-activity-msg');
+      if (msg) { msg.style.display = 'inline'; setTimeout(function() { msg.style.display = 'none'; }, 3000); }
+    }
+  });
+}
+function deleteAccount() {
+  if (!confirm("This will permanently delete your account and all data. This cannot be undone.")) return;
+  fetch('/settings/delete-account', {method: 'POST'}).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) { window.location.href = '/'; }
+  });
 }
 </script>
 </body>
@@ -1792,6 +1818,61 @@ def settings():
             .replace("{ntfy_topic}", topic)
             .replace("{push_checked}", "checked" if user["notify_push"] else "")
             .replace("{ntfy_checked}", "checked" if user["notify_ntfy"]  else ""))
+
+@app.route("/settings/export-csv")
+@require_login
+def export_csv():
+    db      = get_db()
+    user_id = session["user_id"]
+    rows    = db.execute(
+        "SELECT created_at, action_type, label, fields, status, outcome, decided_at "
+        "FROM actions WHERE user_id=? ORDER BY created_at DESC",
+        (user_id,)
+    ).fetchall()
+    si = io.StringIO()
+    writer = csv.writer(si)
+    writer.writerow(["Date", "Action Type", "Description", "Details", "Status", "Outcome", "Decided At"])
+    for row in rows:
+        try:
+            fields_dict = json.loads(row["fields"]) if row["fields"] else {}
+        except Exception:
+            fields_dict = {}
+        details = "; ".join("{}: {}".format(k, v) for k, v in fields_dict.items())
+        writer.writerow([
+            row["created_at"],
+            row["action_type"],
+            row["label"],
+            details,
+            row["status"],
+            row["outcome"] or "",
+            row["decided_at"] or "",
+        ])
+    output = si.getvalue()
+    filename = "mighty-activity-{}.csv".format(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    resp = make_response(output)
+    resp.headers["Content-Type"] = "text/csv"
+    resp.headers["Content-Disposition"] = "attachment; filename={}".format(filename)
+    return resp
+
+@app.route("/settings/delete-activity", methods=["POST"])
+@require_login
+def delete_activity():
+    db = get_db()
+    db.execute("DELETE FROM actions WHERE user_id=?", (session["user_id"],))
+    db.commit()
+    return jsonify({"ok": True})
+
+@app.route("/settings/delete-account", methods=["POST"])
+@require_login
+def delete_account():
+    db      = get_db()
+    user_id = session["user_id"]
+    db.execute("DELETE FROM push_subscriptions WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM actions WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM users WHERE id=?", (user_id,))
+    db.commit()
+    session.clear()
+    return jsonify({"ok": True})
 
 @app.route("/download/mighty_mcp.py")
 @require_login
