@@ -994,6 +994,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
           <div class="cap-card" onclick="toggleCap(this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></div>
         </div>
         <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" style="width:100%;font-family:'Inter',sans-serif;font-size:12px;color:#1a1a1a;background:#f8f7f5;border:1px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s" onfocus="this.style.borderColor='#c4b5fd'" onblur="this.style.borderColor='#e5e3df'">
+        <div id="cap-caveat" style="display:none;margin-top:10px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:12px;color:#92400e;line-height:1.5"></div>
       </div>
       <div id="agent-nudge" style="display:none;font-size:12px;color:#7c3aed;text-align:center;margin-top:8px">Pick an agent type above to continue</div>
       <div class="btn-row" style="margin-top:8px">
@@ -1130,6 +1131,9 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;height:100v
         <div class="test-spinner"></div>
         <div style="font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px">Waiting for your agent…</div>
         <div style="font-size:12px;color:#aaa">Or run the test command below in your terminal</div>
+        <div id="test-slow-note" style="display:none;margin-top:12px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:12px;color:#92400e;line-height:1.5;text-align:left">
+          <strong>Nothing showing up?</strong> Mighty only fires when your agent actually performs the action — not just describes it. Make sure your agent has the tools needed (email access, file permissions, etc.) to carry out what you asked. If it does not have those tools, it may promise to use Mighty but never actually trigger the flow.
+        </div>
       </div>
       <div class="test-connected" id="test-connected">
         <div class="test-connected-icon">✅</div>
@@ -1209,12 +1213,23 @@ function goTo(n) {
   if (n !== 3 && testPollTimer) { clearInterval(testPollTimer); testPollTimer = null; }
 }
 
+var CAP_CAVEATS = {
+  claude:  "Mighty checkpoints only fire for actions Claude Desktop can already perform via its connected MCP tools. If Claude does not have an email or calendar tool installed, those actions will not trigger a Mighty request — even if you select them here.",
+  chatgpt: "Mighty checkpoints only fire for actions your ChatGPT project or Custom GPT can already perform. If your GPT does not have an email, calendar, or browsing tool connected, those actions will not trigger a Mighty request — ChatGPT will acknowledge the instructions but the flow will never run.",
+  custom:  "Mighty checkpoints only fire when your agent actually calls the authorization API. Make sure your agent code invokes the Mighty endpoint before performing each action type you select here."
+};
+
 function selectAgent(el, agent) {
   selectedAgent = agent;
   document.querySelectorAll('.agent-card').forEach(function(c) { c.classList.remove('selected'); });
   el.classList.add('selected');
   updateContinueBtn();
   renderSetup(agent);
+  var caveat = document.getElementById('cap-caveat');
+  if (caveat && CAP_CAVEATS[agent]) {
+    caveat.textContent = CAP_CAVEATS[agent];
+    caveat.style.display = 'block';
+  }
 }
 
 var CAPABILITY_ACTIONS = {
@@ -1370,10 +1385,15 @@ function copyCurl(btn) {
 
 function startTestPoll() {
   var since = Math.floor(Date.now() / 1000);
+  var slowTimer = setTimeout(function() {
+    var note = document.getElementById('test-slow-note');
+    if (note) note.style.display = 'block';
+  }, 20000);
   testPollTimer = setInterval(function() {
     fetch('/dashboard/has-pending?since=' + since).then(function(r) { return r.json(); }).then(function(d) {
       if (d.pending) {
         clearInterval(testPollTimer);
+        clearTimeout(slowTimer);
         document.getElementById('test-waiting').style.display = 'none';
         document.getElementById('test-connected').style.display = 'block';
       }
