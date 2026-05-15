@@ -1387,7 +1387,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
     <!-- Step 0: Welcome -->
     <div class="step active" id="step-0">
       <div class="step-label">Welcome</div>
-      <div class="step-title">You're in control of your AI agents</div>
+      <div class="step-title">AI that asks before it acts</div>
       <div class="step-sub">Mighty puts approval checkpoints in your agent's path. You define what's consequential — the agent pauses and waits for your decision. And every action is logged, in the agent's own words.</div>
       <button class="btn btn-primary" onclick="goTo(1)">Begin setup →</button>
     </div>
