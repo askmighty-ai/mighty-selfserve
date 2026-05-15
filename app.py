@@ -1284,7 +1284,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
             <div class="setup-step-num">3</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Restart Claude Desktop</div>
-              <div class="setup-step-hint">Quit and reopen Claude Desktop. (This setup is for macOS — on Windows, the config file is at <code style="font-size:11px;background:#f0ede8;padding:1px 4px;border-radius:3px">%APPDATA%\Claude\claude_desktop_config.json</code>)</div>
+              <div class="setup-step-hint">Quit and reopen Claude Desktop. (This setup is for macOS — on Windows, the config file is at <code style="font-size:11px;background:#f0ede8;padding:1px 4px;border-radius:3px">%APPDATA%\\Claude\\claude_desktop_config.json</code>)</div>
             </div>
           </div>
           <div class="setup-step">
