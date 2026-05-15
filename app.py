@@ -235,6 +235,19 @@ def require_login(f):
         return f(*a, **kw)
     return inner
 
+def get_csrf_token():
+    """Return (and lazily create) a per-session CSRF token."""
+    if "_csrf" not in session:
+        session["_csrf"] = secrets.token_hex(32)
+    return session["_csrf"]
+
+def check_csrf():
+    """Abort 403 if CSRF token is missing or wrong (form or header)."""
+    from flask import abort
+    token = request.form.get("_csrf") or request.headers.get("X-CSRF-Token", "")
+    if not token or token != session.get("_csrf", ""):
+        abort(403)
+
 def api_user():
     """Return user row from API key in request body or X-Mighty-Key header."""
     data = request.get_json(force=True, silent=True) or {}
@@ -782,6 +795,7 @@ input:focus{outline:none;border-color:#7c3aed}
   <p class="sub">Free to start. You'll be connected in about 5 minutes.</p>
   {error}
   <form method="POST" action="/signup">
+<input type="hidden" name="_csrf" value="{csrf_token}">
     <label>Email</label>
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
     <label>Password</label>
@@ -835,6 +849,7 @@ input:focus{outline:none;border-color:#7c3aed}
   <p class="sub">Sign in to your Mighty account.</p>
   {error}
   <form method="POST" action="/login">
+<input type="hidden" name="_csrf" value="{csrf_token}">
     <input type="hidden" name="next" id="next-field" value="">
     <label>Email</label>
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
@@ -894,6 +909,7 @@ input:focus{outline:none;border-color:#7c3aed}
   <p class="sub">Enter your email and we&rsquo;ll send you a reset link.</p>
   {message}
   <form method="POST" action="/forgot-password">
+<input type="hidden" name="_csrf" value="{csrf_token}">
     <label>Email</label>
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
     <button class="btn-primary" type="submit">Send reset link &rarr;</button>
@@ -940,6 +956,7 @@ input:focus{outline:none;border-color:#7c3aed}
   <p class="sub">Choose a strong password for your Mighty account.</p>
   {error}
   <form method="POST">
+<input type="hidden" name="_csrf" value="{csrf_token}">
     <label>New password</label>
     <input type="password" name="password" placeholder="At least 6 characters" required minlength="6" maxlength="128" autocomplete="new-password">
     <div class="hint">At least 6 characters.</div>
@@ -1214,7 +1231,7 @@ details[open] summary::before{content:"\\25BE "}
   <div class="topbar-right">
     <a href="/settings" style="font-size:12px;color:#6b7280;text-decoration:none">Settings</a>
     <span class="topbar-email">{email}</span>
-    <form method="POST" action="/logout" style="margin:0"><button class="btn-logout" type="submit">Sign out</button></form>
+    <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf_token}"><button class="btn-logout" type="submit">Sign out</button></form>
   </div>
 </div>
 
@@ -1376,7 +1393,6 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
     <span class="logo-name">Mighty</span>
   </a>
   <div class="progress">
-    <div class="progress-dot active" id="dot-0" onclick="dotNav(0)"></div>
     <div class="progress-dot" id="dot-1" onclick="dotNav(1)"></div>
     <div class="progress-dot" id="dot-2" onclick="dotNav(2)"></div>
     <div class="progress-dot" id="dot-3" onclick="dotNav(3)"></div>
@@ -1485,6 +1501,11 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
                 <button class="btn-copy" onclick="copyBox('prompt-box-claude',this)" style="margin-top:6px">Copy</button>
               </div>
               <div class="setup-step-hint">Open your Claude Project → Instructions, and paste this at the top. It tells Claude when to call the Mighty tools.</div>
+              <div id="gen-claude-wrap" style="margin-top:10px;display:none">
+                <input id="gen-claude-desc" type="text" placeholder="Describe what your agent does to get a tailored prompt" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;color:#1a1a1a;background:#fff;margin-bottom:6px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+                <button class="btn-copy" onclick="generatePrompt('claude')" style="width:100%">&#10024; Generate tailored prompt with AI</button>
+                <div id="gen-claude-msg" style="font-size:12px;color:#6b7280;margin-top:6px;display:none"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -1509,6 +1530,11 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
                 <button class="btn-copy" onclick="copyBox('prompt-box',this)" style="margin-top:6px">Copy</button>
               </div>
               <div class="setup-step-hint">Add it at the top of the existing instructions.</div>
+              <div id="gen-chatgpt-wrap" style="margin-top:10px;display:none">
+                <input id="gen-chatgpt-desc" type="text" placeholder="Describe your agent to get a tailored prompt (e.g. 'email assistant that can send and delete emails')" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;color:#1a1a1a;background:#fff;margin-bottom:6px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+                <button class="btn-copy" onclick="generatePrompt('chatgpt')" style="width:100%">&#10024; Generate tailored prompt with AI</button>
+                <div id="gen-chatgpt-msg" style="font-size:12px;color:#6b7280;margin-top:6px;display:none"></div>
+              </div>
             </div>
           </div>
           <div class="setup-step">
@@ -1542,7 +1568,12 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
                 <textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:140px;resize:vertical;overflow:auto"></textarea>
                 <button class="btn-copy" onclick="copyBox('prompt-box2',this)" style="margin-top:6px">Copy</button>
               </div>
-              <div class="setup-step-hint">Or use the Python/JS SDK — see the <a id="docs-link" href="/settings" target="_blank" style="color:#7c3aed">API docs</a>.</div>
+              <div class="setup-step-hint">Your API key and setup instructions are in <a id="docs-link" href="/settings" target="_blank" style="color:#7c3aed">Settings</a>.</div>
+              <div id="gen-custom-wrap" style="margin-top:10px;display:none">
+                <input id="gen-custom-desc" type="text" placeholder="Describe your agent to get a tailored prompt (e.g. 'customer support bot that files tickets and sends emails')" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;color:#1a1a1a;background:#fff;margin-bottom:6px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+                <button class="btn-copy" onclick="generatePrompt('custom')" style="width:100%">&#10024; Generate tailored prompt with AI</button>
+                <div id="gen-custom-msg" style="font-size:12px;color:#6b7280;margin-top:6px;display:none"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -1766,10 +1797,11 @@ function continueFromSetup() {
 }
 
 var _d = JSON.parse(document.getElementById('__mighty_onboarding_data__').textContent);
-var MCP_CONFIG   = _d.mcp_config;
+var MCP_CONFIG    = _d.mcp_config;
 var SYSTEM_PROMPT = _d.system_prompt;
-var API_KEY      = _d.api_key;
-var BASE_URL     = _d.base_url;
+var API_KEY       = _d.api_key;
+var BASE_URL      = _d.base_url;
+var AI_ENABLED    = _d.ai_enabled || false;
 
 // Populate dynamic content into pre-rendered panels on page load
 (function() {
@@ -1809,6 +1841,10 @@ function renderSetup(agent) {
   document.querySelectorAll('.agent-setup').forEach(function(el) { el.style.display = 'none'; });
   var panel = document.getElementById('setup-' + agent);
   if (panel) panel.style.display = 'block';
+  if (AI_ENABLED) {
+    var genWrap = document.getElementById('gen-' + agent + '-wrap');
+    if (genWrap) genWrap.style.display = 'block';
+  }
 }
 
 function updateMcpConfig(username) {
@@ -1889,10 +1925,38 @@ function urlB64ToUint8Array(b) {
   return out;
 }
 
-function finish() {
-  fetch('/onboarding/complete', {method:'POST'}).then(function() {
-    window.location.href = '/dashboard';
+function generatePrompt(agentType) {
+  var descId = 'gen-' + agentType + '-desc';
+  var msgId  = 'gen-' + agentType + '-msg';
+  var desc = (document.getElementById(descId) || {}).value || '';
+  var msg  = document.getElementById(msgId);
+  if (msg) { msg.textContent = 'Generating…'; msg.style.color = '#6b7280'; msg.style.display = 'block'; }
+  fetch('/onboarding/generate-prompt', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({description: desc})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.prompt) {
+      SYSTEM_PROMPT = d.prompt;
+      var targets = agentType === 'claude' ? ['prompt-box-claude'] : ['prompt-box', 'prompt-box2'];
+      targets.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.value = d.prompt;
+      });
+    }
+    if (msg) {
+      msg.textContent = d.warning || 'Prompt updated ✓';
+      msg.style.color = d.warning ? '#d97706' : '#16a34a';
+    }
+  }).catch(function() {
+    if (msg) { msg.textContent = 'Could not generate — using default prompt.'; msg.style.color = '#9ca3af'; }
   });
+}
+
+function finish() {
+  fetch('/onboarding/complete', {method:'POST'})
+    .then(function() { window.location.href = '/dashboard'; })
+    .catch(function() { window.location.href = '/dashboard'; });
 }
 </script>
 </body>
@@ -1948,7 +2012,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
   <div class="topbar-right">
     <a href="/dashboard" style="font-size:12px;color:#6b7280;text-decoration:none">&#8592; Dashboard</a>
     <span class="topbar-email">{email}</span>
-    <form method="POST" action="/logout" style="margin:0"><button class="btn-logout" type="submit">Sign out</button></form>
+    <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf_token}"><button class="btn-logout" type="submit">Sign out</button></form>
   </div>
 </div>
 
@@ -2092,7 +2156,7 @@ function save() {
   }).then(function() {
     var ind = document.getElementById('save-ind');
     if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
-  });
+  }).catch(function() {});
 }
 function changeEmail() {
   var newEmail = (document.getElementById('email-new').value || '').trim();
@@ -2177,12 +2241,16 @@ function urlB64ToUint8Array(b) {
 }
 function deleteActivity() {
   if (!confirm("This will permanently delete your entire activity log. This cannot be undone.")) return;
+  var btn = document.getElementById('del-activity-btn');
+  if (btn) btn.disabled = true;
   fetch('/settings/delete-activity', {method: 'POST'}).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) {
       var msg = document.getElementById('del-activity-msg');
       if (msg) { msg.style.display = 'inline'; setTimeout(function() { msg.style.display = 'none'; }, 3000); }
+    } else {
+      if (btn) btn.disabled = false;
     }
-  });
+  }).catch(function() { if (btn) btn.disabled = false; });
 }
 function showDelConfirm() {
   document.getElementById('del-acct-btn-wrap').style.display = 'none';
@@ -2288,22 +2356,23 @@ def landing():
 def signup_page():
     if "user_id" in session:
         return redirect("/dashboard")
-    return SIGNUP_HTML.replace("{error}", "")
+    return SIGNUP_HTML.replace("{error}", "").replace("{csrf_token}", get_csrf_token())
 
 @app.route("/signup", methods=["POST"])
 def signup():
     if not _rate_limit(request.remote_addr, "signup", limit=5):
         err = '<div class="err">Too many attempts. Please wait a minute and try again.</div>'
-        return SIGNUP_HTML.replace("{error}", err), 429
+        return SIGNUP_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token()), 429
+    check_csrf()
     email    = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
-    if not email or not password or len(password) < 6:
-        err = '<div class="err">Please enter a valid email and a password (6+ characters).</div>'
-        return SIGNUP_HTML.replace("{error}", err)
+    if not email or "@" not in email or not password or len(password) < 6 or len(password) > 128:
+        err = '<div class="err">Please enter a valid email and a password (6–128 characters).</div>'
+        return SIGNUP_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token())
     db = get_db()
     if db.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
         err = '<div class="err">An account with that email already exists. <a href="/login">Sign in</a></div>'
-        return SIGNUP_HTML.replace("{error}", err)
+        return SIGNUP_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token())
     uid = secrets.token_hex(16)
     key = "mk_" + secrets.token_hex(20)
     db.execute(
@@ -2325,12 +2394,15 @@ def enterprise_interest():
     message = data.get("message", "").strip()
     if not name or not email:
         return jsonify({"error": "name and email required"}), 400
+    if len(message) > 4000:
+        message = message[:4000]
     db = get_db()
-    db.execute(
-        "INSERT INTO enterprise_leads (id,name,email,company,message,created_at) VALUES (?,?,?,?,?,?)",
-        (secrets.token_hex(12), name, email, company, message, iso())
-    )
-    db.commit()
+    if not db.execute("SELECT 1 FROM enterprise_leads WHERE email=?", (email,)).fetchone():
+        db.execute(
+            "INSERT INTO enterprise_leads (id,name,email,company,message,created_at) VALUES (?,?,?,?,?,?)",
+            (secrets.token_hex(12), name, email, company, message, iso())
+        )
+        db.commit()
     return jsonify({"ok": True})
 
 @app.route("/login", methods=["GET", "POST"])
@@ -2338,18 +2410,19 @@ def login():
     if request.method == "GET":
         if request.args.get("reset") == "1":
             info = '<div style="font-size:13px;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:7px;padding:9px 12px;margin-bottom:14px">Password updated successfully. Sign in with your new password.</div>'
-            return LOGIN_HTML.replace("{error}", info)
-        return LOGIN_HTML.replace("{error}", "")
+            return LOGIN_HTML.replace("{error}", info).replace("{csrf_token}", get_csrf_token())
+        return LOGIN_HTML.replace("{error}", "").replace("{csrf_token}", get_csrf_token())
     # Rate limit: 10 attempts per minute per IP
     if not _rate_limit(request.remote_addr, "login", limit=10):
         err = '<div class="err">Too many attempts. Please wait a minute and try again.</div>'
-        return LOGIN_HTML.replace("{error}", err), 429
+        return LOGIN_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token()), 429
+    check_csrf()
     email    = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
     row = get_db().execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
     if not row or not check_pw(row["password_hash"], password):
         err = '<div class="err">Incorrect email or password.</div>'
-        return LOGIN_HTML.replace("{error}", err)
+        return LOGIN_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token())
     session.permanent  = True
     session["user_id"] = row["id"]
     session["email"]   = row["email"]
@@ -2364,6 +2437,7 @@ def login():
 
 @app.route("/logout", methods=["POST"])
 def logout():
+    check_csrf()
     session.clear()
     return redirect("/")
 
@@ -2378,10 +2452,11 @@ def tos():
 @app.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
     if request.method == "GET":
-        return FORGOT_HTML.replace("{message}", "")
+        return FORGOT_HTML.replace("{message}", "").replace("{csrf_token}", get_csrf_token())
     if not _rate_limit(request.remote_addr, "forgot", limit=5):
         success = '<div class="info">If an account exists for that email, a reset link is on its way. Check your inbox (and spam folder).</div>'
-        return FORGOT_HTML.replace("{message}", success)
+        return FORGOT_HTML.replace("{message}", success).replace("{csrf_token}", get_csrf_token())
+    check_csrf()
     email = request.form.get("email", "").strip().lower()
     # Always show success message — prevents user enumeration
     success = '<div class="info">If an account exists for that email, a reset link is on its way. Check your inbox (and spam folder).</div>'
@@ -2395,7 +2470,7 @@ def forgot_password():
             db.commit()
             reset_url = f"{base_url()}/reset-password/{token}"
             send_password_reset_email(email, reset_url)
-    return FORGOT_HTML.replace("{message}", success)
+    return FORGOT_HTML.replace("{message}", success).replace("{csrf_token}", get_csrf_token())
 
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
 def reset_password(token):
@@ -2407,15 +2482,16 @@ def reset_password(token):
     ).fetchone()
     if not row:
         err = '<div class="err">This reset link is invalid or has expired. <a href="/forgot-password">Request a new one</a>.</div>'
-        return RESET_HTML.replace("{error}", err)
+        return RESET_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token())
     if request.method == "GET":
-        return RESET_HTML.replace("{error}", "")
+        return RESET_HTML.replace("{error}", "").replace("{csrf_token}", get_csrf_token())
+    check_csrf()
     password = request.form.get("password", "")
     confirm  = request.form.get("confirm", "")
     if len(password) < 6:
-        return RESET_HTML.replace("{error}", '<div class="err">Password must be at least 6 characters.</div>')
+        return RESET_HTML.replace("{error}", '<div class="err">Password must be at least 6 characters.</div>').replace("{csrf_token}", get_csrf_token())
     if password != confirm:
-        return RESET_HTML.replace("{error}", '<div class="err">Passwords do not match. Please try again.</div>')
+        return RESET_HTML.replace("{error}", '<div class="err">Passwords do not match. Please try again.</div>').replace("{csrf_token}", get_csrf_token())
     db.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(password), row["user_id"]))
     db.execute("UPDATE password_resets SET used=1 WHERE token=?", (token,))
     db.commit()
@@ -2562,12 +2638,6 @@ def action_card_html(a, base, show_buttons):
     detail_html = ""
     if extra:
         detail_html = (
-            f'<div id="detail-{aid}" style="display:none;padding:6px 16px 12px;'
-            'border-top:1px solid #f3f4f6;display:flex;flex-wrap:wrap;gap:8px">'
-            + "".join(f'<span style="font-size:11px;background:#f8f7f5;border-radius:4px;padding:2px 7px">{e}</span>' for e in extra)
-            + '</div>'
-        )
-        detail_html = (
             f'<div id="detail-{aid}" style="display:none;padding:6px 16px 12px;border-top:1px solid #f3f4f6">'
             + "".join(f'<span style="font-size:11px;color:#9ca3af;background:#f8f7f5;border-radius:4px;padding:2px 7px;margin-right:6px;display:inline-block">{e}</span>' for e in extra)
             + '</div>'
@@ -2685,13 +2755,14 @@ def dashboard():
         feed_col_hidden = ''
 
     return (DASHBOARD_HTML
-            .replace("{email}",             user["email"])
+            .replace("{email}",             he(user["email"]))
             .replace("{feed_html}",         feed)
             .replace("{pending_count}",     str(pending_count))
             .replace("{pending_display}",   pending_display)
             .replace("{sidebar_content}",   sidebar_content)
             .replace("{feed_col_hidden}",   feed_col_hidden)
-            .replace("{onboarding_banner}", onboarding_banner))
+            .replace("{onboarding_banner}", onboarding_banner)
+            .replace("{csrf_token}",        get_csrf_token()))
 
 @app.route("/settings")
 @require_login
@@ -2703,14 +2774,15 @@ def settings():
     # postmark_warn: initially show warning only if email notifs are ON but Postmark not configured
     postmark_warn = "block" if (user["notify_email"] and not postmark_ok) else "none"
     return (SETTINGS_HTML
-            .replace("{email}",          user["email"])
+            .replace("{email}",          he(user["email"]))
             .replace("{api_key}",        user["api_key"])
             .replace("{ntfy_topic}",     topic)
             .replace("{push_checked}",   "checked" if user["notify_push"]  else "")
             .replace("{ntfy_checked}",   "checked" if user["notify_ntfy"]  else "")
             .replace("{email_checked}",  "checked" if user["notify_email"] else "")
             .replace("{postmark_warn}",  postmark_warn)
-            .replace("{postmark_js}",    "true" if postmark_ok else "false"))
+            .replace("{postmark_js}",    "true" if postmark_ok else "false")
+            .replace("{csrf_token}",     get_csrf_token()))
 
 @app.route("/settings/export-csv")
 @require_login
@@ -2919,6 +2991,7 @@ def onboarding():
         "system_prompt": build_prompt(user["api_key"], url),
         "api_key":       user["api_key"],
         "base_url":      url,
+        "ai_enabled":    bool(ANTHROPIC_API_KEY),
     })
     return (ONBOARDING_HTML
             .replace("MIGHTY_ONBOARDING_DATA", onboarding_data)
@@ -3079,6 +3152,8 @@ def api_record():
     user, data = api_user()
     if not user:
         return jsonify({"error": "Invalid or missing api_key"}), 401
+    if not _rate_limit(user["id"], "api_record", limit=200, window=60):
+        return jsonify({"error": "Rate limit exceeded"}), 429
     action_type       = data.get("action_type", "other")
     label             = data.get("label", "Action")
     fields            = data.get("fields")
@@ -3100,6 +3175,8 @@ def api_authorize():
     user, data = api_user()
     if not user:
         return jsonify({"error": "Invalid or missing api_key"}), 401
+    if not _rate_limit(user["id"], "api_authorize", limit=100, window=60):
+        return jsonify({"error": "Rate limit exceeded"}), 429
     action_type       = data.get("action_type", "other")
     label             = data.get("label", "Action")
     fields            = data.get("fields")
@@ -3224,10 +3301,19 @@ def push_subscribe():
     endpoint = sub.get("endpoint", "")
     db = get_db()
     # Check if subscription with this endpoint already exists for the user
-    existing = db.execute(
-        "SELECT id FROM push_subscriptions WHERE user_id=? AND subscription LIKE ?",
-        (session["user_id"], f'%{endpoint}%')
-    ).fetchone()
+    existing = None
+    if endpoint:
+        rows = db.execute(
+            "SELECT id, subscription FROM push_subscriptions WHERE user_id=?",
+            (session["user_id"],)
+        ).fetchall()
+        for r in rows:
+            try:
+                if json.loads(r["subscription"]).get("endpoint") == endpoint:
+                    existing = r
+                    break
+            except Exception:
+                pass
     if existing:
         # Update the existing record (keys may have rotated)
         db.execute(
@@ -3268,20 +3354,10 @@ def health():
 def not_found(e):
     return NOT_FOUND_HTML, 404
 
+@app.errorhandler(500)
+def server_error(e):
+    return NOT_FOUND_HTML.replace("Page not found", "Something went wrong").replace("The page you were looking for doesn't exist.", "An unexpected error occurred. Please try again or <a href=\"/\">return home</a>."), 500
 
-# ── Dev reset (protected by secret key) ───────────────────────────────────────
-
-@app.route("/admin/reset-all-users", methods=["POST"])
-def admin_reset():
-    secret = request.headers.get("X-Reset-Secret", "")
-    if not secret or secret != os.environ.get("RESET_SECRET", ""):
-        return jsonify({"error": "forbidden"}), 403
-    db = get_db()
-    db.execute("DELETE FROM push_subscriptions")
-    db.execute("DELETE FROM actions")
-    db.execute("DELETE FROM users")
-    db.commit()
-    return jsonify({"ok": True, "message": "All users and actions deleted"})
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
