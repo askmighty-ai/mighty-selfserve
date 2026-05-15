@@ -16,6 +16,7 @@ Env vars (all optional):
 """
 
 import os, io, csv, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html
+import bcrypt as _bcrypt
 
 from datetime import datetime, timezone, timedelta
 from functools import wraps
@@ -26,7 +27,13 @@ def he(s):
     return html.escape(str(s)) if s is not None else ""
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+_secret_key = os.environ.get("SECRET_KEY", "")
+if not _secret_key:
+    if os.environ.get("RAILWAY_ENVIRONMENT") == "production":
+        raise RuntimeError("SECRET_KEY environment variable must be set in production")
+    _secret_key = secrets.token_hex(32)
+    print("[Mighty] WARNING: SECRET_KEY not set — generating random key. All sessions will be lost on restart.", flush=True)
+app.secret_key = _secret_key
 app.config["SESSION_COOKIE_HTTPONLY"]  = True
 app.config["SESSION_COOKIE_SAMESITE"]  = "Lax"
 app.config["SESSION_COOKIE_SECURE"]    = os.environ.get("RAILWAY_ENVIRONMENT") == "production"
@@ -37,6 +44,8 @@ TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
 POSTMARK_API_KEY = os.environ.get("POSTMARK_API_KEY", "")
 POSTMARK_FROM    = os.environ.get("POSTMARK_FROM", "Mighty <noreply@mighty.ai>")
 NOTIFY_EMAIL_OVERRIDE = os.environ.get("NOTIFY_EMAIL", "")  # override recipient for sandbox testing
+if NOTIFY_EMAIL_OVERRIDE:
+    print(f"[Mighty] WARNING: NOTIFY_EMAIL_OVERRIDE is set — all notification emails go to {NOTIFY_EMAIL_OVERRIDE}", flush=True)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 LOGO_ICON_B64 = "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"
@@ -102,6 +111,12 @@ def init_db():
                 company    TEXT,
                 message    TEXT,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS password_resets (
+                token      TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                used       INTEGER DEFAULT 0
             );
         """)
         try:
@@ -169,13 +184,20 @@ print(f"[Mighty] VAPID public key: {VAPID_PUBLIC[:20]}...", flush=True)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def hash_pw(pw):
-    salt = secrets.token_hex(16)
-    h    = hashlib.sha256(f"{salt}{pw}".encode()).hexdigest()
-    return f"{salt}:{h}"
+    return _bcrypt.hashpw(pw.encode(), _bcrypt.gensalt(rounds=12)).decode()
 
 def check_pw(stored, provided):
-    salt, h = stored.split(":", 1)
-    return hashlib.sha256(f"{salt}{provided}".encode()).hexdigest() == h
+    # Support legacy SHA-256 format "hexsalt:hexhash" for existing accounts
+    if stored and ":" in stored and not stored.startswith("$2"):
+        try:
+            salt, h = stored.split(":", 1)
+            return hashlib.sha256(f"{salt}{provided}".encode()).hexdigest() == h
+        except Exception:
+            return False
+    try:
+        return _bcrypt.checkpw(provided.encode(), stored.encode())
+    except Exception:
+        return False
 
 def utcnow():
     return datetime.now(timezone.utc)
@@ -333,6 +355,41 @@ def send_ntfy_notification(api_key, label, action_type, approval_url):
         except Exception as e:
             print(f"[Mighty] ntfy notification failed: {e}", flush=True)
 
+    threading.Thread(target=_send, daemon=True).start()
+
+
+def send_password_reset_email(to_email, reset_url):
+    """Send a password reset email via Postmark. Falls back to console log if not configured."""
+    if not POSTMARK_API_KEY:
+        print(f"[Mighty] Password reset link (Postmark not configured): {reset_url}", flush=True)
+        return
+    html_body = (
+        '<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f8f7f5;font-family:Arial,sans-serif">'
+        '<div style="max-width:480px;margin:40px auto;padding:0 16px">'
+        '<div style="margin-bottom:20px"><span style="font-size:18px;font-weight:700;color:#1a1a1a">&#9889; Mighty</span></div>'
+        '<div style="background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:28px">'
+        '<div style="font-size:18px;font-weight:700;color:#1a1a1a;margin-bottom:12px">Reset your password</div>'
+        '<div style="font-size:14px;color:#555;line-height:1.6;margin-bottom:24px">Click the button below to set a new password. This link expires in 1 hour and can only be used once.</div>'
+        f'<a href="{reset_url}" style="display:block;padding:14px;background:#7c3aed;color:#fff;text-decoration:none;border-radius:8px;font-size:15px;font-weight:700;text-align:center">Reset password &rarr;</a>'
+        '<div style="margin-top:16px;font-size:12px;color:#9ca3af;text-align:center">If you did not request this, you can safely ignore this email.</div>'
+        '</div></div></body></html>'
+    )
+    payload = json.dumps({
+        "From": POSTMARK_FROM,
+        "To": to_email,
+        "Subject": "Reset your Mighty password",
+        "HtmlBody": html_body,
+    }).encode()
+    def _send():
+        try:
+            req = urllib.request.Request(
+                "https://api.postmarkapp.com/email", data=payload,
+                headers={"X-Postmark-Server-Token": POSTMARK_API_KEY,
+                         "Content-Type": "application/json", "Accept": "application/json"})
+            urllib.request.urlopen(req, timeout=10)
+            print("[Mighty] Password reset email sent", flush=True)
+        except Exception as e:
+            print(f"[Mighty] Reset email failed: {e}", flush=True)
     threading.Thread(target=_send, daemon=True).start()
 
 
@@ -593,8 +650,7 @@ body{background:#fff;color:#1a1a1a}
 </section>
 
 <!-- Footer -->
-<div class="footer-bar">&copy; <span id="cy"></span> Mighty &middot; Your agents, your control</div>
-<script>document.getElementById("cy").textContent=new Date().getFullYear();</script>
+<div class="footer-bar">&copy; <span id="cy">2025</span> Mighty &middot; <a href="/privacy" style="color:#9ca3af;text-decoration:none">Privacy</a></div>
 
 <script>
 document.getElementById("ent-form").addEventListener("submit", function(e) {
@@ -613,6 +669,9 @@ document.getElementById("ent-form").addEventListener("submit", function(e) {
     if (d.ok) {
       document.getElementById("ent-form").style.display = "none";
       document.getElementById("ent-thanks").style.display = "block";
+    } else {
+      document.getElementById("enterprise-submit-btn").textContent = "Error — please try again";
+      document.getElementById("enterprise-submit-btn").disabled = false;
     }
   }).catch(function() {
     document.getElementById("enterprise-submit-btn").textContent = "Error — please try again";
@@ -640,7 +699,7 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .logo-mark img{height:32px;width:auto}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:22px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
-.sub{font-size:14px;color:#666;margin-bottom:24px}
+.sub{font-size:14px;color:#666;margin-bottom:24px;line-height:1.5}
 label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
 input[type=email],input[type=password]{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px}
 input:focus{outline:none;border-color:#7c3aed}
@@ -662,7 +721,7 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-name">Mighty</div>
   </div>
   <h1>Create your account</h1>
-  <p class="sub">Free to start. Set up in minutes.</p>
+  <p class="sub">Free to start. You'll be connected in about 5 minutes.</p>
   {error}
   <form method="POST" action="/signup">
     <label>Email</label>
@@ -671,7 +730,8 @@ input:focus{outline:none;border-color:#7c3aed}
     <input type="password" name="password" placeholder="Choose a password" required autocomplete="new-password" minlength="6" maxlength="128">
     <button class="btn-primary" type="submit">Create free account &rarr;</button>
   </form>
-  <div class="footer">Already have an account? <a href="/login">Sign in</a></div>
+  <p style="text-align:center;font-size:12px;color:#9ca3af;margin-top:12px">No credit card required.</p>
+  <div class="footer">Already have an account? <a href="/login">Sign in</a> &middot; <a href="/privacy" style="color:#888">Privacy</a></div>
 </div>
 </body>
 </html>"""
@@ -682,7 +742,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Sign in — Mighty</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
 body{display:flex;align-items:center;justify-content:center;padding:24px}
@@ -691,7 +751,7 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-h1{font-size:20px;font-weight:700;margin-bottom:20px}
+h1{font-size:22px;font-weight:700;margin-bottom:20px}
 label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
 input[type=email],input[type=password]{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px}
 input:focus{outline:none;border-color:#7c3aed}
@@ -699,10 +759,12 @@ input:focus{outline:none;border-color:#7c3aed}
 .btn-primary:hover{background:#6d28d9}
 .err{font-size:13px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:9px 12px;margin-bottom:14px}
 .footer{text-align:center;margin-top:20px;font-size:13px;color:#888}
+.back{display:block;font-size:13px;color:#888;margin-bottom:20px;text-decoration:none}.back:hover{color:#7c3aed;text-decoration:none}
 </style>
 </head>
 <body>
 <div class="card">
+  <a href="/" class="back">&larr; Home</a>
   <div class="logo">
     <div class="logo-mark">
       <img src="/logo-icon.png" alt="Mighty">
@@ -719,9 +781,171 @@ input:focus{outline:none;border-color:#7c3aed}
     <button class="btn-primary" type="submit">Sign in →</button>
   </form>
   <div style="text-align:center;margin-top:12px;font-size:12px;color:#9ca3af">
-    Forgot your password? <a href="mailto:support@mighty.app" style="color:#7c3aed">Contact support</a>
+    Forgot your password? <a href="/forgot-password" style="color:#7c3aed">Reset it here</a>
   </div>
   <div class="footer">No account? <a href="/signup">Sign up free</a> &middot; <a href="/">← Home</a></div>
+</div>
+</body>
+</html>"""
+
+FORGOT_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Reset password — Mighty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+""" + BASE_CSS + """
+body{display:flex;align-items:center;justify-content:center;padding:24px}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
+.logo-mark img{height:32px;width:auto}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#1a1a1a}
+.sub{font-size:14px;color:#666;margin-bottom:24px;line-height:1.5}
+label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
+input[type=email]{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px}
+input:focus{outline:none;border-color:#7c3aed}
+.btn-primary{width:100%;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;margin-top:4px}
+.btn-primary:hover{background:#6d28d9}
+.info{font-size:13px;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:7px;padding:9px 12px;margin-bottom:14px}
+.err{font-size:13px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:9px 12px;margin-bottom:14px}
+.footer{text-align:center;margin-top:20px;font-size:13px;color:#888}
+.back{display:block;font-size:13px;color:#888;margin-bottom:20px;text-decoration:none}
+.back:hover{color:#7c3aed;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <a href="/login" class="back">&larr; Back to sign in</a>
+  <div class="logo">
+    <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
+    <div class="logo-name">Mighty</div>
+  </div>
+  <h1>Forgot your password?</h1>
+  <p class="sub">Enter your email and we&rsquo;ll send you a reset link.</p>
+  {message}
+  <form method="POST" action="/forgot-password">
+    <label>Email</label>
+    <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
+    <button class="btn-primary" type="submit">Send reset link &rarr;</button>
+  </form>
+  <div class="footer"><a href="/login">Back to sign in</a></div>
+</div>
+</body>
+</html>"""
+
+RESET_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Set new password — Mighty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+""" + BASE_CSS + """
+body{display:flex;align-items:center;justify-content:center;padding:24px}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
+.logo-mark img{height:32px;width:auto}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#1a1a1a}
+.sub{font-size:14px;color:#666;margin-bottom:24px}
+label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
+input[type=password]{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:6px}
+input:focus{outline:none;border-color:#7c3aed}
+.hint{font-size:12px;color:#9ca3af;margin-bottom:14px}
+.btn-primary{width:100%;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;margin-top:4px}
+.btn-primary:hover{background:#6d28d9}
+.err{font-size:13px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:9px 12px;margin-bottom:14px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
+    <div class="logo-name">Mighty</div>
+  </div>
+  <h1>Set a new password</h1>
+  <p class="sub">Choose a strong password for your Mighty account.</p>
+  {error}
+  <form method="POST">
+    <label>New password</label>
+    <input type="password" name="password" placeholder="At least 6 characters" required minlength="6" maxlength="128" autocomplete="new-password">
+    <div class="hint">At least 6 characters.</div>
+    <label>Confirm password</label>
+    <input type="password" name="confirm" placeholder="Repeat your password" required maxlength="128" autocomplete="new-password">
+    <button class="btn-primary" type="submit" style="margin-top:14px">Set new password &rarr;</button>
+  </form>
+</div>
+</body>
+</html>"""
+
+PRIVACY_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Privacy — Mighty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+""" + BASE_CSS + """
+body{background:#f8f7f5}
+.nav{background:#fff;border-bottom:1px solid #e5e3df;height:52px;display:flex;align-items:center;padding:0 24px}
+.nav a{font-size:14px;color:#7c3aed;text-decoration:none;font-weight:500}
+.nav a:hover{text-decoration:underline}
+.wrap{max-width:680px;margin:0 auto;padding:48px 24px}
+h1{font-size:28px;font-weight:800;color:#1a1a1a;margin-bottom:8px}
+.updated{font-size:13px;color:#9ca3af;margin-bottom:40px}
+h2{font-size:17px;font-weight:700;color:#1a1a1a;margin:32px 0 10px}
+p,li{font-size:15px;color:#374151;line-height:1.7}
+p{margin-bottom:14px}
+ul{margin:0 0 14px 20px}
+li{margin-bottom:6px}
+a{color:#7c3aed}
+</style>
+</head>
+<body>
+<nav class="nav"><a href="/">&larr; Home</a></nav>
+<div class="wrap">
+  <h1>Privacy Policy</h1>
+  <div class="updated">Last updated: May 2025</div>
+
+  <h2>What Mighty stores</h2>
+  <p>When you use Mighty, we store:</p>
+  <ul>
+    <li>Your email address and hashed password (bcrypt)</li>
+    <li>A randomly generated API key used to authenticate your agent</li>
+    <li>Action logs submitted by your agent &mdash; the action type, label, and any detail fields your agent provides</li>
+    <li>Your notification preferences (email, push, ntfy)</li>
+    <li>Browser push subscription tokens, if you enable push notifications</li>
+  </ul>
+  <p>All data is stored in a private database. We do not store plaintext passwords.</p>
+
+  <h2>What Mighty does not store</h2>
+  <ul>
+    <li>The full content of your AI agent conversations</li>
+    <li>Any data beyond what your agent explicitly sends via the Mighty API</li>
+    <li>Payment information (Mighty is free to use)</li>
+  </ul>
+
+  <h2>Who can see your data</h2>
+  <p>Your action logs and account data are private to your account. We do not sell or share your data with third parties. Mighty team members may access data for debugging or support purposes only.</p>
+
+  <h2>Third-party services</h2>
+  <ul>
+    <li><strong>Postmark</strong> &mdash; used to send authorization request emails and password reset emails. Only the action label and a private approval link are included in emails.</li>
+    <li><strong>ntfy.sh</strong> &mdash; an open-source notification service. If you enable mobile alerts, only the action label and approval URL are sent to ntfy.sh. No account data is transmitted.</li>
+  </ul>
+
+  <h2>Data retention and deletion</h2>
+  <p>Your data is retained until you delete it. You can export your full activity log as a CSV or delete all your data at any time from your <a href="/settings">Settings</a> page. Account deletion is immediate and permanent.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about your data? Email <a href="mailto:support@mighty.app">support@mighty.app</a>.</p>
 </div>
 </body>
 </html>"""
@@ -742,7 +966,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .topbar-logo-mark img{height:26px;width:auto}
 .topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .topbar-right{display:flex;align-items:center;gap:16px}
-.topbar-email{font-size:12px;color:#9ca3af}
+.topbar-email{font-size:12px;color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn-logout{font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
 .btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
 .main{flex:1;min-height:0;display:grid;grid-template-columns:320px 1fr;gap:24px;max-width:1140px;width:100%;margin:0 auto;padding:28px 24px;box-sizing:border-box}
@@ -792,11 +1016,12 @@ details[open] summary::before{content:"\\25BE "}
 .action-card.is-pending{border-color:#fbbf24}
 .action-top{padding:14px 16px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .action-label{font-size:14px;font-weight:600;color:#1a1a1a;line-height:1.4}
+.action-type{font-size:11px;color:#9ca3af;font-family:ui-monospace,monospace;margin-top:2px}
 .action-badges{display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
 .action-time{font-size:11px;color:#9ca3af;margin-top:4px;text-align:right}
 .action-fields{padding:10px 16px 14px;display:flex;flex-direction:column;gap:5px}
 .field-row{display:flex;gap:10px;font-size:12px}
-.field-key{color:#9ca3af;font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:0.5px;min-width:80px;flex-shrink:0;padding-top:1px}
+.field-key{color:#9ca3af;font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:0.5px;min-width:80px;flex-shrink:0;padding-top:1px}
 .field-val{color:#374151;line-height:1.4;word-break:break-word}
 .action-buttons{padding:12px 16px;border-top:1px solid #f0ede8;display:flex;gap:8px}
 .btn-authorize{flex:1;padding:9px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s}
@@ -810,6 +1035,7 @@ details[open] summary::before{content:"\\25BE "}
 .empty-state-icon{width:40px;height:40px;background:#f3f0ff;border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}
 .empty-state-title{font-size:14px;font-weight:600;color:#6b7280;margin-bottom:6px}
 .empty-state-sub{font-size:12px;color:#9ca3af;line-height:1.6}
+@media(max-width:768px){body{height:auto;overflow:auto}.feed-col{overflow:visible}.sidebar{overflow:visible}}
 </style>
 </head>
 <body>
@@ -866,7 +1092,8 @@ function copyKey(btn) {
   setTimeout(() => btn.textContent = 'Copy', 1800);
 }
 function decide(actionId, decision) {
-  document.querySelectorAll(".btn-authorize, .btn-reject").forEach(function(b) { b.disabled = true; });
+  var card = document.getElementById("action-" + actionId);
+  if (card) { card.querySelectorAll(".btn-authorize, .btn-reject").forEach(function(b) { b.disabled = true; }); }
   fetch('/dashboard/decide/' + actionId, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
@@ -1499,7 +1726,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .topbar-logo-mark img{height:26px;width:auto}
 .topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .topbar-right{display:flex;align-items:center;gap:16px}
-.topbar-email{font-size:12px;color:#9ca3af}
+.topbar-email{font-size:12px;color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn-logout{font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
 .btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
 .settings-body{flex:1;min-height:0;overflow-y:auto}
@@ -1512,7 +1739,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .toggle-label{font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:3px}
 .toggle-hint{font-size:12px;color:#6b7280;line-height:1.5}
 .api-key-wrap{display:flex;align-items:center;gap:8px;margin-top:4px}
-.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:10px;color:#6b7280;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:#6b7280;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn-copy-key{font-size:12px;font-weight:600;padding:6px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;white-space:nowrap;cursor:pointer;transition:background 0.12s}
 .btn-copy-key:hover{background:#ede9fe}
 .push-status{font-size:12px;color:#6b7280;margin-top:6px;min-height:16px}
@@ -1520,7 +1747,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .push-btn:hover{background:#ede9fe}
 .btn-danger{font-size:12px;font-weight:600;padding:8px 12px;background:#fff;color:#dc2626;border:1.5px solid #fecaca;border-radius:6px;white-space:nowrap;cursor:pointer;transition:all 0.12s;width:100%;text-align:left}
 .btn-danger:hover{background:#fef2f2}
-.ntfy-link{display:inline-block;margin-top:6px;font-size:10px;font-family:ui-monospace,monospace;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
+.ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
 </style>
 </head>
 <body>
@@ -1541,7 +1768,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
     <div class="page-title">Settings</div>
 
     <div class="card">
-      <div class="section-title">Notifications</div>
+      <div class="section-title">Notifications</div><span id="save-ind" style="font-size:11px;color:#16a34a;margin-left:8px;display:none">Saved ✓</span>
       <div class="toggle-row">
         <input type="checkbox" id="notif-push" {push_checked} onchange="save()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
         <div>
@@ -1554,9 +1781,10 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
       <div class="toggle-row">
         <input type="checkbox" id="notif-ntfy" {ntfy_checked} onchange="save()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
         <div>
-          <div class="toggle-label">Phone alerts</div>
+          <div class="toggle-label">Mobile alerts (ntfy)</div>
           <div class="toggle-hint">Install the free <a href="https://ntfy.sh" target="_blank" style="color:#7c3aed">ntfy app</a>, then subscribe to your channel on your phone.</div>
           <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="ntfy-link">ntfy.sh/{ntfy_topic} &#8599;</a>
+          <div style="font-size:11px;color:#9ca3af;margin-top:6px">Only action labels and approval links are sent — no account data.</div>
         </div>
       </div>
       <div class="toggle-row">
@@ -1570,24 +1798,39 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 
     <div class="card">
       <div class="section-title">Connection</div>
-      <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Your API key — used in the MCP server config and system prompt.</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Your API key — used to connect your agent to Mighty. Keep it secret.</div>
       <div class="api-key-wrap">
         <div class="api-key-val" id="apiKeyVal">{api_key}</div>
         <button class="btn-copy-key" onclick="copyKey(this)">Copy</button>
       </div>
+      <div style="font-size:12px;color:#9ca3af;margin-top:6px">Anyone with this key can submit actions on your behalf.</div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f3f4f6">
-        <a href="/onboarding" style="font-size:13px;color:#7c3aed;text-decoration:none">&#8635; Re-run setup wizard</a>
+        <a href="/onboarding" style="display:inline-block;margin-top:4px;padding:8px 14px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">&#8635; Re-run setup</a>
       </div>
     </div>
 
     <div class="card">
       <div class="section-title">Data &amp; Privacy</div>
-      <button class="btn-copy-key" onclick="window.location.href='/settings/export-csv'" style="margin-bottom:4px">Export activity log</button>
+      <button class="btn-copy-key" onclick="window.location.href='/settings/export-csv'">&#8595; Export activity log (CSV)</button>
       <hr style="border:none;border-top:1px solid #f3f4f6;margin:16px 0">
+      <div style="font-size:12px;font-weight:700;color:#dc2626;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Danger zone</div>
       <div style="display:flex;flex-direction:column;gap:10px">
         <button class="btn-danger" id="del-activity-btn" onclick="deleteActivity()">Delete all activity</button>
-        <span id="del-activity-msg" style="font-size:12px;color:#16a34a;display:none">Activity deleted.</span>
-        <button class="btn-danger" onclick="deleteAccount()">Delete my account</button>
+        <span id="del-activity-msg" style="font-size:12px;color:#16a34a;display:none">All activity deleted.</span>
+      </div>
+      <hr style="border:none;border-top:1px solid #fecaca;margin:16px 0">
+      <div style="font-size:13px;color:#6b7280;margin-bottom:12px;line-height:1.5">Permanently deletes your account and all data. This cannot be undone.</div>
+      <div id="del-acct-btn-wrap">
+        <button class="btn-danger" onclick="showDelConfirm()">Delete my account</button>
+      </div>
+      <div id="del-acct-confirm" style="display:none">
+        <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px">Confirm with your current password</label>
+        <input type="password" id="del-acct-pw" placeholder="Your password" style="width:100%;padding:10px 12px;border:1.5px solid #fecaca;border-radius:8px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;color:#1a1a1a">
+        <div style="display:flex;gap:8px">
+          <button class="btn-danger" style="flex:1" onclick="deleteAccount()">Confirm deletion</button>
+          <button onclick="hideDelConfirm()" style="padding:8px 14px;background:#f3f4f6;border:none;border-radius:6px;font-size:13px;font-weight:600;color:#6b7280;cursor:pointer">Cancel</button>
+        </div>
+        <div id="del-acct-err" style="font-size:12px;color:#dc2626;margin-top:8px;display:none"></div>
       </div>
     </div>
   </div>
@@ -1622,6 +1865,9 @@ function save() {
       push: document.getElementById('notif-push').checked,
       email: document.getElementById('notif-email').checked
     })
+  }).then(function() {
+    var ind = document.getElementById('save-ind');
+    if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
   });
 }
 function enablePush() {
@@ -1672,11 +1918,29 @@ function deleteActivity() {
     }
   });
 }
+function showDelConfirm() {
+  document.getElementById('del-acct-btn-wrap').style.display = 'none';
+  document.getElementById('del-acct-confirm').style.display = 'block';
+  document.getElementById('del-acct-pw').focus();
+}
+function hideDelConfirm() {
+  document.getElementById('del-acct-btn-wrap').style.display = 'block';
+  document.getElementById('del-acct-confirm').style.display = 'none';
+  document.getElementById('del-acct-pw').value = '';
+  document.getElementById('del-acct-err').style.display = 'none';
+}
 function deleteAccount() {
-  if (!confirm("This will permanently delete your account and all data. This cannot be undone.")) return;
-  fetch('/settings/delete-account', {method: 'POST'}).then(function(r) { return r.json(); }).then(function(d) {
+  var pw = document.getElementById('del-acct-pw').value;
+  var errEl = document.getElementById('del-acct-err');
+  if (!pw) { errEl.textContent = 'Please enter your password to confirm.'; errEl.style.display = 'block'; return; }
+  fetch('/settings/delete-account', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password: pw})
+  }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) { window.location.href = '/'; }
-  });
+    else { errEl.textContent = d.error || 'Incorrect password.'; errEl.style.display = 'block'; }
+  }).catch(function() { errEl.textContent = 'Network error — please try again.'; errEl.style.display = 'block'; });
 }
 </script>
 </body>
@@ -1706,7 +1970,7 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;pad
 .card-headline{font-size:18px;font-weight:700;color:#1a1a1a;padding:18px 20px 4px;line-height:1.4}
 .card-type{font-size:12px;color:#9ca3af;padding:0 20px 16px;font-family:ui-monospace,monospace}
 .card-fields{padding:0 20px 16px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid #f0ede8}
-.field-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#9ca3af;margin-bottom:2px}
+.field-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#9ca3af;margin-bottom:2px}
 .field-value{font-size:13px;color:#1a1a1a;line-height:1.5;word-break:break-word}
 .card-actions{padding:16px 20px;display:flex;gap:10px}
 .btn-approve{flex:1;padding:16px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:700;transition:background 0.12s;touch-action:manipulation}
@@ -1802,6 +2066,9 @@ def enterprise_interest():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
+        if request.args.get("reset") == "1":
+            info = '<div style="font-size:13px;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:7px;padding:9px 12px;margin-bottom:14px">Password updated successfully. Sign in with your new password.</div>'
+            return LOGIN_HTML.replace("{error}", info)
         return LOGIN_HTML.replace("{error}", "")
     email    = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
@@ -1811,12 +2078,63 @@ def login():
         return LOGIN_HTML.replace("{error}", err)
     session["user_id"] = row["id"]
     session["email"]   = row["email"]
+    # Lazy migration: re-hash SHA-256 passwords to bcrypt on login
+    if row["password_hash"] and ":" in row["password_hash"] and not row["password_hash"].startswith("$2"):
+        get_db().execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(password), row["id"]))
+        get_db().commit()
     return redirect("/dashboard")
 
 @app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     return redirect("/")
+
+@app.route("/privacy")
+def privacy():
+    return PRIVACY_HTML
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if request.method == "GET":
+        return FORGOT_HTML.replace("{message}", "")
+    email = request.form.get("email", "").strip().lower()
+    # Always show success message — prevents user enumeration
+    success = '<div class="info">If an account exists for that email, a reset link is on its way. Check your inbox (and spam folder).</div>'
+    if email:
+        db = get_db()
+        user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+        if user:
+            token = secrets.token_urlsafe(32)
+            db.execute("INSERT INTO password_resets (token, user_id, created_at) VALUES (?,?,?)",
+                       (token, user["id"], iso()))
+            db.commit()
+            reset_url = f"{base_url()}/reset-password/{token}"
+            send_password_reset_email(email, reset_url)
+    return FORGOT_HTML.replace("{message}", success)
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    db = get_db()
+    cutoff = (utcnow() - timedelta(hours=1)).isoformat()
+    row = db.execute(
+        "SELECT * FROM password_resets WHERE token=? AND used=0 AND created_at > ?",
+        (token, cutoff)
+    ).fetchone()
+    if not row:
+        err = '<div class="err">This reset link is invalid or has expired. <a href="/forgot-password">Request a new one</a>.</div>'
+        return RESET_HTML.replace("{error}", err)
+    if request.method == "GET":
+        return RESET_HTML.replace("{error}", "")
+    password = request.form.get("password", "")
+    confirm  = request.form.get("confirm", "")
+    if len(password) < 6:
+        return RESET_HTML.replace("{error}", '<div class="err">Password must be at least 6 characters.</div>')
+    if password != confirm:
+        return RESET_HTML.replace("{error}", '<div class="err">Passwords do not match. Please try again.</div>')
+    db.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(password), row["user_id"]))
+    db.execute("UPDATE password_resets SET used=1 WHERE token=?", (token,))
+    db.commit()
+    return redirect("/login?reset=1")
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -1914,7 +2232,7 @@ def build_feed_html(actions, base):
     rest    = [a for a in actions if a["status"] != "pending"]
     if pending:
         html.append('<div class="pending-section">')
-        html.append('<div class="pending-title"><div class="pending-dot"></div>Awaiting your decision</div>')
+        html.append('<div class="pending-label"><div class="pending-dot"></div>Awaiting your decision</div>')
         for a in pending:
             html.append(action_card_html(a, base, show_buttons=True))
         html.append('</div>')
@@ -1949,10 +2267,11 @@ def action_card_html(a, base, show_buttons):
           <button class="btn-authorize" onclick="decide('{he(a["id"])}','approve')">Approve</button>
           <button class="btn-reject"    onclick="decide('{he(a["id"])}','deny')">Deny</button>
         </div>'''
-    return f'''<div class="action-card{pending_cls}">
+    return f'''<div class="action-card{pending_cls}" id="action-{he(a["id"])}">
       <div class="action-top">
         <div style="min-width:0;flex:1">
           <div class="action-label">{he(a["label"])}</div>
+          <div class="action-type">{he(a["action_type"])}</div>
         </div>
         <div class="action-badges">
           {clevel}
@@ -1984,7 +2303,7 @@ def dashboard():
         (session["user_id"],),
     ).fetchone()[0]
     pending_display = "flex" if pending_count > 0 else "none"
-    is_connected    = len(acts) > 0 and bool(user["onboarded"])
+    is_connected    = len(acts) > 0
 
 
     onboarding_banner = ""
@@ -2010,8 +2329,8 @@ def dashboard():
             '<div style="font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:10px">'
             'Welcome to Mighty</div>'
             '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
-            'Set up Mighty to work with your agent in just a few steps. Once set up, '
-            'you will be able to see and respond to approval requests.</div>'
+            'Connect your agent in about 5 minutes. Once connected, approval requests '
+            'from your agent will appear here.</div>'
             '<a href="/onboarding" style="display:block;padding:13px 20px;'
             'background:#7c3aed;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
             'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
@@ -2129,10 +2448,16 @@ def delete_activity():
 @app.route("/settings/delete-account", methods=["POST"])
 @require_login
 def delete_account():
-    db      = get_db()
-    user_id = session["user_id"]
+    data     = request.get_json(force=True, silent=True) or {}
+    password = data.get("password", "")
+    db       = get_db()
+    user_id  = session["user_id"]
+    user     = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    if not user or not check_pw(user["password_hash"], password):
+        return jsonify({"error": "Incorrect password."}), 403
     db.execute("DELETE FROM push_subscriptions WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM actions WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM password_resets WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM users WHERE id=?", (user_id,))
     db.commit()
     session.clear()
@@ -2289,12 +2614,12 @@ def approve_page(token):
     db  = get_db()
     row = db.execute("SELECT * FROM actions WHERE approval_token=?", (token,)).fetchone()
     if not row:
-        body = '<div class="outcome timeout">Authorization request not found.</div>'
+        body = '<div class="outcome timeout">Request not found or already expired.</div><div style="text-align:center;padding:0 20px 20px"><a href="/dashboard" style="font-size:14px;color:#7c3aed;font-weight:600;text-decoration:none">Go to dashboard &rarr;</a></div>'
         return APPROVE_HTML.replace("{body}", body)
     if row["status"] != "pending":
         labels = {"approved": "&#10003; Approved", "denied": "&#10007; Denied", "timeout": "Timed out"}
         label  = labels.get(row["status"], he(row["status"].title()))
-        body   = f'<div class="outcome {he(row["status"])}">{label}</div>'
+        body   = f'<div class="outcome {he(row["status"])}">{label}</div><div style="text-align:center;padding:0 20px 20px"><a href="/dashboard" style="font-size:14px;color:#7c3aed;font-weight:600;text-decoration:none">Go to dashboard &rarr;</a></div>'
         return APPROVE_HTML.replace("{body}", body).replace(
             '<div id="agent-waiting-note"',
             '<div id="agent-waiting-note" style="display:none"'
@@ -2343,16 +2668,19 @@ def approve_page(token):
       (function() {{
         var expiresAt = new Date('{expires_at_val}');
         function updateTimer() {{
+          var el = document.getElementById('expiry-timer');
           var now = new Date();
           var diffMs = expiresAt - now;
           if (diffMs <= 0) {{
-            document.getElementById('expiry-timer').textContent = 'Expired';
+            if (el) el.textContent = "This request has expired.";
+            document.querySelectorAll(".btn-approve, .btn-deny").forEach(function(b) {{
+              b.disabled = true; b.style.opacity = "0.4"; b.style.cursor = "not-allowed";
+            }});
             return;
           }}
           var mins = Math.floor(diffMs / 60000);
           var secs = Math.floor((diffMs % 60000) / 1000);
-          document.getElementById('expiry-timer').textContent =
-            'Expires in ' + mins + 'm ' + secs + 's';
+          if (el) el.textContent = 'Expires in ' + mins + 'm ' + secs + 's';
           setTimeout(updateTimer, 1000);
         }}
         updateTimer();
