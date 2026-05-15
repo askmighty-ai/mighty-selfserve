@@ -650,7 +650,7 @@ body{background:#fff;color:#1a1a1a}
 </section>
 
 <!-- Footer -->
-<div class="footer-bar">&copy; <span id="cy">2025</span> Mighty &middot; <a href="/privacy" style="color:#9ca3af;text-decoration:none">Privacy</a></div>
+<div class="footer-bar">&copy; <span id="cy">2026</span> Mighty &middot; <a href="/privacy" style="color:#9ca3af;text-decoration:none">Privacy</a> &middot; <a href="/tos" style="color:#9ca3af;text-decoration:none">Terms</a></div>
 
 <script>
 document.getElementById("ent-form").addEventListener("submit", function(e) {
@@ -731,7 +731,8 @@ input:focus{outline:none;border-color:#7c3aed}
     <button class="btn-primary" type="submit">Create free account &rarr;</button>
   </form>
   <p style="text-align:center;font-size:12px;color:#9ca3af;margin-top:12px">No credit card required.</p>
-  <div class="footer">Already have an account? <a href="/login">Sign in</a> &middot; <a href="/privacy" style="color:#888">Privacy</a></div>
+  <div class="footer">Already have an account? <a href="/login">Sign in</a></div>
+  <div style="text-align:center;margin-top:8px;font-size:12px;color:#9ca3af">By signing up you agree to our <a href="/tos" style="color:#9ca3af">Terms</a> and <a href="/privacy" style="color:#9ca3af">Privacy Policy</a>.</div>
 </div>
 </body>
 </html>"""
@@ -751,7 +752,8 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:32px;width:auto}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-h1{font-size:22px;font-weight:700;margin-bottom:20px}
+h1{font-size:22px;font-weight:700;margin-bottom:6px}
+.sub{font-size:14px;color:#666;margin-bottom:20px}
 label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
 input[type=email],input[type=password]{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px}
 input:focus{outline:none;border-color:#7c3aed}
@@ -772,6 +774,7 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-name">Mighty</div>
   </div>
   <h1>Welcome back</h1>
+  <p class="sub">Sign in to your Mighty account.</p>
   {error}
   <form method="POST" action="/login">
     <label>Email</label>
@@ -912,7 +915,7 @@ a{color:#7c3aed}
 <nav class="nav"><a href="/">&larr; Home</a></nav>
 <div class="wrap">
   <h1>Privacy Policy</h1>
-  <div class="updated">Last updated: May 2025</div>
+  <div class="updated">Last updated: May 2026</div>
 
   <h2>What Mighty stores</h2>
   <p>When you use Mighty, we store:</p>
@@ -946,6 +949,66 @@ a{color:#7c3aed}
 
   <h2>Contact</h2>
   <p>Questions about your data? Email <a href="mailto:support@mighty.app">support@mighty.app</a>.</p>
+</div>
+</body>
+</html>"""
+
+TOS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Terms of Service — Mighty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+""" + BASE_CSS + """
+body{background:#f8f7f5}
+.nav{background:#fff;border-bottom:1px solid #e5e3df;height:52px;display:flex;align-items:center;padding:0 24px}
+.nav a{font-size:14px;color:#7c3aed;text-decoration:none;font-weight:500}
+.nav a:hover{text-decoration:underline}
+.wrap{max-width:680px;margin:0 auto;padding:48px 24px}
+h1{font-size:28px;font-weight:800;color:#1a1a1a;margin-bottom:8px}
+.updated{font-size:13px;color:#9ca3af;margin-bottom:40px}
+h2{font-size:17px;font-weight:700;color:#1a1a1a;margin:32px 0 10px}
+p,li{font-size:15px;color:#374151;line-height:1.7}
+p{margin-bottom:14px}
+ul{margin:0 0 14px 20px}
+li{margin-bottom:6px}
+a{color:#7c3aed}
+</style>
+</head>
+<body>
+<nav class="nav"><a href="/">&larr; Home</a></nav>
+<div class="wrap">
+  <h1>Terms of Service</h1>
+  <div class="updated">Last updated: May 2026</div>
+
+  <h2>Acceptance</h2>
+  <p>By creating a Mighty account you agree to these terms. If you don't agree, don't use the service.</p>
+
+  <h2>What Mighty is</h2>
+  <p>Mighty is a personal authorization layer for AI agents. It provides an API and dashboard for logging and approving actions that your AI agents request. Mighty does not operate your AI agents — you are responsible for how you configure and use them.</p>
+
+  <h2>Your account</h2>
+  <p>You are responsible for keeping your API key and password secure. Do not share your API key with untrusted parties. You are responsible for all activity that occurs under your account.</p>
+
+  <h2>Acceptable use</h2>
+  <p>You may not use Mighty to facilitate illegal activity, to harm others, or to abuse the service infrastructure. We reserve the right to terminate accounts that violate these terms.</p>
+
+  <h2>Data</h2>
+  <p>We store the data necessary to operate the service — see our <a href="/privacy">Privacy Policy</a> for details. You can export or delete your data at any time from your Settings page.</p>
+
+  <h2>Availability</h2>
+  <p>Mighty is provided as-is. We make no guarantees about uptime, reliability, or fitness for a particular purpose. The service may change or be discontinued at any time.</p>
+
+  <h2>Limitation of liability</h2>
+  <p>Mighty is not liable for any actions taken by your AI agents, whether authorized through the service or not. You are solely responsible for the actions of agents you connect to Mighty.</p>
+
+  <h2>Changes</h2>
+  <p>We may update these terms from time to time. Continued use of the service after changes constitutes acceptance of the new terms.</p>
+
+  <h2>Contact</h2>
+  <p>Questions? Email <a href="mailto:support@mighty.app">support@mighty.app</a>.</p>
 </div>
 </body>
 </html>"""
@@ -1133,9 +1196,9 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 .logo-mark img{height:28px;width:auto}
 .logo-name{font-size:17px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .progress{display:flex;gap:6px;justify-content:center;margin-bottom:16px;flex-shrink:0}
-.progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s;padding:6px;margin:-6px;background-clip:content-box}
-.progress-dot.active{background:#7c3aed;background-clip:content-box}
-.progress-dot.done{background:#c4b5fd;background-clip:content-box;cursor:pointer}
+.progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s;padding:6px;margin:-6px;background-clip:content-box;cursor:default;opacity:0.45}
+.progress-dot.active{background:#7c3aed;background-clip:content-box;opacity:1}
+.progress-dot.done{background:#c4b5fd;background-clip:content-box;cursor:pointer;opacity:1}
 .progress-dot.done:hover{background:#a78bfa;background-clip:content-box}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:24px 28px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto;max-height:calc(100vh - 130px)}
 .step{display:none}.step.active{display:block}
@@ -1182,10 +1245,10 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 </head>
 <body>
 <div class="wrap">
-  <div class="logo">
+  <a href="/" style="text-decoration:none" class="logo">
     <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
     <span class="logo-name">Mighty</span>
-  </div>
+  </a>
   <div class="progress">
     <div class="progress-dot active" id="dot-0" onclick="dotNav(0)"></div>
     <div class="progress-dot" id="dot-1" onclick="dotNav(1)"></div>
@@ -1503,8 +1566,7 @@ function toggleCap(el, key) {
 
 function updateContinueBtn() {
   var btn = document.getElementById('btn-next-agent');
-  var hasCap = document.querySelectorAll('.cap-check:checked').length > 0;
-  if (selectedAgent || hasCap) {
+  if (selectedAgent) {
     btn.classList.remove('btn-dim');
   } else {
     btn.classList.add('btn-dim');
@@ -1720,6 +1782,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
 <style>
 """ + BASE_CSS + """
 body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f8f7f5}
+@media(max-width:768px){body{height:auto;overflow:auto}.settings-body{overflow:visible}}
 .topbar{background:#fff;border-bottom:1px solid #e5e3df;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .topbar-logo{display:flex;align-items:center;gap:8px}
 .topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
@@ -1806,6 +1869,21 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
       <div style="font-size:12px;color:#9ca3af;margin-top:6px">Anyone with this key can submit actions on your behalf.</div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f3f4f6">
         <a href="/onboarding" style="display:inline-block;margin-top:4px;padding:8px 14px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">&#8635; Re-run setup</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Security</div>
+      <div style="font-size:13px;color:#6b7280;margin-bottom:16px">Change your account password.</div>
+      <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px">Current password</label>
+      <input type="password" id="pw-current" placeholder="Your current password" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:12px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px">New password</label>
+      <input type="password" id="pw-new" placeholder="At least 6 characters" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:12px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px">Confirm new password</label>
+      <input type="password" id="pw-confirm" placeholder="Repeat new password" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:12px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="btn-copy-key" style="padding:8px 16px;font-size:13px" onclick="changePassword()">Update password</button>
+        <span id="pw-msg" style="font-size:12px;display:none"></span>
       </div>
     </div>
 
@@ -1901,6 +1979,30 @@ function copyKey(btn) {
   navigator.clipboard.writeText(document.getElementById('apiKeyVal').textContent.trim());
   btn.textContent = 'Copied!';
   setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
+}
+function changePassword() {
+  var cur = document.getElementById('pw-current').value;
+  var nw  = document.getElementById('pw-new').value;
+  var cnf = document.getElementById('pw-confirm').value;
+  var msg = document.getElementById('pw-msg');
+  if (!cur || !nw || !cnf) { msg.textContent = 'Please fill in all three fields.'; msg.style.color='#dc2626'; msg.style.display='inline'; return; }
+  if (nw.length < 6) { msg.textContent = 'New password must be at least 6 characters.'; msg.style.color='#dc2626'; msg.style.display='inline'; return; }
+  if (nw !== cnf) { msg.textContent = 'New passwords do not match.'; msg.style.color='#dc2626'; msg.style.display='inline'; return; }
+  fetch('/settings/change-password', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({current: cur, password: nw})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      msg.textContent = 'Password updated.'; msg.style.color='#16a34a'; msg.style.display='inline';
+      document.getElementById('pw-current').value = '';
+      document.getElementById('pw-new').value = '';
+      document.getElementById('pw-confirm').value = '';
+      setTimeout(function() { msg.style.display='none'; }, 3000);
+    } else {
+      msg.textContent = d.error || 'Incorrect current password.'; msg.style.color='#dc2626'; msg.style.display='inline';
+    }
+  }).catch(function() { msg.textContent = 'Network error.'; msg.style.color='#dc2626'; msg.style.display='inline'; });
 }
 function urlB64ToUint8Array(b) {
   var pad = '='.repeat((4 - b.length % 4) % 4);
@@ -2093,6 +2195,10 @@ def logout():
 def privacy():
     return PRIVACY_HTML
 
+@app.route("/tos")
+def tos():
+    return TOS_HTML
+
 @app.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
     if request.method == "GET":
@@ -2279,7 +2385,7 @@ def action_card_html(a, base, show_buttons):
           <div class="action-time">{fmt_time(a["created_at"])}</div>
         </div>
       </div>
-      {'<div class="action-fields">' + fields_html + '</div>' if fields_html else '<div style="height:14px"></div>'}
+      {'<div class="action-fields">' + fields_html + '</div>' if fields_html else ''}
       {btns}
     </div>'''
 
@@ -2307,7 +2413,8 @@ def dashboard():
 
 
     onboarding_banner = ""
-    if not user["onboarded"]:
+    # Only show the banner in the active (non-empty) state — the empty welcome state handles its own CTA
+    if not user["onboarded"] and len(acts) > 0:
         onboarding_banner = (
             '<div style="grid-column:1/-1;background:#f3f0ff;border:1px solid #e9d5ff;'
             'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
@@ -2351,8 +2458,8 @@ def dashboard():
                 '<div class="status-sub">Your agent is connected</div>'
                 '</div></div>'
                 '<div style="margin-top:14px;padding-top:14px;border-top:1px solid #f0ede8">'
-                '<a href="/onboarding" style="font-size:13px;color:#7c3aed;text-decoration:none">'
-                '&#43; Connect another agent</a>'
+                '<a href="/onboarding" class="btn-secondary" style="display:block;text-align:center;padding:9px;font-size:13px;font-weight:600;text-decoration:none">'
+                'Connect another agent</a>'
                 '</div>'
                 '</div>'
             )
@@ -2442,6 +2549,22 @@ def export_csv():
 def delete_activity():
     db = get_db()
     db.execute("DELETE FROM actions WHERE user_id=?", (session["user_id"],))
+    db.commit()
+    return jsonify({"ok": True})
+
+@app.route("/settings/change-password", methods=["POST"])
+@require_login
+def change_password():
+    data     = request.get_json(force=True, silent=True) or {}
+    current  = data.get("current", "")
+    new_pw   = data.get("password", "")
+    db       = get_db()
+    user     = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    if not user or not check_pw(user["password_hash"], current):
+        return jsonify({"error": "Incorrect current password."}), 403
+    if len(new_pw) < 6:
+        return jsonify({"error": "New password must be at least 6 characters."}), 400
+    db.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(new_pw), session["user_id"]))
     db.commit()
     return jsonify({"ok": True})
 
@@ -2672,10 +2795,11 @@ def approve_page(token):
           var now = new Date();
           var diffMs = expiresAt - now;
           if (diffMs <= 0) {{
-            if (el) el.textContent = "This request has expired.";
-            document.querySelectorAll(".btn-approve, .btn-deny").forEach(function(b) {{
-              b.disabled = true; b.style.opacity = "0.4"; b.style.cursor = "not-allowed";
-            }});
+            document.querySelector('.card').innerHTML =
+              '<div class="outcome timeout">This request has timed out.</div>'
+              + '<div style="text-align:center;padding:0 20px 20px"><a href="/dashboard" style="font-size:14px;color:#7c3aed;font-weight:600;text-decoration:none">Go to dashboard →</a></div>';
+            var note = document.getElementById('agent-waiting-note');
+            if (note) note.style.display = 'none';
             return;
           }}
           var mins = Math.floor(diffMs / 60000);
