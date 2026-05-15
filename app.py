@@ -1430,21 +1430,6 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
           <div class="agent-desc">API / code</div>
         </div>
       </div>
-      <div style="margin-top:14px">
-        <div style="font-size:12px;font-weight:600;color:#6b7280;margin-bottom:8px">What can your agent do? <span style="font-weight:400;color:#9ca3af">Select all that apply</span></div>
-        <div class="cap-grid">
-          <div class="cap-card" onclick="toggleCap(this,'email')"><input type="checkbox" class="cap-check" value="email" style="display:none"><span class="cap-icon">✉️</span><div><div class="cap-name">Email</div><div class="cap-sub">Send, reply, forward</div></div></div>
-          <div class="cap-card" onclick="toggleCap(this,'calendar')"><input type="checkbox" class="cap-check" value="calendar" style="display:none"><span class="cap-icon">📅</span><div><div class="cap-name">Calendar</div><div class="cap-sub">Schedule, cancel meetings</div></div></div>
-          <div class="cap-card" onclick="toggleCap(this,'purchases')"><input type="checkbox" class="cap-check" value="purchases" style="display:none"><span class="cap-icon">🛒</span><div><div class="cap-name">Purchases</div><div class="cap-sub">Orders, transactions</div></div></div>
-          <div class="cap-card" onclick="toggleCap(this,'files')"><input type="checkbox" class="cap-check" value="files" style="display:none"><span class="cap-icon">📁</span><div><div class="cap-name">File management</div><div class="cap-sub">Create, edit, delete</div></div></div>
-          <div class="cap-card" onclick="toggleCap(this,'web')"><input type="checkbox" class="cap-check" value="web" style="display:none"><span class="cap-icon">🌐</span><div><div class="cap-name">Web &amp; forms</div><div class="cap-sub">Submit forms, browse</div></div></div>
-          <div class="cap-card" onclick="toggleCap(this,'code')"><input type="checkbox" class="cap-check" value="code" style="display:none"><span class="cap-icon">💻</span><div><div class="cap-name">Code execution</div><div class="cap-sub">Run scripts, modify systems</div></div></div>
-          <div class="cap-card" onclick="toggleCap(this,'social')"><input type="checkbox" class="cap-check" value="social" style="display:none"><span class="cap-icon">📢</span><div><div class="cap-name">Social media</div><div class="cap-sub">Post, publish content</div></div></div>
-          <div class="cap-card" onclick="toggleCap(this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></div>
-        </div>
-        <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;color:#1a1a1a;background:#fff;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
-        <div id="cap-caveat" style="display:none;margin-top:10px;padding:10px 12px;background:#f3f0ff;border:1px solid #e9d5ff;border-radius:8px;font-size:12px;color:#5b21b6;line-height:1.5"></div>
-      </div>
       <div id="agent-nudge" style="display:none;font-size:12px;color:#7c3aed;text-align:center;margin-top:8px">Pick an agent type above to continue</div>
       <div class="btn-row" style="margin-top:8px">
         <button class="btn btn-secondary" onclick="goTo(0)">← Back</button>
@@ -1579,7 +1564,27 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
         </div>
       </div>
 
-      <div class="btn-row" style="margin-top:4px">
+      <!-- Customize checkpoint prompt (collapsed by default) -->
+      <details id="customize-section" style="margin-top:16px;border-top:1px solid #f0ede8;padding-top:14px">
+        <summary style="font-size:13px;font-weight:600;color:#7c3aed;cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;gap:6px">
+          <span id="customize-arrow" style="font-size:10px;transition:transform 0.15s">▸</span> Customize which actions require approval
+        </summary>
+        <div style="margin-top:12px">
+          <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Tick what your agent can do — the checkpoint prompt will update automatically.</div>
+          <div class="cap-grid">
+            <div class="cap-card" onclick="toggleCap(this,'email')"><input type="checkbox" class="cap-check" value="email" style="display:none"><span class="cap-icon">✉️</span><div><div class="cap-name">Email</div><div class="cap-sub">Send, reply, forward</div></div></div>
+            <div class="cap-card" onclick="toggleCap(this,'calendar')"><input type="checkbox" class="cap-check" value="calendar" style="display:none"><span class="cap-icon">📅</span><div><div class="cap-name">Calendar</div><div class="cap-sub">Schedule, cancel meetings</div></div></div>
+            <div class="cap-card" onclick="toggleCap(this,'purchases')"><input type="checkbox" class="cap-check" value="purchases" style="display:none"><span class="cap-icon">🛒</span><div><div class="cap-name">Purchases</div><div class="cap-sub">Orders, transactions</div></div></div>
+            <div class="cap-card" onclick="toggleCap(this,'files')"><input type="checkbox" class="cap-check" value="files" style="display:none"><span class="cap-icon">📁</span><div><div class="cap-name">File management</div><div class="cap-sub">Create, edit, delete</div></div></div>
+            <div class="cap-card" onclick="toggleCap(this,'web')"><input type="checkbox" class="cap-check" value="web" style="display:none"><span class="cap-icon">🌐</span><div><div class="cap-name">Web &amp; forms</div><div class="cap-sub">Submit forms, browse</div></div></div>
+            <div class="cap-card" onclick="toggleCap(this,'code')"><input type="checkbox" class="cap-check" value="code" style="display:none"><span class="cap-icon">💻</span><div><div class="cap-name">Code execution</div><div class="cap-sub">Run scripts, modify systems</div></div></div>
+            <div class="cap-card" onclick="toggleCap(this,'social')"><input type="checkbox" class="cap-check" value="social" style="display:none"><span class="cap-icon">📢</span><div><div class="cap-name">Social media</div><div class="cap-sub">Post, publish content</div></div></div>
+            <div class="cap-card" onclick="toggleCap(this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></div>
+          </div>
+          <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" oninput="onCapChange()" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;color:#1a1a1a;background:#fff;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s;margin-top:4px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+        </div>
+      </details>
+      <div class="btn-row" style="margin-top:14px">
         <button class="btn btn-secondary" onclick="goTo(1)">← Back</button>
         <button class="btn btn-primary" onclick="continueFromSetup()" style="flex:1">Continue →</button>
       </div>
@@ -1685,23 +1690,12 @@ function goTo(n) {
   if (n !== 3 && testPollTimer) { clearInterval(testPollTimer); testPollTimer = null; }
 }
 
-var CAP_CAVEATS = {
-  claude:  "Mighty checkpoints only fire for actions Claude Desktop can already perform via its connected MCP tools. If Claude does not have an email or calendar tool installed, those actions will not trigger a Mighty request — even if you select them here.",
-  chatgpt: "Mighty checkpoints only fire for actions your ChatGPT project or Custom GPT can already perform. If your GPT does not have an email, calendar, or browsing tool connected, those actions will not trigger a Mighty request — ChatGPT will acknowledge the instructions but the flow will never run.",
-  custom:  "Mighty checkpoints only fire when your agent actually calls the authorization API. Make sure your agent code invokes the Mighty endpoint before performing each action type you select here."
-};
-
 function selectAgent(el, agent) {
   selectedAgent = agent;
   document.querySelectorAll('.agent-card').forEach(function(c) { c.classList.remove('selected'); });
   el.classList.add('selected');
   updateContinueBtn();
   renderSetup(agent);
-  var caveat = document.getElementById('cap-caveat');
-  if (caveat && CAP_CAVEATS[agent]) {
-    caveat.textContent = CAP_CAVEATS[agent];
-    caveat.style.display = 'block';
-  }
 }
 
 var CAPABILITY_ACTIONS = {
@@ -1718,7 +1712,23 @@ var CAPABILITY_ACTIONS = {
 function toggleCap(el, key) {
   el.classList.toggle('selected');
   el.querySelector('.cap-check').checked = el.classList.contains('selected');
-  updateContinueBtn();
+  onCapChange();
+}
+
+function onCapChange() {
+  var selected = [];
+  document.querySelectorAll('.cap-check:checked').forEach(function(cb) {
+    if (CAPABILITY_ACTIONS[cb.value]) selected.push(CAPABILITY_ACTIONS[cb.value]);
+  });
+  var other = ((document.getElementById('cap-other') || {}).value || '').trim();
+  if (other) selected.push(other);
+  if (selectedAgent !== 'claude') {
+    SYSTEM_PROMPT = buildCheckpointPrompt(selected, selectedAgent || 'chatgpt');
+    var p1 = document.getElementById('prompt-box');  if (p1) p1.value = SYSTEM_PROMPT;
+    var p2 = document.getElementById('prompt-box2'); if (p2) p2.value = SYSTEM_PROMPT;
+  }
+  var p0 = document.getElementById('prompt-box-claude');
+  if (p0) p0.value = buildCheckpointPrompt(selected, 'claude');
 }
 
 function updateContinueBtn() {
@@ -1763,25 +1773,25 @@ function continueFromAgent() {
   }
   var nudge = document.getElementById('agent-nudge');
   if (nudge) nudge.style.display = 'none';
-  var selected = [];
-  document.querySelectorAll('.cap-check:checked').forEach(function(cb) {
-    if (CAPABILITY_ACTIONS[cb.value]) selected.push(CAPABILITY_ACTIONS[cb.value]);
-  });
-  var other = (document.getElementById('cap-other').value || '').trim();
-  if (other) selected.push(other);
-  // Update HTTP-style prompts for ChatGPT / Custom
+  // Build default prompt (no capabilities pre-selected; user can customise in step 2)
   if (selectedAgent !== 'claude') {
-    SYSTEM_PROMPT = buildCheckpointPrompt(selected, selectedAgent);
-    var p1 = document.getElementById('prompt-box');
-    if (p1) p1.value = SYSTEM_PROMPT;
-    var p2 = document.getElementById('prompt-box2');
-    if (p2) p2.value = SYSTEM_PROMPT;
+    SYSTEM_PROMPT = buildCheckpointPrompt([], selectedAgent);
+    var p1 = document.getElementById('prompt-box');  if (p1) p1.value = SYSTEM_PROMPT;
+    var p2 = document.getElementById('prompt-box2'); if (p2) p2.value = SYSTEM_PROMPT;
   }
-  // Always update MCP-style prompt for Claude Desktop
   var p0 = document.getElementById('prompt-box-claude');
-  if (p0) p0.value = buildCheckpointPrompt(selected, 'claude');
+  if (p0) p0.value = buildCheckpointPrompt([], 'claude');
   goTo(2);
 }
+
+// Rotate the customize arrow when the details element opens/closes
+(function() {
+  var det = document.getElementById('customize-section');
+  if (det) det.addEventListener('toggle', function() {
+    var arrow = document.getElementById('customize-arrow');
+    if (arrow) arrow.style.transform = det.open ? 'rotate(90deg)' : '';
+  });
+})();
 
 function continueFromSetup() {
   if (selectedAgent === "claude") {
