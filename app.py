@@ -910,7 +910,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 .progress-dot.active{background:#7c3aed;background-clip:content-box}
 .progress-dot.done{background:#c4b5fd;background-clip:content-box;cursor:pointer}
 .progress-dot.done:hover{background:#a78bfa;background-clip:content-box}
-.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:24px 28px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:24px 28px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto;max-height:calc(100vh - 130px)}
 .step{display:none}.step.active{display:block}
 .step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#7c3aed;margin-bottom:8px}
 .step-title{font-size:20px;font-weight:700;color:#1a1a1a;margin-bottom:8px;line-height:1.3}
