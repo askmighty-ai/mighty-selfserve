@@ -15,7 +15,7 @@ Env vars (all optional):
   PORT          — Port to listen on (default: 5004)
 """
 
-import os, io, csv, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html
+import os, io, csv, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html, time
 import bcrypt as _bcrypt
 
 from datetime import datetime, timezone, timedelta
@@ -34,9 +34,26 @@ if not _secret_key:
     _secret_key = secrets.token_hex(32)
     print("[Mighty] WARNING: SECRET_KEY not set — generating random key. All sessions will be lost on restart.", flush=True)
 app.secret_key = _secret_key
-app.config["SESSION_COOKIE_HTTPONLY"]  = True
-app.config["SESSION_COOKIE_SAMESITE"]  = "Lax"
-app.config["SESSION_COOKIE_SECURE"]    = os.environ.get("RAILWAY_ENVIRONMENT") == "production"
+app.config["SESSION_COOKIE_HTTPONLY"]    = True
+app.config["SESSION_COOKIE_SAMESITE"]    = "Lax"
+app.config["SESSION_COOKIE_SECURE"]      = os.environ.get("RAILWAY_ENVIRONMENT") == "production"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+
+# ── Simple in-memory rate limiter (per-IP, no external deps) ─────────────────
+_rl_store: dict = {}
+_rl_lock = threading.Lock()
+
+def _rate_limit(ip: str, name: str, limit: int = 10, window: int = 60) -> bool:
+    """Return True if the request is allowed, False if rate-limited."""
+    key = f"{ip}:{name}"
+    now = time.time()
+    with _rl_lock:
+        ts = [t for t in _rl_store.get(key, []) if now - t < window]
+        if len(ts) >= limit:
+            return False
+        ts.append(now)
+        _rl_store[key] = ts
+        return True
 
 DATABASE        = os.environ.get("DATABASE_PATH", "mighty.db")
 PORT            = int(os.environ.get("PORT", 5004))
@@ -213,7 +230,8 @@ def require_login(f):
     @wraps(f)
     def inner(*a, **kw):
         if "user_id" not in session:
-            return redirect("/login")
+            nxt = request.path
+            return redirect(f"/login?next={nxt}")
         return f(*a, **kw)
     return inner
 
@@ -472,6 +490,7 @@ LANDING_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="description" content="Mighty adds approval checkpoints and a permanent activity log to any AI agent. Works with Claude, ChatGPT, and custom agents. Set up in 5 minutes. Free to start.">
 <title>Mighty — Your AI agents, accountable to you.</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -490,6 +509,13 @@ body{background:#fff;color:#1a1a1a}
 .nav-signin:hover{color:#7c3aed;text-decoration:none}
 .btn-nav{padding:8px 18px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 0.12s}
 .btn-nav:hover{background:#6d28d9;text-decoration:none;color:#fff}
+.nav-hamburger{display:none;background:none;border:none;cursor:pointer;padding:6px;color:#444;line-height:0}
+@media(max-width:600px){
+  .nav-hamburger{display:flex;align-items:center;justify-content:center}
+  .nav-actions{display:none;position:absolute;top:60px;left:0;right:0;background:#fff;border-bottom:1px solid #e5e3df;padding:16px 24px;flex-direction:column;align-items:flex-start;gap:14px;z-index:99;box-shadow:0 4px 12px rgba(0,0,0,0.06)}
+  .nav-actions.open{display:flex}
+  .btn-nav{width:100%;text-align:center}
+}
 /* Hero */
 .hero{background:#fff;padding:100px 24px 80px;text-align:center}
 .hero-inner{max-width:700px;margin:0 auto}
@@ -520,7 +546,13 @@ body{background:#fff;color:#1a1a1a}
 .fcard{background:#fff;border:1.5px solid #e5e3df;border-radius:12px;padding:28px 24px}
 .fcard h3{font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:10px}
 .fcard p{font-size:14px;color:#555;line-height:1.6}
-.fcard-icon{width:36px;height:36px;border-radius:10px;background:#f3f0ff;display:flex;align-items:center;justify-content:center;margin-bottom:16px;font-size:18px}
+.fcard-icon{width:36px;height:36px;border-radius:10px;background:#f3f0ff;display:flex;align-items:center;justify-content:center;margin-bottom:16px}
+/* Social proof */
+.sp-bar{background:#f8f7f5;border-top:1px solid #f0ede8;border-bottom:1px solid #f0ede8;padding:14px 24px}
+.sp-inner{max-width:900px;margin:0 auto;display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap}
+.sp-item{font-size:13px;color:#6b7280;display:flex;align-items:center;gap:6px}
+.sp-dot{width:4px;height:4px;border-radius:50%;background:#d1d5db;flex-shrink:0}
+@media(max-width:600px){.sp-bar{display:none}}
 /* Enterprise */
 .enterprise{background:#f3f0ff;padding:80px 24px}
 .enterprise-inner{max-width:640px;margin:0 auto;text-align:center}
@@ -547,10 +579,13 @@ body{background:#fff;color:#1a1a1a}
       <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
       <div class="logo-name">Mighty</div>
     </a>
-    <div class="nav-actions">
+    <div class="nav-actions" id="nav-actions">
       <a href="/login" class="nav-signin">Sign in</a>
       <a href="/signup" class="btn-nav">Get started free</a>
     </div>
+    <button class="nav-hamburger" id="nav-menu-btn" onclick="toggleNav()" aria-label="Open menu">
+      <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="5" x2="18" y2="5"/><line x1="2" y1="11" x2="18" y2="11"/><line x1="2" y1="17" x2="18" y2="17"/></svg>
+    </button>
   </div>
 </nav>
 
@@ -570,6 +605,17 @@ body{background:#fff;color:#1a1a1a}
     </div>
   </div>
 </section>
+
+<!-- Social proof -->
+<div class="sp-bar">
+  <div class="sp-inner">
+    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> Works with Claude, ChatGPT &amp; custom agents</div>
+    <div class="sp-dot"></div>
+    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> 5-minute setup, no credit card</div>
+    <div class="sp-dot"></div>
+    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> Free to start</div>
+  </div>
+</div>
 
 <!-- How it works -->
 <section class="hiw">
@@ -609,17 +655,17 @@ body{background:#fff;color:#1a1a1a}
     <div class="section-title" style="margin-bottom:36px">Built-in oversight for every agent</div>
     <div class="cards">
       <div class="fcard">
-        <div class="fcard-icon">&#9989;</div>
+        <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="9" r="7"/><polyline points="6,9 8,11 12,7"/></svg></div>
         <h3>Approval checkpoints</h3>
         <p>You define what is consequential. Your agent pauses and waits — approved: proceed, denied: stop.</p>
       </div>
       <div class="fcard">
-        <div class="fcard-icon">&#128196;</div>
+        <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><rect x="3" y="2" width="12" height="14" rx="2"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12" x2="9" y2="12"/></svg></div>
         <h3>Permanent audit log</h3>
         <p>Every action your agent takes is logged with a timestamp, description, and your decision. Ready when you need it.</p>
       </div>
       <div class="fcard">
-        <div class="fcard-icon">&#128279;</div>
+        <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="9" r="2.5"/><circle cx="13" cy="4" r="2.5"/><circle cx="13" cy="14" r="2.5"/><line x1="7.2" y1="7.8" x2="10.8" y2="5.2"/><line x1="7.2" y1="10.2" x2="10.8" y2="12.8"/></svg></div>
         <h3>Any agent, any platform</h3>
         <p>Claude Desktop (MCP), ChatGPT Projects, or your own custom agent via a simple HTTP API.</p>
       </div>
@@ -653,6 +699,18 @@ body{background:#fff;color:#1a1a1a}
 <div class="footer-bar">&copy; <span id="cy">2026</span> Mighty &middot; <a href="/privacy" style="color:#9ca3af;text-decoration:none">Privacy</a> &middot; <a href="/tos" style="color:#9ca3af;text-decoration:none">Terms</a></div>
 
 <script>
+document.getElementById('cy').textContent = new Date().getFullYear();
+function toggleNav() {
+  var nav = document.getElementById('nav-actions');
+  nav.classList.toggle('open');
+}
+document.addEventListener('click', function(e) {
+  var btn = document.getElementById('nav-menu-btn');
+  var nav = document.getElementById('nav-actions');
+  if (btn && nav && !btn.contains(e.target) && !nav.contains(e.target)) {
+    nav.classList.remove('open');
+  }
+});
 document.getElementById("ent-form").addEventListener("submit", function(e) {
   e.preventDefault();
   var name = document.getElementById("ent-name").value.trim();
@@ -692,7 +750,7 @@ SIGNUP_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-body{display:flex;align-items:center;justify-content:center;padding:24px}
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
@@ -746,7 +804,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-body{display:flex;align-items:center;justify-content:center;padding:24px}
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
@@ -777,6 +835,7 @@ input:focus{outline:none;border-color:#7c3aed}
   <p class="sub">Sign in to your Mighty account.</p>
   {error}
   <form method="POST" action="/login">
+    <input type="hidden" name="next" id="next-field" value="">
     <label>Email</label>
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
     <label>Password</label>
@@ -786,8 +845,12 @@ input:focus{outline:none;border-color:#7c3aed}
   <div style="text-align:center;margin-top:12px;font-size:12px;color:#9ca3af">
     Forgot your password? <a href="/forgot-password" style="color:#7c3aed">Reset it here</a>
   </div>
-  <div class="footer">No account? <a href="/signup">Sign up free</a> &middot; <a href="/">← Home</a></div>
+  <div class="footer">No account? <a href="/signup">Sign up free</a></div>
 </div>
+<script>
+var nf = document.getElementById('next-field');
+if (nf) nf.value = new URLSearchParams(window.location.search).get('next') || '';
+</script>
 </body>
 </html>"""
 
@@ -800,7 +863,7 @@ FORGOT_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-body{display:flex;align-items:center;justify-content:center;padding:24px}
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
@@ -835,7 +898,6 @@ input:focus{outline:none;border-color:#7c3aed}
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
     <button class="btn-primary" type="submit">Send reset link &rarr;</button>
   </form>
-  <div class="footer"><a href="/login">Back to sign in</a></div>
 </div>
 </body>
 </html>"""
@@ -849,7 +911,7 @@ RESET_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-body{display:flex;align-items:center;justify-content:center;padding:24px}
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
 .logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
@@ -864,10 +926,12 @@ input:focus{outline:none;border-color:#7c3aed}
 .btn-primary{width:100%;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;margin-top:4px}
 .btn-primary:hover{background:#6d28d9}
 .err{font-size:13px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:9px 12px;margin-bottom:14px}
+.back{display:block;font-size:13px;color:#888;margin-bottom:20px;text-decoration:none}.back:hover{color:#7c3aed;text-decoration:none}
 </style>
 </head>
 <body>
 <div class="card">
+  <a href="/login" class="back">&larr; Back to sign in</a>
   <div class="logo">
     <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
     <div class="logo-name">Mighty</div>
@@ -1013,6 +1077,41 @@ a{color:#7c3aed}
 </body>
 </html>"""
 
+NOT_FOUND_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Page not found — Mighty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+""" + BASE_CSS + """
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;background:#f8f7f5}
+.wrap{text-align:center;max-width:380px}
+.logo{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:32px}
+.logo-mark img{height:32px;width:auto}
+.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+h1{font-size:72px;font-weight:800;color:#e5e3df;margin-bottom:0;line-height:1}
+h2{font-size:20px;font-weight:700;color:#1a1a1a;margin:8px 0 12px}
+p{font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px}
+.btn{display:inline-block;padding:11px 24px;background:#7c3aed;color:#fff;border-radius:8px;font-size:14px;font-weight:600;text-decoration:none;transition:background 0.12s}
+.btn:hover{background:#6d28d9;text-decoration:none;color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo">
+    <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
+    <div class="logo-name">Mighty</div>
+  </div>
+  <h1>404</h1>
+  <h2>Page not found</h2>
+  <p>The page you&rsquo;re looking for doesn&rsquo;t exist or has been moved.</p>
+  <a href="/" class="btn">Go home</a>
+</div>
+</body>
+</html>"""
+
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1125,7 +1224,10 @@ details[open] summary::before{content:"\\25BE "}
 
   <div class="feed-col" {feed_col_hidden}>
     <div class="feed-title">Activity Log</div>
-    <div class="feed-sub">Every action your agent takes or requests approval for</div>
+    <div class="feed-sub">A live log of everything your agent does</div>
+    <div style="margin-bottom:14px">
+      <input type="text" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)" style="width:100%;padding:8px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+    </div>
     <div class="feed" id="feed">
       {feed_html}
     </div>
@@ -1163,10 +1265,34 @@ function decide(actionId, decision) {
     body: JSON.stringify({decision})
   }).then(() => location.reload());
 }
+// Restore feed scroll position after auto-reload
+(function() {
+  var fc = document.querySelector('.feed-col');
+  var saved = sessionStorage.getItem('mighty-feed-scroll');
+  if (fc && saved) { fc.scrollTop = parseInt(saved); sessionStorage.removeItem('mighty-feed-scroll'); }
+  var sy = sessionStorage.getItem('mighty-scroll-y');
+  if (sy) { window.scrollTo(0, parseInt(sy)); sessionStorage.removeItem('mighty-scroll-y'); }
+})();
+
+function filterFeed(q) {
+  q = (q || '').toLowerCase();
+  document.querySelectorAll('.action-card').forEach(function(card) {
+    card.style.display = card.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+function toggleDetail(id) {
+  var el = document.getElementById('detail-' + id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
 var lastPending = document.querySelectorAll('.is-pending').length > 0;
 setInterval(function() {
   fetch('/dashboard/has-pending').then(function(r) { return r.json(); }).then(function(d) {
     if (d.pending !== lastPending) {
+      var fc = document.querySelector('.feed-col');
+      if (fc) sessionStorage.setItem('mighty-feed-scroll', fc.scrollTop);
+      sessionStorage.setItem('mighty-scroll-y', window.scrollY || document.documentElement.scrollTop || 0);
       location.reload();
     }
   }).catch(function() {});
@@ -1196,10 +1322,10 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 .logo-mark img{height:28px;width:auto}
 .logo-name{font-size:17px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .progress{display:flex;gap:6px;justify-content:center;margin-bottom:16px;flex-shrink:0}
-.progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:background 0.2s;padding:6px;margin:-6px;background-clip:content-box;cursor:default;opacity:0.45}
+.progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:all 0.2s;padding:6px;margin:-6px;background-clip:content-box;cursor:default;opacity:0.45}
 .progress-dot.active{background:#7c3aed;background-clip:content-box;opacity:1}
-.progress-dot.done{background:#c4b5fd;background-clip:content-box;cursor:pointer;opacity:1}
-.progress-dot.done:hover{background:#a78bfa;background-clip:content-box}
+.progress-dot.done{background:#7c3aed;background-clip:content-box;cursor:pointer;opacity:0.45}
+.progress-dot.done:hover{opacity:0.75}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:24px 28px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto;max-height:calc(100vh - 130px)}
 .step{display:none}.step.active{display:block}
 .step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#7c3aed;margin-bottom:8px}
@@ -1261,7 +1387,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
     <!-- Step 0: Welcome -->
     <div class="step active" id="step-0">
       <div class="step-label">Welcome</div>
-      <div class="step-title">You're in control of your AI agents.</div>
+      <div class="step-title">You're in control of your AI agents</div>
       <div class="step-sub">Mighty puts approval checkpoints in your agent's path. You define what's consequential — the agent pauses and waits for your decision. And every action is logged, in the agent's own words.</div>
       <button class="btn btn-primary" onclick="goTo(1)">Begin setup →</button>
     </div>
@@ -1321,7 +1447,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
       <div id="setup-claude" class="agent-setup" style="display:none">
         <div class="setup-steps">
           <div class="setup-step">
-            <div class="setup-step-num">1</div>
+            <div class="setup-step-num">A</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Download the MCP server</div>
               <a href="/download/mighty_mcp.py" class="btn-copy" style="display:inline-block;margin-top:4px">⬇ Download mighty_mcp.py</a>
@@ -1329,7 +1455,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
             </div>
           </div>
           <div class="setup-step">
-            <div class="setup-step-num">2</div>
+            <div class="setup-step-num">B</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Open this file and paste the config</div>
               <div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>
@@ -1344,18 +1470,18 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
             </div>
           </div>
           <div class="setup-step">
-            <div class="setup-step-num">3</div>
+            <div class="setup-step-num">C</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Restart Claude Desktop</div>
               <div class="setup-step-hint">Quit and reopen Claude Desktop. (This setup is for macOS — on Windows, the config file is at <code style="font-size:11px;background:#f0ede8;padding:1px 4px;border-radius:3px">%APPDATA%\\Claude\\claude_desktop_config.json</code>)</div>
             </div>
           </div>
           <div class="setup-step">
-            <div class="setup-step-num">4</div>
+            <div class="setup-step-num">D</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Add the checkpoint prompt to your Claude Project</div>
               <div style="display:flex;align-items:flex-start;gap:8px">
-                <textarea id="prompt-box-claude" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:90px;resize:none;overflow:auto"></textarea>
+                <textarea id="prompt-box-claude" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:140px;resize:vertical;overflow:auto"></textarea>
                 <button class="btn-copy" onclick="copyBox('prompt-box-claude',this)" style="margin-top:6px">Copy</button>
               </div>
               <div class="setup-step-hint">Open your Claude Project → Instructions, and paste this at the top. It tells Claude when to call the Mighty tools.</div>
@@ -1368,25 +1494,25 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
       <div id="setup-chatgpt" class="agent-setup" style="display:none">
         <div class="setup-steps">
           <div class="setup-step">
-            <div class="setup-step-num">1</div>
+            <div class="setup-step-num">A</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Open ChatGPT → your Project or Custom GPT</div>
               <div class="setup-step-hint">Go to the project or GPT you want to connect. Open its instructions/system prompt.</div>
             </div>
           </div>
           <div class="setup-step">
-            <div class="setup-step-num">2</div>
+            <div class="setup-step-num">B</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Paste the Mighty system prompt</div>
               <div style="display:flex;align-items:flex-start;gap:8px">
-                <textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:90px;resize:none;overflow:auto"></textarea>
+                <textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:140px;resize:vertical;overflow:auto"></textarea>
                 <button class="btn-copy" onclick="copyBox('prompt-box',this)" style="margin-top:6px">Copy</button>
               </div>
               <div class="setup-step-hint">Add it at the top of the existing instructions.</div>
             </div>
           </div>
           <div class="setup-step">
-            <div class="setup-step-num">3</div>
+            <div class="setup-step-num">C</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Save</div>
               <div class="setup-step-hint">That's it — no plugin or download needed.</div>
@@ -1399,7 +1525,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
       <div id="setup-custom" class="agent-setup" style="display:none">
         <div class="setup-steps">
           <div class="setup-step">
-            <div class="setup-step-num">1</div>
+            <div class="setup-step-num">A</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Your API key</div>
               <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
@@ -1409,11 +1535,11 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
             </div>
           </div>
           <div class="setup-step">
-            <div class="setup-step-num">2</div>
+            <div class="setup-step-num">B</div>
             <div class="setup-step-body">
               <div class="setup-step-title">Add the system prompt to your agent</div>
               <div style="display:flex;align-items:flex-start;gap:8px">
-                <textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:90px;resize:none;overflow:auto"></textarea>
+                <textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:140px;resize:vertical;overflow:auto"></textarea>
                 <button class="btn-copy" onclick="copyBox('prompt-box2',this)" style="margin-top:6px">Copy</button>
               </div>
               <div class="setup-step-hint">Or use the Python/JS SDK — see the <a id="docs-link" href="/settings" target="_blank" style="color:#7c3aed">API docs</a>.</div>
@@ -1424,7 +1550,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 
       <div class="btn-row" style="margin-top:4px">
         <button class="btn btn-secondary" onclick="goTo(1)">← Back</button>
-        <button class="btn btn-primary" onclick="continueFromSetup()" style="flex:1">I've done this →</button>
+        <button class="btn btn-primary" onclick="continueFromSetup()" style="flex:1">Continue →</button>
       </div>
       <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
     </div>
@@ -1447,7 +1573,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
         <div style="font-size:15px;font-weight:700;color:#16a34a;margin-bottom:4px">Connected!</div>
         <div style="font-size:13px;color:#555">Mighty received a request from your agent.</div>
       </div>
-      <div class="setup-step-body" style="margin-bottom:16px">
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f0ede8;margin-bottom:16px">
         <div style="font-size:12px;color:#aaa;margin-bottom:4px">Or test manually from Terminal:</div>
         <div style="display:flex;align-items:flex-start;gap:8px">
           <div class="code-box" id="test-curl" style="flex:1;font-size:10px">{test_curl}</div>
@@ -1471,7 +1597,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
       <div style="margin-top:20px;padding-top:20px;border-top:1px solid #f0ede8">
         <div style="font-size:12px;color:#aaa;margin-bottom:8px">Also want notifications on your phone? Install the free <a href="https://ntfy.sh" target="_blank" style="color:#555;font-weight:600">ntfy app</a> (iOS &amp; Android) and subscribe to your channel:</div>
         <div style="display:flex;align-items:center;gap:8px">
-          <div class="path-box" id="ntfy-url-box" style="flex:1">{ntfy_url}</div>
+          <a href="{ntfy_url}" target="_blank" class="path-box" id="ntfy-url-box" style="flex:1;text-decoration:none;display:block">{ntfy_url}</a>
           <button class="btn-copy" onclick="copyBox('ntfy-url-box',this)">Copy</button>
         </div>
       </div>
@@ -1851,11 +1977,24 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
         </div>
       </div>
       <div class="toggle-row">
-        <input type="checkbox" id="notif-email" {email_checked} onchange="save()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
+        <input type="checkbox" id="notif-email" {email_checked} onchange="onEmailToggle()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
         <div>
           <div class="toggle-label">Email alerts</div>
           <div class="toggle-hint">Receive an email when your agent requests approval.</div>
+          <div id="email-notif-warn" style="display:{postmark_warn};margin-top:6px;font-size:12px;color:#d97706;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 10px;line-height:1.5">Email alerts require the POSTMARK_API_KEY environment variable to be set on your server.</div>
         </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Account</div>
+      <div style="font-size:13px;color:#6b7280;margin-bottom:16px">Signed in as <span style="color:#1a1a1a;font-weight:600">{email}</span></div>
+      <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:6px;letter-spacing:0.3px">Change email address</div>
+      <input type="email" id="email-new" placeholder="New email address" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      <input type="password" id="email-pw" placeholder="Confirm with current password" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="btn-copy-key" style="padding:8px 16px;font-size:13px" onclick="changeEmail()">Update email</button>
+        <span id="email-msg" style="font-size:12px;display:none"></span>
       </div>
     </div>
 
@@ -1934,6 +2073,13 @@ if ('serviceWorker' in navigator && 'PushManager' in window) {
     });
   });
 }
+var POSTMARK_CONFIGURED = {postmark_js};
+function onEmailToggle() {
+  var warn = document.getElementById('email-notif-warn');
+  var cb = document.getElementById('notif-email');
+  if (warn) warn.style.display = (cb.checked && !POSTMARK_CONFIGURED) ? 'block' : 'none';
+  save();
+}
 function save() {
   fetch('/dashboard/notifications', {
     method: 'POST',
@@ -1947,6 +2093,24 @@ function save() {
     var ind = document.getElementById('save-ind');
     if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
   });
+}
+function changeEmail() {
+  var newEmail = (document.getElementById('email-new').value || '').trim();
+  var pw = document.getElementById('email-pw').value;
+  var msg = document.getElementById('email-msg');
+  if (!newEmail || !pw) { msg.textContent = 'Please fill in both fields.'; msg.style.color='#dc2626'; msg.style.display='inline'; return; }
+  fetch('/settings/change-email', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: newEmail, password: pw})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      msg.textContent = 'Email updated. Page will reload…'; msg.style.color='#16a34a'; msg.style.display='inline';
+      setTimeout(function() { location.reload(); }, 1500);
+    } else {
+      msg.textContent = d.error || 'Update failed.'; msg.style.color='#dc2626'; msg.style.display='inline';
+    }
+  }).catch(function() { msg.textContent = 'Network error.'; msg.style.color='#dc2626'; msg.style.display='inline'; });
 }
 function enablePush() {
   if (!swReg) return;
@@ -2128,6 +2292,9 @@ def signup_page():
 
 @app.route("/signup", methods=["POST"])
 def signup():
+    if not _rate_limit(request.remote_addr, "signup", limit=5):
+        err = '<div class="err">Too many attempts. Please wait a minute and try again.</div>'
+        return SIGNUP_HTML.replace("{error}", err), 429
     email    = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
     if not email or not password or len(password) < 6:
@@ -2144,6 +2311,7 @@ def signup():
         (uid, email, hash_pw(password), key, iso()),
     )
     db.commit()
+    session.permanent  = True
     session["user_id"] = uid
     session["email"]   = email
     return redirect("/onboarding")
@@ -2172,18 +2340,26 @@ def login():
             info = '<div style="font-size:13px;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:7px;padding:9px 12px;margin-bottom:14px">Password updated successfully. Sign in with your new password.</div>'
             return LOGIN_HTML.replace("{error}", info)
         return LOGIN_HTML.replace("{error}", "")
+    # Rate limit: 10 attempts per minute per IP
+    if not _rate_limit(request.remote_addr, "login", limit=10):
+        err = '<div class="err">Too many attempts. Please wait a minute and try again.</div>'
+        return LOGIN_HTML.replace("{error}", err), 429
     email    = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
     row = get_db().execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
     if not row or not check_pw(row["password_hash"], password):
         err = '<div class="err">Incorrect email or password.</div>'
         return LOGIN_HTML.replace("{error}", err)
+    session.permanent  = True
     session["user_id"] = row["id"]
     session["email"]   = row["email"]
     # Lazy migration: re-hash SHA-256 passwords to bcrypt on login
     if row["password_hash"] and ":" in row["password_hash"] and not row["password_hash"].startswith("$2"):
         get_db().execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(password), row["id"]))
         get_db().commit()
+    nxt = request.form.get("next", "").strip()
+    if nxt and nxt.startswith("/") and not nxt.startswith("//"):
+        return redirect(nxt)
     return redirect("/dashboard")
 
 @app.route("/logout", methods=["POST"])
@@ -2203,6 +2379,9 @@ def tos():
 def forgot_password():
     if request.method == "GET":
         return FORGOT_HTML.replace("{message}", "")
+    if not _rate_limit(request.remote_addr, "forgot", limit=5):
+        success = '<div class="info">If an account exists for that email, a reset link is on its way. Check your inbox (and spam folder).</div>'
+        return FORGOT_HTML.replace("{message}", success)
     email = request.form.get("email", "").strip().lower()
     # Always show success message — prevents user enumeration
     success = '<div class="info">If an account exists for that email, a reset link is on its way. Check your inbox (and spam folder).</div>'
@@ -2373,11 +2552,36 @@ def action_card_html(a, base, show_buttons):
           <button class="btn-authorize" onclick="decide('{he(a["id"])}','approve')">Approve</button>
           <button class="btn-reject"    onclick="decide('{he(a["id"])}','deny')">Deny</button>
         </div>'''
-    return f'''<div class="action-card{pending_cls}" id="action-{he(a["id"])}">
+    aid = he(a["id"])
+    # Expandable detail section
+    extra = []
+    if a["decided_at"]:
+        extra.append(f'<span style="color:#9ca3af">Decided {fmt_time(a["decided_at"])}</span>')
+    if a.get("outcome"):
+        extra.append(f'<span style="color:#9ca3af">Outcome: {he(str(a["outcome"]))}</span>')
+    detail_html = ""
+    if extra:
+        detail_html = (
+            f'<div id="detail-{aid}" style="display:none;padding:6px 16px 12px;'
+            'border-top:1px solid #f3f4f6;display:flex;flex-wrap:wrap;gap:8px">'
+            + "".join(f'<span style="font-size:11px;background:#f8f7f5;border-radius:4px;padding:2px 7px">{e}</span>' for e in extra)
+            + '</div>'
+        )
+        detail_html = (
+            f'<div id="detail-{aid}" style="display:none;padding:6px 16px 12px;border-top:1px solid #f3f4f6">'
+            + "".join(f'<span style="font-size:11px;color:#9ca3af;background:#f8f7f5;border-radius:4px;padding:2px 7px;margin-right:6px;display:inline-block">{e}</span>' for e in extra)
+            + '</div>'
+        )
+    detail_toggle = (
+        f'<button onclick="toggleDetail(\'{aid}\')" style="font-size:11px;color:#9ca3af;'
+        'background:none;border:none;cursor:pointer;padding:0;margin-left:4px">details</button>'
+        if extra else ""
+    )
+    return f'''<div class="action-card{pending_cls}" id="action-{aid}">
       <div class="action-top">
         <div style="min-width:0;flex:1">
           <div class="action-label">{he(a["label"])}</div>
-          <div class="action-type">{he(a["action_type"])}</div>
+          <div class="action-type">{he(a["action_type"])}{detail_toggle}</div>
         </div>
         <div class="action-badges">
           {clevel}
@@ -2386,6 +2590,7 @@ def action_card_html(a, base, show_buttons):
         </div>
       </div>
       {'<div class="action-fields">' + fields_html + '</div>' if fields_html else ''}
+      {detail_html}
       {btns}
     </div>'''
 
@@ -2432,7 +2637,9 @@ def dashboard():
             'align-items:center;justify-content:center;padding:60px 24px">'
             '<div style="width:100%;max-width:360px;text-align:center">'
             '<div style="width:52px;height:52px;background:#f3f0ff;border-radius:14px;'
-            'display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:24px">&#9889;</div>'
+            'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
+            '<svg width="22" height="22" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></svg></div>'
             '<div style="font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:10px">'
             'Welcome to Mighty</div>'
             '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
@@ -2492,13 +2699,18 @@ def settings():
     db   = get_db()
     user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
     topic = ntfy_topic(user["api_key"])
+    postmark_ok = bool(POSTMARK_API_KEY)
+    # postmark_warn: initially show warning only if email notifs are ON but Postmark not configured
+    postmark_warn = "block" if (user["notify_email"] and not postmark_ok) else "none"
     return (SETTINGS_HTML
-            .replace("{email}",        user["email"])
-            .replace("{api_key}",      user["api_key"])
-            .replace("{ntfy_topic}",   topic)
-            .replace("{push_checked}", "checked" if user["notify_push"]  else "")
-            .replace("{ntfy_checked}", "checked" if user["notify_ntfy"]   else "")
-            .replace("{email_checked}","checked" if user["notify_email"] else ""))
+            .replace("{email}",          user["email"])
+            .replace("{api_key}",        user["api_key"])
+            .replace("{ntfy_topic}",     topic)
+            .replace("{push_checked}",   "checked" if user["notify_push"]  else "")
+            .replace("{ntfy_checked}",   "checked" if user["notify_ntfy"]  else "")
+            .replace("{email_checked}",  "checked" if user["notify_email"] else "")
+            .replace("{postmark_warn}",  postmark_warn)
+            .replace("{postmark_js}",    "true" if postmark_ok else "false"))
 
 @app.route("/settings/export-csv")
 @require_login
@@ -2566,6 +2778,25 @@ def change_password():
         return jsonify({"error": "New password must be at least 6 characters."}), 400
     db.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(new_pw), session["user_id"]))
     db.commit()
+    return jsonify({"ok": True})
+
+@app.route("/settings/change-email", methods=["POST"])
+@require_login
+def change_email():
+    data     = request.get_json(force=True, silent=True) or {}
+    new_email = data.get("email", "").strip().lower()
+    password  = data.get("password", "")
+    if not new_email or "@" not in new_email:
+        return jsonify({"error": "Please enter a valid email address."}), 400
+    db   = get_db()
+    user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    if not user or not check_pw(user["password_hash"], password):
+        return jsonify({"error": "Incorrect password."}), 403
+    if db.execute("SELECT 1 FROM users WHERE email=? AND id!=?", (new_email, session["user_id"])).fetchone():
+        return jsonify({"error": "That email address is already in use."}), 409
+    db.execute("UPDATE users SET email=? WHERE id=?", (new_email, session["user_id"]))
+    db.commit()
+    session["email"] = new_email
     return jsonify({"ok": True})
 
 @app.route("/settings/delete-account", methods=["POST"])
@@ -2766,7 +2997,7 @@ def approve_page(token):
         <button class="btn-approve" onclick="submit('approve')">Approve</button>
         <button class="btn-deny"    onclick="submit('deny')">Deny</button>
       </div>
-      <div class="timeout-note">This request will time out in 5 minutes if not decided.</div>
+      <div class="timeout-note">This request will time out in 5 minutes if not decided. Press <kbd style="font-family:monospace;font-size:11px;padding:1px 5px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:3px">A</kbd> to approve or <kbd style="font-family:monospace;font-size:11px;padding:1px 5px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:3px">D</kbd> to deny.</div>
       <div id="expiry-timer" style="text-align:center;padding:0 20px 14px;font-size:12px;color:#aaa"></div>
       <script>
       function submit(dec) {{
@@ -2809,6 +3040,16 @@ def approve_page(token):
         }}
         updateTimer();
       }})();
+      document.addEventListener('keydown', function(e) {{
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        if (e.key === 'a' || e.key === 'A') {{
+          var btn = document.querySelector('.btn-approve');
+          if (btn && !btn.disabled) btn.click();
+        }} else if (e.key === 'd' || e.key === 'D') {{
+          var btn = document.querySelector('.btn-deny');
+          if (btn && !btn.disabled) btn.click();
+        }}
+      }});
       </script>"""
     return APPROVE_HTML.replace("{body}", body)
 
@@ -3019,6 +3260,13 @@ def vapid_public_key():
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
+
+
+# ── Error handlers ────────────────────────────────────────────────────────────
+
+@app.errorhandler(404)
+def not_found(e):
+    return NOT_FOUND_HTML, 404
 
 
 # ── Dev reset (protected by secret key) ───────────────────────────────────────
