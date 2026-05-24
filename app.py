@@ -2687,6 +2687,9 @@ def dashboard():
     expire_pending()
     db    = get_db()
     user  = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    if not user:
+        session.clear()
+        return redirect("/login")
     acts  = db.execute(
         "SELECT * FROM actions WHERE user_id=? ORDER BY created_at DESC LIMIT 100",
         (session["user_id"],),
@@ -2786,6 +2789,9 @@ def dashboard():
 def settings():
     db   = get_db()
     user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    if not user:
+        session.clear()
+        return redirect("/login")
     topic = ntfy_topic(user["api_key"])
     postmark_ok = bool(POSTMARK_API_KEY)
     # postmark_warn: initially show warning only if email notifs are ON but Postmark not configured
@@ -2994,6 +3000,9 @@ def update_notifications():
 @require_login
 def onboarding():
     user = get_db().execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    if not user:
+        session.clear()
+        return redirect("/login")
     url  = base_url()
     import json as _json
     test_curl = (
