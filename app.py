@@ -224,7 +224,14 @@ def iso():
 
 def base_url():
     b = os.environ.get("BASE_URL", "").rstrip("/")
-    return b if b else request.url_root.rstrip("/")
+    if b:
+        return b
+    # Railway (and most reverse proxies) terminate TLS before Flask,
+    # so request.url_root comes in as http://. Force https on non-local hosts.
+    root = request.url_root.rstrip("/")
+    if root.startswith("http://") and "localhost" not in root and "127.0.0.1" not in root:
+        root = "https://" + root[len("http://"):]
+    return root
 
 def require_login(f):
     @wraps(f)
