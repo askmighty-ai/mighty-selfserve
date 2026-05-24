@@ -55,7 +55,7 @@ def _rate_limit(ip: str, name: str, limit: int = 10, window: int = 60) -> bool:
         _rl_store[key] = ts
         return True
 
-DATABASE        = os.environ.get("DATABASE_PATH", "mighty.db")
+DATABASE        = os.environ.get("DATABASE_PATH", "/app/data/mighty.db")
 PORT            = int(os.environ.get("PORT", 5004))
 TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
 POSTMARK_API_KEY = os.environ.get("POSTMARK_API_KEY", "")
