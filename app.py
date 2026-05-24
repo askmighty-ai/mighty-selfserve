@@ -2458,6 +2458,106 @@ def logout():
     session.clear()
     return redirect("/")
 
+@app.route("/openapi.json")
+def openapi_spec():
+    url = base_url()
+    spec = {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Mighty",
+            "version": "1.0.0",
+            "description": "Request human approval before consequential actions, and log routine actions."
+        },
+        "servers": [{"url": url}],
+        "paths": {
+            "/api/authorize": {
+                "post": {
+                    "operationId": "mighty_authorize",
+                    "summary": "Request approval before a consequential action",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["api_key", "action_type", "label"],
+                                    "properties": {
+                                        "api_key": {"type": "string", "description": "Your Mighty API key"},
+                                        "action_type": {"type": "string", "description": "Short category e.g. email, purchase, file_edit"},
+                                        "label": {"type": "string", "description": "Human-readable description of what you are about to do"},
+                                        "fields": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}, "description": "Optional context e.g. [[\"To\", \"alice@example.com\"]]"}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Request created",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "request_id": {"type": "string"},
+                                            "status": {"type": "string"},
+                                            "approval_url": {"type": "string"}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "/api/status/{request_id}": {
+                "get": {
+                    "operationId": "mighty_status",
+                    "summary": "Poll for approval decision",
+                    "parameters": [{"name": "request_id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "responses": {
+                        "200": {
+                            "description": "Current status",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"status": {"type": "string"}}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "/api/record": {
+                "post": {
+                    "operationId": "mighty_record",
+                    "summary": "Log a routine action silently",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["api_key", "action_type", "label"],
+                                    "properties": {
+                                        "api_key": {"type": "string"},
+                                        "action_type": {"type": "string"},
+                                        "label": {"type": "string"},
+                                        "outcome": {"type": "string"}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {"200": {"description": "Logged"}}
+                }
+            }
+        }
+    }
+    return json.dumps(spec), 200, {"Content-Type": "application/json"}
+
 @app.route("/privacy")
 def privacy():
     return PRIVACY_HTML
