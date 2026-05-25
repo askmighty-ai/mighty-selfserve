@@ -2234,7 +2234,7 @@ def action_card_html(a, base, show_buttons):
     extra = []
     if a["decided_at"]:
         extra.append(f'<span style="color:#9ca3af">Decided {fmt_time(a["decided_at"])}</span>')
-    if a.get("outcome"):
+    if a["outcome"]:
         extra.append(f'<span style="color:#9ca3af">Outcome: {he(str(a["outcome"]))}</span>')
     detail_html = ""
     if extra:
