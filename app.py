@@ -156,6 +156,10 @@ def init_db():
             db.execute("ALTER TABLE users ADD COLUMN onboarded INTEGER DEFAULT 0")
         except Exception:
             pass
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN minimal_logging INTEGER DEFAULT 0")
+        except Exception:
+            pass
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -1561,6 +1565,18 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
     </div>
 
     <div class="card">
+      <div class="section-title">Privacy</div>
+      <div class="toggle-row">
+        <input type="checkbox" id="minimal-logging" {minimal_logging_checked} onchange="savePrivacy()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
+        <div>
+          <div class="toggle-label">Minimal logging</div>
+          <div class="toggle-hint">Store only action type and timestamp — not labels or field details. Reduces what Mighty can see, but makes your activity log less useful.</div>
+          <span id="privacy-ind" style="display:none;font-size:12px;color:#16a34a;margin-top:4px">Saved</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="section-title">Connection</div>
       <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Your API key — used to connect your agent to Mighty. Keep it secret.</div>
       <div class="api-key-wrap">
@@ -1653,6 +1669,16 @@ function save() {
     })
   }).then(function() {
     var ind = document.getElementById('save-ind');
+    if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
+  }).catch(function() {});
+}
+function savePrivacy() {
+  fetch('/settings/privacy', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({minimal_logging: document.getElementById('minimal-logging').checked})
+  }).then(function() {
+    var ind = document.getElementById('privacy-ind');
     if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
   }).catch(function() {});
 }
@@ -2480,15 +2506,16 @@ def settings():
     # postmark_warn: initially show warning only if email notifs are ON but Postmark not configured
     postmark_warn = "block" if (user["notify_email"] and not postmark_ok) else "none"
     return (SETTINGS_HTML
-            .replace("{email}",          he(user["email"]))
-            .replace("{api_key}",        user["api_key"])
-            .replace("{ntfy_topic}",     topic)
-            .replace("{push_checked}",   "checked" if user["notify_push"]  else "")
-            .replace("{ntfy_checked}",   "checked" if user["notify_ntfy"]  else "")
-            .replace("{email_checked}",  "checked" if user["notify_email"] else "")
-            .replace("{postmark_warn}",  postmark_warn)
-            .replace("{postmark_js}",    "true" if postmark_ok else "false")
-            .replace("{csrf_token}",     get_csrf_token()))
+            .replace("{email}",                   he(user["email"]))
+            .replace("{api_key}",                 user["api_key"])
+            .replace("{ntfy_topic}",              topic)
+            .replace("{push_checked}",            "checked" if user["notify_push"]    else "")
+            .replace("{ntfy_checked}",            "checked" if user["notify_ntfy"]    else "")
+            .replace("{email_checked}",           "checked" if user["notify_email"]   else "")
+            .replace("{minimal_logging_checked}", "checked" if user["minimal_logging"] else "")
+            .replace("{postmark_warn}",           postmark_warn)
+            .replace("{postmark_js}",             "true" if postmark_ok else "false")
+            .replace("{csrf_token}",              get_csrf_token()))
 
 @app.route("/settings/export-csv")
 @require_login
@@ -2677,6 +2704,18 @@ def update_notifications():
     return jsonify({"ok": True})
 
 
+@app.route("/settings/privacy", methods=["POST"])
+@require_login
+def update_privacy():
+    data = request.get_json(force=True)
+    get_db().execute(
+        "UPDATE users SET minimal_logging=? WHERE id=?",
+        (1 if data.get("minimal_logging") else 0, session["user_id"])
+    )
+    get_db().commit()
+    return jsonify({"ok": True})
+
+
 # ── Onboarding wizard ────────────────────────────────────────────────────────
 
 @app.route("/onboarding")
@@ -2862,6 +2901,9 @@ def api_record():
     fields            = data.get("fields")
     outcome           = data.get("outcome", "completed")
     consequence_level = data.get("consequence_level", "routine")
+    if user["minimal_logging"]:
+        label  = action_type
+        fields = None
     action_id         = secrets.token_hex(16)
     get_db().execute(
         "INSERT INTO actions (id,user_id,action_type,label,fields,status,outcome,consequence_level,created_at) "
@@ -2884,6 +2926,9 @@ def api_authorize():
     label             = data.get("label", "Action")
     fields            = data.get("fields")
     consequence_level = data.get("consequence_level", "routine")
+    if user["minimal_logging"]:
+        label  = action_type
+        fields = None
     action_id         = secrets.token_hex(16)
     approval_token    = secrets.token_urlsafe(24)
     expires_at        = (utcnow() + timedelta(seconds=TIMEOUT_SEC)).isoformat()
@@ -2997,6 +3042,9 @@ def api_log_decision():
         return jsonify({"error": "decision must be 'approved' or 'denied'"}), 400
     action_id = secrets.token_hex(16)
     now       = iso()
+    if user["minimal_logging"]:
+        label  = action_type  # store only the category, not the full description
+        fields = None
     get_db().execute(
         "INSERT INTO actions "
         "(id,user_id,action_type,label,fields,status,consequence_level,created_at,decided_at) "
