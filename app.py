@@ -2298,34 +2298,37 @@ def dashboard():
 
     if len(acts) == 0:
         # Empty state — full-width, centred, no sidebar
-        sidebar_content = (
-            '<div style="grid-column:1/-1;display:flex;flex-direction:column;'
-            'align-items:center;justify-content:center;padding:60px 24px">'
-            '<div style="width:100%;max-width:360px;text-align:center">'
-            '<div style="width:52px;height:52px;background:#f3f0ff;border-radius:14px;'
-            'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
-            '<svg width="22" height="22" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-            '<polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></svg></div>'
-            '<div style="font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:10px">'
-            'Welcome to Mighty</div>'
-            '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
-            + (
-                'Your agent is set up. Ask it to do something consequential — like send an email or book a meeting — and the approval request will appear here.'
-                if user["onboarded"] else
-                'Connect your agent in about 5 minutes. Once connected, approval requests from your agent will appear here.'
-            ) + '</div>'
-            + (
-                '<a href="/settings" style="display:block;padding:13px 20px;'
-                'background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:8px;font-size:14px;font-weight:600;'
-                'text-decoration:none;margin-bottom:16px">View your setup instructions &#8594;</a>'
-                if user["onboarded"] else
+        if user["onboarded"]:
+            sidebar_content = (
+                '<div style="grid-column:1/-1;display:flex;flex-direction:column;'
+                'align-items:center;justify-content:center;padding:80px 24px">'
+                '<div style="width:100%;max-width:360px;text-align:center">'
+                '<div style="font-size:13px;font-weight:600;color:#9ca3af;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:12px">Waiting for requests</div>'
+                '<div style="font-size:15px;color:#6b7280;line-height:1.6">'
+                'Ask your agent to do something consequential — like send an email or book a meeting. '
+                'When it calls Mighty, the approval request will appear here.</div>'
+                '</div>'
+                '</div>'
+            )
+        else:
+            sidebar_content = (
+                '<div style="grid-column:1/-1;display:flex;flex-direction:column;'
+                'align-items:center;justify-content:center;padding:60px 24px">'
+                '<div style="width:100%;max-width:360px;text-align:center">'
+                '<div style="width:52px;height:52px;background:#f3f0ff;border-radius:14px;'
+                'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
+                '<svg width="22" height="22" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                '<polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></svg></div>'
+                '<div style="font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:10px">'
+                'Welcome to Mighty</div>'
+                '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
+                'Connect your agent in about 5 minutes. Once connected, approval requests from your agent will appear here.</div>'
                 '<a href="/onboarding" style="display:block;padding:13px 20px;'
                 'background:#7c3aed;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
                 'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
+                '</div>'
+                '</div>'
             )
-            + '</div>'
-            + '</div>'
-        )
         feed_col_hidden = 'style="display:none"'
     else:
         # Active state: two-column layout
