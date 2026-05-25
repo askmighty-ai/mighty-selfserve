@@ -2651,12 +2651,15 @@ def approve_page(token):
     db  = get_db()
     row = db.execute("SELECT * FROM actions WHERE approval_token=?", (token,)).fetchone()
     if not row:
-        body = '<div class="outcome timeout">Request not found or already expired.</div><div style="text-align:center;padding:0 20px 20px"><a href="/dashboard" style="font-size:14px;color:#7c3aed;font-weight:600;text-decoration:none">Go to dashboard &rarr;</a></div>'
+        body = '<div class="outcome timeout" style="font-size:20px;padding:28px 20px 8px">Request not found</div><div style="text-align:center;padding:4px 20px 24px;font-size:14px;color:#6b7280">This link may have expired or already been used. You can close this tab.</div>'
         return APPROVE_HTML.replace("{body}", body)
     if row["status"] != "pending":
-        labels = {"approved": "&#10003; Approved", "denied": "&#10007; Denied", "timeout": "Timed out"}
+        labels = {"approved": "✓ Approved", "denied": "✗ Denied", "timeout": "Timed out"}
         label  = labels.get(row["status"], he(row["status"].title()))
-        body   = f'<div class="outcome {he(row["status"])}">{label}</div><div style="text-align:center;padding:0 20px 20px"><a href="/dashboard" style="font-size:14px;color:#7c3aed;font-weight:600;text-decoration:none">Go to dashboard &rarr;</a></div>'
+        sublabels = {"approved": "Your agent proceeded.", "denied": "Your agent was stopped.", "timeout": "This request expired."}
+        sub = sublabels.get(row["status"], "")
+        body   = (f'<div class="outcome {he(row["status"])}" style="font-size:22px;padding:28px 20px 8px">{label}</div>'
+                  f'<div style="text-align:center;padding:4px 20px 24px;font-size:14px;color:#6b7280">{sub} You can close this tab.</div>')
         return APPROVE_HTML.replace("{body}", body).replace(
             '<div id="agent-waiting-note"',
             '<div id="agent-waiting-note" style="display:none"'
@@ -2695,9 +2698,13 @@ def approve_page(token):
             return r.json();
           }}).then(function(d) {{
             if (!d) return;
+            var isApproved = d.status === 'approved';
             document.querySelector('.card').innerHTML =
-              '<div class="outcome ' + d.status + '">' + (d.status==='approved'?'Approved':'Denied') + '</div>'
-              + '<div style="text-align:center;margin-top:16px"><a href="/dashboard" style="font-size:13px;color:#7c3aed;text-decoration:none">Go to dashboard →</a></div>';
+              '<div class="outcome ' + d.status + '" style="font-size:22px;padding:28px 20px 12px">'
+              + (isApproved ? '✓ Approved' : '✗ Denied') + '</div>'
+              + '<div style="text-align:center;padding:4px 20px 24px;font-size:14px;color:#6b7280">'
+              + (isApproved ? 'Your agent will proceed.' : 'Your agent has been stopped.')
+              + ' You can close this tab.</div>';
             var note = document.getElementById('agent-waiting-note');
             if (note) note.style.display = 'none';
           }});
@@ -2710,8 +2717,8 @@ def approve_page(token):
           var diffMs = expiresAt - now;
           if (diffMs <= 0) {{
             document.querySelector('.card').innerHTML =
-              '<div class="outcome timeout">This request has timed out.</div>'
-              + '<div style="text-align:center;padding:0 20px 20px"><a href="/dashboard" style="font-size:14px;color:#7c3aed;font-weight:600;text-decoration:none">Go to dashboard →</a></div>';
+              '<div class="outcome timeout" style="font-size:20px;padding:28px 20px 8px">Request timed out</div>'
+              + '<div style="text-align:center;padding:4px 20px 24px;font-size:14px;color:#6b7280">This request expired. You can close this tab.</div>';
             var note = document.getElementById('agent-waiting-note');
             if (note) note.style.display = 'none';
             return;
