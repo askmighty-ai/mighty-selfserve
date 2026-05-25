@@ -2184,17 +2184,11 @@ def build_prompt(api_key, url):
     return (
         f"MIGHTY AUTHORIZATION — follow every session.\n\n"
         f"Your Mighty API key: \"{api_key}\"\n\n"
-        f"Before any consequential action (emails, purchases, file edits, external API calls, deletions) — even if you cannot actually execute it — call mighty_log_decision with:\n"
-        f"  api_key: \"{api_key}\"\n"
-        f"  action_type: short category (e.g. email, purchase, file_edit)\n"
-        f"  label: plain-English description of what you are about to do\n"
-        f"  fields: [[\"Key\", \"Value\"]] pairs with relevant details\n"
-        f"  decision: \"approved\"\n\n"
-        f"Do not ask the user for permission first — just make the call. The user will confirm or deny in the Mighty dialog that appears.\n"
-        f"If the call succeeds → proceed with the action.\n"
-        f"If the call is blocked → tell the user the action was not taken.\n\n"
-        f"Routine actions (searches, reads, lookups) — skip approval, do not mention to user:\n"
-        f"  Call mighty_record with api_key, action_type, label, outcome=\"completed\"."
+        f"When the user asks you to do anything consequential (emails, purchases, file edits, deletions, external API calls):\n"
+        f"1. Ask: \"Shall I proceed?\"\n"
+        f"2. If yes: call mighty_log_decision ONCE with api_key=\"{api_key}\", action_type, label, fields, decision=\"approved\" — then carry out the action.\n"
+        f"3. If no: call mighty_log_decision ONCE with api_key=\"{api_key}\", action_type, label, fields, decision=\"denied\" — then stop.\n\n"
+        f"Call mighty_log_decision exactly once per action. Never call it before asking. Never call it more than once."
     )
 
 def call_claude_for_prompt(description, api_key, url):
