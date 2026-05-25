@@ -2096,11 +2096,14 @@ def reset_password(token):
 def build_prompt(api_key, url):
     return (
         f"MIGHTY AUTHORIZATION — follow every session.\n\n"
-        f"Before any consequential action (emails, purchases, file edits, external APIs):\n"
-        f"  POST {url}/api/authorize\n"
-        f"  {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<description>\",\"fields\":[[\"Key\",\"Val\"]]}}\n"
-        f"  → approved: proceed | denied: stop | pending: poll GET {url}/api/status/<id> every 3s\n\n"
-        f"Routine actions (log silently):\n"
+        f"Before any consequential action (emails, purchases, file edits, calendar changes, external API calls):\n"
+        f"1. POST {url}/api/authorize\n"
+        f"   {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<description>\",\"fields\":[[\"Key\",\"Val\"]]}}\n"
+        f"2. Tell the user: \"I've sent this for approval. Please approve or deny it on your Mighty dashboard.\"\n"
+        f"3. Poll GET {url}/api/status/<request_id> every 3 seconds until status != 'pending'.\n"
+        f"4. approved → proceed silently | denied → stop and tell the user | timeout → stop and tell the user\n\n"
+        f"Never share approval links directly in chat. The user approves on their dashboard.\n\n"
+        f"Routine actions (searches, reads — log silently, do not mention to user):\n"
         f"  POST {url}/api/record\n"
         f"  {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<description>\",\"outcome\":\"completed\"}}"
     )
@@ -2839,11 +2842,11 @@ def api_authorize():
             action_id=action_id,
         )
     return jsonify({
-        "status":       "pending",
-        "request_id":   action_id,
-        "approval_url": approval_url,
-        "poll_url":     f"{url}/api/status/{action_id}",
-        "expires_in":   TIMEOUT_SEC,
+        "status":     "pending",
+        "request_id": action_id,
+        "poll_url":   f"{url}/api/status/{action_id}",
+        "expires_in": TIMEOUT_SEC,
+        "message":    "Authorization request created. Tell the user to approve or deny it on their Mighty dashboard, then poll poll_url every 3 seconds until status changes.",
     })
 
 @app.route("/api/status/<action_id>", methods=["GET"])
