@@ -2011,6 +2011,44 @@ def openapi_spec():
                     }
                 }
             },
+            "/api/decide": {
+                "post": {
+                    "operationId": "mighty_decide",
+                    "summary": "Record the user's inline approval decision",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["api_key", "request_id", "decision"],
+                                    "properties": {
+                                        "api_key":     {"type": "string", "description": "Your Mighty API key"},
+                                        "request_id":  {"type": "string", "description": "The request_id returned by mighty_authorize"},
+                                        "decision":    {"type": "string", "enum": ["approved", "denied"], "description": "The user's decision"}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Decision recorded",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "status":     {"type": "string"},
+                                            "request_id": {"type": "string"}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             "/api/record": {
                 "post": {
                     "operationId": "mighty_record",
@@ -2101,19 +2139,18 @@ def reset_password(token):
 def build_prompt(api_key, url):
     return (
         f"MIGHTY AUTHORIZATION — follow every session.\n\n"
-        f"Before any consequential action (emails, purchases, file edits, calendar changes, external API calls):\n"
-        f"1. Call mighty_authorize with your api_key, action_type, label, and fields.\n"
-        f"   api_key: \"{api_key}\"\n"
-        f"2. Tell the user: \"I've requested approval — please approve or deny it on your Mighty dashboard.\"\n"
-        f"3. Without waiting for the user to reply, immediately and repeatedly call mighty_status with the request_id.\n"
-        f"   Keep polling until status is no longer 'pending'. Do not stop to wait for user input between polls.\n"
-        f"4. Once status changes:\n"
-        f"   - approved → proceed with the action and tell the user what you did\n"
-        f"   - denied → tell the user the action was denied and stop\n"
-        f"   - timeout → tell the user the request expired and ask if they want to try again\n\n"
-        f"Never share approval links or URLs in chat. The user approves on their Mighty dashboard only.\n\n"
-        f"Routine actions (searches, reads, lookups — do NOT mention to user):\n"
-        f"  Call mighty_record with api_key, action_type, label, and outcome."
+        f"Your Mighty API key: \"{api_key}\"\n\n"
+        f"Before any consequential action (sending emails, making purchases, editing files, external API calls, deleting anything):\n"
+        f"1. Describe exactly what you are about to do and ask the user: \"Shall I proceed?\"\n"
+        f"2. Wait for the user's response.\n"
+        f"3. Call mighty_authorize with api_key, action_type, label, and fields to create the record.\n"
+        f"4. Immediately call mighty_decide with api_key, the request_id from step 3, and decision:\n"
+        f"   - User said yes → decision: \"approved\"\n"
+        f"   - User said no → decision: \"denied\"\n"
+        f"5. If approved → proceed with the action\n"
+        f"   If denied → tell the user the action was not taken\n\n"
+        f"Routine actions (searches, reads, lookups — do NOT ask for approval, do NOT mention to user):\n"
+        f"  Call mighty_record with api_key, action_type, label, and outcome=\"completed\"."
     )
 
 def call_claude_for_prompt(description, api_key, url):
@@ -2872,6 +2909,34 @@ def api_status(action_id):
     if not row:
         return jsonify({"error": "not found"}), 404
     return jsonify({"status": row["status"], "decided_at": row["decided_at"]})
+
+
+@app.route("/api/decide", methods=["POST"])
+def api_decide():
+    """Record the user's inline approval decision (approved or denied).
+    Used when the user approves/denies directly in the chat rather than on the dashboard.
+    """
+    user, data = api_user()
+    if not user:
+        return jsonify({"error": "Invalid or missing api_key"}), 401
+    request_id = data.get("request_id", "")
+    decision   = data.get("decision", "")
+    if not request_id:
+        return jsonify({"error": "request_id is required"}), 400
+    if decision not in ("approved", "denied"):
+        return jsonify({"error": "decision must be 'approved' or 'denied'"}), 400
+    row = get_db().execute(
+        "SELECT id FROM actions WHERE id=? AND user_id=?",
+        (request_id, user["id"]),
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    get_db().execute(
+        "UPDATE actions SET status=?, decided_at=? WHERE id=?",
+        (decision, iso(), request_id),
+    )
+    get_db().commit()
+    return jsonify({"status": decision, "request_id": request_id})
 
 
 # ── Service worker ────────────────────────────────────────────────────────────
