@@ -1311,7 +1311,7 @@ function toggleDetail(id) {
 }
 
 var lastPending = document.querySelectorAll('.is-pending').length > 0;
-setInterval(function() {
+function checkForUpdates() {
   fetch('/dashboard/has-pending').then(function(r) { return r.json(); }).then(function(d) {
     if (d.pending !== lastPending) {
       var fc = document.querySelector('.feed-col');
@@ -1320,7 +1320,12 @@ setInterval(function() {
       location.reload();
     }
   }).catch(function() {});
-}, 5000);
+}
+setInterval(checkForUpdates, 4000);
+// Immediately check when user switches back to this tab
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible') checkForUpdates();
+});
 
 // Register SW for push delivery (notifications managed in /settings)
 if ('serviceWorker' in navigator) {
