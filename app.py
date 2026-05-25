@@ -2891,7 +2891,7 @@ def api_authorize():
         "request_id": action_id,
         "poll_url":   f"{url}/api/status/{action_id}",
         "expires_in": TIMEOUT_SEC,
-        "message":    "Authorization request created. Tell the user to approve or deny it on their Mighty dashboard, then poll poll_url every 3 seconds until status changes.",
+        "message":    "Authorization request created. Now ask the user 'Shall I proceed?' and wait for their response. Then call mighty_decide with this request_id and decision 'approved' or 'denied' based on what they say.",
     })
 
 @app.route("/api/status/<action_id>", methods=["GET"])
