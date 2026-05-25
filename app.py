@@ -1829,8 +1829,10 @@ var AGENT_SUBS = {
 };
 
 function renderSetup(agent) {
-  document.getElementById('setup-title').textContent = AGENT_TITLES[agent] || 'Connect your agent';
-  document.getElementById('setup-sub').textContent   = AGENT_SUBS[agent]   || '';
+  var titleEl = document.getElementById('setup-title');
+  var subEl   = document.getElementById('setup-sub');
+  if (titleEl) titleEl.textContent = AGENT_TITLES[agent] || 'Add Mighty to your AI tool';
+  if (subEl)   subEl.textContent   = AGENT_SUBS[agent]   || '';
   document.querySelectorAll('.agent-setup').forEach(function(el) { el.style.display = 'none'; });
   var panel = document.getElementById('setup-' + agent);
   if (panel) panel.style.display = 'block';
