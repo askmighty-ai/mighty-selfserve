@@ -2297,20 +2297,30 @@ def dashboard():
         )
 
     if len(acts) == 0:
-        # Empty state — full-width, centred, no sidebar
         if user["onboarded"]:
-            sidebar_content = (
-                '<div style="grid-column:1/-1;display:flex;flex-direction:column;'
-                'align-items:center;justify-content:center;padding:80px 24px">'
-                '<div style="width:100%;max-width:360px;text-align:center">'
-                '<div style="font-size:13px;font-weight:600;color:#9ca3af;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:12px">Waiting for requests</div>'
-                '<div style="font-size:15px;color:#6b7280;line-height:1.6">'
-                'Ask your agent to do something consequential — like send an email or book a meeting. '
-                'When it calls Mighty, the approval request will appear here.</div>'
-                '</div>'
+            # Real dashboard layout — sidebar + empty feed
+            sidebar_card = (
+                '<div class="card">'
+                '<div class="status-row">'
+                '<div class="status-dot status-green"></div>'
+                '<div>'
+                '<div class="status-title">Mighty is ready</div>'
+                '<div class="status-sub">Waiting for your first request</div>'
+                '</div></div>'
                 '</div>'
             )
+            sidebar_content = '<div class="sidebar">' + sidebar_card + '</div>'
+            feed = (
+                '<div style="display:flex;flex-direction:column;align-items:center;'
+                'justify-content:center;padding:60px 24px;text-align:center">'
+                '<div style="font-size:14px;font-weight:600;color:#9ca3af;margin-bottom:8px">No requests yet</div>'
+                '<div style="font-size:13px;color:#b0b8c4;line-height:1.6;max-width:280px">'
+                'Ask your agent to do something that needs approval and the request will appear here.</div>'
+                '</div>'
+            )
+            feed_col_hidden = ''
         else:
+            # Not yet onboarded — full-width welcome
             sidebar_content = (
                 '<div style="grid-column:1/-1;display:flex;flex-direction:column;'
                 'align-items:center;justify-content:center;padding:60px 24px">'
@@ -2329,7 +2339,7 @@ def dashboard():
                 '</div>'
                 '</div>'
             )
-        feed_col_hidden = 'style="display:none"'
+            feed_col_hidden = 'style="display:none"'
     else:
         # Active state: two-column layout
         if is_connected:
