@@ -1403,7 +1403,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
         <div class="step-title" style="text-align:center;margin-bottom:12px">You're all set</div>
         <div class="step-sub" style="text-align:center;margin-bottom:0">Open your AI tool and ask it to do something consequential — like send an email or book a meeting. Mighty will pause it and ask for your approval first.</div>
       </div>
-      <button class="btn btn-primary" onclick="finish()" style="margin-top:8px">Go to my dashboard →</button>
+      <a href="/onboarding/skip" class="btn btn-primary" style="margin-top:8px;display:block;text-align:center;text-decoration:none">Go to my dashboard →</a>
     </div>
 
   </div>
@@ -1430,12 +1430,6 @@ function copyPrompt(btn) {
   navigator.clipboard.writeText(el.value);
   btn.textContent = 'Copied!';
   setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
-}
-
-function finish() {
-  fetch('/onboarding/complete', {method:'POST'})
-    .then(function() { window.location.href = '/dashboard'; })
-    .catch(function() { window.location.href = '/dashboard'; });
 }
 
 var _d = JSON.parse(document.getElementById('__mighty_onboarding_data__').textContent);
