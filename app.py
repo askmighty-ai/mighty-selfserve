@@ -1339,57 +1339,27 @@ ONBOARDING_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh;overflow:auto;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px 24px}
-.wrap{width:100%;max-width:520px;display:flex;flex-direction:column;min-height:calc(100vh - 40px)}
+body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px 24px}
+.wrap{width:100%;max-width:480px;display:flex;flex-direction:column;min-height:calc(100vh - 40px)}
 .logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:16px;flex-shrink:0}
 .logo-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center}
 .logo-mark img{height:28px;width:auto}
 .logo-name{font-size:17px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .progress{display:flex;gap:6px;justify-content:center;margin-bottom:16px;flex-shrink:0}
-.progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:all 0.2s;padding:6px;margin:-6px;background-clip:content-box;cursor:default;opacity:0.45}
+.progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:all 0.2s;padding:6px;margin:-6px;background-clip:content-box;cursor:default;opacity:0.35}
 .progress-dot.active{background:#7c3aed;background-clip:content-box;opacity:1}
 .progress-dot.done{background:#7c3aed;background-clip:content-box;cursor:pointer;opacity:0.45}
 .progress-dot.done:hover{opacity:0.75}
-.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:24px 28px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto;max-height:calc(100vh - 130px)}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:28px;box-shadow:0 4px 24px rgba(0,0,0,0.06);flex:1;min-height:0;overflow-y:auto;max-height:calc(100vh - 130px)}
 .step{display:none}.step.active{display:block}
 .step-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#7c3aed;margin-bottom:8px}
-.step-title{font-size:20px;font-weight:700;color:#1a1a1a;margin-bottom:8px;line-height:1.3}
-.step-sub{font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:20px}
-.agent-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px}
-.agent-card{border:2px solid #e5e3df;border-radius:12px;padding:16px 12px;text-align:center;cursor:pointer;transition:all 0.15s}
-.agent-card:hover{border-color:#c4b5fd;background:#faf5ff}
-.agent-card.selected{border-color:#7c3aed;background:#f5f3ff}
-.agent-icon{font-size:24px;margin-bottom:8px}
-.agent-name{font-size:13px;font-weight:600;color:#1a1a1a}
-.agent-desc{font-size:12px;color:#9ca3af;margin-top:3px;line-height:1.4}
-.cap-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:10px}
-.cap-card{border:1.5px solid #e5e3df;border-radius:10px;padding:9px 11px;cursor:pointer;transition:all 0.15s;display:flex;align-items:flex-start;gap:9px;user-select:none}
-.cap-card:hover{border-color:#c4b5fd;background:#faf5ff}
-.cap-card.selected{border-color:#7c3aed;background:#f5f3ff}
-.cap-icon{font-size:16px;flex-shrink:0;line-height:1.2}
-.cap-name{font-size:12px;font-weight:600;color:#1a1a1a}
-.cap-sub{font-size:11px;color:#9ca3af;margin-top:1px;line-height:1.3}
-.setup-steps{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}
-.setup-step{display:flex;gap:12px}
-.setup-step-num{width:24px;height:24px;border-radius:50%;background:#f3f0ff;color:#7c3aed;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
-.setup-step-body{flex:1;min-width:0}
-.setup-step-title{font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px}
-.setup-step-hint{font-size:12px;color:#6b7280;line-height:1.5}
-.code-box{font-family:ui-monospace,monospace;font-size:10px;color:#6b7280;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;overflow-y:auto;margin:5px 0;max-width:100%;max-height:82px}
-.path-box{font-family:ui-monospace,monospace;font-size:10px;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:7px 10px;word-break:break-all;margin:5px 0}
-.btn{width:100%;padding:11px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.12s}
-.btn-primary{background:#7c3aed;color:#fff}.btn-primary:hover{background:#6d28d9}.btn-primary.btn-dim{background:#c4b5fd !important;cursor:not-allowed}
-.btn-secondary{background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff}.btn-secondary:hover{background:#ede9fe}
-.btn-copy{font-size:12px;font-weight:600;padding:5px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer;transition:background 0.12s;white-space:nowrap}
+.step-title{font-size:21px;font-weight:700;color:#1a1a1a;margin-bottom:10px;line-height:1.3}
+.step-sub{font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:22px}
+.btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.12s}
+.btn-primary{background:#7c3aed;color:#fff}.btn-primary:hover{background:#6d28d9}
+.btn-copy{font-size:12px;font-weight:600;padding:6px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer;transition:background 0.12s;white-space:nowrap;flex-shrink:0}
 .btn-copy:hover{background:#ede9fe}
-.btn-row{display:flex;gap:10px;margin-top:6px}
-.test-waiting{text-align:center;padding:20px;background:#f8f7f5;border-radius:12px;margin-bottom:16px}
-.test-spinner{width:32px;height:32px;border:3px solid #e5e3df;border-top-color:#7c3aed;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 10px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.test-connected{text-align:center;padding:20px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;margin-bottom:16px;display:none}
-.test-connected-icon{font-size:28px;margin-bottom:6px}
-.push-status{font-size:12px;color:#6b7280;margin-top:6px;min-height:16px}
-.skip{text-align:center;margin-top:10px}
+.skip{text-align:center;margin-top:12px}
 .skip a{font-size:12px;color:#9ca3af;text-decoration:none}.skip a:hover{color:#6b7280}
 </style>
 </head>
@@ -1400,10 +1370,9 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
     <span class="logo-name">Mighty</span>
   </a>
   <div class="progress">
-    <div class="progress-dot" id="dot-1" onclick="dotNav(1)"></div>
-    <div class="progress-dot" id="dot-2" onclick="dotNav(2)"></div>
-    <div class="progress-dot" id="dot-3" onclick="dotNav(3)"></div>
-    <div class="progress-dot" id="dot-4" onclick="dotNav(4)"></div>
+    <div class="progress-dot active" id="dot-0"></div>
+    <div class="progress-dot" id="dot-1"></div>
+    <div class="progress-dot" id="dot-2"></div>
   </div>
   <div class="card">
 
@@ -1411,220 +1380,30 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
     <div class="step active" id="step-0">
       <div class="step-label">Welcome</div>
       <div class="step-title">AI that asks before it acts</div>
-      <div class="step-sub">Mighty puts approval checkpoints in your agent's path. You define what's consequential — the agent pauses and waits for your decision. And every action is logged, in the agent's own words.</div>
+      <div class="step-sub">Mighty puts approval checkpoints in your agent's path. You define what's consequential — the agent pauses and waits for your decision. Every action is logged, in the agent's own words.</div>
       <button class="btn btn-primary" onclick="goTo(1)">Begin setup →</button>
     </div>
 
-    <!-- Step 1: Pick agent -->
+    <!-- Step 1: Copy your prompt -->
     <div class="step" id="step-1">
-      <div class="step-label">Step 1 of 4</div>
-      <div class="step-title">What are you using Mighty with?</div>
-      <div class="step-sub">Pick your agent — we'll give you the exact setup steps.</div>
-      <div class="agent-grid">
-        <div class="agent-card" onclick="selectAgent(this,'claude')">
-          <div class="agent-icon">⚡</div>
-          <div class="agent-name">Claude Desktop</div>
-          <div class="agent-desc">MCP plugin</div>
-        </div>
-        <div class="agent-card" onclick="selectAgent(this,'chatgpt')">
-          <div class="agent-icon">🤖</div>
-          <div class="agent-name">ChatGPT</div>
-          <div class="agent-desc">System prompt</div>
-        </div>
-        <div class="agent-card" onclick="selectAgent(this,'custom')">
-          <div class="agent-icon">🛠</div>
-          <div class="agent-name">Custom agent</div>
-          <div class="agent-desc">API / code</div>
-        </div>
+      <div class="step-title">Add this to your AI tool</div>
+      <div class="step-sub">Paste this into your ChatGPT Project instructions, Custom GPT, or any agent that supports a system prompt. It tells the agent to check with you before taking any consequential action.</div>
+      <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:20px">
+        <textarea id="prompt-box" readonly style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:8px;padding:10px;height:200px;resize:none;overflow:auto;outline:none"></textarea>
+        <button class="btn-copy" id="copy-btn" onclick="copyPrompt(this)">Copy</button>
       </div>
-      <div id="agent-nudge" style="display:none;font-size:12px;color:#7c3aed;text-align:center;margin-top:8px">Pick an agent type above to continue</div>
-      <div class="btn-row" style="margin-top:8px">
-        <button class="btn btn-secondary" onclick="goTo(0)">← Back</button>
-        <button class="btn btn-primary btn-dim" id="btn-next-agent" onclick="continueFromAgent()" style="flex:1">Continue →</button>
-      </div>
-      <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
+      <button class="btn btn-primary" onclick="goTo(2)">I've pasted it — continue →</button>
+      <div class="skip"><a href="/onboarding/skip">Skip to dashboard</a></div>
     </div>
 
-    <!-- Step 2: Setup -->
+    <!-- Step 2: All done -->
     <div class="step" id="step-2">
-      <div class="step-title" id="setup-title">Add Mighty to your AI tool</div>
-
-      <!-- Claude Desktop setup panel -->
-      <div id="setup-claude" class="agent-setup" style="display:none">
-        <div class="setup-steps">
-          <div class="setup-step">
-            <div class="setup-step-num">A</div>
-            <div class="setup-step-body">
-              <div class="setup-step-title">Download the MCP server</div>
-              <a href="/download/mighty_mcp.py" class="btn-copy" style="display:inline-block;margin-top:4px">⬇ Download mighty_mcp.py</a>
-              <div class="setup-step-hint">Save it to your home folder (~/)</div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <div class="setup-step-num">B</div>
-            <div class="setup-step-body">
-              <div class="setup-step-title">Open this file and paste the config</div>
-              <div class="path-box">~/Library/Application Support/Claude/claude_desktop_config.json</div>
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                <span style="font-size:11px;color:#9ca3af;white-space:nowrap">Your Mac username:</span>
-                <input id="mac-username" type="text" placeholder="e.g. john" style="flex:1;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:6px 10px;outline:none;background:#fff;color:#1a1a1a" oninput="updateMcpConfig(this.value)" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
-              </div>
-              <div style="display:flex;align-items:flex-start;gap:8px">
-                <div class="code-box" id="mcp-config-box" style="flex:1;max-height:100px"></div>
-                <button class="btn-copy" onclick="copyBox('mcp-config-box',this)" style="margin-top:6px">Copy</button>
-              </div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <div class="setup-step-num">C</div>
-            <div class="setup-step-body">
-              <div class="setup-step-title">Restart Claude Desktop</div>
-              <div class="setup-step-hint">Quit and reopen Claude Desktop. (This setup is for macOS — on Windows, the config file is at <code style="font-size:11px;background:#f0ede8;padding:1px 4px;border-radius:3px">%APPDATA%\\Claude\\claude_desktop_config.json</code>)</div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <div class="setup-step-num">D</div>
-            <div class="setup-step-body">
-              <div class="setup-step-title">Add the checkpoint prompt to your Claude Project</div>
-              <div style="display:flex;align-items:flex-start;gap:8px">
-                <textarea id="prompt-box-claude" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:140px;resize:vertical;overflow:auto"></textarea>
-                <button class="btn-copy" onclick="copyBox('prompt-box-claude',this)" style="margin-top:6px">Copy</button>
-              </div>
-              <div class="setup-step-hint">Open your Claude Project → Instructions, and paste this at the top. It tells Claude when to call the Mighty tools.</div>
-              <div id="gen-claude-wrap" style="margin-top:10px;display:none">
-                <input id="gen-claude-desc" type="text" placeholder="Describe what your agent does to get a tailored prompt" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;color:#1a1a1a;background:#fff;margin-bottom:6px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
-                <button class="btn-copy" onclick="generatePrompt('claude')" style="width:100%">&#10024; Generate tailored prompt with AI</button>
-                <div id="gen-claude-msg" style="font-size:12px;color:#6b7280;margin-top:6px;display:none"></div>
-              </div>
-            </div>
-          </div>
-        </div>
+      <div style="text-align:center;padding:8px 0 24px">
+        <div style="font-size:44px;margin-bottom:16px">✅</div>
+        <div class="step-title" style="text-align:center;margin-bottom:12px">You're all set</div>
+        <div class="step-sub" style="text-align:center;margin-bottom:0">Open your AI tool and ask it to do something consequential — like send an email or book a meeting. Mighty will pause it and ask for your approval first.</div>
       </div>
-
-      <!-- ChatGPT setup panel -->
-      <div id="setup-chatgpt" class="agent-setup" style="display:none">
-        <div style="font-size:14px;color:#6b7280;margin-bottom:12px">Copy this prompt and paste it into your ChatGPT Project or Custom GPT instructions.</div>
-        <div style="display:flex;align-items:flex-start;gap:8px">
-          <textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:8px;padding:10px;height:160px;resize:none;overflow:auto"></textarea>
-          <button class="btn-copy" onclick="copyBox('prompt-box',this)" style="margin-top:4px">Copy</button>
-        </div>
-        <div id="gen-chatgpt-wrap" style="margin-top:10px;display:none">
-          <input id="gen-chatgpt-desc" type="text" placeholder="Describe your agent to get a tailored prompt (e.g. 'email assistant that can send and delete emails')" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;color:#1a1a1a;background:#fff;margin-bottom:6px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
-          <button class="btn-copy" onclick="generatePrompt('chatgpt')" style="width:100%">&#10024; Generate tailored prompt with AI</button>
-          <div id="gen-chatgpt-msg" style="font-size:12px;color:#6b7280;margin-top:6px;display:none"></div>
-        </div>
-      </div>
-
-      <!-- Custom agent setup panel -->
-      <div id="setup-custom" class="agent-setup" style="display:none">
-        <div class="setup-steps">
-          <div class="setup-step">
-            <div class="setup-step-num">A</div>
-            <div class="setup-step-body">
-              <div class="setup-step-title">Your API key</div>
-              <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-                <div class="path-box" id="api-key-box" style="margin:0;flex:1"></div>
-                <button class="btn-copy" onclick="copyBox('api-key-box',this)">Copy</button>
-              </div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <div class="setup-step-num">B</div>
-            <div class="setup-step-body">
-              <div class="setup-step-title">Add the system prompt to your agent</div>
-              <div style="display:flex;align-items:flex-start;gap:8px">
-                <textarea id="prompt-box2" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:140px;resize:vertical;overflow:auto"></textarea>
-                <button class="btn-copy" onclick="copyBox('prompt-box2',this)" style="margin-top:6px">Copy</button>
-              </div>
-              <div class="setup-step-hint">Your API key and setup instructions are in <a id="docs-link" href="/settings" target="_blank" style="color:#7c3aed">Settings</a>.</div>
-              <div id="gen-custom-wrap" style="margin-top:10px;display:none">
-                <input id="gen-custom-desc" type="text" placeholder="Describe your agent to get a tailored prompt (e.g. 'customer support bot that files tickets and sends emails')" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;color:#1a1a1a;background:#fff;margin-bottom:6px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
-                <button class="btn-copy" onclick="generatePrompt('custom')" style="width:100%">&#10024; Generate tailored prompt with AI</button>
-                <div id="gen-custom-msg" style="font-size:12px;color:#6b7280;margin-top:6px;display:none"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Customize checkpoint prompt (collapsed by default) -->
-      <details id="customize-section" style="margin-top:16px;border-top:1px solid #f0ede8;padding-top:14px">
-        <summary style="font-size:13px;font-weight:600;color:#7c3aed;cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;gap:6px">
-          <span id="customize-arrow" style="font-size:10px;transition:transform 0.15s">▸</span> Customize which actions require approval
-        </summary>
-        <div style="margin-top:12px">
-          <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Tick what your agent can do — the checkpoint prompt will update automatically.</div>
-          <div class="cap-grid">
-            <div class="cap-card" onclick="toggleCap(this,'email')"><input type="checkbox" class="cap-check" value="email" style="display:none"><span class="cap-icon">✉️</span><div><div class="cap-name">Email</div><div class="cap-sub">Send, reply, forward</div></div></div>
-            <div class="cap-card" onclick="toggleCap(this,'calendar')"><input type="checkbox" class="cap-check" value="calendar" style="display:none"><span class="cap-icon">📅</span><div><div class="cap-name">Calendar</div><div class="cap-sub">Schedule, cancel meetings</div></div></div>
-            <div class="cap-card" onclick="toggleCap(this,'purchases')"><input type="checkbox" class="cap-check" value="purchases" style="display:none"><span class="cap-icon">🛒</span><div><div class="cap-name">Purchases</div><div class="cap-sub">Orders, transactions</div></div></div>
-            <div class="cap-card" onclick="toggleCap(this,'files')"><input type="checkbox" class="cap-check" value="files" style="display:none"><span class="cap-icon">📁</span><div><div class="cap-name">File management</div><div class="cap-sub">Create, edit, delete</div></div></div>
-            <div class="cap-card" onclick="toggleCap(this,'web')"><input type="checkbox" class="cap-check" value="web" style="display:none"><span class="cap-icon">🌐</span><div><div class="cap-name">Web &amp; forms</div><div class="cap-sub">Submit forms, browse</div></div></div>
-            <div class="cap-card" onclick="toggleCap(this,'code')"><input type="checkbox" class="cap-check" value="code" style="display:none"><span class="cap-icon">💻</span><div><div class="cap-name">Code execution</div><div class="cap-sub">Run scripts, modify systems</div></div></div>
-            <div class="cap-card" onclick="toggleCap(this,'social')"><input type="checkbox" class="cap-check" value="social" style="display:none"><span class="cap-icon">📢</span><div><div class="cap-name">Social media</div><div class="cap-sub">Post, publish content</div></div></div>
-            <div class="cap-card" onclick="toggleCap(this,'apis')"><input type="checkbox" class="cap-check" value="apis" style="display:none"><span class="cap-icon">🔗</span><div><div class="cap-name">External APIs</div><div class="cap-sub">Third-party services</div></div></div>
-          </div>
-          <input id="cap-other" type="text" placeholder="Anything else? e.g. expense reports, Slack messages" oninput="onCapChange()" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;color:#1a1a1a;background:#fff;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;transition:border 0.12s;margin-top:4px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
-        </div>
-      </details>
-      <div class="btn-row" style="margin-top:14px">
-        <button class="btn btn-secondary" onclick="goTo(1)">← Back</button>
-        <button class="btn btn-primary" onclick="continueFromSetup()" style="flex:1">Continue →</button>
-      </div>
-      <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
-    </div>
-
-    <!-- Step 3: Test -->
-    <div class="step" id="step-3">
-      <div class="step-label">Step 3 of 4</div>
-      <div class="step-title">Let's make sure it works</div>
-      <div class="step-sub" id="test-sub">Ask your agent to do something that needs approval — like send an email. Mighty will pause it and ask you first. We'll detect it automatically.</div>
-      <div class="test-waiting" id="test-waiting">
-        <div class="test-spinner"></div>
-        <div style="font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px">Waiting for your agent…</div>
-        <div style="font-size:12px;color:#aaa">Or run the test command below in your terminal</div>
-        <div id="test-slow-note" style="display:none;margin-top:12px;padding:10px 12px;background:#f3f0ff;border:1px solid #e9d5ff;border-radius:8px;font-size:12px;color:#5b21b6;line-height:1.5;text-align:left">
-          <strong>Nothing showing up?</strong> Mighty only fires when your agent actually performs the action — not just describes it. Make sure your agent has the tools needed (email access, file permissions, etc.) to carry out what you asked. If it does not have those tools, it may promise to use Mighty but never actually trigger the flow.
-        </div>
-      </div>
-      <div class="test-connected" id="test-connected">
-        <div class="test-connected-icon">✅</div>
-        <div style="font-size:15px;font-weight:700;color:#16a34a;margin-bottom:4px">Connected!</div>
-        <div style="font-size:13px;color:#555">Mighty received a request from your agent.</div>
-      </div>
-      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f0ede8;margin-bottom:16px">
-        <div style="font-size:12px;color:#aaa;margin-bottom:4px">Or test manually from Terminal:</div>
-        <div style="display:flex;align-items:flex-start;gap:8px">
-          <div class="code-box" id="test-curl" style="flex:1;font-size:10px">{test_curl}</div>
-          <button class="btn-copy" onclick="copyCurl(this)" style="margin-top:6px">Copy</button>
-        </div>
-      </div>
-      <div class="btn-row" style="margin-top:4px">
-        <button class="btn btn-secondary" onclick="goTo(2)">← Back</button>
-        <button class="btn btn-primary" id="btn-test-continue" onclick="goTo(4)" style="flex:1">Continue →</button>
-      </div>
-      <div class="skip"><a href="/onboarding/skip">Skip setup, go to dashboard</a></div>
-    </div>
-
-    <!-- Step 4: Notifications -->
-    <div class="step" id="step-4">
-      <div class="step-label">Step 4 of 4</div>
-      <div class="step-title">Get notified instantly</div>
-      <div class="step-sub">When your agent needs approval, you'll get a push notification — even when this tab is closed. Click Allow when your browser asks.</div>
-      <button class="btn btn-primary" id="push-btn" onclick="enablePush()" style="margin-bottom:12px">Enable push notifications</button>
-      <div class="push-status" id="push-status"></div>
-      <div style="margin-top:20px;padding-top:20px;border-top:1px solid #f0ede8">
-        <div style="font-size:12px;color:#aaa;margin-bottom:8px">Also want notifications on your phone? Install the free <a href="https://ntfy.sh" target="_blank" style="color:#555;font-weight:600">ntfy app</a> (iOS &amp; Android) and subscribe to your channel:</div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <a href="{ntfy_url}" target="_blank" class="path-box" id="ntfy-url-box" style="flex:1;text-decoration:none;display:block">{ntfy_url}</a>
-          <button class="btn-copy" onclick="copyBox('ntfy-url-box',this)">Copy</button>
-        </div>
-      </div>
-      <div class="btn-row" style="margin-top:20px">
-        <button class="btn btn-secondary" onclick="goTo(3)">← Back</button>
-        <button class="btn btn-primary" onclick="finish()" style="flex:1">Go to my dashboard →</button>
-      </div>
-      <div class="skip"><a href="/onboarding/skip">Skip for now</a></div>
+      <button class="btn btn-primary" onclick="finish()" style="margin-top:8px">Go to my dashboard →</button>
     </div>
 
   </div>
@@ -1632,320 +1411,25 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 <script type="application/json" id="__mighty_onboarding_data__">MIGHTY_ONBOARDING_DATA</script>
 <script>
 var currentStep = 0;
-var selectedAgent = null;
-var swReg = null;
-var testPollTimer = null;
-
-if ('serviceWorker' in navigator && 'PushManager' in window) {
-  navigator.serviceWorker.register('/sw.js').then(function(reg) { swReg = reg; });
-}
-
-function dotNav(n) {
-  var dot = document.getElementById("dot-" + n);
-  if (dot && dot.classList.contains("done")) goTo(n);
-}
 
 function goTo(n) {
-  var prev = currentStep;
-  document.getElementById('step-' + prev).classList.remove('active');
+  document.getElementById('step-' + currentStep).classList.remove('active');
   currentStep = n;
   document.getElementById('step-' + n).classList.add('active');
-  // Update all dots based on new position
-  for (var i = 0; i <= 4; i++) {
-    var dot = document.getElementById("dot-" + i);
+  for (var i = 0; i <= 2; i++) {
+    var dot = document.getElementById('dot-' + i);
     if (!dot) continue;
-    dot.classList.remove("active", "done");
-    if (i < n) dot.classList.add("done");
-    else if (i === n) dot.classList.add("active");
-  }
-  if (n === 3) {
-    startTestPoll();
-    var testSub = document.getElementById('test-sub');
-    var AGENT_TEST_SUBS = {
-      claude:  "In Claude Desktop, ask your agent to do something that needs approval. Mighty will intercept the request automatically.",
-      chatgpt: "In your ChatGPT project, have the agent attempt a consequential action. If the system prompt is in place, it will call the Mighty API.",
-      custom:  "Trigger an action in your agent that calls the Mighty authorization API. Detection is automatic."
-    };
-    if (testSub && selectedAgent && AGENT_TEST_SUBS[selectedAgent]) {
-      testSub.textContent = AGENT_TEST_SUBS[selectedAgent];
-    }
-  }
-  if (n !== 3 && testPollTimer) { clearInterval(testPollTimer); testPollTimer = null; }
-}
-
-function selectAgent(el, agent) {
-  selectedAgent = agent;
-  document.querySelectorAll('.agent-card').forEach(function(c) { c.classList.remove('selected'); });
-  el.classList.add('selected');
-  updateContinueBtn();
-  renderSetup(agent);
-}
-
-var CAPABILITY_ACTIONS = {
-  email:     "sending, replying to, or forwarding emails",
-  calendar:  "scheduling, rescheduling, or cancelling meetings or events",
-  purchases: "making purchases, placing orders, or completing financial transactions",
-  files:     "creating, editing, moving, or deleting files or documents",
-  web:       "submitting web forms or interacting with websites on your behalf",
-  code:      "running scripts or executing code that modifies systems",
-  social:    "posting or publishing content to social media or public channels",
-  apis:      "calling external services or APIs that take real-world actions",
-};
-
-function toggleCap(el, key) {
-  el.classList.toggle('selected');
-  el.querySelector('.cap-check').checked = el.classList.contains('selected');
-  onCapChange();
-}
-
-function onCapChange() {
-  var selected = [];
-  document.querySelectorAll('.cap-check:checked').forEach(function(cb) {
-    if (CAPABILITY_ACTIONS[cb.value]) selected.push(CAPABILITY_ACTIONS[cb.value]);
-  });
-  var other = ((document.getElementById('cap-other') || {}).value || '').trim();
-  if (other) selected.push(other);
-  if (selectedAgent !== 'claude') {
-    SYSTEM_PROMPT = buildCheckpointPrompt(selected, selectedAgent || 'chatgpt');
-    var p1 = document.getElementById('prompt-box');  if (p1) p1.value = SYSTEM_PROMPT;
-    var p2 = document.getElementById('prompt-box2'); if (p2) p2.value = SYSTEM_PROMPT;
-  }
-  var p0 = document.getElementById('prompt-box-claude');
-  if (p0) p0.value = buildCheckpointPrompt(selected, 'claude');
-}
-
-function updateContinueBtn() {
-  var btn = document.getElementById('btn-next-agent');
-  if (selectedAgent) {
-    btn.classList.remove('btn-dim');
-  } else {
-    btn.classList.add('btn-dim');
+    dot.classList.remove('active', 'done');
+    if (i < n) dot.classList.add('done');
+    else if (i === n) dot.classList.add('active');
   }
 }
 
-function buildCheckpointPrompt(actions, agentType) {
-  var list = actions.length > 0
-    ? actions.map(function(a) { return '- ' + a; }).join('\\n')
-    : '- any consequential action (emails, purchases, file edits, external calls)';
-  if (agentType === 'claude') {
-    return (
-      "MIGHTY AUTHORIZATION — follow every session.\\n\\n"
-      + "Before:\\n" + list + "\\n\\n"
-      + "call request_authorization(action_type, label). Poll check_authorization every 3s until resolved.\\n"
-      + "approved: proceed | denied or timeout: stop\\n\\n"
-      + "For routine actions that don't need approval, call record_action to log them."
-    );
-  } else {
-    return (
-      "MIGHTY AUTHORIZATION — follow every session.\\n\\n"
-      + "Before:\\n" + list + "\\n\\n"
-      + "POST " + BASE_URL + "/api/authorize\\n"
-      + '  {"api_key":"' + API_KEY + '","action_type":"<type>","label":"<desc>","fields":[["Key","Val"]]}\\n'
-      + "approved: proceed | denied or timeout: stop | pending: poll GET " + BASE_URL + "/api/status/ID every 3s\\n\\n"
-      + "Routine actions: POST " + BASE_URL + "/api/record\\n"
-      + '  {"api_key":"' + API_KEY + '","action_type":"<type>","label":"<desc>","outcome":"completed"}'
-    );
-  }
-}
-
-function continueFromAgent() {
-  if (!selectedAgent) {
-    var nudge = document.getElementById('agent-nudge');
-    if (nudge) { nudge.style.display = 'block'; }
-    return;
-  }
-  var nudge = document.getElementById('agent-nudge');
-  if (nudge) nudge.style.display = 'none';
-  // Build default prompt (no capabilities pre-selected; user can customise in step 2)
-  if (selectedAgent !== 'claude') {
-    SYSTEM_PROMPT = buildCheckpointPrompt([], selectedAgent);
-    var p1 = document.getElementById('prompt-box');  if (p1) p1.value = SYSTEM_PROMPT;
-    var p2 = document.getElementById('prompt-box2'); if (p2) p2.value = SYSTEM_PROMPT;
-  }
-  var p0 = document.getElementById('prompt-box-claude');
-  if (p0) p0.value = buildCheckpointPrompt([], 'claude');
-  goTo(2);
-}
-
-// Rotate the customize arrow when the details element opens/closes
-(function() {
-  var det = document.getElementById('customize-section');
-  if (det) det.addEventListener('toggle', function() {
-    var arrow = document.getElementById('customize-arrow');
-    if (arrow) arrow.style.transform = det.open ? 'rotate(90deg)' : '';
-  });
-})();
-
-function continueFromSetup() {
-  if (selectedAgent === "claude") {
-    var u = document.getElementById("mac-username");
-    if (u && (!u.value || !u.value.trim())) {
-      u.style.borderColor = "#dc2626";
-      u.placeholder = "Required — enter your Mac username";
-      u.focus();
-      return;
-    }
-  }
-  goTo(3);
-}
-
-var _d = JSON.parse(document.getElementById('__mighty_onboarding_data__').textContent);
-var MCP_CONFIG    = _d.mcp_config;
-var SYSTEM_PROMPT = _d.system_prompt;
-var API_KEY       = _d.api_key;
-var BASE_URL      = _d.base_url;
-var AI_ENABLED    = _d.ai_enabled || false;
-
-// Populate dynamic content into pre-rendered panels on page load
-(function() {
-  // MCP config box
-  var mcpEl = document.getElementById('mcp-config-box');
-  if (mcpEl) mcpEl.textContent = JSON.stringify(JSON.parse(MCP_CONFIG), null, 2);
-  // System prompt textareas
-  var p1 = document.getElementById('prompt-box');
-  if (p1) p1.value = SYSTEM_PROMPT;
-  var p2 = document.getElementById('prompt-box2');
-  if (p2) p2.value = SYSTEM_PROMPT;
-  // Claude Desktop MCP-style prompt (separate from HTTP-API prompt)
-  var p0 = document.getElementById('prompt-box-claude');
-  if (p0) p0.value = buildCheckpointPrompt([], 'claude');
-  // API key box
-  var akEl = document.getElementById('api-key-box');
-  if (akEl) akEl.textContent = API_KEY;
-  // Docs link — points to Settings (API key lives there)
-  var dlEl = document.getElementById('docs-link');
-  if (dlEl) dlEl.href = '/settings';
-})();
-
-var AGENT_TITLES = {
-  claude:  'Connect Claude Desktop',
-  chatgpt: 'Connect ChatGPT',
-  custom:  'Connect your custom agent'
-};
-var AGENT_SUBS = {
-  claude:  'Download the MCP server, add it to your config, and restart Claude Desktop.',
-  chatgpt: 'Add the Mighty system prompt to a ChatGPT Project or Custom GPT.',
-  custom:  'Add your API key and the Mighty system prompt to your agent.'
-};
-
-function renderSetup(agent) {
-  var titleEl = document.getElementById('setup-title');
-  var subEl   = document.getElementById('setup-sub');
-  if (titleEl) titleEl.textContent = AGENT_TITLES[agent] || 'Add Mighty to your AI tool';
-  if (subEl)   subEl.textContent   = AGENT_SUBS[agent]   || '';
-  document.querySelectorAll('.agent-setup').forEach(function(el) { el.style.display = 'none'; });
-  var panel = document.getElementById('setup-' + agent);
-  if (panel) panel.style.display = 'block';
-  if (AI_ENABLED) {
-    var genWrap = document.getElementById('gen-' + agent + '-wrap');
-    if (genWrap) genWrap.style.display = 'block';
-  }
-}
-
-function updateMcpConfig(username) {
-  var box = document.getElementById('mcp-config-box');
-  if (!box) return;
-  try {
-    var config = JSON.parse(MCP_CONFIG);
-    var u = username.trim() || 'YOUR_USERNAME';
-    config.mcpServers.mighty.args[0] = '/Users/' + u + '/mighty_mcp.py';
-    box.textContent = JSON.stringify(config, null, 2);
-  } catch(e) {}
-}
-
-function copyBox(id, btn) {
-  var el = document.getElementById(id);
-  var text = el.tagName === 'TEXTAREA' ? el.value : el.textContent;
-  navigator.clipboard.writeText(text);
+function copyPrompt(btn) {
+  var el = document.getElementById('prompt-box');
+  navigator.clipboard.writeText(el.value);
   btn.textContent = 'Copied!';
   setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
-}
-
-function copyCurl(btn) {
-  navigator.clipboard.writeText(document.getElementById('test-curl').textContent);
-  btn.textContent = 'Copied!';
-  setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
-}
-
-function startTestPoll() {
-  var since = Math.floor(Date.now() / 1000);
-  var slowTimer = setTimeout(function() {
-    var note = document.getElementById('test-slow-note');
-    if (note) note.style.display = 'block';
-  }, 20000);
-  testPollTimer = setInterval(function() {
-    fetch('/dashboard/has-pending?since=' + since).then(function(r) { return r.json(); }).then(function(d) {
-      if (d.pending) {
-        clearInterval(testPollTimer);
-        clearTimeout(slowTimer);
-        document.getElementById('test-waiting').style.display = 'none';
-        document.getElementById('test-connected').style.display = 'block';
-      }
-    });
-  }, 2000);
-}
-
-function enablePush() {
-  if (!swReg) {
-    document.getElementById('push-status').textContent = 'Push not supported in this browser.';
-    return;
-  }
-  document.getElementById('push-status').textContent = 'Setting up…';
-  fetch('/api/push/vapid-public-key').then(function(r) { return r.json(); }).then(function(d) {
-    var converted = urlB64ToUint8Array(d.key);
-    swReg.pushManager.getSubscription().then(function(existing) {
-      return existing ? existing.unsubscribe() : Promise.resolve(true);
-    }).then(function() {
-      return swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: converted });
-    }).then(function(sub) {
-      return fetch('/api/push/subscribe', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({subscription: sub.toJSON()})
-      });
-    }).then(function() {
-      document.getElementById('push-btn').textContent = 'Notifications enabled ✓';
-      document.getElementById('push-status').textContent = "You're all set.";
-    }).catch(function(e) {
-      document.getElementById('push-status').textContent = 'Could not enable: ' + e.message;
-    });
-  });
-}
-
-function urlB64ToUint8Array(b) {
-  var pad = '='.repeat((4 - b.length % 4) % 4);
-  var base64 = (b + pad).replace(/-/g,'+').replace(/_/g,'/');
-  var raw = atob(base64); var out = new Uint8Array(raw.length);
-  for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
-}
-
-function generatePrompt(agentType) {
-  var descId = 'gen-' + agentType + '-desc';
-  var msgId  = 'gen-' + agentType + '-msg';
-  var desc = (document.getElementById(descId) || {}).value || '';
-  var msg  = document.getElementById(msgId);
-  if (msg) { msg.textContent = 'Generating…'; msg.style.color = '#6b7280'; msg.style.display = 'block'; }
-  fetch('/onboarding/generate-prompt', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({description: desc})
-  }).then(function(r) { return r.json(); }).then(function(d) {
-    if (d.prompt) {
-      SYSTEM_PROMPT = d.prompt;
-      var targets = agentType === 'claude' ? ['prompt-box-claude'] : ['prompt-box', 'prompt-box2'];
-      targets.forEach(function(id) {
-        var el = document.getElementById(id);
-        if (el) el.value = d.prompt;
-      });
-    }
-    if (msg) {
-      msg.textContent = d.warning || 'Prompt updated ✓';
-      msg.style.color = d.warning ? '#d97706' : '#16a34a';
-    }
-  }).catch(function() {
-    if (msg) { msg.textContent = 'Could not generate — using default prompt.'; msg.style.color = '#9ca3af'; }
-  });
 }
 
 function finish() {
@@ -1953,6 +1437,26 @@ function finish() {
     .then(function() { window.location.href = '/dashboard'; })
     .catch(function() { window.location.href = '/dashboard'; });
 }
+
+var _d = JSON.parse(document.getElementById('__mighty_onboarding_data__').textContent);
+var API_KEY  = _d.api_key;
+var BASE_URL = _d.base_url;
+
+(function() {
+  var prompt = (
+    "MIGHTY AUTHORIZATION — follow every session.\\n\\n"
+    + "Before any consequential action (emails, purchases, file edits, calendar changes, external API calls):\\n\\n"
+    + "POST " + BASE_URL + "/api/authorize\\n"
+    + '  {"api_key":"' + API_KEY + '","action_type":"<type>","label":"<what you are about to do>","fields":[["Key","Value"]]}\\n\\n'
+    + "Then poll GET " + BASE_URL + "/api/status/<request_id> every 3 seconds until status is resolved.\\n"
+    + "approved → proceed | denied or timeout → stop and tell the user\\n\\n"
+    + "For routine, non-destructive actions (searches, reads, lookups):\\n"
+    + "POST " + BASE_URL + "/api/record\\n"
+    + '  {"api_key":"' + API_KEY + '","action_type":"<type>","label":"<what you did>","outcome":"completed"}'
+  );
+  var p = document.getElementById('prompt-box');
+  if (p) p.value = prompt;
+})();
 </script>
 </body>
 </html>"""
@@ -3083,24 +2587,11 @@ def onboarding():
         return redirect("/login")
     url  = base_url()
     import json as _json
-    test_curl = (
-        f'curl -X POST {url}/api/authorize \\\n'
-        f'  -H "Content-Type: application/json" \\\n'
-        f'  -d \'{{"api_key":"{user["api_key"]}","action_type":"test","label":"Connection test"}}\''
-    )
-    ntfy_url  = f"https://ntfy.sh/{ntfy_topic(user['api_key'])}"
-    # Inject data safely via a JSON script element — avoids JS syntax issues
     onboarding_data = _json.dumps({
-        "mcp_config":    build_mcp_config(user["api_key"], url),
-        "system_prompt": build_prompt(user["api_key"], url),
-        "api_key":       user["api_key"],
-        "base_url":      url,
-        "ai_enabled":    bool(ANTHROPIC_API_KEY),
+        "api_key":  user["api_key"],
+        "base_url": url,
     })
-    return (ONBOARDING_HTML
-            .replace("MIGHTY_ONBOARDING_DATA", onboarding_data)
-            .replace("{test_curl}",            test_curl)
-            .replace("{ntfy_url}",             ntfy_url))
+    return ONBOARDING_HTML.replace("MIGHTY_ONBOARDING_DATA", onboarding_data)
 
 @app.route("/onboarding/complete", methods=["POST"])
 @require_login
