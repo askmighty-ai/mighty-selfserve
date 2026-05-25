@@ -1939,6 +1939,48 @@ def logout():
     session.clear()
     return redirect("/")
 
+@app.route("/openapi-chatgpt.json")
+def openapi_spec_chatgpt():
+    """Minimal single-action schema for ChatGPT Custom GPTs.
+    Only exposes mighty_log_decision to avoid multiple confirmation dialogs.
+    """
+    url = base_url()
+    spec = {
+        "openapi": "3.1.0",
+        "info": {"title": "Mighty", "version": "1.0.0",
+                 "description": "Log actions and approval decisions."},
+        "servers": [{"url": url}],
+        "paths": {
+            "/api/log-decision": {
+                "post": {
+                    "operationId": "mighty_log_decision",
+                    "summary": "Log an action and the user's approval decision",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["api_key", "action_type", "label", "decision"],
+                                    "properties": {
+                                        "api_key":     {"type": "string"},
+                                        "action_type": {"type": "string"},
+                                        "label":       {"type": "string"},
+                                        "fields":      {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+                                        "decision":    {"type": "string", "enum": ["approved", "denied"]}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {"200": {"description": "Logged"}}
+                }
+            }
+        }
+    }
+    return json.dumps(spec), 200, {"Content-Type": "application/json"}
+
+
 @app.route("/openapi.json")
 def openapi_spec():
     url = base_url()
