@@ -1447,9 +1447,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 
     <!-- Step 2: Setup -->
     <div class="step" id="step-2">
-      <div class="step-label">Step 2 of 4</div>
-      <div class="step-title" id="setup-title">Connect your agent</div>
-      <div class="step-sub" id="setup-sub"></div>
+      <div class="step-title" id="setup-title">Add Mighty to your AI tool</div>
 
       <!-- Claude Desktop setup panel -->
       <div id="setup-claude" class="agent-setup" style="display:none">
@@ -1505,37 +1503,15 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
 
       <!-- ChatGPT setup panel -->
       <div id="setup-chatgpt" class="agent-setup" style="display:none">
-        <div class="setup-steps">
-          <div class="setup-step">
-            <div class="setup-step-num">A</div>
-            <div class="setup-step-body">
-              <div class="setup-step-title">Open ChatGPT → your Project or Custom GPT</div>
-              <div class="setup-step-hint">Go to the project or GPT you want to connect. Open its instructions/system prompt.</div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <div class="setup-step-num">B</div>
-            <div class="setup-step-body">
-              <div class="setup-step-title">Paste the Mighty system prompt</div>
-              <div style="display:flex;align-items:flex-start;gap:8px">
-                <textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:6px;padding:10px;height:140px;resize:vertical;overflow:auto"></textarea>
-                <button class="btn-copy" onclick="copyBox('prompt-box',this)" style="margin-top:6px">Copy</button>
-              </div>
-              <div class="setup-step-hint">Add it at the top of the existing instructions.</div>
-              <div id="gen-chatgpt-wrap" style="margin-top:10px;display:none">
-                <input id="gen-chatgpt-desc" type="text" placeholder="Describe your agent to get a tailored prompt (e.g. 'email assistant that can send and delete emails')" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;color:#1a1a1a;background:#fff;margin-bottom:6px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
-                <button class="btn-copy" onclick="generatePrompt('chatgpt')" style="width:100%">&#10024; Generate tailored prompt with AI</button>
-                <div id="gen-chatgpt-msg" style="font-size:12px;color:#6b7280;margin-top:6px;display:none"></div>
-              </div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <div class="setup-step-num">C</div>
-            <div class="setup-step-body">
-              <div class="setup-step-title">Save</div>
-              <div class="setup-step-hint">That's it — no plugin or download needed.</div>
-            </div>
-          </div>
+        <div style="font-size:14px;color:#6b7280;margin-bottom:12px">Copy this prompt and paste it into your ChatGPT Project or Custom GPT instructions.</div>
+        <div style="display:flex;align-items:flex-start;gap:8px">
+          <textarea id="prompt-box" style="flex:1;font-family:ui-monospace,monospace;font-size:11px;color:#374151;background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:8px;padding:10px;height:160px;resize:none;overflow:auto"></textarea>
+          <button class="btn-copy" onclick="copyBox('prompt-box',this)" style="margin-top:4px">Copy</button>
+        </div>
+        <div id="gen-chatgpt-wrap" style="margin-top:10px;display:none">
+          <input id="gen-chatgpt-desc" type="text" placeholder="Describe your agent to get a tailored prompt (e.g. 'email assistant that can send and delete emails')" style="width:100%;font-family:'Inter',sans-serif;font-size:13px;border:1.5px solid #e5e3df;border-radius:8px;padding:8px 10px;outline:none;color:#1a1a1a;background:#fff;margin-bottom:6px" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+          <button class="btn-copy" onclick="generatePrompt('chatgpt')" style="width:100%">&#10024; Generate tailored prompt with AI</button>
+          <div id="gen-chatgpt-msg" style="font-size:12px;color:#6b7280;margin-top:6px;display:none"></div>
         </div>
       </div>
 
