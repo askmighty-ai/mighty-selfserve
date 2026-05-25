@@ -2102,15 +2102,18 @@ def build_prompt(api_key, url):
     return (
         f"MIGHTY AUTHORIZATION — follow every session.\n\n"
         f"Before any consequential action (emails, purchases, file edits, calendar changes, external API calls):\n"
-        f"1. POST {url}/api/authorize\n"
-        f"   {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<description>\",\"fields\":[[\"Key\",\"Val\"]]}}\n"
-        f"2. Tell the user: \"I've sent this for approval. Please approve or deny it on your Mighty dashboard.\"\n"
-        f"3. Poll GET {url}/api/status/<request_id> every 3 seconds until status != 'pending'.\n"
-        f"4. approved → proceed silently | denied → stop and tell the user | timeout → stop and tell the user\n\n"
-        f"Never share approval links directly in chat. The user approves on their dashboard.\n\n"
-        f"Routine actions (searches, reads — log silently, do not mention to user):\n"
-        f"  POST {url}/api/record\n"
-        f"  {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<description>\",\"outcome\":\"completed\"}}"
+        f"1. Call mighty_authorize with your api_key, action_type, label, and fields.\n"
+        f"   api_key: \"{api_key}\"\n"
+        f"2. Say exactly: \"I've sent this for approval. Please approve or deny it on your Mighty dashboard, then reply here when done.\"\n"
+        f"3. When the user replies, immediately call mighty_status with the request_id from step 1.\n"
+        f"4. Check the status:\n"
+        f"   - approved → proceed with the action silently\n"
+        f"   - denied → tell the user the action was denied and stop\n"
+        f"   - pending → say \"Still waiting — please approve or deny it on your dashboard, then reply here again.\"\n"
+        f"   - timeout → say \"The request expired. Let me know if you'd like to try again.\"\n\n"
+        f"Never share approval links or approval URLs in chat. The user approves on their dashboard only.\n\n"
+        f"Routine actions (searches, reads, lookups — do NOT mention to user):\n"
+        f"  Call mighty_record with api_key, action_type, label, and outcome."
     )
 
 def call_claude_for_prompt(description, api_key, url):
