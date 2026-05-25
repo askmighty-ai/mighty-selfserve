@@ -2011,20 +2011,22 @@ def openapi_spec():
                     }
                 }
             },
-            "/api/decide": {
+            "/api/log-decision": {
                 "post": {
-                    "operationId": "mighty_decide",
-                    "summary": "Record the user's inline approval decision",
+                    "operationId": "mighty_log_decision",
+                    "summary": "Log an action together with the user's approval decision in one step",
                     "requestBody": {
                         "required": True,
                         "content": {
                             "application/json": {
                                 "schema": {
                                     "type": "object",
-                                    "required": ["api_key", "request_id", "decision"],
+                                    "required": ["api_key", "action_type", "label", "decision"],
                                     "properties": {
                                         "api_key":     {"type": "string", "description": "Your Mighty API key"},
-                                        "request_id":  {"type": "string", "description": "The request_id returned by mighty_authorize"},
+                                        "action_type": {"type": "string", "description": "Short category e.g. email, purchase, file_edit"},
+                                        "label":       {"type": "string", "description": "Human-readable description of the action"},
+                                        "fields":      {"type": "array", "items": {"type": "array", "items": {"type": "string"}}, "description": "Key/value context e.g. [[\"To\", \"alice@example.com\"]]"},
                                         "decision":    {"type": "string", "enum": ["approved", "denied"], "description": "The user's decision"}
                                     }
                                 }
@@ -2039,8 +2041,8 @@ def openapi_spec():
                                     "schema": {
                                         "type": "object",
                                         "properties": {
-                                            "status":     {"type": "string"},
-                                            "request_id": {"type": "string"}
+                                            "status":    {"type": "string"},
+                                            "record_id": {"type": "string"}
                                         }
                                     }
                                 }
@@ -2141,14 +2143,14 @@ def build_prompt(api_key, url):
         f"MIGHTY AUTHORIZATION — follow every session.\n\n"
         f"Your Mighty API key: \"{api_key}\"\n\n"
         f"Whenever the user asks you to do anything consequential (send emails, make purchases, edit files, call external APIs, delete anything) — even if you cannot actually execute it:\n"
-        f"1. Call mighty_authorize with api_key, action_type, label, and fields.\n"
-        f"2. Say: \"I've requested approval for this — shall I proceed?\" and wait for the user's response.\n"
-        f"3. Call mighty_decide with api_key, the request_id from step 1, and:\n"
+        f"1. Describe what you are about to do and ask: \"Shall I proceed?\"\n"
+        f"2. Wait for the user's response.\n"
+        f"3. Call mighty_log_decision once with api_key, action_type, label, fields, and:\n"
         f"   - decision: \"approved\" if the user said yes\n"
         f"   - decision: \"denied\" if the user said no\n"
-        f"4. If approved → carry out the action (or confirm you've done so)\n"
+        f"4. If approved → carry out the action\n"
         f"   If denied → tell the user the action was not taken\n\n"
-        f"Do this for every consequential request without exception, before attempting anything.\n\n"
+        f"Do this for every consequential request without exception. Only one API call needed.\n\n"
         f"Routine actions (searches, reads, lookups) — do NOT ask for approval, do NOT mention to user:\n"
         f"  Call mighty_record with api_key, action_type, label, outcome=\"completed\"."
     )
@@ -2937,6 +2939,38 @@ def api_decide():
     )
     get_db().commit()
     return jsonify({"status": decision, "request_id": request_id})
+
+
+@app.route("/api/log-decision", methods=["POST"])
+def api_log_decision():
+    """Single-call endpoint for inline chat approval flows.
+    Creates an action record and immediately sets the decision in one step.
+    Avoids the two-step authorize + decide pattern.
+    """
+    user, data = api_user()
+    if not user:
+        return jsonify({"error": "Invalid or missing api_key"}), 401
+    if not _rate_limit(user["id"], "api_log_decision", limit=100, window=60):
+        return jsonify({"error": "Rate limit exceeded"}), 429
+    action_type       = data.get("action_type", "other")
+    label             = data.get("label", "Action")
+    fields            = data.get("fields")
+    decision          = data.get("decision", "")
+    consequence_level = data.get("consequence_level", "routine")
+    if decision not in ("approved", "denied"):
+        return jsonify({"error": "decision must be 'approved' or 'denied'"}), 400
+    action_id = secrets.token_hex(16)
+    now       = iso()
+    get_db().execute(
+        "INSERT INTO actions "
+        "(id,user_id,action_type,label,fields,status,consequence_level,created_at,decided_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (action_id, user["id"], action_type, label,
+         json.dumps(fields) if fields else None,
+         decision, consequence_level, now, now),
+    )
+    get_db().commit()
+    return jsonify({"status": decision, "record_id": action_id})
 
 
 # ── Service worker ────────────────────────────────────────────────────────────
