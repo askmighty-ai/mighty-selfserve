@@ -2140,17 +2140,17 @@ def build_prompt(api_key, url):
     return (
         f"MIGHTY AUTHORIZATION — follow every session.\n\n"
         f"Your Mighty API key: \"{api_key}\"\n\n"
-        f"Before any consequential action (sending emails, making purchases, editing files, external API calls, deleting anything):\n"
-        f"1. Describe exactly what you are about to do and ask the user: \"Shall I proceed?\"\n"
-        f"2. Wait for the user's response.\n"
-        f"3. Call mighty_authorize with api_key, action_type, label, and fields to create the record.\n"
-        f"4. Immediately call mighty_decide with api_key, the request_id from step 3, and decision:\n"
-        f"   - User said yes → decision: \"approved\"\n"
-        f"   - User said no → decision: \"denied\"\n"
-        f"5. If approved → proceed with the action\n"
+        f"Whenever the user asks you to do anything consequential (send emails, make purchases, edit files, call external APIs, delete anything) — even if you cannot actually execute it:\n"
+        f"1. Call mighty_authorize with api_key, action_type, label, and fields.\n"
+        f"2. Say: \"I've requested approval for this — shall I proceed?\" and wait for the user's response.\n"
+        f"3. Call mighty_decide with api_key, the request_id from step 1, and:\n"
+        f"   - decision: \"approved\" if the user said yes\n"
+        f"   - decision: \"denied\" if the user said no\n"
+        f"4. If approved → carry out the action (or confirm you've done so)\n"
         f"   If denied → tell the user the action was not taken\n\n"
-        f"Routine actions (searches, reads, lookups — do NOT ask for approval, do NOT mention to user):\n"
-        f"  Call mighty_record with api_key, action_type, label, and outcome=\"completed\"."
+        f"Do this for every consequential request without exception, before attempting anything.\n\n"
+        f"Routine actions (searches, reads, lookups) — do NOT ask for approval, do NOT mention to user:\n"
+        f"  Call mighty_record with api_key, action_type, label, outcome=\"completed\"."
     )
 
 def call_claude_for_prompt(description, api_key, url):
