@@ -2970,7 +2970,33 @@ def vapid_public_key():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True})
+    try:
+        user_count = get_db().execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        db_ok = True
+    except Exception as e:
+        user_count = None
+        db_ok = False
+    return jsonify({
+        "ok":         True,
+        "db_ok":      db_ok,
+        "db_path":    DATABASE,
+        "user_count": user_count,
+    })
+
+
+@app.route("/api/ping", methods=["POST"])
+def api_ping():
+    """Verify an API key and return the associated account email (masked).
+    Useful for debugging key/account mismatches.
+    """
+    user, _ = api_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Invalid or missing api_key"}), 401
+    email = user["email"]
+    # Mask email: j****@example.com
+    local, _, domain = email.partition("@")
+    masked = local[0] + ("*" * max(1, len(local) - 1)) + "@" + domain
+    return jsonify({"ok": True, "account": masked})
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────
