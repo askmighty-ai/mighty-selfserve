@@ -2309,14 +2309,22 @@ def dashboard():
             '<div style="font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:10px">'
             'Welcome to Mighty</div>'
             '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
-            'Connect your agent in about 5 minutes. Once connected, approval requests '
-            'from your agent will appear here.</div>'
-            '<a href="/onboarding" style="display:block;padding:13px 20px;'
-            'background:#7c3aed;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
-            'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
-''
-            '</div>'
-            '</div>'
+            + (
+                'Your agent is set up. Ask it to do something consequential — like send an email or book a meeting — and the approval request will appear here.'
+                if user["onboarded"] else
+                'Connect your agent in about 5 minutes. Once connected, approval requests from your agent will appear here.'
+            ) + '</div>'
+            + (
+                '<a href="/settings" style="display:block;padding:13px 20px;'
+                'background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:8px;font-size:14px;font-weight:600;'
+                'text-decoration:none;margin-bottom:16px">View your setup instructions &#8594;</a>'
+                if user["onboarded"] else
+                '<a href="/onboarding" style="display:block;padding:13px 20px;'
+                'background:#7c3aed;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
+                'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
+            )
+            + '</div>'
+            + '</div>'
         )
         feed_col_hidden = 'style="display:none"'
     else:
