@@ -1,8 +1,23 @@
 #!/usr/bin/env python3
 """
-Mighty MCP Server — stdlib only, no pip install required.
+Mighty MCP Server
+=================
+Gives Claude Desktop an independent approval and activity log for consequential actions.
 
-Configuration — add to ~/Library/Application Support/Claude/claude_desktop_config.json:
+How it works
+------------
+1. Before a consequential action (email, purchase, file deletion, etc.), Claude calls
+   request_authorization with the FULL content of what it's about to do.
+2. Mighty creates a pending record and returns an approval_url.
+3. Claude shares the approval_url with the user. The user opens it in their browser,
+   sees exactly what was submitted, and clicks Approve or Deny — inside Mighty.
+4. Claude calls check_authorization to poll for the decision.
+5. Approved: Claude proceeds. Denied: Claude stops.
+
+Because the user approves inside Mighty's interface (not in the chat), Mighty's log
+is a verified record of what the user actually saw and agreed to.
+
+Setup — add to ~/Library/Application Support/Claude/claude_desktop_config.json:
 {
   "mcpServers": {
     "mighty": {
@@ -15,63 +30,88 @@ Configuration — add to ~/Library/Application Support/Claude/claude_desktop_con
     }
   }
 }
+
+Environment variables
+---------------------
+MIGHTY_API_KEY   — required. Your Mighty API key (from Settings).
+MIGHTY_BASE_URL  — optional. Defaults to the hosted Mighty instance.
 """
 
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.request
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-API_KEY  = os.environ.get("MIGHTY_API_KEY", "mk_7b83acc522f784495dc65b2563624dbe4b57b05d")
-BASE_URL = os.environ.get("MIGHTY_BASE_URL", "https://mighty-selfserve-production.up.railway.app")
+API_KEY  = os.environ.get("MIGHTY_API_KEY", "")
+BASE_URL = os.environ.get("MIGHTY_BASE_URL", "https://mighty-selfserve-production.up.railway.app").rstrip("/")
 
-POLL_INTERVAL = 3    # seconds between status polls
+if not API_KEY:
+    sys.stderr.write("[mighty] WARNING: MIGHTY_API_KEY is not set. All requests will fail.\n")
+    sys.stderr.flush()
 
-# ── Tool definitions (returned to Claude Desktop) ─────────────────────────────
+# ── Tool definitions ──────────────────────────────────────────────────────────
 
 TOOLS = [
     {
         "name": "request_authorization",
         "description": (
-            "Submit an authorization request to Mighty before taking a consequential action. "
-            "Call this BEFORE sending emails, making purchases, modifying files, posting content, "
-            "or doing anything the user might want to review first. "
-            "Returns a JSON object with 'request_id' and 'approval_url'. "
-            "After calling this tool, share the approval_url with the user and ask them to approve or deny. "
-            "Then call check_authorization with the request_id to get the final decision."
+            "Submit an authorization request to Mighty BEFORE taking any consequential action — "
+            "sending emails, making purchases, modifying or deleting files, posting content, "
+            "submitting forms, making API calls that have real-world effects. "
+            "\n\n"
+            "IMPORTANT: Include the FULL content in fields — not a summary. "
+            "For email: To, Subject, and the complete body. "
+            "For purchases: merchant, item, and exact amount. "
+            "For file operations: the file path and what will change. "
+            "The fields you submit become the permanent record of what was approved. "
+            "They must contain enough detail to verify exactly what happened. "
+            "\n\n"
+            "This tool returns a request_id and an approval_url. "
+            "Tell the user: 'Please approve this action in Mighty: <approval_url>'. "
+            "Then call check_authorization with the request_id to wait for their decision."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action_type": {
                     "type": "string",
-                    "description": "Short category, e.g. 'email', 'purchase', 'file', 'post'",
+                    "description": "Short category: 'email', 'purchase', 'file_edit', 'deletion', 'api_call', 'post', etc.",
                 },
                 "label": {
                     "type": "string",
-                    "description": "Human-readable description of exactly what you will do. Be specific.",
+                    "description": "Plain-English description of the specific action. Be specific: 'Send email to john@example.com re: project update' not 'Send email'.",
                 },
                 "fields": {
                     "type": "array",
-                    "items": {"type": "array", "items": {"type": "string"}},
-                    "description": "Optional [['Key', 'Value']] detail pairs, e.g. [['To', 'alice@example.com']]",
+                    "items": {"type": "array", "items": {"type": "string", "minItems": 2, "maxItems": 2}},
+                    "description": (
+                        "Full content as [['Key', 'Value']] pairs. Include everything the user would need "
+                        "to verify exactly what was approved. "
+                        "Email example: [['To', 'alice@example.com'], ['Subject', 'Q3 update'], ['Body', '<full text>']]. "
+                        "Purchase example: [['Merchant', 'AWS'], ['Item', 'Reserved Instance m5.xlarge'], ['Amount', '$4,200.00']]."
+                    ),
+                },
+                "consequence_level": {
+                    "type": "string",
+                    "enum": ["routine", "sensitive", "critical"],
+                    "description": "How consequential is this action? routine = easily reversed, sensitive = hard to reverse, critical = financial/legal/irreversible.",
                 },
             },
-            "required": ["action_type", "label"],
+            "required": ["action_type", "label", "fields"],
         },
     },
     {
         "name": "check_authorization",
         "description": (
-            "Check whether the user has approved or denied an authorization request. "
+            "Check whether the user has approved or denied an authorization request in Mighty. "
             "Call this after request_authorization, once you have shared the approval_url with the user. "
             "Returns 'approved', 'denied', 'pending', or 'timeout'. "
-            "If 'pending', wait a few seconds and call again. "
-            "If 'approved', proceed with the action. If 'denied' or 'timeout', stop."
+            "If 'pending', wait a few seconds and call again — the user may still be reviewing. "
+            "If 'approved', proceed with the action. "
+            "If 'denied' or 'timeout', stop and tell the user."
         ),
         "inputSchema": {
             "type": "object",
@@ -87,19 +127,30 @@ TOOLS = [
     {
         "name": "record_action",
         "description": (
-            "Log a completed action to the user's Mighty dashboard. "
-            "Call this AFTER routine actions that don't need pre-approval "
-            "but that the user would want a record of."
+            "Log a completed action to the user's Mighty activity log. "
+            "Use this for routine actions that don't require pre-approval but that the user "
+            "would want a record of — reading files, running searches, fetching data. "
+            "Include the full content in fields, same as request_authorization."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action_type": {"type": "string"},
-                "label":       {"type": "string"},
-                "outcome":     {"type": "string", "description": "e.g. 'completed', 'failed', 'skipped'"},
+                "action_type": {
+                    "type": "string",
+                    "description": "Short category: 'file_read', 'search', 'fetch', etc.",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Plain-English description of what was done.",
+                },
                 "fields": {
                     "type": "array",
                     "items": {"type": "array", "items": {"type": "string"}},
+                    "description": "Full content as [['Key', 'Value']] pairs.",
+                },
+                "outcome": {
+                    "type": "string",
+                    "description": "'completed', 'failed', or 'skipped'.",
                 },
             },
             "required": ["action_type", "label"],
@@ -114,10 +165,14 @@ def _post(path: str, body: dict) -> dict:
     req  = urllib.request.Request(
         BASE_URL + path,
         data=data,
-        headers={"Content-Type": "application/json", "X-Mighty-Key": API_KEY},
+        headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise RuntimeError(f"HTTP {e.code}: {body}") from e
 
 
 def _get(path: str) -> dict:
@@ -125,17 +180,22 @@ def _get(path: str) -> dict:
         BASE_URL + path,
         headers={"X-Mighty-Key": API_KEY},
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise RuntimeError(f"HTTP {e.code}: {body}") from e
 
 # ── Tool handlers ─────────────────────────────────────────────────────────────
 
 def handle_request_authorization(args: dict) -> str:
     payload = {
-        "api_key":     API_KEY,
-        "action_type": args["action_type"],
-        "label":       args["label"],
-        "fields":      args.get("fields", []),
+        "api_key":           API_KEY,
+        "action_type":       args["action_type"],
+        "label":             args["label"],
+        "fields":            args.get("fields", []),
+        "consequence_level": args.get("consequence_level", "routine"),
     }
     try:
         data = _post("/api/authorize", payload)
@@ -145,18 +205,32 @@ def handle_request_authorization(args: dict) -> str:
     if data.get("status") != "pending":
         return f"error: unexpected response — {data}"
 
+    approval_url = data.get("approval_url", "")
+    request_id   = data.get("request_id", "")
+
     return json.dumps({
-        "request_id":   data["request_id"],
-        "approval_url": data["approval_url"],
-        "message":      "Share this approval_url with the user, then call check_authorization with the request_id.",
+        "request_id":   request_id,
+        "approval_url": approval_url,
+        "instructions": (
+            f"Tell the user: 'Please approve this action in Mighty: {approval_url}' "
+            f"Then call check_authorization with request_id='{request_id}' to wait for their decision."
+        ),
     })
 
 
 def handle_check_authorization(args: dict) -> str:
     request_id = args["request_id"]
     try:
-        status_data = _get(f"/api/status/{request_id}")
-        return status_data.get("status", "pending")
+        data = _get(f"/api/status/{request_id}")
+        status = data.get("status", "pending")
+        if status == "approved":
+            return "approved — proceed with the action"
+        elif status == "denied":
+            return "denied — stop and tell the user their request was denied in Mighty"
+        elif status in ("timeout", "expired"):
+            return "timeout — the request expired without a decision; stop and ask the user what they want to do"
+        else:
+            return "pending — the user has not yet decided; wait a few seconds and call again"
     except Exception as exc:
         return f"error: could not reach Mighty — {exc}"
 
@@ -171,7 +245,7 @@ def handle_record_action(args: dict) -> str:
     }
     try:
         data = _post("/api/record", payload)
-        return data.get("status", "logged")
+        return f"logged — record_id: {data.get('record_id', '?')}"
     except Exception as exc:
         return f"error: could not reach Mighty — {exc}"
 
@@ -196,7 +270,6 @@ def main() -> None:
         method = msg.get("method", "")
         msg_id = msg.get("id")
 
-        # ── Handshake ──────────────────────────────────────────────────────
         if method == "initialize":
             send({
                 "jsonrpc": "2.0",
@@ -204,14 +277,13 @@ def main() -> None:
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities":    {"tools": {}},
-                    "serverInfo":      {"name": "mighty", "version": "1.0.0"},
+                    "serverInfo":      {"name": "mighty", "version": "1.1.0"},
                 },
             })
 
         elif method == "notifications/initialized":
-            pass  # notification — no response
+            pass  # notification — no response needed
 
-        # ── Tool discovery ─────────────────────────────────────────────────
         elif method == "tools/list":
             send({
                 "jsonrpc": "2.0",
@@ -219,7 +291,6 @@ def main() -> None:
                 "result": {"tools": TOOLS},
             })
 
-        # ── Tool execution ─────────────────────────────────────────────────
         elif method == "tools/call":
             params    = msg.get("params", {})
             tool_name = params.get("name")
@@ -238,10 +309,9 @@ def main() -> None:
                 send({
                     "jsonrpc": "2.0",
                     "id": msg_id,
-                    "result": {
-                        "content": [{"type": "text", "text": result}],
-                    },
+                    "result": {"content": [{"type": "text", "text": result}]},
                 })
+
             except Exception as exc:
                 send({
                     "jsonrpc": "2.0",
@@ -252,7 +322,6 @@ def main() -> None:
                     },
                 })
 
-        # ── Unknown method — return a JSON-RPC error ───────────────────────
         elif msg_id is not None:
             send({
                 "jsonrpc": "2.0",

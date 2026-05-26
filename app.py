@@ -616,8 +616,8 @@ body{background:#fff;color:#1a1a1a}
 <!-- Hero -->
 <section class="hero">
   <div class="hero-inner">
-    <h1>Your AI agents, accountable to you.</h1>
-    <p class="hero-sub">Mighty adds approval checkpoints and a permanent activity log to any AI agent. Set it up once — your agents pause before consequential actions and wait for your decision.</p>
+    <h1>For the actions your AI can't take back.</h1>
+    <p class="hero-sub">AI agents are getting good at doing things on your behalf — sending emails, making purchases, signing up for services. Most mistakes are fixable. But some aren't. Mighty is the independent record of what your AI did, and what you approved — so when it matters, you can prove it.</p>
     <div class="hero-ctas">
       <a href="/signup" class="btn-primary-lg">Get started free &rarr;</a>
       <a href="#enterprise" class="hero-link">Using Mighty across a team? Talk to us &rarr;</a>
@@ -680,13 +680,13 @@ body{background:#fff;color:#1a1a1a}
     <div class="cards">
       <div class="fcard">
         <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="9" r="7"/><polyline points="6,9 8,11 12,7"/></svg></div>
-        <h3>Approval checkpoints</h3>
-        <p>You define what is consequential. Your agent pauses and waits — approved: proceed, denied: stop.</p>
+        <h3>An independent record</h3>
+        <p>Every consequential action is logged in Mighty — separate from your AI, which can't edit or delete it. Not your AI's history. Yours.</p>
       </div>
       <div class="fcard">
         <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><rect x="3" y="2" width="12" height="14" rx="2"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12" x2="9" y2="12"/></svg></div>
-        <h3>Permanent audit log</h3>
-        <p>Every action your agent takes is logged with a timestamp, description, and your decision. Ready when you need it.</p>
+        <h3>Full-content logging</h3>
+        <p>Mighty stores what your AI was actually going to do — the email body, the amount, the file — not just a summary. Enough detail to verify, not just remember.</p>
       </div>
       <div class="fcard">
         <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="9" r="2.5"/><circle cx="13" cy="4" r="2.5"/><circle cx="13" cy="14" r="2.5"/><line x1="7.2" y1="7.8" x2="10.8" y2="5.2"/><line x1="7.2" y1="10.2" x2="10.8" y2="12.8"/></svg></div>
@@ -1079,7 +1079,7 @@ a{color:#7c3aed}
   <p>By creating a Mighty account you agree to these terms. If you don't agree, don't use the service.</p>
 
   <h2>What Mighty is</h2>
-  <p>Mighty is a personal authorization layer for AI agents. It provides an API and dashboard for logging and approving actions that your AI agents request. Mighty does not operate your AI agents — you are responsible for how you configure and use them.</p>
+  <p>Mighty is an independent record of what your AI agents do on your behalf. It provides an API and dashboard for logging consequential actions — what the agent reported it was going to do, and whether you approved it. Mighty does not operate your AI agents — you are responsible for how you configure and use them.</p>
 
   <h2>Your account</h2>
   <p>You are responsible for keeping your API key and password secure. Do not share your API key with untrusted parties. You are responsible for all activity that occurs under your account.</p>
@@ -2212,9 +2212,16 @@ def build_prompt(api_key, url):
         f"Your Mighty API key: \"{api_key}\"\n\n"
         f"When the user asks you to do anything consequential (emails, purchases, file edits, deletions, external API calls):\n"
         f"1. Ask: \"Shall I proceed?\"\n"
-        f"2. If yes: call mighty_log_decision ONCE with api_key=\"{api_key}\", action_type, label, fields, decision=\"approved\" — then carry out the action.\n"
-        f"3. If no: call mighty_log_decision ONCE with api_key=\"{api_key}\", action_type, label, fields, decision=\"denied\" — then stop.\n\n"
-        f"Call mighty_log_decision exactly once per action. Never call it before asking. Never call it more than once."
+        f"2. If yes: call mighty_log_decision ONCE with:\n"
+        f"   - api_key=\"{api_key}\"\n"
+        f"   - action_type: the category (e.g. \"email\", \"purchase\", \"file_edit\", \"deletion\", \"api_call\")\n"
+        f"   - label: a plain-English description of the specific action (e.g. \"Send email to john@example.com re: project update\")\n"
+        f"   - fields: the FULL content being acted on as key-value pairs — for email include [[\"To\", \"<recipient>\"], [\"Subject\", \"<subject>\"], [\"Body\", \"<full email body>\"]]; for purchases include amount, merchant, item; include whatever a person would need to verify exactly what was done\n"
+        f"   - decision=\"approved\"\n"
+        f"   Then carry out the action.\n"
+        f"3. If no: call mighty_log_decision ONCE with the same fields and decision=\"denied\" — then stop.\n\n"
+        f"Call mighty_log_decision exactly once per action. Never call it before asking. Never call it more than once.\n"
+        f"The fields you submit are the permanent record of what was approved — include enough detail that it could be verified later."
     )
 
 def call_claude_for_prompt(description, api_key, url):
