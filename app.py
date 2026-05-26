@@ -605,7 +605,7 @@ body{background:#fff;color:#1a1a1a}
     </a>
     <div class="nav-actions" id="nav-actions">
       <a href="/login" class="nav-signin">Sign in</a>
-      <a href="/signup" class="btn-nav">Get started free</a>
+      <a href="/signup" class="btn-nav">Get started</a>
     </div>
     <button class="nav-hamburger" id="nav-menu-btn" onclick="toggleNav()" aria-label="Open menu">
       <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="5" x2="18" y2="5"/><line x1="2" y1="11" x2="18" y2="11"/><line x1="2" y1="17" x2="18" y2="17"/></svg>
@@ -619,7 +619,7 @@ body{background:#fff;color:#1a1a1a}
     <h1>For the actions your AI can't take back.</h1>
     <p class="hero-sub">Most AI mistakes are fixable. But some aren't — a wire transfer, a signed contract, a sent legal notice. Mighty is the independent record of what your AI did and what you approved, so when it matters, you can prove it.</p>
     <div class="hero-ctas">
-      <a href="/signup" class="btn-primary-lg">Get started free &rarr;</a>
+      <a href="/signup" class="btn-primary-lg">Create free account &rarr;</a>
       <a href="#enterprise" class="hero-link">Using Mighty across a team? Talk to us &rarr;</a>
     </div>
   </div>
@@ -630,9 +630,9 @@ body{background:#fff;color:#1a1a1a}
   <div class="sp-inner">
     <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> Works with Claude, ChatGPT &amp; custom agents</div>
     <div class="sp-dot"></div>
-    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> 5-minute setup, no credit card</div>
+    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> 5-minute setup</div>
     <div class="sp-dot"></div>
-    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> Free to start</div>
+    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> No credit card required</div>
   </div>
 </div>
 
@@ -652,8 +652,8 @@ body{background:#fff;color:#1a1a1a}
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <h3>Agent pauses before acting</h3>
-          <p>When your agent is about to do something consequential — send an email, make a purchase, edit a file — it stops and asks.</p>
+          <h3>Your agent asks before acting</h3>
+          <p>When your agent is about to do something consequential — send an email, make a purchase, edit a file — it checks with you first.</p>
         </div>
       </div>
       <div class="step">
@@ -671,7 +671,7 @@ body{background:#fff;color:#1a1a1a}
 <section class="features">
   <div class="features-inner">
     <div class="section-label">What you get</div>
-    <div class="section-title" style="margin-bottom:36px">Built-in oversight for every agent</div>
+    <div class="section-title" style="margin-bottom:36px">What makes Mighty different</div>
     <div class="cards">
       <div class="fcard">
         <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="9" r="7"/><polyline points="6,9 8,11 12,7"/></svg></div>
@@ -696,7 +696,7 @@ body{background:#fff;color:#1a1a1a}
 <section class="enterprise" id="enterprise">
   <div class="enterprise-inner">
     <h2>Using AI agents across your organization?</h2>
-    <p class="enterprise-sub">When teams deploy AI agents at scale, Mighty's authorization layer becomes a governance and compliance tool. Audit trails, approval workflows, and oversight — built in from day one. Tell us about your use case.</p>
+    <p class="enterprise-sub">When teams give AI agents real authority — over email, purchasing, contracts, or operations — an independent record isn't optional, it's essential. Tell us about your use case.</p>
     <div class="ent-form" id="ent-form-wrap">
       <form id="ent-form">
         <label>Full name</label>
