@@ -617,15 +617,10 @@ body{background:#fff;color:#1a1a1a}
 <section class="hero">
   <div class="hero-inner">
     <h1>For the actions your AI can't take back.</h1>
-    <p class="hero-sub">AI agents are getting good at doing things on your behalf — sending emails, making purchases, signing up for services. Most mistakes are fixable. But some aren't. Mighty is the independent record of what your AI did, and what you approved — so when it matters, you can prove it.</p>
+    <p class="hero-sub">Most AI mistakes are fixable. But some aren't — a wire transfer, a signed contract, a sent legal notice. Mighty is the independent record of what your AI did and what you approved, so when it matters, you can prove it.</p>
     <div class="hero-ctas">
       <a href="/signup" class="btn-primary-lg">Get started free &rarr;</a>
       <a href="#enterprise" class="hero-link">Using Mighty across a team? Talk to us &rarr;</a>
-    </div>
-    <div class="hero-chips">
-      <span class="chip">&#10003; Works with Claude, ChatGPT &amp; custom agents</span>
-      <span class="chip">&#10003; 5-minute setup</span>
-      <span class="chip">&#10003; Free to start</span>
     </div>
   </div>
 </section>
