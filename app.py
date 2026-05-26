@@ -541,17 +541,16 @@ body{background:#fff;color:#1a1a1a}
   .btn-nav{width:100%;text-align:center}
 }
 /* Hero */
-.hero{background:#fff;padding:100px 24px 80px;text-align:center}
-.hero-inner{max-width:700px;margin:0 auto}
-.hero h1{font-size:50px;font-weight:800;line-height:1.1;letter-spacing:-1px;color:#1a1a1a;margin-bottom:22px}
-.hero-sub{font-size:18px;color:#555;line-height:1.6;max-width:560px;margin:0 auto 36px}
-.hero-ctas{display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap;margin-bottom:28px}
-.btn-primary-lg{padding:14px 28px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;transition:background 0.12s;display:inline-block}
+.hero{background:#fff;padding:80px 24px 60px;text-align:center}
+.hero-inner{max-width:640px;margin:0 auto}
+.hero h1{font-size:52px;font-weight:800;line-height:1.08;letter-spacing:-1.5px;color:#1a1a1a;margin-bottom:20px}
+.hero-sub{font-size:17px;color:#555;line-height:1.65;max-width:480px;margin:0 auto 32px}
+.hero-sub strong{color:#1a1a1a;font-weight:600}
+.hero-ctas{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap}
+.btn-primary-lg{padding:13px 26px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;transition:background 0.12s;display:inline-block}
 .btn-primary-lg:hover{background:#6d28d9;text-decoration:none;color:#fff}
-.hero-link{font-size:14px;color:#7c3aed;text-decoration:none;font-weight:500}
-.hero-link:hover{text-decoration:underline}
-.hero-chips{display:flex;align-items:center;justify-content:center;gap:18px;flex-wrap:wrap}
-.chip{font-size:13px;color:#555;font-weight:500}
+.hero-link{font-size:13px;color:#9ca3af;text-decoration:none;font-weight:500}
+.hero-link:hover{color:#6b7280;text-decoration:underline}
 /* How it works */
 .hiw{background:#f8f7f5;padding:80px 24px}
 .hiw-inner{max-width:900px;margin:0 auto}
@@ -616,11 +615,11 @@ body{background:#fff;color:#1a1a1a}
 <!-- Hero -->
 <section class="hero">
   <div class="hero-inner">
-    <h1>For the actions your AI can't take back.</h1>
-    <p class="hero-sub">Most AI mistakes are fixable. But some aren't — a wire transfer, a signed contract, a sent legal notice. Mighty is the independent record of what your AI did and what you approved, so when it matters, you can prove it.</p>
+    <h1>For the actions your AI<br>can't take back.</h1>
+    <p class="hero-sub">Wire transfers. Signed contracts. Sent legal notices.<br>Mighty keeps the independent record of what your AI did — and what you approved.</p>
     <div class="hero-ctas">
       <a href="/signup" class="btn-primary-lg">Create free account &rarr;</a>
-      <a href="#enterprise" class="hero-link">Using Mighty across a team? Talk to us &rarr;</a>
+      <a href="#enterprise" class="hero-link">Using Mighty for a team? &rarr;</a>
     </div>
   </div>
 </section>
