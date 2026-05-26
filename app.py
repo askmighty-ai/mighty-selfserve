@@ -540,57 +540,67 @@ body{background:#fff;color:#1a1a1a}
   .nav-actions.open{display:flex}
   .btn-nav{width:100%;text-align:center}
 }
-/* Hero */
-.hero{background:#fff;padding:80px 24px 60px;text-align:center}
-.hero-inner{max-width:640px;margin:0 auto}
+/* Hero — full viewport */
+.hero{background:#fff;min-height:calc(100vh - 60px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:60px 24px 80px;position:relative}
+.hero-inner{max-width:600px;margin:0 auto}
 .hero h1{font-size:52px;font-weight:800;line-height:1.08;letter-spacing:-1.5px;color:#1a1a1a;margin-bottom:20px}
-.hero-sub{font-size:17px;color:#555;line-height:1.65;max-width:480px;margin:0 auto 32px}
-.hero-sub strong{color:#1a1a1a;font-weight:600}
-.hero-ctas{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap}
-.btn-primary-lg{padding:13px 26px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;transition:background 0.12s;display:inline-block}
+.hero-sub{font-size:17px;color:#555;line-height:1.65;max-width:460px;margin:0 auto 32px}
+.hero-ctas{display:flex;flex-direction:column;align-items:center;gap:12px}
+.btn-primary-lg{padding:14px 32px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;transition:background 0.12s;display:inline-block}
 .btn-primary-lg:hover{background:#6d28d9;text-decoration:none;color:#fff}
 .hero-link{font-size:13px;color:#9ca3af;text-decoration:none;font-weight:500}
 .hero-link:hover{color:#6b7280;text-decoration:underline}
-/* How it works */
-.hiw{background:#f8f7f5;padding:80px 24px}
-.hiw-inner{max-width:900px;margin:0 auto}
-.section-label{font-size:12px;font-weight:700;letter-spacing:1.5px;color:#7c3aed;text-transform:uppercase;margin-bottom:12px}
-.section-title{font-size:32px;font-weight:800;color:#1a1a1a;margin-bottom:48px}
-.steps{display:flex;flex-direction:column;gap:36px}
-.step{display:flex;align-items:flex-start;gap:24px}
-.step-num{width:40px;height:40px;border-radius:50%;background:#7c3aed;color:#fff;font-size:16px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.step-body h3{font-size:18px;font-weight:700;color:#1a1a1a;margin-bottom:6px}
-.step-body p{font-size:15px;color:#555;line-height:1.6}
-/* Features */
-.features{background:#fff;padding:80px 24px}
-.features-inner{max-width:900px;margin:0 auto}
-.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
-@media(max-width:700px){.cards{grid-template-columns:1fr}.hero h1{font-size:34px}.hero-ctas{flex-direction:column;gap:12px}}
-.fcard{background:#fff;border:1.5px solid #e5e3df;border-radius:12px;padding:28px 24px}
-.fcard h3{font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:10px}
-.fcard p{font-size:14px;color:#555;line-height:1.6}
-.fcard-icon{width:36px;height:36px;border-radius:10px;background:#f3f0ff;display:flex;align-items:center;justify-content:center;margin-bottom:16px}
-/* Social proof */
-.sp-bar{background:#f8f7f5;border-top:1px solid #f0ede8;border-bottom:1px solid #f0ede8;padding:14px 24px}
+.hero-scroll{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;color:#c4b5fd;font-size:12px;font-weight:500;letter-spacing:0.5px;text-transform:uppercase;cursor:pointer;border:none;background:none;transition:color 0.12s}
+.hero-scroll:hover{color:#7c3aed}
+.hero-scroll svg{animation:bounce 2s infinite}
+@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
+@media(max-width:600px){.hero h1{font-size:36px}.hero{padding:40px 24px 80px}}
+/* Social proof bar */
+.sp-bar{background:#f8f7f5;border-top:1px solid #f0ede8;border-bottom:1px solid #f0ede8;padding:12px 24px}
 .sp-inner{max-width:900px;margin:0 auto;display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap}
 .sp-item{font-size:13px;color:#6b7280;display:flex;align-items:center;gap:6px}
 .sp-dot{width:4px;height:4px;border-radius:50%;background:#d1d5db;flex-shrink:0}
 @media(max-width:600px){.sp-bar{display:none}}
-/* Enterprise */
-.enterprise{background:#f3f0ff;padding:80px 24px}
-.enterprise-inner{max-width:640px;margin:0 auto;text-align:center}
-.enterprise h2{font-size:30px;font-weight:800;color:#1a1a1a;margin-bottom:14px}
-.enterprise-sub{font-size:16px;color:#555;line-height:1.6;margin-bottom:40px}
-.ent-form{background:#fff;border:1.5px solid #ddd6fe;border-radius:16px;padding:36px;text-align:left}
+/* Accordion */
+.accordion{max-width:760px;margin:0 auto;padding:0 24px 80px}
+.acc-item{border-bottom:1px solid #e5e3df}
+.acc-item:first-child{border-top:1px solid #e5e3df}
+.acc-header{width:100%;display:flex;align-items:center;justify-content:space-between;padding:22px 0;background:none;border:none;cursor:pointer;text-align:left;gap:16px}
+.acc-header:hover .acc-title{color:#7c3aed}
+.acc-title{font-size:17px;font-weight:700;color:#1a1a1a;transition:color 0.12s}
+.acc-chevron{flex-shrink:0;color:#9ca3af;transition:transform 0.25s ease}
+.acc-chevron.open{transform:rotate(180deg)}
+.acc-content{max-height:0;overflow:hidden;transition:max-height 0.35s ease, opacity 0.25s ease;opacity:0}
+.acc-content.open{opacity:1}
+.acc-body{padding:0 0 28px}
+/* Steps (inside accordion) */
+.section-label{font-size:12px;font-weight:700;letter-spacing:1.5px;color:#7c3aed;text-transform:uppercase;margin-bottom:12px}
+.section-title{font-size:28px;font-weight:800;color:#1a1a1a;margin-bottom:36px}
+.steps{display:flex;flex-direction:column;gap:28px}
+.step{display:flex;align-items:flex-start;gap:20px}
+.step-num{width:36px;height:36px;border-radius:50%;background:#7c3aed;color:#fff;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.step-body h3{font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
+.step-body p{font-size:14px;color:#555;line-height:1.6}
+/* Feature cards (inside accordion) */
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+@media(max-width:700px){.cards{grid-template-columns:1fr}}
+.fcard{background:#fff;border:1.5px solid #e5e3df;border-radius:12px;padding:24px 20px}
+.fcard h3{font-size:15px;font-weight:700;color:#1a1a1a;margin-bottom:8px}
+.fcard p{font-size:13px;color:#555;line-height:1.6}
+.fcard-icon{width:32px;height:32px;border-radius:8px;background:#f3f0ff;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+/* Enterprise form (inside accordion) */
+.ent-wrap{max-width:480px}
+.enterprise-sub{font-size:15px;color:#555;line-height:1.6;margin-bottom:28px}
+.ent-form{background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:12px;padding:28px;text-align:left}
 .ent-form label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
-.ent-form input,.ent-form textarea{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:16px;font-family:inherit}
+.ent-form input,.ent-form textarea{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px;font-family:inherit}
 .ent-form input:focus,.ent-form textarea:focus{outline:none;border-color:#7c3aed}
-.ent-form textarea{height:100px;resize:vertical}
-.btn-ent{width:100%;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;cursor:pointer}
+.ent-form textarea{height:90px;resize:vertical}
+.btn-ent{width:100%;padding:11px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;cursor:pointer}
 .btn-ent:hover{background:#6d28d9}
-.ent-thanks{display:none;text-align:center;padding:20px 0;font-size:15px;color:#16a34a;font-weight:600}
+.ent-thanks{display:none;padding:16px 0;font-size:15px;color:#16a34a;font-weight:600}
 /* Footer */
-.footer-bar{background:#fff;border-top:1px solid #e5e3df;padding:28px 24px;text-align:center;font-size:13px;color:#9ca3af}
+.footer-bar{background:#fff;border-top:1px solid #e5e3df;padding:24px;text-align:center;font-size:13px;color:#9ca3af}
 </style>
 </head>
 <body>
@@ -619,12 +629,16 @@ body{background:#fff;color:#1a1a1a}
     <p class="hero-sub">Wire transfers. Signed contracts. Sent legal notices.<br>Mighty keeps the independent record of what your AI did — and what you approved.</p>
     <div class="hero-ctas">
       <a href="/signup" class="btn-primary-lg">Create free account &rarr;</a>
-      <a href="#enterprise" class="hero-link">Using Mighty for a team? &rarr;</a>
+      <a href="#more" class="hero-link">Using Mighty for a team? &rarr;</a>
     </div>
   </div>
+  <button class="hero-scroll" onclick="openFirst()" aria-label="Learn more">
+    <span>Learn more</span>
+    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,6 8,10 12,6"/></svg>
+  </button>
 </section>
 
-<!-- Social proof -->
+<!-- Social proof bar -->
 <div class="sp-bar">
   <div class="sp-inner">
     <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> Works with Claude, ChatGPT &amp; custom agents</div>
@@ -635,89 +649,110 @@ body{background:#fff;color:#1a1a1a}
   </div>
 </div>
 
-<!-- How it works -->
-<section class="hiw">
-  <div class="hiw-inner">
-    <div class="section-label">How it works</div>
-    <div class="section-title">Up and running in three steps</div>
-    <div class="steps">
-      <div class="step">
-        <div class="step-num">1</div>
-        <div class="step-body">
-          <h3>Connect your agent</h3>
-          <p>Add the Mighty system prompt or MCP plugin. Takes about 5 minutes.</p>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-num">2</div>
-        <div class="step-body">
-          <h3>Your agent asks before acting</h3>
-          <p>When your agent is about to do something consequential — send an email, make a purchase, edit a file — it checks with you first.</p>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-num">3</div>
-        <div class="step-body">
-          <h3>You decide. Everything is logged.</h3>
-          <p>Approve or deny from any device. Every action your agent takes or requests is recorded permanently.</p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
+<!-- Accordion -->
+<div class="accordion" id="more">
 
-<!-- Feature cards -->
-<section class="features">
-  <div class="features-inner">
-    <div class="section-label">What you get</div>
-    <div class="section-title" style="margin-bottom:36px">What makes Mighty different</div>
-    <div class="cards">
-      <div class="fcard">
-        <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="9" r="7"/><polyline points="6,9 8,11 12,7"/></svg></div>
-        <h3>An independent record</h3>
-        <p>Every consequential action is logged in Mighty — separate from your AI, which can't edit or delete it. Not your AI's history. Yours.</p>
-      </div>
-      <div class="fcard">
-        <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><rect x="3" y="2" width="12" height="14" rx="2"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12" x2="9" y2="12"/></svg></div>
-        <h3>Full-content logging</h3>
-        <p>Mighty stores what your AI was actually going to do — the email body, the amount, the file — not just a summary. Enough detail to verify, not just remember.</p>
-      </div>
-      <div class="fcard">
-        <div class="fcard-icon"><svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="9" r="2.5"/><circle cx="13" cy="4" r="2.5"/><circle cx="13" cy="14" r="2.5"/><line x1="7.2" y1="7.8" x2="10.8" y2="5.2"/><line x1="7.2" y1="10.2" x2="10.8" y2="12.8"/></svg></div>
-        <h3>Any agent, any platform</h3>
-        <p>Claude Desktop (MCP), ChatGPT Projects, or your own custom agent via a simple HTTP API.</p>
+  <!-- How it works -->
+  <div class="acc-item">
+    <button class="acc-header" onclick="toggleAcc('hiw')" id="hiw-btn">
+      <span class="acc-title">How it works</span>
+      <svg class="acc-chevron" id="hiw-chevron" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,7 9,12 14,7"/></svg>
+    </button>
+    <div class="acc-content" id="hiw">
+      <div class="acc-body">
+        <div class="steps">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-body">
+              <h3>Connect your agent</h3>
+              <p>Add the Mighty system prompt to ChatGPT, or install the MCP plugin for Claude Desktop. Takes about 5 minutes.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-body">
+              <h3>Your agent asks before acting</h3>
+              <p>When your agent is about to do something consequential — send an email, make a purchase, edit a file — it checks with you first.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-body">
+              <h3>You decide. Mighty records it.</h3>
+              <p>Approve or deny. Every action your agent takes is logged — what it was going to do, and what you said.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
-</section>
 
-<!-- Enterprise -->
-<section class="enterprise" id="enterprise">
-  <div class="enterprise-inner">
-    <h2>Using AI agents across your organization?</h2>
-    <p class="enterprise-sub">When teams give AI agents real authority — over email, purchasing, contracts, or operations — an independent record isn't optional, it's essential. Tell us about your use case.</p>
-    <div class="ent-form" id="ent-form-wrap">
-      <form id="ent-form">
-        <label>Full name</label>
-        <input type="text" id="ent-name" placeholder="Jane Smith" required>
-        <label>Work email</label>
-        <input type="email" id="ent-email" placeholder="jane@company.com" required>
-        <label>Company</label>
-        <input type="text" id="ent-company" placeholder="Acme Corp">
-        <label>Tell us about your use case <span style="font-weight:400;color:#aaa">(optional)</span></label>
-        <textarea id="ent-message" placeholder="We are deploying agents that..."></textarea>
-        <button type="submit" class="btn-ent" id="enterprise-submit-btn">Get in touch &rarr;</button>
-      </form>
-      <div class="ent-thanks" id="ent-thanks">Thanks — we will be in touch within one business day.</div>
+  <!-- What you get -->
+  <div class="acc-item">
+    <button class="acc-header" onclick="toggleAcc('features')" id="features-btn">
+      <span class="acc-title">What makes Mighty different</span>
+      <svg class="acc-chevron" id="features-chevron" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,7 9,12 14,7"/></svg>
+    </button>
+    <div class="acc-content" id="features">
+      <div class="acc-body">
+        <div class="cards">
+          <div class="fcard">
+            <div class="fcard-icon"><svg width="16" height="16" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><polyline points="5,8 7,10 11,6"/></svg></div>
+            <h3>An independent record</h3>
+            <p>Logged in Mighty — separate from your AI, which can't edit or delete it. Not your AI's history. Yours.</p>
+          </div>
+          <div class="fcard">
+            <div class="fcard-icon"><svg width="16" height="16" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><rect x="2" y="1" width="12" height="14" rx="2"/><line x1="5" y1="5" x2="11" y2="5"/><line x1="5" y1="8" x2="11" y2="8"/><line x1="5" y1="11" x2="8" y2="11"/></svg></div>
+            <h3>Full-content logging</h3>
+            <p>The email body, the amount, the file — not just a summary. Enough detail to verify, not just remember.</p>
+          </div>
+          <div class="fcard">
+            <div class="fcard-icon"><svg width="16" height="16" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="4" cy="8" r="2"/><circle cx="12" cy="3" r="2"/><circle cx="12" cy="13" r="2"/><line x1="5.8" y1="7" x2="10.2" y2="4.2"/><line x1="5.8" y1="9" x2="10.2" y2="11.8"/></svg></div>
+            <h3>Any agent, any platform</h3>
+            <p>Claude Desktop (MCP), ChatGPT Projects, or your own agent via a simple HTTP API.</p>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
-</section>
+
+  <!-- For teams -->
+  <div class="acc-item" id="enterprise">
+    <button class="acc-header" onclick="toggleAcc('teams')" id="teams-btn">
+      <span class="acc-title">Using Mighty for a team?</span>
+      <svg class="acc-chevron" id="teams-chevron" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,7 9,12 14,7"/></svg>
+    </button>
+    <div class="acc-content" id="teams">
+      <div class="acc-body">
+        <div class="ent-wrap">
+          <p class="enterprise-sub">When teams give AI agents real authority — over email, purchasing, contracts, or operations — an independent record isn't optional, it's essential. Tell us about your use case.</p>
+          <div id="ent-form-wrap">
+            <form id="ent-form" class="ent-form">
+              <label>Full name</label>
+              <input type="text" id="ent-name" placeholder="Jane Smith" required>
+              <label>Work email</label>
+              <input type="email" id="ent-email" placeholder="jane@company.com" required>
+              <label>Company</label>
+              <input type="text" id="ent-company" placeholder="Acme Corp">
+              <label>Tell us about your use case <span style="font-weight:400;color:#aaa">(optional)</span></label>
+              <textarea id="ent-message" placeholder="We are deploying agents that..."></textarea>
+              <button type="submit" class="btn-ent" id="enterprise-submit-btn">Get in touch &rarr;</button>
+            </form>
+            <div class="ent-thanks" id="ent-thanks">Thanks — we will be in touch within one business day.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
 
 <!-- Footer -->
 <div class="footer-bar">&copy; <span id="cy">2026</span> Mighty &middot; <a href="/privacy" style="color:#9ca3af;text-decoration:none">Privacy</a> &middot; <a href="/tos" style="color:#9ca3af;text-decoration:none">Terms</a></div>
 
 <script>
 document.getElementById('cy').textContent = new Date().getFullYear();
+
 function toggleNav() {
   var nav = document.getElementById('nav-actions');
   nav.classList.toggle('open');
@@ -729,29 +764,62 @@ document.addEventListener('click', function(e) {
     nav.classList.remove('open');
   }
 });
+
+// Accordion
+function toggleAcc(id) {
+  var content  = document.getElementById(id);
+  var chevron  = document.getElementById(id + '-chevron');
+  var isOpen   = content.classList.contains('open');
+  // close all
+  document.querySelectorAll('.acc-content').forEach(function(el) {
+    el.classList.remove('open');
+    el.style.maxHeight = '0';
+  });
+  document.querySelectorAll('.acc-chevron').forEach(function(el) {
+    el.classList.remove('open');
+  });
+  // open clicked if it was closed
+  if (!isOpen) {
+    content.classList.add('open');
+    content.style.maxHeight = content.scrollHeight + 'px';
+    chevron.classList.add('open');
+  }
+}
+
+function openFirst() {
+  var first = document.querySelector('.acc-item');
+  if (first) {
+    first.scrollIntoView({behavior: 'smooth', block: 'start'});
+    setTimeout(function() { toggleAcc('hiw'); }, 350);
+  }
+}
+
 document.getElementById("ent-form").addEventListener("submit", function(e) {
   e.preventDefault();
-  var name = document.getElementById("ent-name").value.trim();
-  var email = document.getElementById("ent-email").value.trim();
+  var name    = document.getElementById("ent-name").value.trim();
+  var email   = document.getElementById("ent-email").value.trim();
   var company = document.getElementById("ent-company").value.trim();
   var message = document.getElementById("ent-message").value.trim();
-  var submitBtn = document.getElementById("enterprise-submit-btn");
-  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Sending..."; }
+  var btn     = document.getElementById("enterprise-submit-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Sending..."; }
   fetch("/enterprise-interest", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({"name": name, "email": email, "company": company, "message": message})
+    body: JSON.stringify({name: name, email: email, company: company, message: message})
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) {
       document.getElementById("ent-form").style.display = "none";
       document.getElementById("ent-thanks").style.display = "block";
+      // re-measure accordion height
+      var tc = document.getElementById('teams');
+      if (tc && tc.classList.contains('open')) tc.style.maxHeight = tc.scrollHeight + 'px';
     } else {
-      document.getElementById("enterprise-submit-btn").textContent = "Error — please try again";
-      document.getElementById("enterprise-submit-btn").disabled = false;
+      btn.textContent = "Error — please try again";
+      btn.disabled = false;
     }
   }).catch(function() {
-    document.getElementById("enterprise-submit-btn").textContent = "Error — please try again";
-    document.getElementById("enterprise-submit-btn").disabled = false;
+    btn.textContent = "Error — please try again";
+    btn.disabled = false;
   });
 });
 </script>
