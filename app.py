@@ -638,16 +638,6 @@ body{background:#fff;color:#1a1a1a}
   </button>
 </section>
 
-<!-- Social proof bar -->
-<div class="sp-bar">
-  <div class="sp-inner">
-    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> Works with Claude, ChatGPT &amp; custom agents</div>
-    <div class="sp-dot"></div>
-    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> 5-minute setup</div>
-    <div class="sp-dot"></div>
-    <div class="sp-item"><svg width="14" height="14" fill="none" stroke="#7c3aed" stroke-width="2"><polyline points="2,8 6,12 12,4"/></svg> No credit card required</div>
-  </div>
-</div>
 
 <!-- Accordion -->
 <div class="accordion" id="more">
