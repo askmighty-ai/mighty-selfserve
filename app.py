@@ -625,8 +625,8 @@ body{background:#fff;color:#1a1a1a}
 <!-- Hero -->
 <section class="hero">
   <div class="hero-inner">
-    <h1>For the actions your AI<br>can't take back.</h1>
-    <p class="hero-sub">Wire transfers. Signed contracts. Sent legal notices.<br>Mighty keeps the independent record of what your AI did — and what you approved.</p>
+    <h1>Your AI, accountable.</h1>
+    <p class="hero-sub">Keep tabs on your agent's most consequential actions — what it did, what you approved, and when.</p>
     <div class="hero-ctas">
       <a href="/signup" class="btn-primary-lg">Create free account &rarr;</a>
       <a href="#more" class="hero-link">Using Mighty for a team? &rarr;</a>
