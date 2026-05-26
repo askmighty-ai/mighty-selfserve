@@ -780,7 +780,6 @@ function openFirst() {
   var first = document.querySelector('.acc-item');
   if (first) {
     first.scrollIntoView({behavior: 'smooth', block: 'start'});
-    setTimeout(function() { toggleAcc('hiw'); }, 350);
   }
 }
 
