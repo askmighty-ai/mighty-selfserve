@@ -550,7 +550,7 @@ body{background:#fff;color:#1a1a1a}
 .btn-primary-lg:hover{background:#6d28d9;text-decoration:none;color:#fff}
 .hero-link{font-size:13px;color:#9ca3af;text-decoration:none;font-weight:500}
 .hero-link:hover{color:#6b7280;text-decoration:underline}
-.hero-scroll{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;color:#c4b5fd;font-size:12px;font-weight:500;letter-spacing:0.5px;text-transform:uppercase;cursor:pointer;border:none;background:none;transition:color 0.12s}
+.hero-scroll{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;color:#c4b5fd;font-size:11px;font-weight:500;letter-spacing:0.8px;text-transform:uppercase;cursor:pointer;border:none;outline:none;background:none;padding:0;transition:color 0.12s;font-family:inherit}
 .hero-scroll:hover{color:#7c3aed}
 .hero-scroll svg{animation:bounce 2s infinite}
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
@@ -612,13 +612,6 @@ body{background:#fff;color:#1a1a1a}
       <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
       <div class="logo-name">Mighty</div>
     </a>
-    <div class="nav-actions" id="nav-actions">
-      <a href="/login" class="nav-signin">Sign in</a>
-      <a href="/signup" class="btn-nav">Get started</a>
-    </div>
-    <button class="nav-hamburger" id="nav-menu-btn" onclick="toggleNav()" aria-label="Open menu">
-      <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="5" x2="18" y2="5"/><line x1="2" y1="11" x2="18" y2="11"/><line x1="2" y1="17" x2="18" y2="17"/></svg>
-    </button>
   </div>
 </nav>
 
@@ -628,7 +621,8 @@ body{background:#fff;color:#1a1a1a}
     <h1>Your AI, accountable.</h1>
     <p class="hero-sub">Keep tabs on your agent's most consequential actions — what it did, what you approved, and when.</p>
     <div class="hero-ctas">
-      <a href="/signup" class="btn-primary-lg">Create free account &rarr;</a>
+      <a href="/signup" class="btn-primary-lg">Create account &rarr;</a>
+      <a href="/login" class="hero-link">Sign in &rarr;</a>
       <a href="#more" class="hero-link">Using Mighty for a team? &rarr;</a>
     </div>
   </div>
