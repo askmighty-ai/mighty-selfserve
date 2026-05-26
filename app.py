@@ -771,10 +771,10 @@ function toggleAcc(id) {
 }
 
 function openFirst() {
+  var btn = document.querySelector('.hero-scroll');
+  if (btn) btn.style.display = 'none';
   var first = document.querySelector('.acc-item');
-  if (first) {
-    first.scrollIntoView({behavior: 'smooth', block: 'start'});
-  }
+  if (first) first.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 document.getElementById("ent-form").addEventListener("submit", function(e) {
