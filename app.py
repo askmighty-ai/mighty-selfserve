@@ -848,7 +848,7 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-name">Mighty</div>
   </div>
   <h1>Create your account</h1>
-  <p class="sub">Free to start. You'll be connected in about 5 minutes.</p>
+  <p class="sub">You'll be connected in about 5 minutes.</p>
   {error}
   <form method="POST" action="/signup">
 <input type="hidden" name="_csrf" value="{csrf_token}">
@@ -856,9 +856,8 @@ input:focus{outline:none;border-color:#7c3aed}
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
     <label>Password</label>
     <input type="password" name="password" placeholder="Choose a password" required autocomplete="new-password" minlength="6" maxlength="128">
-    <button class="btn-primary" type="submit">Create free account &rarr;</button>
+    <button class="btn-primary" type="submit">Create account &rarr;</button>
   </form>
-  <p style="text-align:center;font-size:12px;color:#9ca3af;margin-top:12px">No credit card required.</p>
   <div class="footer">Already have an account? <a href="/login">Sign in</a></div>
   <div style="text-align:center;margin-top:8px;font-size:12px;color:#9ca3af">By signing up you agree to our <a href="/tos" style="color:#9ca3af">Terms</a> and <a href="/privacy" style="color:#9ca3af">Privacy Policy</a>.</div>
 </div>
