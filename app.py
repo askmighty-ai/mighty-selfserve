@@ -649,21 +649,21 @@ body{background:#fff;color:#1a1a1a}
             <div class="step-num">1</div>
             <div class="step-body">
               <h3>Connect your agent</h3>
-              <p>Add the Mighty system prompt to ChatGPT, or install the MCP plugin for Claude Desktop. Takes about 5 minutes.</p>
+              <p>Add the Mighty system prompt to ChatGPT, or install the MCP plugin for Claude Desktop. Works with any custom agent via API. Takes about 5 minutes.</p>
             </div>
           </div>
           <div class="step">
             <div class="step-num">2</div>
             <div class="step-body">
               <h3>Your agent asks before acting</h3>
-              <p>When your agent is about to do something consequential — send an email, make a purchase, edit a file — it checks with you first.</p>
+              <p>Before anything consequential — sending an email, making a purchase, editing a file — your agent checks with you first.</p>
             </div>
           </div>
           <div class="step">
             <div class="step-num">3</div>
             <div class="step-body">
-              <h3>You decide. Mighty records it.</h3>
-              <p>Approve or deny. Every action your agent takes is logged — what it was going to do, and what you said.</p>
+              <h3>You decide. Mighty keeps the record.</h3>
+              <p>Your decision is logged independently — separate from your AI, which can't edit or delete it. Detailed enough to prove what happened, when you need to.</p>
             </div>
           </div>
         </div>
@@ -671,34 +671,6 @@ body{background:#fff;color:#1a1a1a}
     </div>
   </div>
 
-  <!-- What you get -->
-  <div class="acc-item">
-    <button class="acc-header" onclick="toggleAcc('features')" id="features-btn">
-      <span class="acc-title">What makes Mighty different</span>
-      <svg class="acc-chevron" id="features-chevron" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,7 9,12 14,7"/></svg>
-    </button>
-    <div class="acc-content" id="features">
-      <div class="acc-body">
-        <div class="cards">
-          <div class="fcard">
-            <div class="fcard-icon"><svg width="16" height="16" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><polyline points="5,8 7,10 11,6"/></svg></div>
-            <h3>An independent record</h3>
-            <p>Logged in Mighty — separate from your AI, which can't edit or delete it. Not your AI's history. Yours.</p>
-          </div>
-          <div class="fcard">
-            <div class="fcard-icon"><svg width="16" height="16" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><rect x="2" y="1" width="12" height="14" rx="2"/><line x1="5" y1="5" x2="11" y2="5"/><line x1="5" y1="8" x2="11" y2="8"/><line x1="5" y1="11" x2="8" y2="11"/></svg></div>
-            <h3>Full-content logging</h3>
-            <p>The email body, the amount, the file — not just a summary. Enough detail to verify, not just remember.</p>
-          </div>
-          <div class="fcard">
-            <div class="fcard-icon"><svg width="16" height="16" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round"><circle cx="4" cy="8" r="2"/><circle cx="12" cy="3" r="2"/><circle cx="12" cy="13" r="2"/><line x1="5.8" y1="7" x2="10.2" y2="4.2"/><line x1="5.8" y1="9" x2="10.2" y2="11.8"/></svg></div>
-            <h3>Any agent, any platform</h3>
-            <p>Claude Desktop (MCP), ChatGPT Projects, or your own agent via a simple HTTP API.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <!-- For teams -->
   <div class="acc-item" id="enterprise">
