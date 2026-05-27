@@ -534,12 +534,6 @@ body{background:#fff;color:#1a1a1a}
 .btn-nav{padding:8px 18px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 0.12s}
 .btn-nav:hover{background:#6d28d9;text-decoration:none;color:#fff}
 .nav-hamburger{display:none;background:none;border:none;cursor:pointer;padding:6px;color:#444;line-height:0}
-@media(max-width:600px){
-  .nav-hamburger{display:flex;align-items:center;justify-content:center}
-  .nav-actions{display:none;position:absolute;top:60px;left:0;right:0;background:#fff;border-bottom:1px solid #e5e3df;padding:16px 24px;flex-direction:column;align-items:flex-start;gap:14px;z-index:99;box-shadow:0 4px 12px rgba(0,0,0,0.06)}
-  .nav-actions.open{display:flex}
-  .btn-nav{width:100%;text-align:center}
-}
 /* Hero — full viewport */
 .hero{background:#fff;min-height:calc(100vh - 60px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:60px 24px 80px;position:relative}
 .hero-inner{max-width:600px;margin:0 auto}
@@ -554,13 +548,6 @@ body{background:#fff;color:#1a1a1a}
 .hero-scroll:hover{color:#7c3aed}
 .hero-scroll svg{animation:bounce 2s infinite}
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
-@media(max-width:600px){.hero h1{font-size:36px}.hero{padding:40px 24px 80px}}
-/* Social proof bar */
-.sp-bar{background:#f8f7f5;border-top:1px solid #f0ede8;border-bottom:1px solid #f0ede8;padding:12px 24px}
-.sp-inner{max-width:900px;margin:0 auto;display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap}
-.sp-item{font-size:13px;color:#6b7280;display:flex;align-items:center;gap:6px}
-.sp-dot{width:4px;height:4px;border-radius:50%;background:#d1d5db;flex-shrink:0}
-@media(max-width:600px){.sp-bar{display:none}}
 /* Accordion */
 .accordion{max-width:760px;margin:0 auto;padding:0 24px 80px}
 .acc-item{border-bottom:1px solid #e5e3df}
@@ -583,7 +570,6 @@ body{background:#fff;color:#1a1a1a}
 .step-body p{font-size:14px;color:#555;line-height:1.6}
 /* Feature cards (inside accordion) */
 .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
-@media(max-width:700px){.cards{grid-template-columns:1fr}}
 .fcard{background:#fff;border:1.5px solid #e5e3df;border-radius:12px;padding:24px 20px}
 .fcard h3{font-size:15px;font-weight:700;color:#1a1a1a;margin-bottom:8px}
 .fcard p{font-size:13px;color:#555;line-height:1.6}
@@ -601,6 +587,33 @@ body{background:#fff;color:#1a1a1a}
 .ent-thanks{display:none;padding:16px 0;font-size:15px;color:#16a34a;font-weight:600}
 /* Footer */
 .footer-bar{background:#fff;border-top:1px solid #e5e3df;padding:24px;text-align:center;font-size:13px;color:#9ca3af}
+/* ── Mobile (≤ 640px) ────────────────────────────────────────────────────── */
+@media(max-width:640px){
+  /* Hero */
+  .hero{min-height:calc(100vh - 60px);padding:48px 20px 72px}
+  .hero h1{font-size:36px;letter-spacing:-0.5px;margin-bottom:16px}
+  .hero-sub{font-size:16px;max-width:100%}
+  .hero-ctas{gap:10px}
+  .btn-primary-lg{width:100%;text-align:center;padding:14px 20px;font-size:16px}
+  .hero-link{font-size:14px}
+  .hero-scroll{bottom:20px;font-size:10px}
+  /* Accordion */
+  .accordion{padding:0 16px 60px}
+  .acc-header{padding:18px 0}
+  .acc-title{font-size:16px}
+  /* Steps */
+  .steps{gap:24px}
+  .step{gap:14px}
+  .step-num{width:30px;height:30px;font-size:13px;flex-shrink:0}
+  .step-body h3{font-size:15px}
+  .step-body p{font-size:14px}
+  /* Feature cards */
+  .cards{grid-template-columns:1fr}
+  /* Enterprise form */
+  .ent-form{padding:20px 16px}
+  /* Footer */
+  .footer-bar{padding:20px 16px;font-size:12px}
+}
 </style>
 </head>
 <body>
