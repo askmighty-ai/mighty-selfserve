@@ -15,7 +15,13 @@ Env vars (all optional):
   PORT          — Port to listen on (default: 5004)
 """
 
-import os, io, csv, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html, time
+import os, io, csv, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html, time, base64
+
+try:
+    from cryptography.fernet import Fernet
+    _FERNET_AVAILABLE = True
+except ImportError:
+    _FERNET_AVAILABLE = False
 import bcrypt as _bcrypt
 
 from datetime import datetime, timezone, timedelta
@@ -135,6 +141,17 @@ def init_db():
                 created_at TEXT NOT NULL,
                 used       INTEGER DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS account_data (
+                user_id      TEXT NOT NULL,
+                source       TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                icon         TEXT,
+                color        TEXT,
+                data_enc     TEXT,
+                synced_at    TEXT NOT NULL,
+                PRIMARY KEY (user_id, source),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
         """)
         try:
             db.execute("ALTER TABLE actions ADD COLUMN consequence_level TEXT DEFAULT 'routine'")
@@ -222,6 +239,40 @@ def check_pw(stored, provided):
 
 def utcnow():
     return datetime.now(timezone.utc)
+
+# ── Per-user data encryption ───────────────────────────────────────────────────
+# Key is derived from SECRET_KEY + user_id so each user's data uses a distinct key.
+# This protects against raw database theft; the server itself can decrypt (v1 trade-off).
+
+def _data_fernet(user_id: str):
+    """Return a Fernet instance keyed to this user. Returns None if cryptography not installed."""
+    if not _FERNET_AVAILABLE:
+        return None
+    raw = hashlib.pbkdf2_hmac(
+        "sha256",
+        (app.secret_key + user_id).encode(),
+        b"mighty-account-data-v1",
+        100_000,
+    )
+    return Fernet(base64.urlsafe_b64encode(raw))
+
+def encrypt_account_data(user_id: str, data: dict) -> str:
+    """Encrypt account data JSON. Falls back to plain JSON if cryptography unavailable."""
+    f = _data_fernet(user_id)
+    payload = json.dumps(data).encode()
+    return ("enc:" + f.encrypt(payload).decode()) if f else ("plain:" + payload.decode())
+
+def decrypt_account_data(user_id: str, stored: str) -> dict:
+    """Decrypt stored account data. Handles both encrypted and plain fallback."""
+    try:
+        if stored.startswith("enc:"):
+            f = _data_fernet(user_id)
+            return json.loads(f.decrypt(stored[4:].encode()))
+        if stored.startswith("plain:"):
+            return json.loads(stored[6:])
+        return json.loads(stored)
+    except Exception:
+        return {}
 
 def iso():
     return utcnow().isoformat()
@@ -1254,6 +1305,14 @@ details[open] summary::before{content:"\\25BE "}
 .empty-state-icon{width:40px;height:40px;background:#f3f0ff;border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}
 .empty-state-title{font-size:14px;font-weight:600;color:#6b7280;margin-bottom:6px}
 .empty-state-sub{font-size:12px;color:#9ca3af;line-height:1.6}
+.feed-tab{padding:6px 14px;border-radius:7px;border:1px solid #e5e3df;background:#fff;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer;font-family:inherit;transition:all 0.12s}
+.feed-tab.active{background:#f3f0ff;border-color:#d4c6ff;color:#5b21b6}
+.acct-card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:16px 18px;margin-bottom:10px}
+.acct-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.acct-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid #f5f3f0}
+.acct-row:last-child{border-bottom:none}
+.acct-lbl{font-size:12px;color:#9ca3af}
+.acct-val{font-size:13px;font-weight:600;color:#1a1a1a}
 @media(max-width:768px){body{height:auto;overflow:auto}.feed-col{overflow:visible}.sidebar{overflow:visible}}
 </style>
 </head>
@@ -1280,13 +1339,26 @@ details[open] summary::before{content:"\\25BE "}
   {sidebar_content}
 
   <div class="feed-col" {feed_col_hidden}>
-    <div class="feed-title">Activity Log</div>
-    <div class="feed-sub">A live log of everything your agent does</div>
-    <div style="margin-bottom:14px">
-      <input type="text" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)" style="width:100%;padding:8px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+    <div style="display:flex;gap:6px;margin-bottom:18px">
+      <button class="feed-tab active" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
+      <button class="feed-tab" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
     </div>
-    <div class="feed" id="feed">
-      {feed_html}
+
+    <div id="fview-activity">
+      <div class="feed-title">Activity Log</div>
+      <div class="feed-sub">A live log of everything your agent does</div>
+      <div style="margin-bottom:14px">
+        <input type="text" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)" style="width:100%;padding:8px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      </div>
+      <div class="feed" id="feed">
+        {feed_html}
+      </div>
+    </div>
+
+    <div id="fview-accounts" style="display:none">
+      <div class="feed-title">Account Data</div>
+      <div class="feed-sub">Live data pulled from your connected accounts</div>
+      <div style="margin-top:14px">{account_data_html}</div>
     </div>
   </div>
 </div>
@@ -1298,6 +1370,21 @@ function switchTab(name, btn) {
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
 }
+function switchFeedTab(name, btn) {
+  ['activity','accounts'].forEach(function(n) {
+    document.getElementById('fview-' + n).style.display = n === name ? '' : 'none';
+    document.getElementById('ftab-' + n).classList.toggle('active', n === name);
+  });
+  sessionStorage.setItem('mighty-feed-tab', name);
+}
+// Restore feed tab after reload
+(function() {
+  var t = sessionStorage.getItem('mighty-feed-tab');
+  if (t && t !== 'activity') {
+    var btn = document.getElementById('ftab-' + t);
+    if (btn) switchFeedTab(t, btn);
+  }
+})();
 function copyMcpConfig(btn) {
   navigator.clipboard.writeText(document.getElementById('mcpConfigBox').textContent);
   btn.textContent = 'Copied!';
@@ -2519,15 +2606,75 @@ def dashboard():
         sidebar_content = '<div class="sidebar">' + sidebar_card + '</div>'
         feed_col_hidden = ''
 
+    # ── Account data tab ──────────────────────────────────────────────────────
+    acct_rows = get_db().execute(
+        "SELECT * FROM account_data WHERE user_id=? ORDER BY synced_at DESC",
+        (user["id"],)
+    ).fetchall()
+
+    CATEGORY_ORDER = ["amex","chase","sfcu","amazon","delta","hertz","marriott",
+                      "hilton","disney_plus","ticketmaster","xfinity","pa_utilities","pamf"]
+
+    def _fmt_sync(ts):
+        try:
+            dt = datetime.fromisoformat(ts)
+            delta = utcnow() - dt
+            mins = int(delta.total_seconds() // 60)
+            if mins < 60: return f"{mins}m ago"
+            hrs = mins // 60
+            if hrs < 24: return f"{hrs}h ago"
+            return f"{hrs // 24}d ago"
+        except Exception:
+            return ts[:10] if ts else "—"
+
+    if acct_rows:
+        cards_html = ""
+        row_map = {r["source"]: r for r in acct_rows}
+        ordered = [row_map[k] for k in CATEGORY_ORDER if k in row_map]
+        ordered += [r for r in acct_rows if r["source"] not in CATEGORY_ORDER]
+        for row in ordered:
+            data = decrypt_account_data(user["id"], row["data_enc"] or "")
+            items = data.get("items", [])
+            items_html = "".join(
+                f'<div class="acct-row"><span class="acct-lbl">{he(i["label"])}</span>'
+                f'<span class="acct-val">{he(i["value"])}</span></div>'
+                for i in items
+            ) if items else '<div class="acct-row"><span class="acct-lbl" style="font-style:italic">No data extracted</span></div>'
+            status_color = "#30d158" if data.get("status") == "ok" else "#ff3b30"
+            cards_html += (
+                f'<div class="acct-card">'
+                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
+                f'<div class="acct-icon" style="background:{he(row["color"] or "#f0f0f0")}">{he(row["icon"] or "?")}</div>'
+                f'<div style="flex:1">'
+                f'<div style="font-size:13px;font-weight:600;color:#1a1a1a">{he(row["display_name"])}</div>'
+                f'<div style="font-size:11px;color:#9ca3af">Synced {_fmt_sync(row["synced_at"])}</div>'
+                f'</div>'
+                f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0"></div>'
+                f'</div>'
+                f'{items_html}'
+                f'</div>'
+            )
+        account_data_html = cards_html
+    else:
+        account_data_html = (
+            '<div style="text-align:center;padding:48px 24px">'
+            '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:8px">No account data yet</div>'
+            '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:280px;margin:0 auto">'
+            'Run <code style="background:#f3f0ff;padding:2px 6px;border-radius:4px;font-size:12px">python3 scrape.py</code> '
+            'with your Mighty API key set to sync your accounts here.</div>'
+            '</div>'
+        )
+
     return (DASHBOARD_HTML
-            .replace("{email}",             he(user["email"]))
-            .replace("{feed_html}",         feed)
-            .replace("{pending_count}",     str(pending_count))
-            .replace("{pending_display}",   pending_display)
-            .replace("{sidebar_content}",   sidebar_content)
-            .replace("{feed_col_hidden}",   feed_col_hidden)
-            .replace("{onboarding_banner}", onboarding_banner)
-            .replace("{csrf_token}",        get_csrf_token()))
+            .replace("{email}",              he(user["email"]))
+            .replace("{feed_html}",          feed)
+            .replace("{pending_count}",      str(pending_count))
+            .replace("{pending_display}",    pending_display)
+            .replace("{sidebar_content}",    sidebar_content)
+            .replace("{feed_col_hidden}",    feed_col_hidden)
+            .replace("{onboarding_banner}",  onboarding_banner)
+            .replace("{account_data_html}",  account_data_html)
+            .replace("{csrf_token}",         get_csrf_token()))
 
 @app.route("/settings")
 @require_login
@@ -3219,6 +3366,66 @@ def api_ping():
     local, _, domain = email.partition("@")
     masked = local[0] + ("*" * max(1, len(local) - 1)) + "@" + domain
     return jsonify({"ok": True, "account": masked})
+
+
+# ── Account data sync API ─────────────────────────────────────────────────────
+
+@app.route("/api/data/sync", methods=["POST"])
+def api_data_sync():
+    """Receive scraped account data from the local scraper and store it encrypted.
+
+    Body (JSON):
+        api_key   — user's Mighty API key
+        source    — account key, e.g. "amex"
+        data      — the result dict from the scraper (name, icon, color, status, items)
+        synced_at — ISO timestamp of when the scrape ran (optional)
+    """
+    user, body = api_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Invalid or missing api_key"}), 401
+
+    source = (body.get("source") or "").strip().lower()
+    if not source:
+        return jsonify({"ok": False, "error": "source required"}), 400
+
+    data       = body.get("data") or {}
+    synced_at  = body.get("synced_at") or iso()
+    display    = data.get("name", source)
+    icon       = data.get("icon", "?")
+    color      = data.get("color", "#f0f0f0")
+    data_enc   = encrypt_account_data(user["id"], data)
+
+    db = get_db()
+    db.execute(
+        "INSERT OR REPLACE INTO account_data "
+        "(user_id, source, display_name, icon, color, data_enc, synced_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (user["id"], source, display, icon, color, data_enc, synced_at),
+    )
+    db.commit()
+    return jsonify({"ok": True, "source": source})
+
+
+@app.route("/api/data", methods=["GET", "POST"])
+@require_login
+def api_data_get():
+    """Return all decrypted account data for the logged-in user (dashboard use)."""
+    rows = get_db().execute(
+        "SELECT * FROM account_data WHERE user_id=? ORDER BY synced_at DESC",
+        (session["user_id"],),
+    ).fetchall()
+    result = {}
+    for row in rows:
+        data = decrypt_account_data(session["user_id"], row["data_enc"] or "")
+        result[row["source"]] = {
+            "display_name": row["display_name"],
+            "icon":         row["icon"],
+            "color":        row["color"],
+            "synced_at":    row["synced_at"],
+            "status":       data.get("status", "unknown"),
+            "items":        data.get("items", []),
+        }
+    return jsonify({"ok": True, "data": result})
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────
