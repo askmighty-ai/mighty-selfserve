@@ -152,6 +152,17 @@ def init_db():
                 PRIMARY KEY (user_id, source),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
+            CREATE TABLE IF NOT EXISTS account_credentials (
+                user_id      TEXT NOT NULL,
+                source       TEXT NOT NULL,
+                username_enc TEXT,
+                password_enc TEXT,
+                extra_enc    TEXT,
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                PRIMARY KEY (user_id, source),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
         """)
         try:
             db.execute("ALTER TABLE actions ADD COLUMN consequence_level TEXT DEFAULT 'routine'")
@@ -255,6 +266,36 @@ def _data_fernet(user_id: str):
         100_000,
     )
     return Fernet(base64.urlsafe_b64encode(raw))
+
+def _cred_fernet(user_id: str):
+    """Fernet key for credential encryption — different salt from account data."""
+    if not _FERNET_AVAILABLE:
+        return None
+    raw = hashlib.pbkdf2_hmac(
+        "sha256",
+        (app.secret_key + user_id).encode(),
+        b"mighty-credentials-v1",
+        100_000,
+    )
+    return Fernet(base64.urlsafe_b64encode(raw))
+
+def encrypt_cred(user_id: str, value: str) -> str:
+    if not value:
+        return ""
+    f = _cred_fernet(user_id)
+    return ("enc:" + f.encrypt(value.encode()).decode()) if f else ("plain:" + value)
+
+def decrypt_cred(user_id: str, stored: str) -> str:
+    if not stored:
+        return ""
+    try:
+        if stored.startswith("enc:"):
+            return _cred_fernet(user_id).decrypt(stored[4:].encode()).decode()
+        if stored.startswith("plain:"):
+            return stored[6:]
+        return stored
+    except Exception:
+        return ""
 
 def encrypt_account_data(user_id: str, data: dict) -> str:
     """Encrypt account data JSON. Falls back to plain JSON if cryptography unavailable."""
@@ -1328,6 +1369,7 @@ details[open] summary::before{content:"\\25BE "}
     {pending_count} awaiting decision
   </div>
   <div class="topbar-right">
+    <a href="/credentials" style="font-size:12px;color:#6b7280;text-decoration:none">Accounts</a>
     <a href="/settings" style="font-size:12px;color:#6b7280;text-decoration:none">Settings</a>
     <span class="topbar-email">{email}</span>
     <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf_token}"><button class="btn-logout" type="submit">Sign out</button></form>
@@ -3366,6 +3408,346 @@ def api_ping():
     local, _, domain = email.partition("@")
     masked = local[0] + ("*" * max(1, len(local) - 1)) + "@" + domain
     return jsonify({"ok": True, "account": masked})
+
+
+# ── Credential management ─────────────────────────────────────────────────────
+
+SUPPORTED_SITES = [
+    ("amex",         "American Express",      "💳", "#e8f0fe", "Banking & Finance"),
+    ("chase",        "Chase",                 "🏦", "#e3f2fd", "Banking & Finance"),
+    ("sfcu",         "Stanford FCU",          "🏦", "#dbeafe", "Banking & Finance"),
+    ("amazon",       "Amazon",                "📦", "#fff8e1", "Shopping"),
+    ("delta",        "Delta",                 "✈️", "#e3f2fd", "Travel"),
+    ("hertz",        "Hertz",                 "🚗", "#fff3e0", "Travel"),
+    ("marriott",     "Marriott Bonvoy",       "🏨", "#fce8e6", "Travel"),
+    ("hilton",       "Hilton Honors",         "🏨", "#e8f5e9", "Travel"),
+    ("disney_plus",  "Disney+",               "🎬", "#e8f0fe", "Entertainment"),
+    ("ticketmaster", "Ticketmaster",          "🎟️", "#fce8e6", "Entertainment"),
+    ("xfinity",      "Xfinity",              "📡", "#e8f5e9", "Utilities & Bills"),
+    ("pa_utilities", "Palo Alto Utilities",   "⚡", "#fff3e0", "Utilities & Bills"),
+    ("pamf",         "PAMF MyChart",          "🏥", "#e8f5e9", "Health"),
+]
+
+
+def _build_credentials_page(user, configured: set) -> str:
+    """Generate the credentials management page HTML."""
+    csrf = get_csrf_token()
+
+    # Group sites by category
+    categories: dict = {}
+    for key, name, icon, color, cat in SUPPORTED_SITES:
+        categories.setdefault(cat, []).append((key, name, icon, color))
+
+    sections_html = ""
+    for cat, sites in categories.items():
+        cards = ""
+        for key, name, icon, color in sites:
+            is_set = key in configured
+            badge = (
+                '<span style="font-size:10px;font-weight:600;padding:2px 8px;'
+                'border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>'
+                if is_set else
+                '<span style="font-size:10px;color:#9ca3af">Not connected</span>'
+            )
+            cards += f"""
+<div class="cred-card" id="card-{he(key)}">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    <div style="width:32px;height:32px;border-radius:8px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:15px">{icon}</div>
+    <div style="flex:1">
+      <div style="font-size:13px;font-weight:600;color:#1a1a1a">{he(name)}</div>
+      <div id="badge-{he(key)}">{badge}</div>
+    </div>
+    <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}">
+      {'Edit' if is_set else 'Connect'}
+    </button>
+    {f'<button class="btn-remove" onclick="removeCred(\'{he(key)}\',\'{he(name)}\')">Remove</button>' if is_set else ''}
+  </div>
+  <div class="cred-form" id="form-{he(key)}" style="display:none">
+    <input type="text" name="username" placeholder="Username or email"
+           autocomplete="off" id="u-{he(key)}">
+    <input type="password" name="password" placeholder="Password"
+           autocomplete="new-password" id="p-{he(key)}">
+    <details style="margin-top:8px">
+      <summary style="font-size:12px;color:#6b7280;cursor:pointer;user-select:none">
+        Authenticator app 2FA (optional)
+      </summary>
+      <input type="text" name="totp" placeholder="TOTP secret key"
+             style="margin-top:6px" id="t-{he(key)}">
+      <div style="font-size:11px;color:#9ca3af;margin-top:4px">
+        Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.
+      </div>
+    </details>
+    <button class="btn-save" onclick="saveCred('{he(key)}')">Save</button>
+  </div>
+</div>"""
+        sections_html += f"""
+<div style="margin-bottom:28px">
+  <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+              color:#9ca3af;margin-bottom:12px">{he(cat)}</div>
+  {cards}
+</div>"""
+
+    email_section = f"""
+<div style="margin-bottom:28px">
+  <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+              color:#9ca3af;margin-bottom:12px">Email verification codes (auto-fill)</div>
+  <div class="cred-card">
+    <p style="font-size:13px;color:#6b7280;margin-bottom:12px;line-height:1.5">
+      Many sites send a one-time code to your email. Provide a Gmail address and
+      <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:#7c3aed">App Password</a>
+      and the scraper will fetch and fill these codes automatically.
+    </p>
+    <input type="email" id="email-addr" placeholder="Gmail address"
+           value="{he(configured.get('_email_address', ''))}" autocomplete="off">
+    <input type="password" id="email-pw" placeholder="Gmail App Password (16 chars)"
+           autocomplete="new-password">
+    <button class="btn-save" onclick="saveEmail()">Save email config</button>
+  </div>
+</div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Connected Accounts — Mighty</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+     background:#f8f7f5;color:#1a1a1a;min-height:100vh}}
+.topbar{{height:56px;border-bottom:1px solid #e5e3df;background:#fff;
+         display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:10}}
+.topbar-logo{{display:flex;align-items:center;gap:8px;text-decoration:none}}
+.logo-mark{{width:28px;height:28px;border-radius:7px;overflow:hidden}}
+.logo-mark img{{width:100%;height:100%;object-fit:cover}}
+.logo-name{{font-size:15px;font-weight:800;letter-spacing:.4px;
+            background:linear-gradient(135deg,#7c3aed,#6d28d9);
+            -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
+.topbar-right{{display:flex;align-items:center;gap:16px}}
+.topbar-link{{font-size:13px;color:#6b7280;text-decoration:none}}
+.page{{max-width:680px;margin:0 auto;padding:32px 24px}}
+h1{{font-size:20px;font-weight:700;margin-bottom:6px}}
+.sub{{font-size:13px;color:#6b7280;margin-bottom:28px;line-height:1.5}}
+.cred-card{{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:16px 18px;margin-bottom:10px}}
+.cred-form input{{width:100%;padding:8px 12px;border:1.5px solid #e5e3df;border-radius:8px;
+                  font-size:13px;font-family:inherit;outline:none;margin-top:8px;
+                  transition:border-color 0.12s;background:#fff;color:#1a1a1a}}
+.cred-form input:focus{{border-color:#7c3aed}}
+.btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #e5e3df;
+             background:#fff;font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;font-family:inherit}}
+.btn-toggle:hover{{background:#f3f0ff;border-color:#d4c6ff}}
+.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #fecaca;
+             background:#fff;font-size:12px;color:#ef4444;cursor:pointer;font-family:inherit}}
+.btn-remove:hover{{background:#fff0f0}}
+.btn-save{{margin-top:12px;padding:9px 18px;border-radius:8px;background:#7c3aed;
+           color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}}
+.btn-save:hover{{background:#6d28d9}}
+.toast{{position:fixed;bottom:24px;right:24px;background:#1a1a1a;color:#fff;
+        padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;
+        transition:opacity 0.2s;pointer-events:none;z-index:100}}
+.toast.show{{opacity:1}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <a class="topbar-logo" href="/dashboard">
+    <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
+    <div class="logo-name">Mighty</div>
+  </a>
+  <div class="topbar-right">
+    <a class="topbar-link" href="/dashboard">Dashboard</a>
+    <a class="topbar-link" href="/settings">Settings</a>
+    <span style="font-size:13px;color:#9ca3af">{he(user["email"])}</span>
+  </div>
+</div>
+
+<div class="page">
+  <h1>Connected accounts</h1>
+  <p class="sub">
+    Add credentials for each site you want the scraper to monitor.
+    Credentials are encrypted and stored securely — only you can access them via your API key.
+  </p>
+
+  {sections_html}
+  {email_section}
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var CSRF = '{csrf}';
+
+function toggleForm(key) {{
+  var f = document.getElementById('form-' + key);
+  f.style.display = f.style.display === 'none' ? 'block' : 'none';
+}}
+
+function toast(msg, ok) {{
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = ok === false ? '#dc2626' : '#1a1a1a';
+  t.classList.add('show');
+  setTimeout(function() {{ t.classList.remove('show'); }}, 2500);
+}}
+
+function saveCred(key) {{
+  var u = document.getElementById('u-' + key).value.trim();
+  var p = document.getElementById('p-' + key).value;
+  var t = document.getElementById('t-' + key) ? document.getElementById('t-' + key).value.trim() : '';
+  if (!u || !p) {{ toast('Username and password required', false); return; }}
+  fetch('/credentials/save', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF, source: key, username: u, password: p, totp_secret: t}})
+  }}).then(r => r.json()).then(d => {{
+    if (d.ok) {{
+      toast('Saved ✓');
+      document.getElementById('badge-' + key).innerHTML =
+        '<span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>';
+      document.getElementById('btn-' + key).textContent = 'Edit';
+      document.getElementById('form-' + key).style.display = 'none';
+      location.reload();
+    }} else {{ toast(d.error || 'Error', false); }}
+  }});
+}}
+
+function saveEmail() {{
+  var addr = document.getElementById('email-addr').value.trim();
+  var pw   = document.getElementById('email-pw').value;
+  if (!addr || !pw) {{ toast('Email address and app password required', false); return; }}
+  fetch('/credentials/save', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF, source: '_email', username: addr, password: pw}})
+  }}).then(r => r.json()).then(d => {{
+    if (d.ok) {{ toast('Email config saved ✓'); }}
+    else {{ toast(d.error || 'Error', false); }}
+  }});
+}}
+
+function removeCred(key, name) {{
+  if (!confirm('Remove credentials for ' + name + '?')) return;
+  fetch('/credentials/delete/' + key, {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF}})
+  }}).then(() => location.reload());
+}}
+</script>
+</body>
+</html>"""
+
+
+@app.route("/credentials")
+@require_login
+def credentials_page():
+    user = get_db().execute(
+        "SELECT * FROM users WHERE id=?", (session["user_id"],)
+    ).fetchone()
+    rows = get_db().execute(
+        "SELECT source, username_enc FROM account_credentials WHERE user_id=?",
+        (user["id"],)
+    ).fetchall()
+    configured = {r["source"] for r in rows}
+    # Pass email address for pre-filling
+    configured_with_email = set(configured)
+    for r in rows:
+        if r["source"] == "_email":
+            configured_with_email.add(
+                "_email_address"
+            )
+    return _build_credentials_page(user, configured)
+
+
+@app.route("/credentials/save", methods=["POST"])
+@require_login
+def credentials_save():
+    check_csrf()
+    uid      = session["user_id"]
+    source   = request.form.get("source", "").strip()
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    totp     = request.form.get("totp_secret", "").strip()
+
+    if not source or not username:
+        return jsonify({"ok": False, "error": "source and username required"}), 400
+
+    extra = {}
+    if totp: extra["totp_secret"] = totp
+
+    now = iso()
+    db  = get_db()
+    existing = db.execute(
+        "SELECT created_at FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    created = existing["created_at"] if existing else now
+
+    db.execute(
+        "INSERT OR REPLACE INTO account_credentials "
+        "(user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (uid, source,
+         encrypt_cred(uid, username),
+         encrypt_cred(uid, password) if password else "",
+         encrypt_cred(uid, json.dumps(extra)) if extra else "",
+         created, now)
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/credentials/delete/<source>", methods=["POST"])
+@require_login
+def credentials_delete(source):
+    check_csrf()
+    get_db().execute(
+        "DELETE FROM account_credentials WHERE user_id=? AND source=?",
+        (session["user_id"], source)
+    )
+    get_db().commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/credentials", methods=["GET", "POST"])
+def api_credentials_fetch():
+    """Return decrypted credentials for the authenticated user (for the scraper).
+
+    The scraper authenticates with its API key, gets back all credentials
+    in plaintext — decryption happens server-side, so the scraper only
+    needs the API key (no separate encryption password required).
+    """
+    user, _ = api_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Invalid or missing api_key"}), 401
+
+    rows = get_db().execute(
+        "SELECT * FROM account_credentials WHERE user_id=?", (user["id"],)
+    ).fetchall()
+
+    creds   = {}
+    email_cfg = None
+    for row in rows:
+        extra = {}
+        if row["extra_enc"]:
+            try:
+                extra = json.loads(decrypt_cred(user["id"], row["extra_enc"]))
+            except Exception:
+                pass
+
+        if row["source"] == "_email":
+            email_cfg = {
+                "address":      decrypt_cred(user["id"], row["username_enc"] or ""),
+                "app_password": decrypt_cred(user["id"], row["password_enc"] or ""),
+            }
+        else:
+            creds[row["source"]] = {
+                "username":    decrypt_cred(user["id"], row["username_enc"] or ""),
+                "password":    decrypt_cred(user["id"], row["password_enc"] or ""),
+                "totp_secret": extra.get("totp_secret"),
+            }
+
+    return jsonify({"ok": True, "credentials": creds, "email": email_cfg})
 
 
 # ── Account data sync API ─────────────────────────────────────────────────────
