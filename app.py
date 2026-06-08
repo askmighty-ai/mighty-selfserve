@@ -3498,7 +3498,7 @@ def _build_credentials_page(user, configured: set) -> str:
       and the scraper will fetch and fill these codes automatically.
     </p>
     <input type="email" id="email-addr" placeholder="Gmail address"
-           value="{he(configured.get('_email_address', ''))}" autocomplete="off">
+           value="" autocomplete="off">
     <input type="password" id="email-pw" placeholder="Gmail App Password (16 chars)"
            autocomplete="new-password">
     <button class="btn-save" onclick="saveEmail()">Save email config</button>
