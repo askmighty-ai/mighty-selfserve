@@ -279,10 +279,15 @@ def _cred_fernet(user_id: str):
     )
     return Fernet(base64.urlsafe_b64encode(raw))
 
-# ── Claude field discovery ────────────────────────────────────────────────────
+# ── AI field discovery (Gemini Flash) ────────────────────────────────────────
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 try:
-    import anthropic as _anthropic
-    _claude = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+    import google.generativeai as _genai
+    if GEMINI_API_KEY:
+        _genai.configure(api_key=GEMINI_API_KEY)
+        _claude = _genai.GenerativeModel("gemini-1.5-flash")
+    else:
+        _claude = None
 except ImportError:
     _claude = None
 
@@ -304,25 +309,18 @@ Rules:
 - Max 12 fields"""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
-    """Use Claude to identify all useful data fields in a page."""
+    """Use Gemini Flash to identify all useful data fields in a page."""
     if not _claude or not raw_text:
         return []
     try:
-        msg = _claude.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            messages=[{"role": "user", "content":
-                DISCOVER_PROMPT.format(
-                    site=site_name,
-                    text=raw_text[:6000]
-                )}]
-        )
-        text = msg.content[0].text.strip()
+        prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:6000])
+        response = _claude.generate_content(prompt)
+        text = response.text.strip()
         # Extract JSON array even if there's surrounding text
         m = re.search(r'\[.*\]', text, re.DOTALL)
         return json.loads(m.group()) if m else []
     except Exception as e:
-        print(f"[Mighty] Claude discovery error: {e}", flush=True)
+        print(f"[Mighty] Gemini discovery error: {e}", flush=True)
         return []
 
 def encrypt_cred(user_id: str, value: str) -> str:
@@ -3978,7 +3976,7 @@ def credentials_discover(source):
         return jsonify({"ok": False, "error": "No page text stored — sync again"}), 404
 
     if not _claude:
-        return jsonify({"ok": False, "error": "Claude API not configured"}), 503
+        return jsonify({"ok": False, "error": "Gemini API not configured — add GEMINI_API_KEY to Railway"}), 503
 
     # Find site display name
     site_name = next((name for key, name, *_ in SUPPORTED_SITES if key == source), source)
