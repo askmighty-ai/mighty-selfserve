@@ -3853,9 +3853,11 @@ function resetFields(source) {{
     method: 'POST',
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
     body: new URLSearchParams({{_csrf: CSRF}})
-  }}).then(r => r.json()).then(function(d) {{
+  }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
     if (d.ok) discoverFields(source);
     else toast(d.error || 'Reset failed', false);
+  }}).catch(function(e) {{
+    toast('Reset failed — try again', false);
   }});
 }}
 
@@ -3875,7 +3877,7 @@ function discoverFields(source) {{
       if (btn) {{ btn.textContent = 'Discover data fields'; btn.disabled = false; }}
     }}
   }}).catch(function(e) {{
-    toast('Error: ' + e, false);
+    toast('Discovery failed — try syncing again first', false);
     if (btn) {{ btn.textContent = 'Discover data fields'; btn.disabled = false; }}
   }});
 }}
