@@ -314,11 +314,21 @@ def claude_discover_fields(raw_text: str, site_name: str) -> list:
         return []
     try:
         prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:6000])
-        response = _claude.generate_content(prompt)
+        response = _claude.generate_content(
+            prompt,
+            generation_config=_genai.GenerationConfig(
+                response_mime_type="application/json"
+            )
+        )
         text = response.text.strip()
-        # Extract JSON array even if there's surrounding text
-        m = re.search(r'\[.*\]', text, re.DOTALL)
-        return json.loads(m.group()) if m else []
+        print(f"[Mighty] Gemini response ({len(text)} chars): {text[:200]}", flush=True)
+        # Try direct parse first, then extract array
+        try:
+            result = json.loads(text)
+            return result if isinstance(result, list) else []
+        except json.JSONDecodeError:
+            m = re.search(r'\[.*\]', text, re.DOTALL)
+            return json.loads(m.group()) if m else []
     except Exception as e:
         print(f"[Mighty] Gemini discovery error: {e}", flush=True)
         return []
