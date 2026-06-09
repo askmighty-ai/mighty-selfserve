@@ -313,10 +313,9 @@ def claude_discover_fields(raw_text: str, site_name: str) -> list:
         prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:6000])
         # Try models in order until one works
         _models = [
-            "gemini-2.5-flash-preview-05-20",
             "gemini-2.5-flash",
             "gemini-2.5-pro",
-            "gemini-2.0-flash-lite",
+            "gemini-2.5-flash-preview-05-20",
         ]
         response = None
         for _m in _models:
@@ -336,13 +335,23 @@ def claude_discover_fields(raw_text: str, site_name: str) -> list:
         if response is None:
             return []
         text = response.text.strip()
-        print(f"[Mighty] Gemini response ({len(text)} chars): {text[:200]}", flush=True)
+        print(f"[Mighty] Gemini response ({len(text)} chars): {text[:400]}", flush=True)
         try:
             result = json.loads(text)
-            return result if isinstance(result, list) else []
+            if isinstance(result, list):
+                return result
+            # Handle {"fields": [...]} or similar wrapper
+            if isinstance(result, dict):
+                for k in ("fields", "data", "items", "results"):
+                    if isinstance(result.get(k), list):
+                        return result[k]
+            return []
         except json.JSONDecodeError:
             m = re.search(r'\[.*\]', text, re.DOTALL)
-            return json.loads(m.group()) if m else []
+            if m:
+                try: return json.loads(m.group())
+                except Exception: pass
+            return []
     except Exception as e:
         print(f"[Mighty] Gemini discovery error: {e}", flush=True)
         return []
