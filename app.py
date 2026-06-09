@@ -3995,8 +3995,7 @@ def credentials_discover(source):
     if not fields:
         return jsonify({"ok": False, "error": "Could not identify fields — try syncing again"}), 500
 
-    # Save discovered fields + auto-enable all
-    enabled = [f["key"] for f in fields]
+    # Merge with existing — never remove previously discovered fields
     cred_row = get_db().execute(
         "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
         (uid, source)
@@ -4005,8 +4004,24 @@ def credentials_discover(source):
     if cred_row and cred_row["extra_enc"]:
         try: ex = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
         except Exception: pass
-    ex["enabled_fields"]    = enabled
-    ex["discovered_fields"] = fields
+
+    existing  = ex.get("discovered_fields", [])
+    ex_by_key = {f["key"]: f for f in existing}
+    ex_enabled = set(ex.get("enabled_fields", []))
+
+    for f in fields:
+        key = f["key"]
+        if key in ex_by_key:
+            ex_by_key[key]["value"] = f.get("value", "")  # refresh value
+        else:
+            ex_by_key[key] = f          # new field — add it
+            ex_enabled.add(key)         # auto-enable new fields
+
+    merged_fields   = list(ex_by_key.values())
+    merged_enabled  = list(ex_enabled | {f["key"] for f in fields})  # never lose enabled
+
+    ex["enabled_fields"]    = merged_enabled
+    ex["discovered_fields"] = merged_fields
     get_db().execute(
         "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
         (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
