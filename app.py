@@ -279,15 +279,11 @@ def _cred_fernet(user_id: str):
     )
     return Fernet(base64.urlsafe_b64encode(raw))
 
-# ── AI field discovery (Gemini Flash) ────────────────────────────────────────
+# ── AI field discovery (Gemini Flash via google-genai SDK) ───────────────────
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 try:
-    import google.generativeai as _genai
-    if GEMINI_API_KEY:
-        _genai.configure(api_key=GEMINI_API_KEY)
-        _claude = _genai.GenerativeModel("gemini-2.5-flash")
-    else:
-        _claude = None
+    from google import genai as _genai_sdk
+    _claude = _genai_sdk.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 except ImportError:
     _claude = None
 
@@ -315,16 +311,16 @@ def claude_discover_fields(raw_text: str, site_name: str) -> list:
         return []
     try:
         prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:6000])
-        response = _claude.generate_content(
-            prompt,
-            generation_config=_genai.GenerationConfig(
+        response = _claude.models.generate_content(
+            model="gemini-2.0-flash-001",
+            contents=prompt,
+            config=_genai_sdk.types.GenerateContentConfig(
                 response_mime_type="application/json",
-                temperature=0  # deterministic output
-            )
+                temperature=0,
+            ),
         )
         text = response.text.strip()
         print(f"[Mighty] Gemini response ({len(text)} chars): {text[:200]}", flush=True)
-        # Try direct parse first, then extract array
         try:
             result = json.loads(text)
             return result if isinstance(result, list) else []
@@ -4033,7 +4029,10 @@ def credentials_discover(source):
 
     # Find site display name
     site_name = next((name for key, name, *_ in SUPPORTED_SITES if key == source), source)
-    fields = claude_discover_fields(raw_text, site_name)
+    try:
+        fields = claude_discover_fields(raw_text, site_name)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Discovery error: {str(e)[:100]}"}), 500
     if not fields:
         return jsonify({"ok": False, "error": "Could not identify fields — try syncing again"}), 500
 
