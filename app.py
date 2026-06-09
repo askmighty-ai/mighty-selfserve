@@ -4035,7 +4035,18 @@ def credentials_fields_reset(source):
 @require_login
 def credentials_discover(source):
     """Run AI field discovery for an account using the latest stored page text."""
-    check_csrf()
+    from werkzeug.exceptions import HTTPException
+    try:
+        check_csrf()
+    except HTTPException:
+        return jsonify({"ok": False, "error": "Session expired — refresh the page and try again"}), 403
+    try:
+        return _credentials_discover_impl(source)
+    except Exception as e:
+        print(f"[Mighty] Discover endpoint error: {e}", flush=True)
+        return jsonify({"ok": False, "error": f"Server error: {str(e)[:100]}"}), 500
+
+def _credentials_discover_impl(source):
     uid  = session["user_id"]
 
     # Get raw_text from last sync
