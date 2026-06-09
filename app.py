@@ -311,14 +311,30 @@ def claude_discover_fields(raw_text: str, site_name: str) -> list:
         return []
     try:
         prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:6000])
-        response = _claude.models.generate_content(
-            model="gemini-2.0-flash-001",
-            contents=prompt,
-            config=_genai_sdk.types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0,
-            ),
-        )
+        # Try models in order until one works
+        _models = [
+            "gemini-2.5-flash-preview-05-20",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash-lite",
+        ]
+        response = None
+        for _m in _models:
+            try:
+                response = _claude.models.generate_content(
+                    model=_m,
+                    contents=prompt,
+                    config=_genai_sdk.types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0,
+                    ),
+                )
+                print(f"[Mighty] Used model: {_m}", flush=True)
+                break
+            except Exception as _me:
+                print(f"[Mighty] Model {_m} failed: {_me}", flush=True)
+        if response is None:
+            return []
         text = response.text.strip()
         print(f"[Mighty] Gemini response ({len(text)} chars): {text[:200]}", flush=True)
         try:
