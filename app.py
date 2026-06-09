@@ -3600,6 +3600,9 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
             f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;'
             f'border:1px solid #e5e3df;background:#fff;cursor:pointer;color:#6b7280" '
             f'onclick="discoverFields(\'{src}\')">Re-discover ↺</button>'
+            f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;'
+            f'border:1px solid #fecaca;background:#fff;cursor:pointer;color:#ef4444" '
+            f'onclick="resetFields(\'{src}\')">Reset ✕</button>'
             f'</div></div></details>'
         )
     else:
@@ -3823,6 +3826,18 @@ function removeCred(key, name) {{
   }}).then(() => location.reload());
 }}
 
+function resetFields(source) {{
+  if (!confirm('Clear all discovered fields for this account and re-discover fresh?')) return;
+  fetch('/credentials/fields/reset/' + source, {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF}})
+  }}).then(r => r.json()).then(function(d) {{
+    if (d.ok) discoverFields(source);
+    else toast(d.error || 'Reset failed', false);
+  }});
+}}
+
 function discoverFields(source) {{
   var btn = document.getElementById('discover-btn-' + source);
   if (btn) {{ btn.textContent = 'Discovering...'; btn.disabled = true; }}
@@ -3967,6 +3982,32 @@ def credentials_fields_save():
     return jsonify({"ok": True})
 
 
+@app.route("/credentials/fields/reset/<source>", methods=["POST"])
+@require_login
+def credentials_fields_reset(source):
+    """Clear all discovered fields for an account so re-discover starts fresh."""
+    check_csrf()
+    uid     = session["user_id"]
+    db      = get_db()
+    cred_row = db.execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    ex = {}
+    if cred_row and cred_row["extra_enc"]:
+        try: ex = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
+        except Exception: pass
+    ex.pop("enabled_fields", None)
+    ex.pop("discovered_fields", None)
+    new_enc = encrypt_cred(uid, json.dumps(ex)) if ex else ""
+    db.execute(
+        "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
+        (new_enc, iso(), uid, source)
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
 @app.route("/credentials/discover/<source>", methods=["POST"])
 @require_login
 def credentials_discover(source):
@@ -4018,16 +4059,29 @@ def credentials_discover(source):
             ex_by_key[key] = f          # new field — add it
             ex_enabled.add(key)         # auto-enable new fields
 
-    # Deduplicate by value — if two fields have identical non-empty values, keep first seen
+    # Deduplicate: keep first-seen field when value OR normalized label matches
+    def _norm(s: str) -> str:
+        return re.sub(r'[^a-z0-9]', '', s.lower())
+
     seen_values: dict = {}
+    seen_labels: set  = set()
     deduped = []
     for f in ex_by_key.values():
-        val = str(f.get("value", "")).strip()
-        if val and val != "0":
-            if val in seen_values:
-                # Same value already — remove the duplicate from enabled too
-                ex_enabled.discard(f["key"])
-                continue
+        val   = str(f.get("value", "")).strip()
+        label = _norm(f.get("label", ""))
+
+        # Check label similarity — skip if an existing label contains this one or vice versa
+        label_dup = any(label in sl or sl in label for sl in seen_labels)
+
+        # Check value duplicate (non-trivial values only)
+        value_dup = (val and val not in ("0", "") and val in seen_values)
+
+        if label_dup or value_dup:
+            ex_enabled.discard(f["key"])
+            continue
+
+        seen_labels.add(label)
+        if val and val not in ("0", ""):
             seen_values[val] = f["key"]
         deduped.append(f)
 
