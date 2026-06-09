@@ -3525,8 +3525,11 @@ def _field_config_html(source: str, configured: set) -> str:
         f'<details class="field-config" id="fields-{he(source)}">'
         f'<summary style="font-size:12px;font-weight:600;color:#7c3aed;'
         f'cursor:pointer;user-select:none;padding:8px 0 4px">Configure data fields</summary>'
-        f'<div style="padding:4px 0 8px;border-top:1px solid #f0ede8;margin-top:4px">'
-        f'{checkboxes}</div></details>'
+        f'<div style="padding:4px 0 4px;border-top:1px solid #f0ede8;margin-top:4px">'
+        f'{checkboxes}'
+        f'<button class="btn-save" style="margin-top:8px;font-size:12px;padding:6px 14px" '
+        f'onclick="saveFields(\'{he(source)}\')">Save field preferences</button>'
+        f'</div></details>'
     )
 
 
