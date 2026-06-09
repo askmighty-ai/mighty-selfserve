@@ -279,6 +279,52 @@ def _cred_fernet(user_id: str):
     )
     return Fernet(base64.urlsafe_b64encode(raw))
 
+# ── Claude field discovery ────────────────────────────────────────────────────
+try:
+    import anthropic as _anthropic
+    _claude = _anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+except ImportError:
+    _claude = None
+
+DISCOVER_PROMPT = """You are analyzing a page from a user's {site} account.
+
+Page text:
+{text}
+
+Identify all data fields that would be useful to monitor in a personal dashboard.
+Return ONLY a JSON array with no other text:
+[{{"key":"balance","label":"Current Balance","value":"$2,472.20"}}]
+
+Rules:
+- key: snake_case identifier
+- label: 2-4 words, human-readable
+- value: the actual current value found on the page (not a placeholder)
+- Include: amounts, dates, points/miles, usage stats, alerts, upcoming events, enrollment status
+- Skip: navigation links, help text, marketing slogans, page titles
+- Max 12 fields"""
+
+def claude_discover_fields(raw_text: str, site_name: str) -> list:
+    """Use Claude to identify all useful data fields in a page."""
+    if not _claude or not raw_text:
+        return []
+    try:
+        msg = _claude.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            messages=[{"role": "user", "content":
+                DISCOVER_PROMPT.format(
+                    site=site_name,
+                    text=raw_text[:6000]
+                )}]
+        )
+        text = msg.content[0].text.strip()
+        # Extract JSON array even if there's surrounding text
+        m = re.search(r'\[.*\]', text, re.DOTALL)
+        return json.loads(m.group()) if m else []
+    except Exception as e:
+        print(f"[Mighty] Claude discovery error: {e}", flush=True)
+        return []
+
 def encrypt_cred(user_id: str, value: str) -> str:
     if not value:
         return ""
@@ -2694,7 +2740,8 @@ def dashboard():
             items = data.get("items", [])
             # Filter by user field preferences if configured for this source
             enabled = field_prefs.get(row["source"])
-            if enabled:
+            # If Claude discovered fields, filter to enabled ones
+            if enabled is not None:
                 items = [i for i in items
                          if i.get("key") in enabled or not i.get("key")]
             items_html = "".join(
@@ -3504,36 +3551,63 @@ SUPPORTED_SITES = [
 ]
 
 
-def _field_config_html(source: str, configured: set) -> str:
-    """Render the field-selection checkboxes for a connected account."""
-    fields = ACCOUNT_FIELDS.get(source)
-    if not fields or source not in configured:
+def _field_config_html(source: str, configured: set, extra_data: dict = None) -> str:
+    """Render AI-discovered field checkboxes, or a Discover button if not yet run."""
+    if source not in configured:
         return ""
-    checkboxes = ""
-    for f in fields:
-        fkey = he(f["key"])
-        flbl = he(f["label"])
-        checkboxes += (
-            f'<label style="display:flex;align-items:center;gap:8px;'
-            f'font-size:12px;color:#374151;padding:4px 0;cursor:pointer">'
-            f'<input type="checkbox" id="field-{he(source)}-{fkey}" '
-            f'data-source="{he(source)}" data-key="{fkey}" '
-            f'onchange="saveFields(\'{he(source)}\')" '
-            f'style="width:14px;height:14px;cursor:pointer"> {flbl}</label>'
+    extra      = extra_data or {}
+    discovered = extra.get("discovered_fields", [])
+    enabled    = set(extra.get("enabled_fields", []))
+    src        = he(source)
+
+    if discovered:
+        checkboxes = ""
+        for f in discovered:
+            fkey   = he(f.get("key", ""))
+            flbl   = he(f.get("label", ""))
+            fval   = he(f.get("value", ""))
+            chkd   = "checked" if f.get("key") in enabled else ""
+            checkboxes += (
+                f'<label style="display:flex;align-items:center;gap:8px;'
+                f'font-size:12px;color:#374151;padding:5px 0;cursor:pointer;'
+                f'border-bottom:1px solid #f9f7f5">'
+                f'<input type="checkbox" id="field-{src}-{fkey}" '
+                f'data-source="{src}" data-key="{fkey}" {chkd} '
+                f'style="width:14px;height:14px;cursor:pointer;flex-shrink:0">'
+                f'<span style="flex:1">{flbl}</span>'
+                f'<span style="color:#9ca3af;font-size:11px">{fval}</span></label>'
+            )
+        return (
+            f'<details class="field-config" id="fields-{src}" open>'
+            f'<summary style="font-size:12px;font-weight:600;color:#7c3aed;'
+            f'cursor:pointer;user-select:none;padding:8px 0 4px;display:flex;'
+            f'align-items:center;gap:6px">✦ Data fields</summary>'
+            f'<div style="padding:2px 0 4px;border-top:1px solid #f0ede8;margin-top:4px">'
+            f'{checkboxes}'
+            f'<div style="display:flex;gap:8px;margin-top:10px">'
+            f'<button class="btn-save" style="font-size:12px;padding:6px 14px" '
+            f'onclick="saveFields(\'{src}\')">Save</button>'
+            f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;'
+            f'border:1px solid #e5e3df;background:#fff;cursor:pointer;color:#6b7280" '
+            f'onclick="discoverFields(\'{src}\')">Re-discover ↺</button>'
+            f'</div></div></details>'
         )
-    return (
-        f'<details class="field-config" id="fields-{he(source)}">'
-        f'<summary style="font-size:12px;font-weight:600;color:#7c3aed;'
-        f'cursor:pointer;user-select:none;padding:8px 0 4px">Configure data fields</summary>'
-        f'<div style="padding:4px 0 4px;border-top:1px solid #f0ede8;margin-top:4px">'
-        f'{checkboxes}'
-        f'<button class="btn-save" style="margin-top:8px;font-size:12px;padding:6px 14px" '
-        f'onclick="saveFields(\'{he(source)}\')">Save field preferences</button>'
-        f'</div></details>'
-    )
+    else:
+        return (
+            f'<div id="discover-area-{src}" style="margin-top:8px">'
+            f'<button id="discover-btn-{src}" '
+            f'style="font-size:12px;padding:7px 14px;border-radius:8px;'
+            f'background:#f3f0ff;border:1px solid #d4c6ff;color:#7c3aed;'
+            f'cursor:pointer;font-family:inherit;font-weight:600" '
+            f'onclick="discoverFields(\'{src}\')">'
+            f'✦ Discover data fields</button>'
+            f'<div id="discover-result-{src}"></div>'
+            f'</div>'
+        )
 
 
-def _build_credentials_page(user, configured: set) -> str:
+def _build_credentials_page(user, configured: set, extra_by_source: dict = None) -> str:
+    extra_by_source = extra_by_source or {}
     """Generate the credentials management page HTML."""
     csrf = get_csrf_token()
 
@@ -3583,7 +3657,7 @@ def _build_credentials_page(user, configured: set) -> str:
     </details>
     <button class="btn-save" onclick="saveCred('{he(key)}')">Save</button>
   </div>
-  {_field_config_html(key, configured)}
+  {_field_config_html(key, configured, extra_by_source.get(key, {}))}
 </div>"""
         sections_html += f"""
 <div style="margin-bottom:28px">
@@ -3739,6 +3813,30 @@ function removeCred(key, name) {{
   }}).then(() => location.reload());
 }}
 
+async function discoverFields(source) {{
+  var btn = document.getElementById('discover-btn-' + source)
+          || document.querySelector('[onclick*="discoverFields(\'' + source + '\')"]');
+  if (btn) {{ btn.textContent = '✦ Discovering...'; btn.disabled = true; }}
+  try {{
+    var resp = await fetch('/credentials/discover/' + source, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+      body: new URLSearchParams({{_csrf: CSRF}})
+    }});
+    var data = await resp.json();
+    if (data.ok) {{
+      toast('✦ ' + data.fields.length + ' fields discovered — select what to show');
+      setTimeout(() => location.reload(), 1200);
+    }} else {{
+      toast(data.error || 'Discovery failed', false);
+      if (btn) {{ btn.textContent = '✦ Discover data fields'; btn.disabled = false; }}
+    }}
+  }} catch(e) {{
+    toast('Error: ' + e, false);
+    if (btn) {{ btn.textContent = '✦ Discover data fields'; btn.disabled = false; }}
+  }}
+}}
+
 function saveFields(source) {{
   var boxes = document.querySelectorAll('[data-source="' + source + '"]');
   var enabled = Array.from(boxes).filter(b => b.checked).map(b => b.dataset.key);
@@ -3775,18 +3873,21 @@ def credentials_page():
         "SELECT * FROM users WHERE id=?", (session["user_id"],)
     ).fetchone()
     rows = get_db().execute(
-        "SELECT source, username_enc FROM account_credentials WHERE user_id=?",
+        "SELECT source, username_enc, extra_enc FROM account_credentials WHERE user_id=?",
         (user["id"],)
     ).fetchall()
     configured = {r["source"] for r in rows}
-    # Pass email address for pre-filling
-    configured_with_email = set(configured)
+    # Load extra data (discovered fields, totp, etc.) per source
+    extra_by_source = {}
     for r in rows:
-        if r["source"] == "_email":
-            configured_with_email.add(
-                "_email_address"
-            )
-    return _build_credentials_page(user, configured)
+        if r["extra_enc"]:
+            try:
+                extra_by_source[r["source"]] = json.loads(
+                    decrypt_cred(user["id"], r["extra_enc"])
+                )
+            except Exception:
+                pass
+    return _build_credentials_page(user, configured, extra_by_source)
 
 
 @app.route("/credentials/save", methods=["POST"])
@@ -3857,6 +3958,55 @@ def credentials_fields_save():
     )
     db.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/credentials/discover/<source>", methods=["POST"])
+@require_login
+def credentials_discover(source):
+    """Run AI field discovery for an account using the latest stored page text."""
+    check_csrf()
+    uid  = session["user_id"]
+
+    # Get raw_text from last sync
+    row  = get_db().execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not row:
+        return jsonify({"ok": False, "error": "No sync data yet — sync this account first"}), 404
+
+    data = decrypt_account_data(uid, row["data_enc"] or "")
+    raw_text = data.get("raw_text", "")
+    if not raw_text:
+        return jsonify({"ok": False, "error": "No page text stored — sync again"}), 404
+
+    if not _claude:
+        return jsonify({"ok": False, "error": "Claude API not configured"}), 503
+
+    # Find site display name
+    site_name = next((name for key, name, *_ in SUPPORTED_SITES if key == source), source)
+    fields = claude_discover_fields(raw_text, site_name)
+    if not fields:
+        return jsonify({"ok": False, "error": "Could not identify fields — try syncing again"}), 500
+
+    # Save discovered fields + auto-enable all
+    enabled = [f["key"] for f in fields]
+    cred_row = get_db().execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    ex = {}
+    if cred_row and cred_row["extra_enc"]:
+        try: ex = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
+        except Exception: pass
+    ex["enabled_fields"]    = enabled
+    ex["discovered_fields"] = fields
+    get_db().execute(
+        "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
+        (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
+    )
+    get_db().commit()
+    return jsonify({"ok": True, "fields": fields})
 
 
 @app.route("/credentials/fields/load")
@@ -3957,6 +4107,11 @@ def api_data_sync():
     display    = data.get("name", source)
     icon       = data.get("icon", "?")
     color      = data.get("color", "#f0f0f0")
+    # Store raw_text alongside the data for AI discovery
+    raw_text = body.get("raw_text", "")
+    if raw_text:
+        data["raw_text"] = raw_text[:8000]
+
     data_enc   = encrypt_account_data(user["id"], data)
 
     db = get_db()
@@ -3967,6 +4122,45 @@ def api_data_sync():
         (user["id"], source, display, icon, color, data_enc, synced_at),
     )
     db.commit()
+
+    # Auto-trigger field discovery if no field prefs exist yet for this source
+    cred_row = db.execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (user["id"], source)
+    ).fetchone()
+    has_prefs = False
+    if cred_row and cred_row["extra_enc"]:
+        try:
+            ex = json.loads(decrypt_cred(user["id"], cred_row["extra_enc"]))
+            has_prefs = "enabled_fields" in ex
+        except Exception:
+            pass
+
+    if not has_prefs and raw_text and _claude:
+        # Discover fields in the background
+        import threading
+        site_name = display
+        uid = user["id"]
+        def _bg_discover():
+            fields = claude_discover_fields(raw_text, site_name)
+            if fields:
+                enabled = [f["key"] for f in fields]
+                ex2 = {}
+                if cred_row and cred_row["extra_enc"]:
+                    try: ex2 = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
+                    except Exception: pass
+                ex2["enabled_fields"]   = enabled
+                ex2["discovered_fields"] = fields
+                new_enc = encrypt_cred(uid, json.dumps(ex2))
+                with app.app_context():
+                    get_db().execute(
+                        "UPDATE account_credentials SET extra_enc=?, updated_at=? "
+                        "WHERE user_id=? AND source=?",
+                        (new_enc, iso(), uid, source)
+                    )
+                    get_db().commit()
+        threading.Thread(target=_bg_discover, daemon=True).start()
+
     return jsonify({"ok": True, "source": source})
 
 
