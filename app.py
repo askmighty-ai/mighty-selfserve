@@ -285,7 +285,7 @@ try:
     import google.generativeai as _genai
     if GEMINI_API_KEY:
         _genai.configure(api_key=GEMINI_API_KEY)
-        _claude = _genai.GenerativeModel("gemini-1.5-flash")
+        _claude = _genai.GenerativeModel("gemini-2.0-flash")
     else:
         _claude = None
 except ImportError:
