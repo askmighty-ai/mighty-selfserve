@@ -4300,6 +4300,13 @@ def api_data_get():
 
 # ── Error handlers ────────────────────────────────────────────────────────────
 
+@app.errorhandler(403)
+def forbidden(e):
+    if request.path.startswith("/api/") or request.path.startswith("/credentials/"):
+        return jsonify({"ok": False, "error": "Session expired — please refresh the page"}), 403
+    return NOT_FOUND_HTML.replace("Page not found", "Forbidden").replace(
+        "The page you were looking for doesn't exist.", "Access denied."), 403
+
 @app.errorhandler(404)
 def not_found(e):
     return NOT_FOUND_HTML, 404
