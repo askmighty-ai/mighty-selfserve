@@ -3813,28 +3813,25 @@ function removeCred(key, name) {{
   }}).then(() => location.reload());
 }}
 
-async function discoverFields(source) {{
-  var btn = document.getElementById('discover-btn-' + source)
-          || document.querySelector('[onclick*="discoverFields(\'' + source + '\')"]');
-  if (btn) {{ btn.textContent = '✦ Discovering...'; btn.disabled = true; }}
-  try {{
-    var resp = await fetch('/credentials/discover/' + source, {{
-      method: 'POST',
-      headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-      body: new URLSearchParams({{_csrf: CSRF}})
-    }});
-    var data = await resp.json();
+function discoverFields(source) {{
+  var btn = document.getElementById('discover-btn-' + source);
+  if (btn) {{ btn.textContent = 'Discovering...'; btn.disabled = true; }}
+  fetch('/credentials/discover/' + source, {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF}})
+  }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
     if (data.ok) {{
-      toast('✦ ' + data.fields.length + ' fields discovered — select what to show');
-      setTimeout(() => location.reload(), 1200);
+      toast(data.fields.length + ' fields found');
+      setTimeout(function() {{ location.reload(); }}, 1200);
     }} else {{
       toast(data.error || 'Discovery failed', false);
-      if (btn) {{ btn.textContent = '✦ Discover data fields'; btn.disabled = false; }}
+      if (btn) {{ btn.textContent = 'Discover data fields'; btn.disabled = false; }}
     }}
-  }} catch(e) {{
+  }}).catch(function(e) {{
     toast('Error: ' + e, false);
-    if (btn) {{ btn.textContent = '✦ Discover data fields'; btn.disabled = false; }}
-  }}
+    if (btn) {{ btn.textContent = 'Discover data fields'; btn.disabled = false; }}
+  }});
 }}
 
 function saveFields(source) {{
