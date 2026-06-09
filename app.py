@@ -2674,9 +2674,29 @@ def dashboard():
         row_map = {r["source"]: r for r in acct_rows}
         ordered = [row_map[k] for k in CATEGORY_ORDER if k in row_map]
         ordered += [r for r in acct_rows if r["source"] not in CATEGORY_ORDER]
+        # Load field preferences for filtering
+        field_prefs: dict = {}
+        cred_rows = get_db().execute(
+            "SELECT source, extra_enc FROM account_credentials WHERE user_id=?",
+            (user["id"],)
+        ).fetchall()
+        for cr in cred_rows:
+            if cr["extra_enc"]:
+                try:
+                    ex = json.loads(decrypt_cred(user["id"], cr["extra_enc"]))
+                    if "enabled_fields" in ex:
+                        field_prefs[cr["source"]] = set(ex["enabled_fields"])
+                except Exception:
+                    pass
+
         for row in ordered:
-            data = decrypt_account_data(user["id"], row["data_enc"] or "")
+            data  = decrypt_account_data(user["id"], row["data_enc"] or "")
             items = data.get("items", [])
+            # Filter by user field preferences if configured for this source
+            enabled = field_prefs.get(row["source"])
+            if enabled:
+                items = [i for i in items
+                         if i.get("key") in enabled or not i.get("key")]
             items_html = "".join(
                 f'<div class="acct-row"><span class="acct-lbl">{he(i["label"])}</span>'
                 f'<span class="acct-val">{he(i["value"])}</span></div>'
@@ -3412,6 +3432,61 @@ def api_ping():
 
 # ── Credential management ─────────────────────────────────────────────────────
 
+# Available data fields per account — shown as checkboxes in /credentials
+ACCOUNT_FIELDS = {
+    "pa_utilities": [
+        {"key": "balance",  "label": "Current Balance",         "default": True},
+        {"key": "due_date", "label": "Due Date",                "default": True},
+        {"key": "auto_pay", "label": "Auto-pay Status",         "default": True},
+        {"key": "usage",    "label": "Monthly kWh Usage",       "default": True},
+        {"key": "alerts",   "label": "Service Alerts",          "default": True},
+        {"key": "offers",   "label": "Ways to Save Offers",     "default": False},
+    ],
+    "delta": [
+        {"key": "miles",       "label": "SkyMiles Balance",     "default": True},
+        {"key": "status",      "label": "Medallion Status",     "default": True},
+        {"key": "next_flight", "label": "Next Flight",          "default": True},
+        {"key": "offers",      "label": "Active Promotions",    "default": False},
+    ],
+    "marriott": [
+        {"key": "points",    "label": "Bonvoy Points",          "default": True},
+        {"key": "tier",      "label": "Member Tier",            "default": True},
+        {"key": "awards",    "label": "Free Night Awards",      "default": True},
+        {"key": "expiry",    "label": "Points Expiry",          "default": True},
+    ],
+    "hilton": [
+        {"key": "points",    "label": "Honors Points",          "default": True},
+        {"key": "tier",      "label": "Member Tier",            "default": True},
+        {"key": "awards",    "label": "Free Night Rewards",     "default": True},
+    ],
+    "amex": [
+        {"key": "balance",   "label": "Current Balance",        "default": True},
+        {"key": "due_date",  "label": "Payment Due Date",       "default": True},
+        {"key": "rewards",   "label": "Membership Rewards",     "default": True},
+        {"key": "offers",    "label": "Amex Offers",            "default": False},
+    ],
+    "chase": [
+        {"key": "balance",   "label": "Balance",                "default": True},
+        {"key": "due_date",  "label": "Due Date",               "default": True},
+        {"key": "rewards",   "label": "Ultimate Rewards",       "default": True},
+    ],
+    "xfinity": [
+        {"key": "balance",   "label": "Balance",                "default": True},
+        {"key": "due_date",  "label": "Due Date",               "default": True},
+        {"key": "data",      "label": "Data Usage",             "default": True},
+    ],
+    "amazon": [
+        {"key": "orders",    "label": "Recent Orders",          "default": True},
+        {"key": "tracking",  "label": "Active Tracking",        "default": True},
+    ],
+    "pamf": [
+        {"key": "messages",  "label": "New Messages",           "default": True},
+        {"key": "appt",      "label": "Next Appointment",       "default": True},
+        {"key": "results",   "label": "Pending Results",        "default": False},
+        {"key": "refills",   "label": "Prescription Refills",   "default": False},
+    ],
+}
+
 SUPPORTED_SITES = [
     ("amex",         "American Express",      "💳", "#e8f0fe", "Banking & Finance"),
     ("chase",        "Chase",                 "🏦", "#e3f2fd", "Banking & Finance"),
@@ -3427,6 +3502,32 @@ SUPPORTED_SITES = [
     ("pa_utilities", "Palo Alto Utilities",   "⚡", "#fff3e0", "Utilities & Bills"),
     ("pamf",         "PAMF MyChart",          "🏥", "#e8f5e9", "Health"),
 ]
+
+
+def _field_config_html(source: str, configured: set) -> str:
+    """Render the field-selection checkboxes for a connected account."""
+    fields = ACCOUNT_FIELDS.get(source)
+    if not fields or source not in configured:
+        return ""
+    checkboxes = ""
+    for f in fields:
+        fkey = he(f["key"])
+        flbl = he(f["label"])
+        checkboxes += (
+            f'<label style="display:flex;align-items:center;gap:8px;'
+            f'font-size:12px;color:#374151;padding:4px 0;cursor:pointer">'
+            f'<input type="checkbox" id="field-{he(source)}-{fkey}" '
+            f'data-source="{he(source)}" data-key="{fkey}" '
+            f'onchange="saveFields(\'{he(source)}\')" '
+            f'style="width:14px;height:14px;cursor:pointer"> {flbl}</label>'
+        )
+    return (
+        f'<details class="field-config" id="fields-{he(source)}">'
+        f'<summary style="font-size:12px;font-weight:600;color:#7c3aed;'
+        f'cursor:pointer;user-select:none;padding:8px 0 4px">Configure data fields</summary>'
+        f'<div style="padding:4px 0 8px;border-top:1px solid #f0ede8;margin-top:4px">'
+        f'{checkboxes}</div></details>'
+    )
 
 
 def _build_credentials_page(user, configured: set) -> str:
@@ -3479,6 +3580,7 @@ def _build_credentials_page(user, configured: set) -> str:
     </details>
     <button class="btn-save" onclick="saveCred('{he(key)}')">Save</button>
   </div>
+  {_field_config_html(key, configured)}
 </div>"""
         sections_html += f"""
 <div style="margin-bottom:28px">
@@ -3633,6 +3735,31 @@ function removeCred(key, name) {{
     body: new URLSearchParams({{_csrf: CSRF}})
   }}).then(() => location.reload());
 }}
+
+function saveFields(source) {{
+  var boxes = document.querySelectorAll('[data-source="' + source + '"]');
+  var enabled = Array.from(boxes).filter(b => b.checked).map(b => b.dataset.key);
+  fetch('/credentials/fields', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF, source: source, enabled_fields: JSON.stringify(enabled)}})
+  }}).then(r => r.json()).then(d => {{ if (d.ok) toast('Saved ✓'); }});
+}}
+
+// Pre-check saved field preferences on load
+fetch('/credentials/fields/load').then(r => r.json()).then(function(data) {{
+  if (!data.ok) return;
+  Object.entries(data.fields).forEach(function([source, enabled]) {{
+    enabled.forEach(function(key) {{
+      var box = document.getElementById('field-' + source + '-' + key);
+      if (box) box.checked = true;
+    }});
+    if (enabled.length) {{
+      var det = document.getElementById('fields-' + source);
+      if (det) det.open = true;
+    }}
+  }});
+}}).catch(function(){{}});
 </script>
 </body>
 </html>"""
@@ -3695,6 +3822,58 @@ def credentials_save():
     )
     db.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/credentials/fields", methods=["POST"])
+@require_login
+def credentials_fields_save():
+    """Save which fields to show for an account."""
+    check_csrf()
+    uid    = session["user_id"]
+    source = request.form.get("source", "").strip()
+    try:
+        enabled = json.loads(request.form.get("enabled_fields", "[]"))
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid enabled_fields"}), 400
+
+    # Merge into existing extra_enc
+    db  = get_db()
+    row = db.execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    extra = {}
+    if row and row["extra_enc"]:
+        try: extra = json.loads(decrypt_cred(uid, row["extra_enc"]))
+        except Exception: pass
+    extra["enabled_fields"] = enabled
+    new_enc = encrypt_cred(uid, json.dumps(extra)) if extra else ""
+    db.execute(
+        "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
+        (new_enc, iso(), uid, source)
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/credentials/fields/load")
+@require_login
+def credentials_fields_load():
+    """Return saved field preferences for all connected accounts."""
+    uid  = session["user_id"]
+    rows = get_db().execute(
+        "SELECT source, extra_enc FROM account_credentials WHERE user_id=?", (uid,)
+    ).fetchall()
+    fields = {}
+    for row in rows:
+        if not row["extra_enc"]: continue
+        try:
+            extra = json.loads(decrypt_cred(uid, row["extra_enc"]))
+            if "enabled_fields" in extra:
+                fields[row["source"]] = extra["enabled_fields"]
+        except Exception:
+            pass
+    return jsonify({"ok": True, "fields": fields})
 
 
 @app.route("/credentials/delete/<source>", methods=["POST"])
