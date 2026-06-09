@@ -4104,10 +4104,7 @@ def api_data_sync():
     display    = data.get("name", source)
     icon       = data.get("icon", "?")
     color      = data.get("color", "#f0f0f0")
-    # Store raw_text alongside the data for AI discovery
-    raw_text = body.get("raw_text", "")
-    if raw_text:
-        data["raw_text"] = raw_text[:8000]
+    # raw_text is sent inside data{} by the scraper — it's already in data dict
 
     data_enc   = encrypt_account_data(user["id"], data)
 
