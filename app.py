@@ -317,7 +317,8 @@ def claude_discover_fields(raw_text: str, site_name: str) -> list:
         response = _claude.generate_content(
             prompt,
             generation_config=_genai.GenerationConfig(
-                response_mime_type="application/json"
+                response_mime_type="application/json",
+                temperature=0  # deterministic output
             )
         )
         text = response.text.strip()
