@@ -296,17 +296,18 @@ DISCOVER_PROMPT = """You are analyzing a page from a user's {site} account.
 Page text:
 {text}
 
-Identify all data fields that would be useful to monitor in a personal dashboard.
-Return ONLY a JSON array with no other text:
+Identify data fields useful to monitor in a personal dashboard.
+Return ONLY a JSON array, no other text:
 [{{"key":"balance","label":"Current Balance","value":"$2,472.20"}}]
 
 Rules:
-- key: snake_case identifier
+- key: 1-2 word snake_case ONLY — "balance" not "current_balance", "due_date" not "payment_due_date"
 - label: 2-4 words, human-readable
-- value: the actual current value found on the page (not a placeholder)
-- Include: amounts, dates, points/miles, usage stats, alerts, upcoming events, enrollment status
-- Skip: navigation links, help text, marketing slogans, page titles
-- Max 12 fields"""
+- value: exact current value from the page
+- Each CONCEPT appears EXACTLY ONCE — do not split one idea into multiple fields
+- Include: amounts, dates, points/miles, usage, alerts, enrollment status
+- Skip: navigation, help text, marketing, version numbers, account holder name
+- Max 8 fields"""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
     """Use Gemini Flash to identify all useful data fields in a page."""
@@ -4017,7 +4018,20 @@ def credentials_discover(source):
             ex_by_key[key] = f          # new field — add it
             ex_enabled.add(key)         # auto-enable new fields
 
-    merged_fields   = list(ex_by_key.values())
+    # Deduplicate by value — if two fields have identical non-empty values, keep first seen
+    seen_values: dict = {}
+    deduped = []
+    for f in ex_by_key.values():
+        val = str(f.get("value", "")).strip()
+        if val and val != "0":
+            if val in seen_values:
+                # Same value already — remove the duplicate from enabled too
+                ex_enabled.discard(f["key"])
+                continue
+            seen_values[val] = f["key"]
+        deduped.append(f)
+
+    merged_fields   = deduped
     merged_enabled  = list(ex_enabled | {f["key"] for f in fields})  # never lose enabled
 
     ex["enabled_fields"]    = merged_enabled
