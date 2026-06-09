@@ -4008,6 +4008,32 @@ def credentials_fields_reset(source):
     return jsonify({"ok": True})
 
 
+@app.route("/credentials/fields/reset/<source>", methods=["POST"])
+@require_login
+def credentials_fields_reset(source):
+    """Clear all discovered fields so re-discover starts fresh."""
+    check_csrf()
+    uid = session["user_id"]
+    db  = get_db()
+    row = db.execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    ex = {}
+    if row and row["extra_enc"]:
+        try: ex = json.loads(decrypt_cred(uid, row["extra_enc"]))
+        except Exception: pass
+    ex.pop("enabled_fields",    None)
+    ex.pop("discovered_fields", None)
+    new_enc = encrypt_cred(uid, json.dumps(ex)) if ex else ""
+    db.execute(
+        "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
+        (new_enc, iso(), uid, source)
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
 @app.route("/credentials/discover/<source>", methods=["POST"])
 @require_login
 def credentials_discover(source):
