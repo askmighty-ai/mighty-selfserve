@@ -3566,19 +3566,55 @@ ACCOUNT_FIELDS = {
 }
 
 SUPPORTED_SITES = [
-    ("amex",         "American Express",      "💳", "#e8f0fe", "Banking & Finance"),
-    ("chase",        "Chase",                 "🏦", "#e3f2fd", "Banking & Finance"),
-    ("sfcu",         "Stanford FCU",          "🏦", "#dbeafe", "Banking & Finance"),
-    ("amazon",       "Amazon",                "📦", "#fff8e1", "Shopping"),
-    ("delta",        "Delta",                 "✈️", "#e3f2fd", "Travel"),
-    ("hertz",        "Hertz",                 "🚗", "#fff3e0", "Travel"),
-    ("marriott",     "Marriott Bonvoy",       "🏨", "#fce8e6", "Travel"),
-    ("hilton",       "Hilton Honors",         "🏨", "#e8f5e9", "Travel"),
-    ("disney_plus",  "Disney+",               "🎬", "#e8f0fe", "Entertainment"),
-    ("ticketmaster", "Ticketmaster",          "🎟️", "#fce8e6", "Entertainment"),
-    ("xfinity",      "Xfinity",              "📡", "#e8f5e9", "Utilities & Bills"),
-    ("pa_utilities", "Palo Alto Utilities",   "⚡", "#fff3e0", "Utilities & Bills"),
-    ("pamf",         "PAMF MyChart",          "🏥", "#e8f5e9", "Health"),
+    # Banking & Finance
+    ("amex",          "American Express",       "💳", "#e8f0fe", "Banking & Finance"),
+    ("chase",         "Chase",                  "🏦", "#e3f2fd", "Banking & Finance"),
+    ("sfcu",          "Stanford FCU",           "🏦", "#dbeafe", "Banking & Finance"),
+    ("wells_fargo",   "Wells Fargo",            "🏦", "#fef3c7", "Banking & Finance"),
+    ("bofa",          "Bank of America",        "🏦", "#fee2e2", "Banking & Finance"),
+    ("capital_one",   "Capital One",            "💳", "#fce7f3", "Banking & Finance"),
+    ("discover",      "Discover",               "💳", "#fff7ed", "Banking & Finance"),
+    ("citi",          "Citi",                   "💳", "#ecfdf5", "Banking & Finance"),
+    ("paypal",        "PayPal",                 "💰", "#eff6ff", "Banking & Finance"),
+    ("fidelity",      "Fidelity",               "📈", "#ecfdf5", "Banking & Finance"),
+    ("schwab",        "Charles Schwab",         "📈", "#eff6ff", "Banking & Finance"),
+    # Travel
+    ("delta",         "Delta",                  "✈️", "#e3f2fd", "Travel"),
+    ("united",        "United Airlines",        "✈️", "#eff6ff", "Travel"),
+    ("southwest",     "Southwest",              "✈️", "#fef3c7", "Travel"),
+    ("american_air",  "American Airlines",      "✈️", "#fce7f3", "Travel"),
+    ("alaska_air",    "Alaska Airlines",        "✈️", "#ecfdf5", "Travel"),
+    ("hertz",         "Hertz",                  "🚗", "#fff3e0", "Travel"),
+    ("marriott",      "Marriott Bonvoy",        "🏨", "#fce8e6", "Travel"),
+    ("hilton",        "Hilton Honors",          "🏨", "#e8f5e9", "Travel"),
+    ("hyatt",         "Hyatt",                  "🏨", "#f5f3ff", "Travel"),
+    ("ihg",           "IHG / Holiday Inn",      "🏨", "#fff7ed", "Travel"),
+    ("wyndham",       "Wyndham Rewards",        "🏨", "#fce7f3", "Travel"),
+    # Entertainment
+    ("disney_plus",   "Disney+",                "🎬", "#e8f0fe", "Entertainment"),
+    ("netflix",       "Netflix",                "🎬", "#fee2e2", "Entertainment"),
+    ("hulu",          "Hulu",                   "📺", "#ecfdf5", "Entertainment"),
+    ("spotify",       "Spotify",                "🎵", "#ecfdf5", "Entertainment"),
+    ("max",           "Max",                    "🎬", "#f5f3ff", "Entertainment"),
+    ("peacock",       "Peacock",                "🦚", "#fef3c7", "Entertainment"),
+    ("paramount_plus","Paramount+",             "🎬", "#eff6ff", "Entertainment"),
+    ("ticketmaster",  "Ticketmaster",           "🎟️", "#fce8e6", "Entertainment"),
+    # Shopping
+    ("amazon",        "Amazon",                 "📦", "#fff8e1", "Shopping"),
+    ("target",        "Target",                 "🎯", "#fee2e2", "Shopping"),
+    ("walmart",       "Walmart",                "🛒", "#eff6ff", "Shopping"),
+    ("costco",        "Costco",                 "🛒", "#eff6ff", "Shopping"),
+    # Utilities & Telecom
+    ("xfinity",       "Xfinity",               "📡", "#e8f5e9", "Utilities & Telecom"),
+    ("pa_utilities",  "Palo Alto Utilities",    "⚡", "#fff3e0", "Utilities & Telecom"),
+    ("att",           "AT&T",                   "📱", "#eff6ff", "Utilities & Telecom"),
+    ("verizon",       "Verizon",                "📱", "#fce7f3", "Utilities & Telecom"),
+    ("tmobile",       "T-Mobile",               "📱", "#fce7f3", "Utilities & Telecom"),
+    # Health
+    ("pamf",          "PAMF MyChart",           "🏥", "#e8f5e9", "Health"),
+    ("kaiser",        "Kaiser Permanente",      "🏥", "#ecfdf5", "Health"),
+    ("cvs",           "CVS Pharmacy",           "💊", "#fee2e2", "Health"),
+    ("walgreens",     "Walgreens",              "💊", "#eff6ff", "Health"),
 ]
 
 
@@ -3677,6 +3713,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
     for cat, sites in categories.items():
         cards = ""
         for key, name, icon, color in sites:
+            # data-name enables client-side search filtering
             is_set = key in configured
             badge = (
                 '<span style="font-size:10px;font-weight:600;padding:2px 8px;'
@@ -3685,7 +3722,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
                 '<span style="font-size:10px;color:#9ca3af">Not connected</span>'
             )
             cards += f"""
-<div class="cred-card" id="card-{he(key)}">
+<div class="cred-card" id="card-{he(key)}" data-name="{he(name.lower())}">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
     <div style="width:32px;height:32px;border-radius:8px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:15px">{icon}</div>
     <div style="flex:1">
@@ -3717,7 +3754,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
   {_field_config_html(key, configured, extra_by_source.get(key, {}))}
 </div>"""
         sections_html += f"""
-<div style="margin-bottom:28px">
+<div class="section-group" style="margin-bottom:28px">
   <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
               color:#9ca3af;margin-bottom:12px">{he(cat)}</div>
   {cards}
@@ -3803,6 +3840,16 @@ h1{{font-size:20px;font-weight:700;margin-bottom:6px}}
     Add credentials for each site you want the scraper to monitor.
     Credentials are encrypted and stored securely — only you can access them via your API key.
   </p>
+  <input type="text" id="site-search" placeholder="Search sites…" autocomplete="off"
+         oninput="filterSites(this.value)"
+         style="width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #e5e3df;
+                font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#fff;
+                margin-bottom:24px;transition:border-color 0.12s;box-sizing:border-box"
+         onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+  <div id="no-results" style="display:none;text-align:center;padding:32px;color:#9ca3af;font-size:14px">
+    No sites match your search.
+  </div>
+  </p>
 
   {sections_html}
   {email_section}
@@ -3868,6 +3915,24 @@ function removeCred(key, name) {{
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
     body: new URLSearchParams({{_csrf: CSRF}})
   }}).then(() => location.reload());
+}}
+
+function filterSites(q) {{
+  q = (q || '').toLowerCase().trim();
+  var anyVisible = false;
+  document.querySelectorAll('.cred-card').forEach(function(card) {{
+    var name = (card.dataset.name || '').toLowerCase();
+    var show = !q || name.includes(q);
+    card.style.display = show ? '' : 'none';
+    if (show) anyVisible = true;
+  }});
+  document.querySelectorAll('.section-group').forEach(function(grp) {{
+    var hasVisible = Array.from(grp.querySelectorAll('.cred-card')).some(function(c) {{
+      return c.style.display !== 'none';
+    }});
+    grp.style.display = hasVisible ? '' : 'none';
+  }});
+  document.getElementById('no-results').style.display = (q && !anyVisible) ? '' : 'none';
 }}
 
 function resetFields(source) {{
