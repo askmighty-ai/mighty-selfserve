@@ -379,6 +379,7 @@ def _make_scraper(cfg: dict):
     p_sels    = cfg.get("p_sels",   ['input[type="password"]'])
     s_sels    = cfg.get("s_sels",   ['button[type="submit"]', 'input[type="submit"]'])
     ok_url    = cfg.get("ok_url")
+    post_url  = cfg.get("post_url")           # navigate here after login to get the right page
     wait_ms   = cfg.get("wait_ms",  3_000)
     multistep = cfg.get("multistep", False)   # username → next → password
 
@@ -399,6 +400,8 @@ def _make_scraper(cfg: dict):
             _handle_2fa(page, ctx)
             if ok_url:
                 page.wait_for_url(ok_url, timeout=LOGIN_TIMEOUT)
+            if post_url:
+                page.goto(post_url, timeout=NAV_TIMEOUT)
             page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
             page.wait_for_timeout(wait_ms)
             r.update({"status": "ok", "items": []})
@@ -470,7 +473,9 @@ _SITE_CFGS = {
         "u_sels":['input[name="userNameOrAccountNumber"]','input[id*="login"]','input[type="text"]'],
         "p_sels":['input[name="password"]','input[type="password"]'],
         "s_sels":['button[type="submit"]','button[id*="login"]'],
-        "ok_url":"**southwest.com/**","wait_ms":5_000},
+        "ok_url":"**southwest.com/**",
+        "post_url":"https://www.southwest.com/account/rapid-rewards/",
+        "wait_ms":5_000},
     "american_air":  {"name":"American Airlines","icon":"✈️","color":"#fce7f3",
         "login_url":"https://www.aa.com/homePage.do",
         "u_sels":['input[name="accountNumber"]','input[type="text"]'],
