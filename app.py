@@ -4195,6 +4195,11 @@ function saveFields(source) {{
   }}).then(r => r.json()).then(d => {{ if (d.ok) toast('Saved ✓'); }});
 }}
 
+// Auto-discover fields for any connected account that needs it
+fetch('/credentials/auto-discover', {{method:'POST',
+  headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+  body:new URLSearchParams({{_csrf:CSRF}})}}).catch(function(){{}});
+
 // Pre-check saved field preferences on load
 fetch('/credentials/fields/load').then(r => r.json()).then(function(data) {{
   if (!data.ok) return;
@@ -4305,6 +4310,15 @@ def credentials_fields_save():
         (new_enc, iso(), uid, source)
     )
     db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/credentials/auto-discover", methods=["POST"])
+@require_login
+def credentials_auto_discover():
+    """Background: discover fields for any connected account missing them."""
+    uid = session["user_id"]
+    threading.Thread(target=_auto_discover_missing, args=(uid,), daemon=True).start()
     return jsonify({"ok": True})
 
 
