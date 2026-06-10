@@ -3586,9 +3586,22 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
     """Render AI-discovered field checkboxes, or a Discover button if not yet run."""
     if source not in configured:
         return ""
-    extra      = extra_data or {}
-    discovered = extra.get("discovered_fields", [])
-    enabled    = set(extra.get("enabled_fields", []))
+    extra        = extra_data or {}
+    discovered   = extra.get("discovered_fields", [])
+    enabled      = set(extra.get("enabled_fields", []))
+    discovered_at = extra.get("discovered_at", "")
+    # Format "discovered X ago"
+    disc_label = ""
+    if discovered_at:
+        try:
+            dt    = datetime.fromisoformat(discovered_at)
+            delta = utcnow() - dt
+            mins  = int(delta.total_seconds() // 60)
+            if mins < 1:   disc_label = "just now"
+            elif mins < 60: disc_label = f"{mins}m ago"
+            else:          disc_label = f"{mins // 60}h ago"
+        except Exception:
+            pass
     src        = he(source)
 
     if discovered:
@@ -3612,7 +3625,10 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
             f'<details class="field-config" id="fields-{src}" open>'
             f'<summary style="font-size:12px;font-weight:600;color:#7c3aed;'
             f'cursor:pointer;user-select:none;padding:8px 0 4px;display:flex;'
-            f'align-items:center;gap:6px">✦ Data fields</summary>'
+            f'align-items:center;gap:6px">✦ Data fields'
+            + (f'<span style="font-size:11px;font-weight:400;color:#9ca3af;margin-left:6px">'
+               f'discovered {disc_label}</span>' if disc_label else "")
+            + f'</summary>'
             f'<div style="padding:2px 0 4px;border-top:1px solid #f0ede8;margin-top:4px">'
             f'{checkboxes}'
             f'<div style="display:flex;gap:8px;margin-top:10px">'
@@ -3848,7 +3864,6 @@ function removeCred(key, name) {{
 }}
 
 function resetFields(source) {{
-  if (!confirm('Clear all discovered fields for this account and re-discover fresh?')) return;
   fetch('/credentials/fields/reset/' + source, {{
     method: 'POST',
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
@@ -4136,8 +4151,9 @@ def _credentials_discover_impl(source):
     merged_fields   = deduped
     merged_enabled  = list(ex_enabled | {f["key"] for f in fields})  # never lose enabled
 
-    ex["enabled_fields"]    = merged_enabled
-    ex["discovered_fields"] = merged_fields
+    ex["enabled_fields"]     = merged_enabled
+    ex["discovered_fields"]  = merged_fields
+    ex["discovered_at"]      = iso()
     get_db().execute(
         "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
         (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
