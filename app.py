@@ -3639,7 +3639,14 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
             f'onclick="discoverFields(\'{src}\')">Re-discover ↺</button>'
             f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;'
             f'border:1px solid #fecaca;background:#fff;cursor:pointer;color:#ef4444" '
-            f'onclick="resetFields(\'{src}\')">Reset ✕</button>'
+            f'onclick="(function(){{var b=this;b.textContent=\'Resetting...\';b.disabled=true;'
+            f'fetch(\'/credentials/fields/reset/{src}\',{{method:\'POST\','
+            f'headers:{{\'Content-Type\':\'application/x-www-form-urlencoded\'}},'
+            f'body:new URLSearchParams({{_csrf:CSRF}})}}).then(function(r){{return r.json();}}).then(function(d){{'
+            f'if(d.ok)discoverFields(\'{src}\');'
+            f'else{{alert(d.error||\'Reset failed\');b.textContent=\'Reset ✕\';b.disabled=false;}}'
+            f'}}).catch(function(){{alert(\'Reset failed\');b.textContent=\'Reset ✕\';b.disabled=false;}});'
+            f'}}).call(this)">Reset ✕</button>'
             f'</div></div></details>'
         )
     else:
