@@ -230,6 +230,66 @@ _2FA_HINTS   = ['verification code','one-time','we sent','check your email',
 def _inbox_mark(ctx: dict) -> None:
     if ctx.get("fetcher"): ctx["fetcher"].mark()
 
+def _cloud_2fa_request(ctx: dict, source: str, page_text: str) -> str | None:
+    """Create a pending 2FA challenge via Mighty API and poll for user response."""
+    creds      = ctx.get("creds", {})
+    acct_name  = creds.get("name", source)
+    is_push    = any(h in page_text.lower() for h in _PUSH_HINTS)
+    is_sms     = not is_push
+    msg        = ""
+    # Try to extract the message shown on the 2FA page
+    for hint in ["sent to", "ending in", "code was sent", "verify your"]:
+        import re as _re
+        m = _re.search(rf'[^\n]{{0,80}}{hint}[^\n]{{0,80}}', page_text, _re.IGNORECASE)
+        if m:
+            msg = m.group().strip()[:120]
+            break
+
+    payload = json.dumps({
+        "api_key":        MIGHTY_API_KEY,
+        "source":         source,
+        "account_name":   acct_name,
+        "challenge_type": "push" if is_push else "sms",
+        "message":        msg,
+    }).encode()
+    req = urllib.request.Request(
+        MIGHTY_URL.rstrip("/") + "/api/2fa/request",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+            challenge_id = data.get("challenge_id")
+    except Exception as e:
+        print(f"  2FA request failed: {e}", flush=True)
+        return None
+
+    if not challenge_id:
+        return None
+
+    # Poll every 5s for up to 10 minutes
+    poll_url = MIGHTY_URL.rstrip("/") + f"/api/2fa/poll/{challenge_id}"
+    poll_req = urllib.request.Request(
+        poll_url,
+        headers={"X-Mighty-Key": MIGHTY_API_KEY},
+        method="GET",
+    )
+    for _ in range(120):
+        time.sleep(5)
+        try:
+            with urllib.request.urlopen(poll_req, timeout=10) as resp:
+                result = json.loads(resp.read())
+                if result.get("status") == "resolved":
+                    return result.get("code", "confirmed") or "confirmed"
+                if result.get("status") == "expired":
+                    return None
+        except Exception:
+            pass
+    return None
+
+
 def _handle_2fa(page, ctx: dict) -> None:
     page.wait_for_timeout(3_000)
     try:
@@ -259,10 +319,18 @@ def _handle_2fa(page, ctx: dict) -> None:
     if not code and totp_secret:
         print("TOTP...", end=" ", flush=True)
         code = pyotp.TOTP(totp_secret).now()
+    account_key = ctx.get("account_key", "account")
     if not code:
-        print("SMS/unknown — enter code: ", end="", flush=True)
-        try: code = input().strip()
-        except: return
+        if os.environ.get("RAILWAY_ENVIRONMENT") and MIGHTY_API_KEY:
+            print("SMS/push 2FA — requesting approval from Mighty dashboard...", flush=True)
+            code = _cloud_2fa_request(ctx, account_key, text)
+            if not code:
+                print("2FA timed out.", flush=True)
+                return
+        else:
+            print("SMS/unknown — enter code: ", end="", flush=True)
+            try: code = input().strip()
+            except: return
 
     if code:
         print(f"filling {code}...", end=" ", flush=True)

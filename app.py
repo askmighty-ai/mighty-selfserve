@@ -152,6 +152,20 @@ def init_db():
                 PRIMARY KEY (user_id, source),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
+            CREATE TABLE IF NOT EXISTS pending_2fa (
+                id             TEXT PRIMARY KEY,
+                user_id        TEXT NOT NULL,
+                source         TEXT NOT NULL,
+                account_name   TEXT NOT NULL,
+                challenge_type TEXT NOT NULL,
+                message        TEXT,
+                code           TEXT,
+                status         TEXT NOT NULL DEFAULT 'pending',
+                created_at     TEXT NOT NULL,
+                expires_at     TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_2fa_user ON pending_2fa(user_id);
             CREATE TABLE IF NOT EXISTS account_credentials (
                 user_id      TEXT NOT NULL,
                 source       TEXT NOT NULL,
@@ -1460,6 +1474,7 @@ details[open] summary::before{content:"\\25BE "}
 </div>
 
 {onboarding_banner}
+<div id="twofa-banner" style="display:none;max-width:1140px;width:100%;margin:0 auto;padding:0 24px"></div>
 <div class="main">
   {sidebar_content}
 
@@ -1542,6 +1557,57 @@ function decide(actionId, decision) {
   var sy = sessionStorage.getItem('mighty-scroll-y');
   if (sy) { window.scrollTo(0, parseInt(sy)); sessionStorage.removeItem('mighty-scroll-y'); }
 })();
+
+// ── 2FA pending challenges ────────────────────────────────────────────────────
+function load2FAChallenges() {
+  fetch('/api/2fa/pending').then(function(r){return r.json();}).then(function(d){
+    if (!d.ok || !d.challenges.length) {
+      document.getElementById('twofa-banner').style.display = 'none';
+      return;
+    }
+    var banner = document.getElementById('twofa-banner');
+    banner.style.display = 'block';
+    var html = '';
+    d.challenges.forEach(function(c) {
+      var isCode = c.challenge_type === 'sms' || c.challenge_type === 'email_code';
+      html += '<div style="background:#fff;border:1px solid #e5e3df;border-radius:10px;padding:14px 16px;margin-bottom:8px">'
+        + '<div style="font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px">'
+        + '🔐 ' + c.account_name + ' needs ' + (isCode ? 'a verification code' : 'push approval')
+        + '</div>'
+        + (c.message ? '<div style="font-size:12px;color:#6b7280;margin-bottom:8px">' + c.message + '</div>' : '')
+        + (isCode
+          ? '<div style="display:flex;gap:8px;align-items:center">'
+            + '<input type="text" id="code-' + c.id + '" placeholder="Enter code" maxlength="8" '
+            + 'style="padding:7px 10px;border:1.5px solid #e5e3df;border-radius:7px;font-size:13px;width:120px;outline:none">'
+            + '<button onclick="submit2FA(\'' + c.id + '\',false)" '
+            + 'style="padding:7px 14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">Submit</button>'
+            + '</div>'
+          : '<button onclick="submit2FA(\'' + c.id + '\',true)" '
+            + 'style="padding:7px 14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">I approved it ✓</button>'
+        )
+        + '</div>';
+    });
+    banner.innerHTML = '<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:12px;padding:14px 16px;margin-bottom:16px">'
+      + '<div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:8px">⚠ 2FA approval needed</div>'
+      + html + '</div>';
+  });
+}
+
+function submit2FA(id, isPush) {
+  var code = isPush ? 'confirmed' : (document.getElementById('code-' + id) || {value:''}).value.trim();
+  fetch('/api/2fa/respond/' + id, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({_csrf: document.querySelector('[name="_csrf"]').value, code: code, confirmed: isPush ? '1' : ''})
+  }).then(function(r){return r.json();}).then(function(d){
+    if (d.ok) { load2FAChallenges(); }
+    else alert(d.error || 'Error');
+  });
+}
+
+// Poll for 2FA challenges every 15s
+setInterval(load2FAChallenges, 15000);
+load2FAChallenges();
 
 function cloudSync() {
   var btn = document.getElementById('cloud-sync-btn');
@@ -4533,6 +4599,149 @@ def api_data_get():
             "items":        data.get("items", []),
         }
     return jsonify({"ok": True, "data": result})
+
+
+# ── 2FA pending approval ──────────────────────────────────────────────────────
+
+@app.route("/api/2fa/request", methods=["POST"])
+def api_2fa_request():
+    """Scraper calls this when it hits an SMS/push 2FA challenge it can't auto-handle."""
+    user, body = api_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Invalid api_key"}), 401
+
+    source         = body.get("source", "")
+    account_name   = body.get("account_name", source)
+    challenge_type = body.get("challenge_type", "sms")   # sms | push
+    message        = body.get("message", "")
+
+    # Expire any existing pending challenge for this source
+    get_db().execute(
+        "UPDATE pending_2fa SET status='expired' WHERE user_id=? AND source=? AND status='pending'",
+        (user["id"], source)
+    )
+
+    challenge_id = secrets.token_hex(16)
+    now          = utcnow()
+    expires      = (now + timedelta(minutes=10)).isoformat()
+    get_db().execute(
+        "INSERT INTO pending_2fa (id,user_id,source,account_name,challenge_type,message,status,created_at,expires_at) "
+        "VALUES (?,?,?,?,?,?,'pending',?,?)",
+        (challenge_id, user["id"], source, account_name, challenge_type, message, now.isoformat(), expires)
+    )
+    get_db().commit()
+
+    # Notify user by email
+    _send_2fa_email(user["email"], account_name, challenge_type, message,
+                    f"{base_url()}/dashboard#2fa-{challenge_id}")
+
+    return jsonify({"ok": True, "challenge_id": challenge_id})
+
+
+@app.route("/api/2fa/poll/<challenge_id>")
+def api_2fa_poll(challenge_id):
+    """Scraper polls this until status becomes 'resolved'."""
+    user, _ = api_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Invalid api_key"}), 401
+
+    row = get_db().execute(
+        "SELECT * FROM pending_2fa WHERE id=? AND user_id=?",
+        (challenge_id, user["id"])
+    ).fetchone()
+    if not row:
+        return jsonify({"ok": False, "error": "Challenge not found"}), 404
+
+    # Auto-expire
+    if row["status"] == "pending" and row["expires_at"] < utcnow().isoformat():
+        get_db().execute("UPDATE pending_2fa SET status='expired' WHERE id=?", (challenge_id,))
+        get_db().commit()
+        return jsonify({"ok": True, "status": "expired"})
+
+    return jsonify({
+        "ok":     True,
+        "status": row["status"],
+        "code":   row["code"] or "",
+    })
+
+
+@app.route("/api/2fa/respond/<challenge_id>", methods=["POST"])
+@require_login
+def api_2fa_respond(challenge_id):
+    """User submits their SMS code or push confirmation via the dashboard."""
+    check_csrf()
+    code = request.form.get("code", "").strip()
+    confirmed = request.form.get("confirmed", "")
+
+    row = get_db().execute(
+        "SELECT * FROM pending_2fa WHERE id=? AND user_id=? AND status='pending'",
+        (challenge_id, session["user_id"])
+    ).fetchone()
+    if not row:
+        return jsonify({"ok": False, "error": "Challenge not found or already resolved"}), 404
+
+    get_db().execute(
+        "UPDATE pending_2fa SET status='resolved', code=? WHERE id=?",
+        (code or confirmed or "confirmed", challenge_id)
+    )
+    get_db().commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/2fa/pending")
+@require_login
+def api_2fa_pending():
+    """Return active pending 2FA challenges for the logged-in user."""
+    rows = get_db().execute(
+        "SELECT * FROM pending_2fa WHERE user_id=? AND status='pending' ORDER BY created_at DESC",
+        (session["user_id"],)
+    ).fetchall()
+    # Auto-expire old ones
+    now = utcnow().isoformat()
+    challenges = []
+    for r in rows:
+        if r["expires_at"] < now:
+            get_db().execute("UPDATE pending_2fa SET status='expired' WHERE id=?", (r["id"],))
+        else:
+            challenges.append({
+                "id": r["id"], "source": r["source"],
+                "account_name": r["account_name"],
+                "challenge_type": r["challenge_type"],
+                "message": r["message"] or "",
+                "expires_at": r["expires_at"],
+            })
+    if any(r["expires_at"] < now for r in rows):
+        get_db().commit()
+    return jsonify({"ok": True, "challenges": challenges})
+
+
+def _send_2fa_email(to_email: str, account_name: str, challenge_type: str,
+                    message: str, dashboard_url: str) -> None:
+    if not POSTMARK_API_KEY:
+        print(f"[2FA] Email skipped (no Postmark): {account_name} needs {challenge_type}", flush=True)
+        return
+    subject = f"Action needed: 2FA required for {account_name}"
+    body_html = f"""<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px">
+<h2 style="color:#7c3aed">⚡ Mighty needs your help</h2>
+<p>Your <strong>{account_name}</strong> account requires {"a verification code" if challenge_type=="sms" else "push approval"} to sync.</p>
+{"<p style='color:#555'>" + message + "</p>" if message else ""}
+<a href="{dashboard_url}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#7c3aed;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Enter code in Mighty →</a>
+<p style="color:#9ca3af;font-size:12px;margin-top:24px">This request expires in 10 minutes.</p>
+</div>"""
+    payload = json.dumps({
+        "From": POSTMARK_FROM, "To": NOTIFY_EMAIL_OVERRIDE or to_email,
+        "Subject": subject, "HtmlBody": body_html,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.postmarkapp.com/email",
+        data=payload,
+        headers={"Content-Type": "application/json", "X-Postmark-Server-Token": POSTMARK_API_KEY},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"[2FA] Email failed: {e}", flush=True)
 
 
 # ── Cloud sync ────────────────────────────────────────────────────────────────
