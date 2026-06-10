@@ -1610,6 +1610,18 @@ function submit2FA(id, pushFlag) {
 setInterval(load2FAChallenges, 15000);
 load2FAChallenges();
 
+// Format sync timestamps in user's local time zone
+document.querySelectorAll('[data-synced]').forEach(function(el) {
+  var ts = el.dataset.synced;
+  if (!ts) return;
+  try {
+    var d = new Date(ts);
+    var date = d.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+    var time = d.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'});
+    el.textContent = 'Synced ' + date + ' at ' + time;
+  } catch(e) {}
+});
+
 // Auto-sync on page load if last sync was >30 min ago or never
 fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
   if (s.running) return; // already syncing
@@ -2913,7 +2925,7 @@ def dashboard():
                 f'<div class="acct-icon" style="background:{he(row["color"] or "#f0f0f0")}">{he(row["icon"] or "?")}</div>'
                 f'<div style="flex:1">'
                 f'<div style="font-size:13px;font-weight:600;color:#1a1a1a">{he(row["display_name"])}</div>'
-                f'<div style="font-size:11px;color:#9ca3af">Synced {_fmt_sync(row["synced_at"])}</div>'
+                f'<div style="font-size:11px;color:#9ca3af" data-synced="{he(row["synced_at"])}">Synced {_fmt_sync(row["synced_at"])}</div>'
                 f'</div>'
                 f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0"></div>'
                 f'</div>'
