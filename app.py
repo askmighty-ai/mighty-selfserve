@@ -1579,10 +1579,10 @@ function load2FAChallenges() {
           ? '<div style="display:flex;gap:8px;align-items:center">'
             + '<input type="text" id="code-' + c.id + '" placeholder="Enter code" maxlength="8" '
             + 'style="padding:7px 10px;border:1.5px solid #e5e3df;border-radius:7px;font-size:13px;width:120px;outline:none">'
-            + '<button onclick="submit2FA(\'' + c.id + '\',false)" '
+            + '<button data-cid="' + c.id + '" data-push="0" onclick="submit2FA(this.dataset.cid,this.dataset.push)" '
             + 'style="padding:7px 14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">Submit</button>'
             + '</div>'
-          : '<button onclick="submit2FA(\'' + c.id + '\',true)" '
+          : '<button data-cid="' + c.id + '" data-push="1" onclick="submit2FA(this.dataset.cid,this.dataset.push)" '
             + 'style="padding:7px 14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">I approved it ✓</button>'
         )
         + '</div>';
@@ -1593,7 +1593,8 @@ function load2FAChallenges() {
   });
 }
 
-function submit2FA(id, isPush) {
+function submit2FA(id, pushFlag) {
+  var isPush = pushFlag === '1' || pushFlag === true;
   var code = isPush ? 'confirmed' : (document.getElementById('code-' + id) || {value:''}).value.trim();
   fetch('/api/2fa/respond/' + id, {
     method: 'POST',
