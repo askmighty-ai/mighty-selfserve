@@ -1610,6 +1610,14 @@ function submit2FA(id, pushFlag) {
 setInterval(load2FAChallenges, 15000);
 load2FAChallenges();
 
+// Auto-sync on page load if last sync was >30 min ago or never
+fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
+  if (s.running) return; // already syncing
+  var lastSync = s.last ? new Date(s.last) : null;
+  var minsAgo = lastSync ? (Date.now() - lastSync.getTime()) / 60000 : Infinity;
+  if (minsAgo > 30) cloudSync();
+}).catch(function(){});
+
 function cloudSync() {
   var btn = document.getElementById('cloud-sync-btn');
   if (!btn) return;
