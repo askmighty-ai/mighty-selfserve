@@ -4067,8 +4067,19 @@ def _credentials_discover_impl(source):
 
     # Find site display name
     site_name = next((name for key, name, *_ in SUPPORTED_SITES if key == source), source)
+
+    # Run discovery 3 times and merge — maximises field coverage without user effort
     try:
-        fields = claude_discover_fields(raw_text, site_name)
+        merged: dict = {}
+        for _run in range(3):
+            run_fields = claude_discover_fields(raw_text, site_name)
+            for f in run_fields:
+                k = f.get("key", "")
+                if k and k not in merged:
+                    merged[k] = f          # new field
+                elif k and f.get("value"):
+                    merged[k]["value"] = f["value"]  # refresh value
+        fields = list(merged.values())
     except Exception as e:
         return jsonify({"ok": False, "error": f"Discovery error: {str(e)[:100]}"}), 500
     if not fields:
