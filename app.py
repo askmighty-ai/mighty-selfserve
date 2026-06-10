@@ -1447,6 +1447,12 @@ details[open] summary::before{content:"\\25BE "}
   </div>
   <div class="topbar-right">
     <a href="/credentials" style="font-size:12px;color:#6b7280;text-decoration:none">Accounts</a>
+    <input type="hidden" name="_csrf" value="{csrf_token}">
+    <button id="cloud-sync-btn" onclick="cloudSync()"
+            style="padding:5px 12px;border-radius:7px;border:1px solid #e5e3df;background:#fff;
+                   font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;font-family:inherit">
+      ↻ Sync
+    </button>
     <a href="/settings" style="font-size:12px;color:#6b7280;text-decoration:none">Settings</a>
     <span class="topbar-email">{email}</span>
     <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf_token}"><button class="btn-logout" type="submit">Sign out</button></form>
@@ -1536,6 +1542,40 @@ function decide(actionId, decision) {
   var sy = sessionStorage.getItem('mighty-scroll-y');
   if (sy) { window.scrollTo(0, parseInt(sy)); sessionStorage.removeItem('mighty-scroll-y'); }
 })();
+
+function cloudSync() {
+  var btn = document.getElementById('cloud-sync-btn');
+  if (!btn) return;
+  btn.textContent = '↻ Syncing...';
+  btn.disabled = true;
+  fetch('/sync/now', {method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
+      document.querySelector('input[name="_csrf"]').value : '')
+  }).then(function(r){return r.json();}).then(function(d){
+    if (d.ok) {
+      btn.textContent = '↻ Syncing…';
+      // Poll status every 3s until done
+      var poll = setInterval(function(){
+        fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
+          if (!s.running) {
+            clearInterval(poll);
+            btn.textContent = '↻ Sync';
+            btn.disabled = false;
+            location.reload();
+          }
+        });
+      }, 3000);
+    } else {
+      btn.textContent = '↻ Sync';
+      btn.disabled = false;
+      alert(d.error || 'Sync failed');
+    }
+  }).catch(function(){
+    btn.textContent = '↻ Sync';
+    btn.disabled = false;
+  });
+}
 
 function filterFeed(q) {
   q = (q || '').toLowerCase();
@@ -4430,6 +4470,97 @@ def api_data_get():
     return jsonify({"ok": True, "data": result})
 
 
+# ── Cloud sync ────────────────────────────────────────────────────────────────
+
+_sync_status: dict = {}   # user_id → {"running": bool, "last": iso, "result": dict}
+
+def _cloud_sync_user(user_id: str, api_key: str, mighty_url: str) -> dict:
+    """Run scrapers for one user server-side and return result."""
+    try:
+        import scrape as _scrape
+        result = _scrape.run_sync(
+            api_key=api_key,
+            mighty_url=mighty_url,
+            log=lambda m: print(f"[CloudSync:{user_id[:6]}] {m}", flush=True),
+        )
+        _sync_status[user_id] = {
+            "running": False, "last": iso(),
+            "synced": result.get("synced", 0),
+            "errors": result.get("errors", 0),
+        }
+        return result
+    except Exception as e:
+        _sync_status[user_id] = {"running": False, "last": iso(), "error": str(e)[:120]}
+        raise
+
+def _cloud_sync_all():
+    """Sync all users who have credentials configured."""
+    with app.app_context():
+        try:
+            url = os.environ.get("BASE_URL", "https://mighty-selfserve-production.up.railway.app")
+            rows = get_db().execute("SELECT id, api_key FROM users").fetchall()
+            for row in rows:
+                uid = row["id"]
+                if _sync_status.get(uid, {}).get("running"):
+                    continue
+                n = get_db().execute(
+                    "SELECT COUNT(*) as n FROM account_credentials WHERE user_id=?",
+                    (uid,)
+                ).fetchone()["n"]
+                if n == 0:
+                    continue
+                _sync_status[uid] = {"running": True}
+                try:
+                    _cloud_sync_user(uid, row["api_key"], url)
+                except Exception as e:
+                    print(f"[AutoSync] User {uid[:6]} error: {e}", flush=True)
+        except Exception as e:
+            print(f"[AutoSync] Loop error: {e}", flush=True)
+
+def _start_cloud_scheduler():
+    interval = int(os.environ.get("SYNC_INTERVAL_HOURS", "1"))
+    def loop():
+        import time
+        time.sleep(120)  # Wait 2 min after startup before first sync
+        while True:
+            print(f"[AutoSync] Running scheduled sync for all users", flush=True)
+            _cloud_sync_all()
+            time.sleep(interval * 3600)
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    print(f"[Mighty] Cloud sync scheduler started (every {interval}h)", flush=True)
+
+
+@app.route("/sync/now", methods=["POST"])
+@require_login
+def sync_now_cloud():
+    """Trigger an immediate cloud sync for the current user."""
+    check_csrf()
+    uid = session["user_id"]
+    if _sync_status.get(uid, {}).get("running"):
+        return jsonify({"ok": False, "error": "Sync already in progress"}), 409
+    user = get_db().execute("SELECT api_key FROM users WHERE id=?", (uid,)).fetchone()
+    url  = os.environ.get("BASE_URL", "https://mighty-selfserve-production.up.railway.app")
+    _sync_status[uid] = {"running": True}
+
+    def _do():
+        try:
+            _cloud_sync_user(uid, user["api_key"], url)
+        except Exception as e:
+            print(f"[SyncNow] {e}", flush=True)
+    threading.Thread(target=_do, daemon=True).start()
+    return jsonify({"ok": True, "message": "Sync started"})
+
+
+@app.route("/sync/status")
+@require_login
+def sync_status():
+    """Return current sync status for the logged-in user."""
+    uid    = session["user_id"]
+    status = _sync_status.get(uid, {})
+    return jsonify({"ok": True, **status})
+
+
 # ── Error handlers ────────────────────────────────────────────────────────────
 
 @app.errorhandler(403)
@@ -4452,4 +4583,7 @@ def server_error(e):
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Start cloud sync scheduler if running on Railway
+    if os.environ.get("ENABLE_CLOUD_SYNC", "").lower() == "true":
+        _start_cloud_scheduler()
     app.run(host="0.0.0.0", port=PORT, debug=False)
