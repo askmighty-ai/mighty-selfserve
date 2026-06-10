@@ -4161,11 +4161,33 @@ def _credentials_discover_impl(source):
     ex["enabled_fields"]     = merged_enabled
     ex["discovered_fields"]  = merged_fields
     ex["discovered_at"]      = iso()
-    get_db().execute(
+    db = get_db()
+    db.execute(
         "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
         (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
     )
-    get_db().commit()
+
+    # Also update account_data items with AI-discovered values so the dashboard
+    # shows the same fields/labels the user selected (not the scraper's hardcoded ones)
+    enabled_set = set(merged_enabled)
+    ai_items = [
+        {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
+        for f in merged_fields
+        if f.get("key") in enabled_set
+    ]
+    ad_row = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if ad_row and ai_items:
+        ad_data = decrypt_account_data(uid, ad_row["data_enc"] or "")
+        ad_data["items"] = ai_items
+        db.execute(
+            "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+            (encrypt_account_data(uid, ad_data), uid, source)
+        )
+
+    db.commit()
     return jsonify({"ok": True, "fields": fields})
 
 
