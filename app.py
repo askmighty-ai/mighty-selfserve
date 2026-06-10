@@ -2913,13 +2913,8 @@ def dashboard():
                 ]
             else:
                 items = data.get("items", [])
-            # Only show cards with at least one real value (not just "–")
-            has_real = any(
-                i.get("value", "–") not in ("–", "", "No data extracted")
-                for i in items
-            )
-            if not has_real:
-                continue
+            if not items:
+                continue  # Skip if no fields selected at all
 
             items_html = "".join(
                 f'<div class="acct-row"><span class="acct-lbl">{he(i["label"])}</span>'
