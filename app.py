@@ -15,7 +15,7 @@ Env vars (all optional):
   PORT          — Port to listen on (default: 5004)
 """
 
-import os, io, csv, json, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html, time, base64
+import os, io, csv, json, re, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html, time, base64
 
 try:
     from cryptography.fernet import Fernet
