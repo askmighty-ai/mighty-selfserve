@@ -3754,13 +3754,19 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
         cards = ""
         for key, name, icon, color in sites:
             # data-name enables client-side search filtering
-            is_set = key in configured
-            badge = (
+            is_set  = key in configured
+            badge   = (
                 '<span style="font-size:10px;font-weight:600;padding:2px 8px;'
                 'border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>'
                 if is_set else
                 '<span style="font-size:10px;color:#9ca3af">Not connected</span>'
             )
+            # Pre-compute values that need backslashes (not allowed inside {} in Python <3.12)
+            toggle_label = 'Edit' if is_set else 'Connect'
+            remove_btn   = (
+                '<button class="btn-remove" onclick="removeCred(\''
+                + he(key) + '\',\'' + he(name) + '\')">Remove</button>'
+            ) if is_set else ''
             cards += f"""
 <div class="cred-card" id="card-{he(key)}" data-name="{he(name.lower())}">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
@@ -3770,9 +3776,9 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
       <div id="badge-{he(key)}">{badge}</div>
     </div>
     <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}">
-      {'Edit' if is_set else 'Connect'}
+      {toggle_label}
     </button>
-    {f'<button class="btn-remove" onclick="removeCred(\'{he(key)}\',\'{he(name)}\')">Remove</button>' if is_set else ''}
+    {remove_btn}
   </div>
   <div class="cred-form" id="form-{he(key)}" style="display:none">
     <input type="text" name="username" placeholder="Username or email"
