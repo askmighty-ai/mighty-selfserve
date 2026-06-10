@@ -1201,7 +1201,7 @@ def main() -> None:
 
 # ── Programmatic entry point (used by MightySync.app) ─────────────────────────
 def run_sync(api_key: str, mighty_url: str = MIGHTY_URL,
-             log: callable = print) -> dict:
+             log: callable = print, only_source: str | None = None) -> dict:
     """Run a full sync and return a summary dict.
     Designed to be called from the MightySync menu bar app (no CLI needed).
 
@@ -1219,6 +1219,8 @@ def run_sync(api_key: str, mighty_url: str = MIGHTY_URL,
         return {"ok": False, "error": str(e), "synced": 0, "errors": 0, "results": {}}
 
     configured = [k for k in all_creds if k in SCRAPERS and all_creds[k].get("username")]
+    if only_source:
+        configured = [only_source] if only_source in configured else []
     if not configured:
         return {"ok": False, "error": "No credentials configured", "synced": 0, "errors": 0, "results": {}}
 

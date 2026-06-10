@@ -3873,7 +3873,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
         Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.
       </div>
     </details>
-    <button class="btn-save" onclick="saveCred('{he(key)}')">Save</button>
+    <button class="btn-save" onclick="saveCred('{he(key)}')">Save & Sync</button>
   </div>
   {_field_config_html(key, configured, extra_by_source.get(key, {}))}
 </div>"""
@@ -4002,19 +4002,35 @@ function saveCred(key) {{
   var p = document.getElementById('p-' + key).value;
   var t = document.getElementById('t-' + key) ? document.getElementById('t-' + key).value.trim() : '';
   if (!u || !p) {{ toast('Username and password required', false); return; }}
+  var saveBtn = document.querySelector('#form-' + key + ' .btn-save');
+  if (saveBtn) {{ saveBtn.textContent = 'Saving & syncing...'; saveBtn.disabled = true; }}
   fetch('/credentials/save', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
     body: new URLSearchParams({{_csrf: CSRF, source: key, username: u, password: p, totp_secret: t}})
   }}).then(r => r.json()).then(d => {{
     if (d.ok) {{
-      toast('Saved ✓');
-      document.getElementById('badge-' + key).innerHTML =
-        '<span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>';
-      document.getElementById('btn-' + key).textContent = 'Edit';
-      document.getElementById('form-' + key).style.display = 'none';
-      location.reload();
-    }} else {{ toast(d.error || 'Error', false); }}
+      toast('Saved — syncing ' + key + '...');
+      // Trigger single-account sync
+      fetch('/sync/account/' + key, {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+        body: new URLSearchParams({{_csrf: CSRF}})
+      }}).then(function() {{
+        // Poll until sync completes then reload
+        var poll = setInterval(function() {{
+          fetch('/sync/status').then(r => r.json()).then(function(s) {{
+            if (!s.running) {{
+              clearInterval(poll);
+              location.reload();
+            }}
+          }});
+        }}, 3000);
+      }});
+    }} else {{
+      toast(d.error || 'Error', false);
+      if (saveBtn) {{ saveBtn.textContent = 'Save & Sync'; saveBtn.disabled = false; }}
+    }}
   }});
 }}
 
@@ -4809,7 +4825,7 @@ def _start_cloud_scheduler():
 @app.route("/sync/now", methods=["POST"])
 @require_login
 def sync_now_cloud():
-    """Trigger an immediate cloud sync for the current user."""
+    """Trigger an immediate cloud sync for the current user (all accounts)."""
     check_csrf()
     uid = session["user_id"]
     if _sync_status.get(uid, {}).get("running"):
@@ -4825,6 +4841,37 @@ def sync_now_cloud():
             print(f"[SyncNow] {e}", flush=True)
     threading.Thread(target=_do, daemon=True).start()
     return jsonify({"ok": True, "message": "Sync started"})
+
+
+@app.route("/sync/account/<source>", methods=["POST"])
+@require_login
+def sync_account_cloud(source):
+    """Trigger an immediate cloud sync for a single account."""
+    check_csrf()
+    uid  = session["user_id"]
+    user = get_db().execute("SELECT api_key FROM users WHERE id=?", (uid,)).fetchone()
+    url  = os.environ.get("BASE_URL", "https://mighty-selfserve-production.up.railway.app")
+    _sync_status[uid] = {"running": True}
+
+    def _do():
+        try:
+            import scrape as _scrape
+            result = _scrape.run_sync(
+                api_key=user["api_key"],
+                mighty_url=url,
+                log=lambda m: print(f"[SyncAccount:{source}] {m}", flush=True),
+                only_source=source,
+            )
+            _sync_status[uid] = {
+                "running": False, "last": iso(),
+                "synced": result.get("synced", 0),
+                "errors": result.get("errors", 0),
+            }
+        except Exception as e:
+            _sync_status[uid] = {"running": False, "last": iso(), "error": str(e)[:120]}
+            print(f"[SyncAccount] {e}", flush=True)
+    threading.Thread(target=_do, daemon=True).start()
+    return jsonify({"ok": True})
 
 
 @app.route("/sync/status")
