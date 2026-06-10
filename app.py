@@ -2792,7 +2792,8 @@ def dashboard():
         ordered = [row_map[k] for k in CATEGORY_ORDER if k in row_map]
         ordered += [r for r in acct_rows if r["source"] not in CATEGORY_ORDER]
         # Load field preferences for filtering
-        field_prefs: dict = {}
+        # Load AI-discovered fields per source (used for display instead of scraper items)
+        discovered_by_source: dict = {}
         cred_rows = get_db().execute(
             "SELECT source, extra_enc FROM account_credentials WHERE user_id=?",
             (user["id"],)
@@ -2801,20 +2802,30 @@ def dashboard():
             if cr["extra_enc"]:
                 try:
                     ex = json.loads(decrypt_cred(user["id"], cr["extra_enc"]))
-                    if "enabled_fields" in ex:
-                        field_prefs[cr["source"]] = set(ex["enabled_fields"])
+                    discovered = ex.get("discovered_fields", [])
+                    enabled    = set(ex.get("enabled_fields", []))
+                    if discovered and enabled:
+                        discovered_by_source[cr["source"]] = {
+                            "fields":  discovered,
+                            "enabled": enabled,
+                        }
                 except Exception:
                     pass
 
         for row in ordered:
-            data  = decrypt_account_data(user["id"], row["data_enc"] or "")
-            items = data.get("items", [])
-            # Filter by user field preferences if configured for this source
-            enabled = field_prefs.get(row["source"])
-            # If Claude discovered fields, filter to enabled ones
-            if enabled is not None:
-                items = [i for i in items
-                         if i.get("key") in enabled or not i.get("key")]
+            data   = decrypt_account_data(user["id"], row["data_enc"] or "")
+            src    = row["source"]
+
+            # Use AI-discovered fields if available — more fields, better labels, fresher values
+            if src in discovered_by_source:
+                disc = discovered_by_source[src]
+                items = [
+                    {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
+                    for f in disc["fields"]
+                    if f.get("key") in disc["enabled"]
+                ]
+            else:
+                items = data.get("items", [])
             items_html = "".join(
                 f'<div class="acct-row"><span class="acct-lbl">{he(i["label"])}</span>'
                 f'<span class="acct-val">{he(i["value"])}</span></div>'
