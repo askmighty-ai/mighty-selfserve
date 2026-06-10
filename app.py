@@ -3919,7 +3919,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
             toggle_label = 'Edit' if is_set else 'Connect'
             remove_btn   = (
                 '<button class="btn-remove" onclick="removeCred(\''
-                + he(key) + '\',\'' + he(name) + '\')">Remove</button>'
+                + he(key) + '\',\'' + he(name) + '\')">Disconnect</button>'
             ) if is_set else ''
             cards += f"""
 <div class="cred-card" id="card-{he(key)}" data-name="{he(name.lower())}">
