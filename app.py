@@ -3764,6 +3764,65 @@ SUPPORTED_SITES = [
 ]
 
 
+def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
+    """Save AI-discovered fields and update account_data items. Shared by auto and manual discovery."""
+    db = get_db()
+    cred_row = db.execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    ex = {}
+    if cred_row and cred_row["extra_enc"]:
+        try: ex = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
+        except Exception: pass
+
+    existing  = ex.get("discovered_fields", [])
+    ex_by_key = {f["key"]: f for f in existing}
+    ex_enabled = set(ex.get("enabled_fields", []))
+    for f in fields:
+        key = f["key"]
+        if key in ex_by_key: ex_by_key[key]["value"] = f.get("value", "")
+        else:
+            ex_by_key[key] = f
+            ex_enabled.add(key)
+
+    # Dedup by label similarity
+    def _n(s): return re.sub(r'[^a-z0-9]', '', s.lower())
+    seen_labels: set = set(); seen_vals: dict = {}; deduped = []
+    for f in ex_by_key.values():
+        val = str(f.get("value", "")).strip(); lbl = _n(f.get("label", ""))
+        if any(lbl in sl or sl in lbl for sl in seen_labels): ex_enabled.discard(f["key"]); continue
+        if val and val not in ("0", "") and val in seen_vals: ex_enabled.discard(f["key"]); continue
+        seen_labels.add(lbl)
+        if val and val not in ("0", ""): seen_vals[val] = f["key"]
+        deduped.append(f)
+
+    ex["enabled_fields"]    = list(ex_enabled | {f["key"] for f in fields})
+    ex["discovered_fields"] = deduped
+    ex["discovered_at"]     = iso()
+    db.execute(
+        "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
+        (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
+    )
+    # Update account_data items
+    enabled_set = set(ex["enabled_fields"])
+    ai_items = [
+        {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
+        for f in deduped if f.get("key") in enabled_set
+    ]
+    ad = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
+    ).fetchone()
+    if ad and ai_items:
+        ad_data = decrypt_account_data(uid, ad["data_enc"] or "")
+        ad_data["items"] = ai_items
+        db.execute(
+            "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+            (encrypt_account_data(uid, ad_data), uid, source)
+        )
+    db.commit()
+
+
 def _field_config_html(source: str, configured: set, extra_data: dict = None) -> str:
     """Render AI-discovered field checkboxes, or a Discover button if not yet run."""
     if source not in configured:
@@ -3832,15 +3891,17 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
             f'</div></div></details>'
         )
     else:
+        # No fields yet — auto-discovery runs after sync; show Re-discover as fallback
         return (
-            f'<div id="discover-area-{src}" style="margin-top:8px">'
+            f'<div id="discover-area-{src}" style="margin-top:8px;display:flex;align-items:center;gap:8px">'
+            f'<span style="font-size:12px;color:#9ca3af;font-style:italic">'
+            f'Fields discovered automatically after syncing</span>'
             f'<button id="discover-btn-{src}" '
-            f'style="font-size:12px;padding:7px 14px;border-radius:8px;'
+            f'style="font-size:11px;padding:4px 10px;border-radius:6px;'
             f'background:#f3f0ff;border:1px solid #d4c6ff;color:#7c3aed;'
-            f'cursor:pointer;font-family:inherit;font-weight:600" '
+            f'cursor:pointer;font-family:inherit" '
             f'onclick="discoverFields(\'{src}\')">'
-            f'✦ Discover data fields</button>'
-            f'<div id="discover-result-{src}"></div>'
+            f'✦ Discover now</button>'
             f'</div>'
         )
 
@@ -4340,88 +4401,10 @@ def _credentials_discover_impl(source):
     if not fields:
         return jsonify({"ok": False, "error": "Could not identify fields — try syncing again"}), 500
 
-    # Merge with existing — never remove previously discovered fields
-    cred_row = get_db().execute(
-        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
-        (uid, source)
-    ).fetchone()
-    ex = {}
-    if cred_row and cred_row["extra_enc"]:
-        try: ex = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
-        except Exception: pass
-
-    existing  = ex.get("discovered_fields", [])
-    ex_by_key = {f["key"]: f for f in existing}
-    ex_enabled = set(ex.get("enabled_fields", []))
-
-    for f in fields:
-        key = f["key"]
-        if key in ex_by_key:
-            ex_by_key[key]["value"] = f.get("value", "")  # refresh value
-        else:
-            ex_by_key[key] = f          # new field — add it
-            ex_enabled.add(key)         # auto-enable new fields
-
-    # Deduplicate: keep first-seen field when value OR normalized label matches
-    def _norm(s: str) -> str:
-        return re.sub(r'[^a-z0-9]', '', s.lower())
-
-    seen_values: dict = {}
-    seen_labels: set  = set()
-    deduped = []
-    for f in ex_by_key.values():
-        val   = str(f.get("value", "")).strip()
-        label = _norm(f.get("label", ""))
-
-        # Check label similarity — skip if an existing label contains this one or vice versa
-        label_dup = any(label in sl or sl in label for sl in seen_labels)
-
-        # Check value duplicate (non-trivial values only)
-        value_dup = (val and val not in ("0", "") and val in seen_values)
-
-        if label_dup or value_dup:
-            ex_enabled.discard(f["key"])
-            continue
-
-        seen_labels.add(label)
-        if val and val not in ("0", ""):
-            seen_values[val] = f["key"]
-        deduped.append(f)
-
-    merged_fields   = deduped
-    merged_enabled  = list(ex_enabled | {f["key"] for f in fields})  # never lose enabled
-
-    ex["enabled_fields"]     = merged_enabled
-    ex["discovered_fields"]  = merged_fields
-    ex["discovered_at"]      = iso()
-    db = get_db()
-    db.execute(
-        "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
-        (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
-    )
-
-    # Also update account_data items with AI-discovered values so the dashboard
-    # shows the same fields/labels the user selected (not the scraper's hardcoded ones)
-    enabled_set = set(merged_enabled)
-    ai_items = [
-        {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
-        for f in merged_fields
-        if f.get("key") in enabled_set
-    ]
-    ad_row = db.execute(
-        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
-        (uid, source)
-    ).fetchone()
-    if ad_row and ai_items:
-        ad_data = decrypt_account_data(uid, ad_row["data_enc"] or "")
-        ad_data["items"] = ai_items
-        db.execute(
-            "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
-            (encrypt_account_data(uid, ad_data), uid, source)
-        )
-
-    db.commit()
+    _save_discovered_fields(uid, source, fields)
     return jsonify({"ok": True, "fields": fields})
+
+
 
 
 @app.route("/credentials/fields/load")
@@ -4890,6 +4873,33 @@ def sync_account_cloud(source):
                 log=lambda m: print(f"[SyncAccount:{source}] {m}", flush=True),
                 only_source=source,
             )
+            # Auto-discover fields after sync — no manual step needed
+            if result.get("synced", 0) > 0 and _claude:
+                try:
+                    _sync_status[uid] = {"running": True, "step": "discovering fields"}
+                    ad = get_db().execute(
+                        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                        (uid, source)
+                    ).fetchone()
+                    if ad:
+                        ad_data = decrypt_account_data(uid, ad["data_enc"] or "")
+                        raw_text = ad_data.get("raw_text", "")
+                        site_name = next(
+                            (n for k, n, *_ in SUPPORTED_SITES if k == source), source
+                        )
+                        if raw_text:
+                            # Run 3x discovery and merge (same as manual discover)
+                            merged: dict = {}
+                            for _run in range(3):
+                                for f in claude_discover_fields(raw_text, site_name):
+                                    k = f.get("key", "")
+                                    if k and k not in merged: merged[k] = f
+                                    elif k: merged[k]["value"] = f.get("value", "")
+                            fields = list(merged.values())
+                            if fields:
+                                _save_discovered_fields(uid, source, fields)
+                except Exception as de:
+                    print(f"[AutoDiscover:{source}] {de}", flush=True)
             _sync_status[uid] = {
                 "running": False, "last": iso(),
                 "synced": result.get("synced", 0),
