@@ -2913,11 +2913,19 @@ def dashboard():
                 ]
             else:
                 items = data.get("items", [])
+            # Only show cards with at least one real value (not just "–")
+            has_real = any(
+                i.get("value", "–") not in ("–", "", "No data extracted")
+                for i in items
+            )
+            if not has_real:
+                continue
+
             items_html = "".join(
                 f'<div class="acct-row"><span class="acct-lbl">{he(i["label"])}</span>'
                 f'<span class="acct-val">{he(i["value"])}</span></div>'
                 for i in items
-            ) if items else '<div class="acct-row"><span class="acct-lbl" style="font-style:italic">No data extracted</span></div>'
+            )
             status_color = "#30d158" if data.get("status") == "ok" else "#ff3b30"
             cards_html += (
                 f'<div class="acct-card">'
