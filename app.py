@@ -3891,18 +3891,10 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
             f'</div></div></details>'
         )
     else:
-        # No fields yet — auto-discovery runs after sync; show Re-discover as fallback
+        # No fields yet — will appear automatically after next sync
         return (
-            f'<div id="discover-area-{src}" style="margin-top:8px;display:flex;align-items:center;gap:8px">'
-            f'<span style="font-size:12px;color:#9ca3af;font-style:italic">'
-            f'Fields discovered automatically after syncing</span>'
-            f'<button id="discover-btn-{src}" '
-            f'style="font-size:11px;padding:4px 10px;border-radius:6px;'
-            f'background:#f3f0ff;border:1px solid #d4c6ff;color:#7c3aed;'
-            f'cursor:pointer;font-family:inherit" '
-            f'onclick="discoverFields(\'{src}\')">'
-            f'✦ Discover now</button>'
-            f'</div>'
+            f'<div style="margin-top:6px;font-size:12px;color:#aeaeb2;font-style:italic">'
+            f'Data fields appear here after your first sync</div>'
         )
 
 
@@ -4795,6 +4787,50 @@ def _cloud_sync_user(user_id: str, api_key: str, mighty_url: str) -> dict:
         _sync_status[user_id] = {"running": False, "last": iso(), "error": str(e)[:120]}
         raise
 
+def _auto_discover_missing(uid: str) -> None:
+    """Run field discovery for any connected account that has raw_text but no fields yet."""
+    if not _claude:
+        return
+    try:
+        cred_rows = get_db().execute(
+            "SELECT source, extra_enc FROM account_credentials WHERE user_id=?", (uid,)
+        ).fetchall()
+        for cr in cred_rows:
+            src = cr["source"]
+            if src.startswith("_"):
+                continue
+            has_fields = False
+            if cr["extra_enc"]:
+                try:
+                    ex = json.loads(decrypt_cred(uid, cr["extra_enc"]))
+                    has_fields = bool(ex.get("discovered_fields"))
+                except Exception:
+                    pass
+            if has_fields:
+                continue
+            ad = get_db().execute(
+                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                (uid, src)
+            ).fetchone()
+            if not ad:
+                continue
+            raw_text = decrypt_account_data(uid, ad["data_enc"] or "").get("raw_text", "")
+            if not raw_text:
+                continue
+            site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == src), src)
+            print(f"[AutoDiscover] {src} for user {uid[:6]}", flush=True)
+            merged: dict = {}
+            for _ in range(3):
+                for f in claude_discover_fields(raw_text, site_name):
+                    k = f.get("key", "")
+                    if k and k not in merged: merged[k] = f
+                    elif k: merged[k]["value"] = f.get("value", "")
+            if merged:
+                _save_discovered_fields(uid, src, list(merged.values()))
+    except Exception as e:
+        print(f"[AutoDiscover] Error: {e}", flush=True)
+
+
 def _cloud_sync_all():
     """Sync all users who have credentials configured."""
     with app.app_context():
@@ -4814,6 +4850,8 @@ def _cloud_sync_all():
                 _sync_status[uid] = {"running": True}
                 try:
                     _cloud_sync_user(uid, row["api_key"], url)
+                    # Auto-discover fields for any account that doesn't have them yet
+                    _auto_discover_missing(uid)
                 except Exception as e:
                     print(f"[AutoSync] User {uid[:6]} error: {e}", flush=True)
         except Exception as e:
@@ -4848,8 +4886,11 @@ def sync_now_cloud():
     def _do():
         try:
             _cloud_sync_user(uid, user["api_key"], url)
+            _auto_discover_missing(uid)  # discover fields for any account that needs it
         except Exception as e:
             print(f"[SyncNow] {e}", flush=True)
+        finally:
+            _sync_status[uid] = {"running": False, "last": iso()}
     threading.Thread(target=_do, daemon=True).start()
     return jsonify({"ok": True, "message": "Sync started"})
 
