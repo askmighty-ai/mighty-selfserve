@@ -1514,11 +1514,22 @@ details[open] summary::before{content:"\\25BE "}
 
   <div class="feed-col" {feed_col_hidden}>
     <div style="display:flex;gap:6px;margin-bottom:18px">
-      <button class="feed-tab active" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
-      <button class="feed-tab" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
+      <button class="feed-tab active" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
+      <button class="feed-tab" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
     </div>
 
-    <div id="fview-activity">
+    <div id="fview-accounts">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <div class="feed-title" style="margin-bottom:0">Account Data</div>
+        <a href="/credentials" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;
+           border-radius:8px;background:#7c3aed;color:#fff;font-size:12px;font-weight:600;
+           text-decoration:none;white-space:nowrap">+ Connect account</a>
+      </div>
+      <div class="feed-sub" style="margin-bottom:14px">Live data pulled from your connected accounts</div>
+      <div>{account_data_html}</div>
+    </div>
+
+    <div id="fview-activity" style="display:none">
       <div class="feed-title">Activity Log</div>
       <div class="feed-sub">A live log of everything your agent does</div>
       <div style="margin-bottom:14px">
@@ -1527,12 +1538,6 @@ details[open] summary::before{content:"\\25BE "}
       <div class="feed" id="feed">
         {feed_html}
       </div>
-    </div>
-
-    <div id="fview-accounts" style="display:none">
-      <div class="feed-title">Account Data</div>
-      <div class="feed-sub">Live data pulled from your connected accounts</div>
-      <div style="margin-top:14px">{account_data_html}</div>
     </div>
   </div>
 </div>
@@ -1551,10 +1556,10 @@ function switchFeedTab(name, btn) {
   });
   sessionStorage.setItem('mighty-feed-tab', name);
 }
-// Restore feed tab after reload
+// Restore feed tab after reload (default: accounts)
 (function() {
-  var t = sessionStorage.getItem('mighty-feed-tab');
-  if (t && t !== 'activity') {
+  var t = sessionStorage.getItem('mighty-feed-tab') || 'accounts';
+  if (t !== 'accounts') {
     var btn = document.getElementById('ftab-' + t);
     if (btn) switchFeedTab(t, btn);
   }
@@ -3004,7 +3009,13 @@ def dashboard():
             f'<div style="font-size:13px;font-weight:600;color:#1a1a1a">{he(display_name)}</div>'
             f'{sync_label}'
             f'</div>'
+            f'<div style="display:flex;align-items:center;gap:8px">'
+            f'<a href="/credentials#fields-{he(src)}" '
+            f'style="font-size:11px;font-weight:500;color:#7c3aed;text-decoration:none;'
+            f'padding:3px 8px;border-radius:6px;border:1px solid #e9d5ff;background:#faf5ff;'
+            f'white-space:nowrap">Modify fields</a>'
             f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0"></div>'
+            f'</div>'
             f'</div>'
             f'{items_html}'
             f'</div>'
@@ -3012,9 +3023,11 @@ def dashboard():
 
     account_data_html = cards_html if cards_html else (
         '<div style="text-align:center;padding:48px 24px">'
-        '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:8px">No accounts connected yet</div>'
-        '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:280px;margin:0 auto">'
-        'Go to <a href="/credentials" style="color:#7c3aed">Accounts</a> to connect your first account.</div>'
+        '<div style="font-size:32px;margin-bottom:12px">🔗</div>'
+        '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:16px">No accounts connected yet</div>'
+        '<a href="/credentials" style="display:inline-block;padding:9px 20px;background:#7c3aed;'
+        'color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none">'
+        '+ Connect your first account</a>'
         '</div>'
     )
 
@@ -4351,6 +4364,18 @@ function saveFields(source) {{
     }}
   }});
 }}
+
+// Auto-open field section if navigated here via anchor (e.g. from dashboard "Modify fields")
+(function() {{
+  var hash = location.hash.slice(1);
+  if (hash.startsWith('fields-')) {{
+    var det = document.getElementById(hash);
+    if (det) {{
+      det.open = true;
+      setTimeout(function() {{ det.scrollIntoView({{behavior:'smooth', block:'center'}}); }}, 150);
+    }}
+  }}
+}})();
 
 // Auto-discover fields for connected accounts that need it
 fetch('/credentials/auto-discover', {{method:'POST',
