@@ -3946,88 +3946,79 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
 
 
 def _build_credentials_page(user, configured: set, extra_by_source: dict = None) -> str:
-    extra_by_source = extra_by_source or {}
     """Generate the credentials management page HTML."""
+    extra_by_source = extra_by_source or {}
     csrf = get_csrf_token()
 
-    # Group sites by category
-    categories: dict = {}
+    # ── Connected account cards (main page) ──────────────────────────────────
+    connected_cards_html = ""
     for key, name, icon, color, cat in SUPPORTED_SITES:
-        categories.setdefault(cat, []).append((key, name, icon, color))
-
-    sections_html = ""
-    for cat, sites in categories.items():
-        cards = ""
-        for key, name, icon, color in sites:
-            # data-name enables client-side search filtering
-            is_set  = key in configured
-            badge   = (
-                '<span style="font-size:10px;font-weight:600;padding:2px 8px;'
-                'border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>'
-                if is_set else
-                '<span style="font-size:10px;color:#9ca3af">Not connected</span>'
-            )
-            # Pre-compute values that need backslashes (not allowed inside {} in Python <3.12)
-            toggle_label = 'Edit' if is_set else 'Connect'
-            remove_btn   = (
-                '<button class="btn-remove" onclick="removeCred(\''
-                + he(key) + '\',\'' + he(name) + '\')">Disconnect</button>'
-            ) if is_set else ''
-            cards += f"""
-<div class="cred-card" id="card-{he(key)}" data-name="{he(name.lower())}">
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-    <div style="width:32px;height:32px;border-radius:8px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:15px">{icon}</div>
+        if key not in configured:
+            continue
+        remove_btn = (
+            '<button class="btn-remove" onclick="removeCred(\''
+            + he(key) + '\',\'' + he(name) + '\')">Disconnect</button>'
+        )
+        connected_cards_html += f"""
+<div class="cred-card" id="card-{he(key)}">
+  <div style="display:flex;align-items:center;gap:12px">
+    <div style="width:36px;height:36px;border-radius:9px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{icon}</div>
     <div style="flex:1">
-      <div style="font-size:13px;font-weight:600;color:#1a1a1a">{he(name)}</div>
-      <div id="badge-{he(key)}">{badge}</div>
+      <div style="font-size:14px;font-weight:600;color:#1a1a1a">{he(name)}</div>
+      <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>
     </div>
-    <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}">
-      {toggle_label}
-    </button>
+    <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}">Edit</button>
     {remove_btn}
   </div>
-  <div class="cred-form" id="form-{he(key)}" style="display:none">
-    <input type="text" name="username" placeholder="Username or email"
-           autocomplete="off" id="u-{he(key)}">
-    <input type="password" name="password" placeholder="Password"
-           autocomplete="new-password" id="p-{he(key)}">
+  <div class="cred-form" id="form-{he(key)}" style="display:none;margin-top:14px">
+    <input type="text" name="username" placeholder="Username or email" autocomplete="off" id="u-{he(key)}">
+    <input type="password" name="password" placeholder="Password" autocomplete="new-password" id="p-{he(key)}">
     <details style="margin-top:8px">
-      <summary style="font-size:12px;color:#6b7280;cursor:pointer;user-select:none">
-        Authenticator app 2FA (optional)
-      </summary>
-      <input type="text" name="totp" placeholder="TOTP secret key"
-             style="margin-top:6px" id="t-{he(key)}">
-      <div style="font-size:11px;color:#9ca3af;margin-top:4px">
-        Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.
-      </div>
+      <summary style="font-size:12px;color:#6b7280;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
+      <input type="text" name="totp" placeholder="TOTP secret key" style="margin-top:6px" id="t-{he(key)}">
+      <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
     </details>
     <button class="btn-save" onclick="saveCred('{he(key)}')">Save & Sync</button>
   </div>
   {_field_config_html(key, configured, extra_by_source.get(key, {}))}
 </div>"""
-        sections_html += f"""
-<div class="section-group" style="margin-bottom:28px">
-  <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
-              color:#9ca3af;margin-bottom:12px">{he(cat)}</div>
-  {cards}
+
+    if not connected_cards_html:
+        connected_cards_html = """
+<div style="text-align:center;padding:56px 24px;color:#9ca3af">
+  <div style="font-size:36px;margin-bottom:14px">🔗</div>
+  <div style="font-size:15px;font-weight:500;color:#6b7280;margin-bottom:6px">No accounts connected yet</div>
+  <div style="font-size:13px">Click <strong>Connect account</strong> above to get started.</div>
 </div>"""
 
-    email_section = f"""
-<div style="margin-bottom:28px">
-  <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
-              color:#9ca3af;margin-bottom:12px">Email verification codes (auto-fill)</div>
-  <div class="cred-card">
-    <p style="font-size:13px;color:#6b7280;margin-bottom:12px;line-height:1.5">
-      Many sites send a one-time code to your email. Provide a Gmail address and
-      <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:#7c3aed">App Password</a>
-      and the scraper will fetch and fill these codes automatically.
-    </p>
-    <input type="email" id="email-addr" placeholder="Gmail address"
-           value="" autocomplete="off">
-    <input type="password" id="email-pw" placeholder="Gmail App Password (16 chars)"
-           autocomplete="new-password">
-    <button class="btn-save" onclick="saveEmail()">Save email config</button>
-  </div>
+    # ── Modal site picker ────────────────────────────────────────────────────
+    modal_categories: dict = {}
+    for key, name, icon, color, cat in SUPPORTED_SITES:
+        modal_categories.setdefault(cat, []).append((key, name, icon, color))
+
+    modal_sections = ""
+    for cat, sites in modal_categories.items():
+        site_rows = ""
+        for key, name, icon, color in sites:
+            already = key in configured
+            if already:
+                action = f'<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>'
+            else:
+                action = (
+                    f'<button class="modal-connect-btn" '
+                    f'onclick="openCredForm(\'{he(key)}\',\'{he(name)}\',\'{icon}\',\'{he(color)}\')">'
+                    f'Connect</button>'
+                )
+            site_rows += f"""
+<div class="modal-site-row" data-name="{he(name.lower())}">
+  <div style="width:30px;height:30px;border-radius:7px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">{icon}</div>
+  <div style="flex:1;font-size:13px;font-weight:500;color:#1a1a1a">{he(name)}</div>
+  {action}
+</div>"""
+        modal_sections += f"""
+<div class="modal-cat-group">
+  <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9ca3af;margin:16px 0 6px">{he(cat)}</div>
+  {site_rows}
 </div>"""
 
     return f"""<!DOCTYPE html>
@@ -4038,38 +4029,53 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
 <title>Connected Accounts — Mighty</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-     background:#f8f7f5;color:#1a1a1a;min-height:100vh}}
-.topbar{{height:56px;border-bottom:1px solid #e5e3df;background:#fff;
-         display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:10}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh}}
+.topbar{{height:56px;border-bottom:1px solid #e5e3df;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:10}}
 .topbar-logo{{display:flex;align-items:center;gap:8px;text-decoration:none}}
 .logo-mark{{width:28px;height:28px;border-radius:7px;overflow:hidden}}
 .logo-mark img{{width:100%;height:100%;object-fit:cover}}
-.logo-name{{font-size:15px;font-weight:800;letter-spacing:.4px;
-            background:linear-gradient(135deg,#7c3aed,#6d28d9);
-            -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
+.logo-name{{font-size:15px;font-weight:800;letter-spacing:.4px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
 .topbar-right{{display:flex;align-items:center;gap:16px}}
 .topbar-link{{font-size:13px;color:#6b7280;text-decoration:none}}
-.page{{max-width:680px;margin:0 auto;padding:32px 24px}}
-h1{{font-size:20px;font-weight:700;margin-bottom:6px}}
-.sub{{font-size:13px;color:#6b7280;margin-bottom:28px;line-height:1.5}}
+.page{{max-width:640px;margin:0 auto;padding:32px 24px}}
+.page-header{{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}}
+h1{{font-size:20px;font-weight:700}}
+.btn-connect-new{{padding:8px 16px;border-radius:8px;background:#7c3aed;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px}}
+.btn-connect-new:hover{{background:#6d28d9}}
 .cred-card{{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:16px 18px;margin-bottom:10px}}
-.cred-form input{{width:100%;padding:8px 12px;border:1.5px solid #e5e3df;border-radius:8px;
-                  font-size:13px;font-family:inherit;outline:none;margin-top:8px;
-                  transition:border-color 0.12s;background:#fff;color:#1a1a1a}}
+.cred-form input{{width:100%;padding:8px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#fff;color:#1a1a1a}}
 .cred-form input:focus{{border-color:#7c3aed}}
-.btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #e5e3df;
-             background:#fff;font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;font-family:inherit}}
+.btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #e5e3df;background:#fff;font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;font-family:inherit}}
 .btn-toggle:hover{{background:#f3f0ff;border-color:#d4c6ff}}
-.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #fecaca;
-             background:#fff;font-size:12px;color:#ef4444;cursor:pointer;font-family:inherit}}
+.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #fecaca;background:#fff;font-size:12px;color:#ef4444;cursor:pointer;font-family:inherit}}
 .btn-remove:hover{{background:#fff0f0}}
-.btn-save{{margin-top:12px;padding:9px 18px;border-radius:8px;background:#7c3aed;
-           color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}}
+.btn-save{{margin-top:12px;padding:9px 18px;border-radius:8px;background:#7c3aed;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}}
 .btn-save:hover{{background:#6d28d9}}
-.toast{{position:fixed;bottom:24px;right:24px;background:#1a1a1a;color:#fff;
-        padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;
-        transition:opacity 0.2s;pointer-events:none;z-index:100}}
+/* Modal */
+.modal-overlay{{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:64px}}
+.modal-overlay.open{{display:flex}}
+.modal{{background:#fff;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.18)}}
+.modal-head{{padding:20px 20px 12px;border-bottom:1px solid #f0ede8;flex-shrink:0}}
+.modal-title{{font-size:16px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}}
+.modal-close{{background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px}}
+.modal-close:hover{{color:#1a1a1a}}
+.modal-search{{width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #e5e3df;font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#f8f7f5;transition:border-color .12s}}
+.modal-search:focus{{border-color:#7c3aed;background:#fff}}
+.modal-body{{overflow-y:auto;padding:0 20px 20px;flex:1}}
+.modal-site-row{{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f8f6f2}}
+.modal-site-row:last-child{{border-bottom:none}}
+.modal-connect-btn{{padding:5px 12px;border-radius:7px;border:1px solid #e5e3df;background:#fff;font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;font-family:inherit;flex-shrink:0}}
+.modal-connect-btn:hover{{background:#f3f0ff;border-color:#d4c6ff}}
+/* Credential form inside modal */
+.modal-cred-screen{{display:none;flex-direction:column;height:100%}}
+.modal-cred-screen.active{{display:flex}}
+.modal-cred-head{{padding:20px 20px 16px;border-bottom:1px solid #f0ede8;flex-shrink:0;display:flex;align-items:center;gap:12px}}
+.modal-back-btn{{background:none;border:none;font-size:14px;cursor:pointer;color:#7c3aed;font-family:inherit;font-weight:600;padding:0}}
+.modal-back-btn:hover{{color:#6d28d9}}
+.modal-cred-body{{padding:20px;overflow-y:auto;flex:1}}
+.modal-cred-body input{{width:100%;padding:9px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:10px;transition:border-color .12s;background:#fff;color:#1a1a1a}}
+.modal-cred-body input:focus{{border-color:#7c3aed}}
+.toast{{position:fixed;bottom:24px;right:24px;background:#1a1a1a;color:#fff;padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:200}}
 .toast.show{{opacity:1}}
 </style>
 </head>
@@ -4087,31 +4093,149 @@ h1{{font-size:20px;font-weight:700;margin-bottom:6px}}
 </div>
 
 <div class="page">
-  <h1>Connected accounts</h1>
-  <p class="sub">
-    Add credentials for each site you want the scraper to monitor.
-    Credentials are encrypted and stored securely — only you can access them via your API key.
-  </p>
-  <input type="text" id="site-search" placeholder="Search sites…" autocomplete="off"
-         oninput="filterSites(this.value)"
-         style="width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #e5e3df;
-                font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#fff;
-                margin-bottom:24px;transition:border-color 0.12s;box-sizing:border-box"
-         onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
-  <div id="no-results" style="display:none;text-align:center;padding:32px;color:#9ca3af;font-size:14px">
-    No sites match your search.
+  <div class="page-header">
+    <h1>Connected accounts</h1>
+    <button class="btn-connect-new" onclick="openModal()">+ Connect account</button>
   </div>
-  </p>
+  {connected_cards_html}
+</div>
 
-  {sections_html}
-  {email_section}
+<!-- Add account modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="overlayClick(event)">
+  <div class="modal" id="modal-box">
+
+    <!-- Screen 1: site picker -->
+    <div id="screen-picker" style="display:flex;flex-direction:column;height:100%">
+      <div class="modal-head">
+        <div class="modal-title">
+          <span>Connect an account</span>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <input class="modal-search" id="modal-search" placeholder="Search sites…"
+               autocomplete="off" oninput="filterModal(this.value)">
+      </div>
+      <div class="modal-body" id="modal-sites">
+        {modal_sections}
+        <div id="modal-no-results" style="display:none;text-align:center;padding:32px;color:#9ca3af;font-size:14px">No matching sites.</div>
+      </div>
+    </div>
+
+    <!-- Screen 2: credential entry -->
+    <div id="screen-cred" style="display:none;flex-direction:column;max-height:80vh">
+      <div class="modal-cred-head">
+        <button class="modal-back-btn" onclick="backToPicker()">← Back</button>
+        <div id="modal-cred-icon" style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px"></div>
+        <div style="font-size:15px;font-weight:700" id="modal-cred-name"></div>
+        <button class="modal-close" style="margin-left:auto" onclick="closeModal()">✕</button>
+      </div>
+      <div class="modal-cred-body">
+        <input type="text" id="modal-u" placeholder="Username or email" autocomplete="off">
+        <input type="password" id="modal-p" placeholder="Password" autocomplete="new-password">
+        <details style="margin-top:10px">
+          <summary style="font-size:12px;color:#6b7280;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
+          <input type="text" id="modal-t" placeholder="TOTP secret key" style="margin-top:6px">
+          <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
+        </details>
+        <button class="btn-save" style="width:100%;margin-top:16px" onclick="saveModalCred()">Save & Sync</button>
+      </div>
+    </div>
+
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
 var CSRF = '{csrf}';
+var _modalKey = '';
 
+/* ── Modal open/close ─────────────────────────────── */
+function openModal() {{
+  document.getElementById('modal-overlay').classList.add('open');
+  document.getElementById('modal-search').focus();
+  showPicker();
+}}
+function closeModal() {{
+  document.getElementById('modal-overlay').classList.remove('open');
+}}
+function overlayClick(e) {{
+  if (e.target === document.getElementById('modal-overlay')) closeModal();
+}}
+function showPicker() {{
+  document.getElementById('screen-picker').style.display = 'flex';
+  document.getElementById('screen-cred').style.display = 'none';
+}}
+function backToPicker() {{
+  showPicker();
+  _modalKey = '';
+}}
+
+/* ── Open credential form for a site ─────────────── */
+function openCredForm(key, name, icon, color) {{
+  _modalKey = key;
+  document.getElementById('modal-cred-name').textContent = name;
+  var ic = document.getElementById('modal-cred-icon');
+  ic.textContent = icon;
+  ic.style.background = color;
+  document.getElementById('modal-u').value = '';
+  document.getElementById('modal-p').value = '';
+  if (document.getElementById('modal-t')) document.getElementById('modal-t').value = '';
+  document.getElementById('screen-picker').style.display = 'none';
+  document.getElementById('screen-cred').style.display = 'flex';
+  document.getElementById('modal-u').focus();
+}}
+
+/* ── Save from modal ──────────────────────────────── */
+function saveModalCred() {{
+  var u = document.getElementById('modal-u').value.trim();
+  var p = document.getElementById('modal-p').value;
+  var t = document.getElementById('modal-t') ? document.getElementById('modal-t').value.trim() : '';
+  if (!u || !p) {{ toast('Username and password required', false); return; }}
+  var btn = document.querySelector('#screen-cred .btn-save');
+  btn.textContent = 'Saving & syncing...'; btn.disabled = true;
+  fetch('/credentials/save', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF, source: _modalKey, username: u, password: p, totp_secret: t}})
+  }}).then(r => r.json()).then(d => {{
+    if (d.ok) {{
+      toast('Saved — syncing...');
+      closeModal();
+      fetch('/sync/account/' + _modalKey, {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+        body: new URLSearchParams({{_csrf: CSRF}})
+      }}).then(function() {{
+        var poll = setInterval(function() {{
+          fetch('/sync/status').then(r => r.json()).then(function(s) {{
+            if (!s.running) {{ clearInterval(poll); location.reload(); }}
+          }});
+        }}, 3000);
+      }});
+    }} else {{
+      toast(d.error || 'Error', false);
+      btn.textContent = 'Save & Sync'; btn.disabled = false;
+    }}
+  }});
+}}
+
+/* ── Modal search ─────────────────────────────────── */
+function filterModal(q) {{
+  q = (q || '').toLowerCase().trim();
+  var anyVisible = false;
+  document.querySelectorAll('.modal-site-row').forEach(function(row) {{
+    var show = !q || (row.dataset.name || '').includes(q);
+    row.style.display = show ? '' : 'none';
+    if (show) anyVisible = true;
+  }});
+  document.querySelectorAll('.modal-cat-group').forEach(function(grp) {{
+    var vis = Array.from(grp.querySelectorAll('.modal-site-row')).some(r => r.style.display !== 'none');
+    grp.style.display = vis ? '' : 'none';
+  }});
+  document.getElementById('modal-no-results').style.display = (q && !anyVisible) ? '' : 'none';
+}}
+
+/* ── Existing account actions ─────────────────────── */
 function toggleForm(key) {{
   var f = document.getElementById('form-' + key);
   f.style.display = f.style.display === 'none' ? 'block' : 'none';
@@ -4139,19 +4263,14 @@ function saveCred(key) {{
   }}).then(r => r.json()).then(d => {{
     if (d.ok) {{
       toast('Saved — syncing ' + key + '...');
-      // Trigger single-account sync
       fetch('/sync/account/' + key, {{
         method: 'POST',
         headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
         body: new URLSearchParams({{_csrf: CSRF}})
       }}).then(function() {{
-        // Poll until sync completes then reload
         var poll = setInterval(function() {{
           fetch('/sync/status').then(r => r.json()).then(function(s) {{
-            if (!s.running) {{
-              clearInterval(poll);
-              location.reload();
-            }}
+            if (!s.running) {{ clearInterval(poll); location.reload(); }}
           }});
         }}, 3000);
       }});
@@ -4159,20 +4278,6 @@ function saveCred(key) {{
       toast(d.error || 'Error', false);
       if (saveBtn) {{ saveBtn.textContent = 'Save & Sync'; saveBtn.disabled = false; }}
     }}
-  }});
-}}
-
-function saveEmail() {{
-  var addr = document.getElementById('email-addr').value.trim();
-  var pw   = document.getElementById('email-pw').value;
-  if (!addr || !pw) {{ toast('Email address and app password required', false); return; }}
-  fetch('/credentials/save', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    body: new URLSearchParams({{_csrf: CSRF, source: '_email', username: addr, password: pw}})
-  }}).then(r => r.json()).then(d => {{
-    if (d.ok) {{ toast('Email config saved ✓'); }}
-    else {{ toast(d.error || 'Error', false); }}
   }});
 }}
 
@@ -4185,24 +4290,6 @@ function removeCred(key, name) {{
   }}).then(() => location.reload());
 }}
 
-function filterSites(q) {{
-  q = (q || '').toLowerCase().trim();
-  var anyVisible = false;
-  document.querySelectorAll('.cred-card').forEach(function(card) {{
-    var name = (card.dataset.name || '').toLowerCase();
-    var show = !q || name.includes(q);
-    card.style.display = show ? '' : 'none';
-    if (show) anyVisible = true;
-  }});
-  document.querySelectorAll('.section-group').forEach(function(grp) {{
-    var hasVisible = Array.from(grp.querySelectorAll('.cred-card')).some(function(c) {{
-      return c.style.display !== 'none';
-    }});
-    grp.style.display = hasVisible ? '' : 'none';
-  }});
-  document.getElementById('no-results').style.display = (q && !anyVisible) ? '' : 'none';
-}}
-
 function resetFields(source) {{
   fetch('/credentials/fields/reset/' + source, {{
     method: 'POST',
@@ -4211,9 +4298,7 @@ function resetFields(source) {{
   }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
     if (d.ok) discoverFields(source);
     else toast(d.error || 'Reset failed', false);
-  }}).catch(function(e) {{
-    toast('Reset failed — try again', false);
-  }});
+  }}).catch(function() {{ toast('Reset failed — try again', false); }});
 }}
 
 function discoverFields(source) {{
@@ -4231,7 +4316,7 @@ function discoverFields(source) {{
       toast(data.error || 'Discovery failed', false);
       if (btn) {{ btn.textContent = 'Discover data fields'; btn.disabled = false; }}
     }}
-  }}).catch(function(e) {{
+  }}).catch(function() {{
     toast('Discovery failed — try syncing again first', false);
     if (btn) {{ btn.textContent = 'Discover data fields'; btn.disabled = false; }}
   }});
@@ -4247,7 +4332,7 @@ function saveFields(source) {{
   }}).then(r => r.json()).then(d => {{ if (d.ok) toast('Saved ✓'); }});
 }}
 
-// Auto-discover fields for any connected account that needs it
+// Auto-discover fields for connected accounts that need it
 fetch('/credentials/auto-discover', {{method:'POST',
   headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
   body:new URLSearchParams({{_csrf:CSRF}})}}).catch(function(){{}});
