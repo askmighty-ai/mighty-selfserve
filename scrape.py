@@ -472,7 +472,7 @@ def _make_scraper(cfg: dict):
             _handle_2fa(page, ctx)
             if ok_url:
                 page.wait_for_url(ok_url, timeout=LOGIN_TIMEOUT)
-            # wait_for_login: confirm login succeeded before navigating to post_url
+            # wait_for_login: wait until this text APPEARS — confirms login before post_url nav
             if wait_for_login:
                 try:
                     page.wait_for_function(
@@ -481,18 +481,19 @@ def _make_scraper(cfg: dict):
                     )
                 except Exception:
                     pass
-            if post_url:
-                # If explicit post_url given, use it as starting point for exploration
-                page.goto(post_url, timeout=NAV_TIMEOUT)
-                page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+            # wait_for_not: wait until this text DISAPPEARS — also confirms login before post_url nav
             if wait_for_not:
                 try:
                     page.wait_for_function(
                         f"() => !document.body.innerText.includes({json.dumps(wait_for_not)})",
-                        timeout=15_000
+                        timeout=LOGIN_TIMEOUT
                     )
                 except Exception:
                     pass
+            if post_url:
+                # Navigate to the richest account page once login is confirmed
+                page.goto(post_url, timeout=NAV_TIMEOUT)
+                page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
             page.wait_for_timeout(wait_ms)
             # Auto-explore account pages — finds loyalty/account pages regardless of URL structure
             raw_text = _explore_account_pages(page)
@@ -565,7 +566,8 @@ _SITE_CFGS = {
         "u_sels":['input[name="userNameOrAccountNumber"]','input[id*="username"]','input[type="text"]'],
         "p_sels":['input[name="password"]','input[type="password"]'],
         "s_sels":['button[type="submit"]','button[id*="login"]','button[id*="sign"]'],
-        "wait_for_login":"Sign Out",  # only present when logged in; confirms auth before navigating
+        # Wait for the login form's submit button text to disappear — reliable sign login completed
+        "wait_for_not":"LOG IN",
         "post_url":"https://www.southwest.com/loyalty/myaccount/",
         "wait_ms":6_000},
     "american_air":  {"name":"American Airlines","icon":"✈️","color":"#fce7f3",

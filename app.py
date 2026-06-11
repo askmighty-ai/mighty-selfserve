@@ -4522,6 +4522,8 @@ def credentials_fields_reset(source):
         except Exception: pass
     ex.pop("enabled_fields", None)
     ex.pop("discovered_fields", None)
+    ex.pop("last_raw_hash", None)   # force re-discovery on next sync
+    ex.pop("new_fields", None)
     new_enc = encrypt_cred(uid, json.dumps(ex)) if ex else ""
     db.execute(
         "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
