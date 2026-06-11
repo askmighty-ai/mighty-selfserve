@@ -1622,12 +1622,20 @@ document.querySelectorAll('[data-synced]').forEach(function(el) {
   } catch(e) {}
 });
 
-// Auto-sync on page load if last sync was >30 min ago or never
+// Auto-sync + auto-discover on page load if stale or never synced
 fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
-  if (s.running) return; // already syncing
+  if (s.running) return;
   var lastSync = s.last ? new Date(s.last) : null;
   var minsAgo = lastSync ? (Date.now() - lastSync.getTime()) / 60000 : Infinity;
-  if (minsAgo > 30) cloudSync();
+  if (minsAgo > 30) {
+    cloudSync();
+  } else {
+    // Still trigger auto-discovery for any account missing fields
+    fetch('/credentials/auto-discover', {method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:new URLSearchParams({_csrf: document.querySelector('[name="_csrf"]').value || ''})
+    }).catch(function(){});
+  }
 }).catch(function(){});
 
 function cloudSync() {
@@ -2853,14 +2861,6 @@ def dashboard():
         feed_col_hidden = ''
 
     # ── Account data tab ──────────────────────────────────────────────────────
-    acct_rows = get_db().execute(
-        "SELECT * FROM account_data WHERE user_id=? ORDER BY synced_at DESC",
-        (user["id"],)
-    ).fetchall()
-
-    CATEGORY_ORDER = ["amex","chase","sfcu","amazon","delta","hertz","marriott",
-                      "hilton","disney_plus","ticketmaster","xfinity","pa_utilities","pamf"]
-
     def _fmt_sync(ts):
         try:
             dt = datetime.fromisoformat(ts)
@@ -2873,78 +2873,110 @@ def dashboard():
         except Exception:
             return ts[:10] if ts else "—"
 
-    if acct_rows:
-        cards_html = ""
-        row_map = {r["source"]: r for r in acct_rows}
-        ordered = [row_map[k] for k in CATEGORY_ORDER if k in row_map]
-        ordered += [r for r in acct_rows if r["source"] not in CATEGORY_ORDER]
-        # Load field preferences for filtering
-        # Load AI-discovered fields per source (used for display instead of scraper items)
-        discovered_by_source: dict = {}
-        cred_rows = get_db().execute(
-            "SELECT source, extra_enc FROM account_credentials WHERE user_id=?",
-            (user["id"],)
-        ).fetchall()
-        for cr in cred_rows:
-            if cr["extra_enc"]:
-                try:
-                    ex = json.loads(decrypt_cred(user["id"], cr["extra_enc"]))
-                    discovered = ex.get("discovered_fields", [])
-                    enabled    = set(ex.get("enabled_fields", []))
-                    if discovered and enabled:
-                        discovered_by_source[cr["source"]] = {
-                            "fields":  discovered,
-                            "enabled": enabled,
-                        }
-                except Exception:
-                    pass
+    # Step 1: get ALL connected accounts (have credentials, not internal keys)
+    cred_rows = get_db().execute(
+        "SELECT source, extra_enc FROM account_credentials WHERE user_id=?",
+        (user["id"],)
+    ).fetchall()
+    connected_sources = {r["source"] for r in cred_rows if not r["source"].startswith("_")}
 
-        for row in ordered:
-            data   = decrypt_account_data(user["id"], row["data_enc"] or "")
-            src    = row["source"]
+    # Step 2: load discovered fields and synced data per source
+    discovered_by_source: dict = {}
+    for cr in cred_rows:
+        if cr["extra_enc"]:
+            try:
+                ex = json.loads(decrypt_cred(user["id"], cr["extra_enc"]))
+                discovered = ex.get("discovered_fields", [])
+                enabled    = set(ex.get("enabled_fields", []))
+                if discovered and enabled:
+                    discovered_by_source[cr["source"]] = {"fields": discovered, "enabled": enabled}
+            except Exception:
+                pass
 
-            # Use AI-discovered fields if available — more fields, better labels, fresher values
-            if src in discovered_by_source:
-                disc = discovered_by_source[src]
-                items = [
-                    {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
-                    for f in disc["fields"]
-                    if f.get("key") in disc["enabled"]
-                ]
-            else:
-                items = data.get("items", [])
-            if not items:
-                continue  # Skip if no fields selected at all
+    acct_rows = get_db().execute(
+        "SELECT * FROM account_data WHERE user_id=? ORDER BY synced_at DESC",
+        (user["id"],)
+    ).fetchall()
+    synced_map = {r["source"]: r for r in acct_rows}
 
+    # Step 3: build cards for ALL connected accounts, ordered by category
+    CATEGORY_ORDER = [
+        "amex","chase","sfcu","wells_fargo","bofa","capital_one","discover","citi",
+        "paypal","fidelity","schwab",
+        "delta","united","southwest","american_air","alaska_air","hertz",
+        "marriott","hilton","hyatt","ihg","wyndham",
+        "disney_plus","netflix","hulu","spotify","max","peacock","paramount_plus","ticketmaster",
+        "amazon","target","walmart","costco",
+        "xfinity","pa_utilities","att","verizon","tmobile",
+        "pamf","kaiser","cvs","walgreens",
+    ]
+    ordered_sources = [s for s in CATEGORY_ORDER if s in connected_sources]
+    ordered_sources += [s for s in connected_sources if s not in CATEGORY_ORDER]
+
+    cards_html = ""
+    for src in ordered_sources:
+        row  = synced_map.get(src)
+        data = decrypt_account_data(user["id"], row["data_enc"] or "") if row else {}
+
+        # Determine items to display
+        if src in discovered_by_source:
+            disc  = discovered_by_source[src]
+            items = [
+                {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
+                for f in disc["fields"] if f.get("key") in disc["enabled"]
+            ]
+        else:
+            items = data.get("items", [])
+
+        # Get display metadata (icon/color) from SUPPORTED_SITES or stored data
+        site_meta = next(((n, ic, co) for k, n, ic, co, _ in SUPPORTED_SITES if k == src), None)
+        display_name = site_meta[0] if site_meta else (row["display_name"] if row else src)
+        icon         = site_meta[1] if site_meta else (row["icon"] if row else "?")
+        color        = site_meta[2] if site_meta else (row["color"] if row else "#f0f0f0")
+        synced_at    = row["synced_at"] if row else ""
+        status_color = "#30d158"
+
+        if items:
             items_html = "".join(
                 f'<div class="acct-row"><span class="acct-lbl">{he(i["label"])}</span>'
                 f'<span class="acct-val">{he(i["value"])}</span></div>'
                 for i in items
             )
-            status_color = "#30d158" if data.get("status") == "ok" else "#ff3b30"
-            cards_html += (
-                f'<div class="acct-card">'
-                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
-                f'<div class="acct-icon" style="background:{he(row["color"] or "#f0f0f0")}">{he(row["icon"] or "?")}</div>'
-                f'<div style="flex:1">'
-                f'<div style="font-size:13px;font-weight:600;color:#1a1a1a">{he(row["display_name"])}</div>'
-                f'<div style="font-size:11px;color:#9ca3af" data-synced="{he(row["synced_at"])}">Synced {_fmt_sync(row["synced_at"])}</div>'
-                f'</div>'
-                f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0"></div>'
-                f'</div>'
-                f'{items_html}'
-                f'</div>'
-            )
-        account_data_html = cards_html
-    else:
-        account_data_html = (
-            '<div style="text-align:center;padding:48px 24px">'
-            '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:8px">No account data yet</div>'
-            '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:280px;margin:0 auto">'
-            'Run <code style="background:#f3f0ff;padding:2px 6px;border-radius:4px;font-size:12px">python3 scrape.py</code> '
-            'with your Mighty API key set to sync your accounts here.</div>'
-            '</div>'
+        elif synced_at:
+            items_html = ('<div class="acct-row"><span class="acct-lbl" style="color:#aeaeb2;'
+                          'font-style:italic">Syncing & discovering fields…</span></div>')
+            status_color = "#aeaeb2"
+        else:
+            items_html = ('<div class="acct-row"><span class="acct-lbl" style="color:#aeaeb2;'
+                          'font-style:italic">Awaiting first sync…</span></div>')
+            status_color = "#aeaeb2"
+
+        sync_label = (f'<div style="font-size:11px;color:#9ca3af" '
+                      f'data-synced="{he(synced_at)}">Synced {_fmt_sync(synced_at)}</div>'
+                      if synced_at else
+                      '<div style="font-size:11px;color:#aeaeb2">Not yet synced</div>')
+
+        cards_html += (
+            f'<div class="acct-card">'
+            f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
+            f'<div class="acct-icon" style="background:{he(color)}">{he(icon)}</div>'
+            f'<div style="flex:1">'
+            f'<div style="font-size:13px;font-weight:600;color:#1a1a1a">{he(display_name)}</div>'
+            f'{sync_label}'
+            f'</div>'
+            f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0"></div>'
+            f'</div>'
+            f'{items_html}'
+            f'</div>'
         )
+
+    account_data_html = cards_html if cards_html else (
+        '<div style="text-align:center;padding:48px 24px">'
+        '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:8px">No accounts connected yet</div>'
+        '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:280px;margin:0 auto">'
+        'Go to <a href="/credentials" style="color:#7c3aed">Accounts</a> to connect your first account.</div>'
+        '</div>'
+    )
 
     return (DASHBOARD_HTML
             .replace("{email}",              he(user["email"]))
