@@ -448,11 +448,12 @@ def _make_scraper(cfg: dict):
     u_sels    = cfg.get("u_sels",   ['input[type="email"]', 'input[type="text"]'])
     p_sels    = cfg.get("p_sels",   ['input[type="password"]'])
     s_sels    = cfg.get("s_sels",   ['button[type="submit"]', 'input[type="submit"]'])
-    ok_url       = cfg.get("ok_url")
-    post_url     = cfg.get("post_url")        # navigate here after login to get the right page
-    wait_for_not = cfg.get("wait_for_not")    # wait until this text disappears (dynamic content)
-    wait_ms      = cfg.get("wait_ms",  3_000)
-    multistep    = cfg.get("multistep", False)
+    ok_url         = cfg.get("ok_url")
+    post_url       = cfg.get("post_url")         # navigate here after login to get the right page
+    wait_for_not   = cfg.get("wait_for_not")     # wait until this text disappears (dynamic content)
+    wait_for_login = cfg.get("wait_for_login")   # wait until this text APPEARS (confirms login done)
+    wait_ms        = cfg.get("wait_ms",  3_000)
+    multistep      = cfg.get("multistep", False)
 
     def scraper(page, c, ctx):
         r = _base(name, icon, color, login_url)
@@ -471,6 +472,15 @@ def _make_scraper(cfg: dict):
             _handle_2fa(page, ctx)
             if ok_url:
                 page.wait_for_url(ok_url, timeout=LOGIN_TIMEOUT)
+            # wait_for_login: confirm login succeeded before navigating to post_url
+            if wait_for_login:
+                try:
+                    page.wait_for_function(
+                        f"() => document.body.innerText.includes({json.dumps(wait_for_login)})",
+                        timeout=LOGIN_TIMEOUT
+                    )
+                except Exception:
+                    pass
             if post_url:
                 # If explicit post_url given, use it as starting point for exploration
                 page.goto(post_url, timeout=NAV_TIMEOUT)
@@ -555,7 +565,7 @@ _SITE_CFGS = {
         "u_sels":['input[name="userNameOrAccountNumber"]','input[id*="username"]','input[type="text"]'],
         "p_sels":['input[name="password"]','input[type="password"]'],
         "s_sels":['button[type="submit"]','button[id*="login"]','button[id*="sign"]'],
-        "ok_url":"**southwest.com/**",
+        "wait_for_login":"Sign Out",  # only present when logged in; confirms auth before navigating
         "post_url":"https://www.southwest.com/loyalty/myaccount/",
         "wait_ms":6_000},
     "american_air":  {"name":"American Airlines","icon":"✈️","color":"#fce7f3",

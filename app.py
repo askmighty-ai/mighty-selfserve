@@ -307,31 +307,51 @@ Pages may be separated by === URL === markers.
 Page text:
 {text}
 
-Extract ONLY data specific to THIS USER — not site-wide announcements, promotions, or generic content.
+Extract ONLY data that is SPECIFIC TO THIS USER's account — personalized numbers, statuses, and dates.
 
-INCLUDE: balances, points, miles, credits, tier/status, progress toward goals,
-expiration dates, upcoming reservations, payment info, account-specific alerts.
+INCLUDE:
+- Loyalty/rewards balances and point totals
+- Tier or status level (Gold, Platinum, A-List, etc.)
+- Progress toward goals (e.g. "4 of 20 flights to A-List")
+- Expiration dates for points, credits, or status
+- Confirmed upcoming reservations or bookings (with real dates/details)
+- Account credits, vouchers, or certificates with values
+- Payment info (balance due, autopay status, next payment date)
 
-EXCLUDE: promotional banners, site-wide announcements, search form pre-fills,
-"log in to view" placeholders, navigation links, content the same for all users.
+HARD EXCLUDE — never include these even if they appear on the page:
+- Any value containing "log in", "sign in", "login to view", "sign in to see"
+- Search form fields (departure city, destination, travel dates, passenger count)
+- Site-wide availability notices (e.g. "Book travel through [date]")
+- "No match found", "None", "N/A", "–", or empty values
+- Navigation items, links, or menu text
+- Promotional banners or offers available to all users
+- Generic labels with no user-specific data behind them
 
-LABELING — write labels so they make sense without knowing the site:
-- "Available Points: 24,617" → "Rapid Rewards Points" not "Available Points"
-- "0 out of 20 flights" under A-List section → "A-List Flights Progress"
-- "0 out of 100 flights" under Companion Pass → "Companion Pass Flights Progress"
-- "$2,472.20 Total Payment Due" → "Balance Due" not "Total Payment Due"
-- "Enrolled in Auto Payment Plan" → "Auto-Pay Status"
-Write full descriptive labels, not abbreviated page labels.
+CONCRETE REJECT EXAMPLES:
+- "Points Balance Alert: Log in to view points balance" → REJECT (login wall, not real data)
+- "Reservations Through: March 10, 2027" → REJECT (site-wide booking window, not personal)
+- "Depart Date: Fri, Jun 12, 2026" from a search widget → REJECT (search form pre-fill)
+- "Depart Airport Status: No match found" → REJECT (search form state)
+- "Upcoming Trips: None" → REJECT (empty, no real value)
+
+CONCRETE INCLUDE EXAMPLES:
+- "24,617 Rapid Rewards points" → INCLUDE as {{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}
+- "0 of 20 flights" in A-List section → INCLUDE as {{"key":"alist_flights","label":"A-List Flights Progress","value":"0 of 20"}}
+- "Companion Pass: 0 of 100 flights" → INCLUDE as {{"key":"companion_pass_flights","label":"Companion Pass Flights Progress","value":"0 of 100"}}
+- "$2,472.20 Total Payment Due" → INCLUDE as {{"key":"balance_due","label":"Balance Due","value":"$2,472.20"}}
+
+LABELING: write labels that make sense without knowing the site (no abbreviations, no page jargon).
 
 Return ONLY a JSON array, no other text:
 [{{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}]
 
 Rules:
-- key: snake_case, 1-3 words
+- key: snake_case, 1-4 words
 - label: 2-5 words, self-explanatory out of context
-- value: exact current value found on the page
+- value: exact current value — if empty or a login prompt, skip the field entirely
 - Each concept ONCE, no duplicates
-- Max 10 fields"""
+- Max 10 fields
+- If you find fewer than 3 fields that pass the hard-exclude test, return an empty array []"""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
     """Use Gemini Flash to identify all useful data fields in a page."""
