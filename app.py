@@ -3929,21 +3929,25 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
                 f'<span style="flex:1">{flbl}{new_pill}</span>'
                 f'<span style="color:#9ca3af;font-size:11px">{fval}</span></label>'
             )
+        open_attr = "open" if new_keys else ""
         return (
-            f'<details class="field-config" id="fields-{src}" open>'
+            f'<details class="field-config" id="fields-{src}" {open_attr}>'
             f'<summary style="font-size:12px;font-weight:600;color:#7c3aed;'
             f'cursor:pointer;user-select:none;padding:8px 0 4px;display:flex;'
-            f'align-items:center;gap:6px">✦ Data fields'
+            f'align-items:center;gap:6px;list-style:none">Modify field selection'
             + (f'<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:99px;'
                f'background:#7c3aed;color:#fff;margin-left:6px">{len(new_keys)} new</span>'
                if new_keys else "")
             + f'</summary>'
-            f'<div style="padding:2px 0 4px;border-top:1px solid #f0ede8;margin-top:4px">'
+            f'<div style="padding:6px 0 4px;border-top:1px solid #f0ede8;margin-top:6px">'
             f'{new_banner}'
             f'{checkboxes}'
             f'<div style="display:flex;gap:8px;margin-top:10px">'
             f'<button class="btn-save" style="font-size:12px;padding:6px 14px" '
             f'onclick="saveFields(\'{src}\')">Save</button>'
+            f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;border:1px solid #e5e3df;'
+            f'background:#fff;cursor:pointer;color:#6b7280;font-family:inherit" '
+            f'onclick="document.getElementById(\'fields-{src}\').open=false">Cancel</button>'
             f'</div></div></details>'
         )
     else:
@@ -3976,7 +3980,8 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
       <div style="font-size:14px;font-weight:600;color:#1a1a1a">{he(name)}</div>
       <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>
     </div>
-    <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}">Edit</button>
+    <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}"
+            style="font-size:11px;color:#9ca3af;border-color:#e5e3df;font-weight:400">Edit login</button>
     {remove_btn}
   </div>
   <div class="cred-form" id="form-{he(key)}" style="display:none;margin-top:14px">
@@ -4318,7 +4323,13 @@ function saveFields(source) {{
     method: 'POST',
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
     body: new URLSearchParams({{_csrf: CSRF, source: source, enabled_fields: JSON.stringify(enabled)}})
-  }}).then(r => r.json()).then(d => {{ if (d.ok) toast('Saved ✓'); }});
+  }}).then(r => r.json()).then(d => {{
+    if (d.ok) {{
+      toast('Saved ✓');
+      var det = document.getElementById('fields-' + source);
+      if (det) det.open = false;
+    }}
+  }});
 }}
 
 // Auto-discover fields for connected accounts that need it
