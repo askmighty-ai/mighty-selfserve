@@ -1610,6 +1610,11 @@ function submit2FA(id, pushFlag) {
 setInterval(load2FAChallenges, 15000);
 load2FAChallenges();
 
+// Auto-reload if any account is still discovering fields
+if (document.querySelector('[data-discovering="1"]')) {
+  setTimeout(function() { location.reload(); }, 12000);
+}
+
 // Format sync timestamps in user's local time zone
 document.querySelectorAll('[data-synced]').forEach(function(el) {
   var ts = el.dataset.synced;
@@ -2943,7 +2948,8 @@ def dashboard():
                 for i in items
             )
         elif synced_at:
-            items_html = ('<div class="acct-row"><span class="acct-lbl" style="color:#aeaeb2;'
+            items_html = ('<div class="acct-row" data-discovering="1">'
+                          '<span class="acct-lbl" style="color:#aeaeb2;'
                           'font-style:italic">Syncing & discovering fields…</span></div>')
             status_color = "#aeaeb2"
         else:
