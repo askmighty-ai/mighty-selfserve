@@ -3824,14 +3824,18 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
         except Exception: pass
 
     existing  = ex.get("discovered_fields", [])
+    existing_keys = {f["key"] for f in existing}
     ex_by_key = {f["key"]: f for f in existing}
     ex_enabled = set(ex.get("enabled_fields", []))
+    truly_new_keys: list = []
     for f in fields:
         key = f["key"]
         if key in ex_by_key: ex_by_key[key]["value"] = f.get("value", "")
         else:
             ex_by_key[key] = f
             ex_enabled.add(key)
+            if key not in existing_keys:
+                truly_new_keys.append(key)
 
     # Dedup by label similarity
     def _n(s): return re.sub(r'[^a-z0-9]', '', s.lower())
@@ -3847,6 +3851,10 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
     ex["enabled_fields"]    = list(ex_enabled | {f["key"] for f in fields})
     ex["discovered_fields"] = deduped
     ex["discovered_at"]     = iso()
+    # Accumulate genuinely new field keys so UI can highlight them
+    if truly_new_keys and existing_keys:  # only notify when there were already fields (not first discovery)
+        prev_new = ex.get("new_fields", [])
+        ex["new_fields"] = list({*prev_new, *truly_new_keys})
     db.execute(
         "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
         (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
@@ -3871,42 +3879,54 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
 
 
 def _field_config_html(source: str, configured: set, extra_data: dict = None) -> str:
-    """Render AI-discovered field checkboxes, or a Discover button if not yet run."""
+    """Render AI-discovered field checkboxes. New fields are highlighted."""
     if source not in configured:
         return ""
     extra        = extra_data or {}
     discovered   = extra.get("discovered_fields", [])
     enabled      = set(extra.get("enabled_fields", []))
-    discovered_at = extra.get("discovered_at", "")
-    # Format "discovered X ago"
-    disc_label = ""
-    if discovered_at:
-        try:
-            dt    = datetime.fromisoformat(discovered_at)
-            delta = utcnow() - dt
-            mins  = int(delta.total_seconds() // 60)
-            if mins < 1:   disc_label = "just now"
-            elif mins < 60: disc_label = f"{mins}m ago"
-            else:          disc_label = f"{mins // 60}h ago"
-        except Exception:
-            pass
-    src        = he(source)
+    new_keys     = set(extra.get("new_fields", []))
+    src          = he(source)
 
     if discovered:
+        # New-field notification banner
+        new_banner = ""
+        if new_keys:
+            new_labels = [he(f.get("label", f.get("key", ""))) for f in discovered if f.get("key") in new_keys]
+            if new_labels:
+                label_list = ", ".join(new_labels[:3]) + ("…" if len(new_labels) > 3 else "")
+                new_banner = (
+                    f'<div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;'
+                    f'padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px">'
+                    f'<span style="font-size:13px">✨</span>'
+                    f'<span style="font-size:12px;color:#7c3aed;flex:1">'
+                    f'New fields discovered: <strong>{label_list}</strong></span>'
+                    f'<span style="font-size:11px;color:#9ca3af">Save to confirm</span></div>'
+                )
+
         checkboxes = ""
         for f in discovered:
-            fkey   = he(f.get("key", ""))
-            flbl   = he(f.get("label", ""))
-            fval   = he(f.get("value", ""))
-            chkd   = "checked" if f.get("key") in enabled else ""
+            fkey  = he(f.get("key", ""))
+            flbl  = he(f.get("label", ""))
+            fval  = he(f.get("value", ""))
+            chkd  = "checked" if f.get("key") in enabled else ""
+            is_new = f.get("key") in new_keys
+            row_style = (
+                'display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 0;'
+                'cursor:pointer;border-bottom:1px solid #f9f7f5;'
+                + ('color:#7c3aed;font-weight:500' if is_new else 'color:#374151')
+            )
+            new_pill = (
+                '<span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:99px;'
+                'background:#f3e8ff;color:#7c3aed;border:1px solid #e9d5ff;margin-left:4px">new</span>'
+                if is_new else ''
+            )
             checkboxes += (
-                f'<label style="display:flex;align-items:center;gap:8px;'
-                f'font-size:12px;color:#374151;padding:5px 0;cursor:pointer;'
-                f'border-bottom:1px solid #f9f7f5">'
+                f'<label style="{row_style}">'
                 f'<input type="checkbox" id="field-{src}-{fkey}" '
                 f'data-source="{src}" data-key="{fkey}" {chkd} '
                 f'style="width:14px;height:14px;cursor:pointer;flex-shrink:0">'
-                f'<span style="flex:1">{flbl}</span>'
+                f'<span style="flex:1">{flbl}{new_pill}</span>'
                 f'<span style="color:#9ca3af;font-size:11px">{fval}</span></label>'
             )
         return (
@@ -3914,34 +3934,23 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
             f'<summary style="font-size:12px;font-weight:600;color:#7c3aed;'
             f'cursor:pointer;user-select:none;padding:8px 0 4px;display:flex;'
             f'align-items:center;gap:6px">✦ Data fields'
-            + (f'<span style="font-size:11px;font-weight:400;color:#9ca3af;margin-left:6px">'
-               f'discovered {disc_label}</span>' if disc_label else "")
+            + (f'<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:99px;'
+               f'background:#7c3aed;color:#fff;margin-left:6px">{len(new_keys)} new</span>'
+               if new_keys else "")
             + f'</summary>'
             f'<div style="padding:2px 0 4px;border-top:1px solid #f0ede8;margin-top:4px">'
+            f'{new_banner}'
             f'{checkboxes}'
             f'<div style="display:flex;gap:8px;margin-top:10px">'
             f'<button class="btn-save" style="font-size:12px;padding:6px 14px" '
             f'onclick="saveFields(\'{src}\')">Save</button>'
-            f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;'
-            f'border:1px solid #e5e3df;background:#fff;cursor:pointer;color:#6b7280" '
-            f'onclick="discoverFields(\'{src}\')">Re-discover ↺</button>'
-            f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;'
-            f'border:1px solid #fecaca;background:#fff;cursor:pointer;color:#ef4444" '
-            f'onclick="(function(){{var b=this;b.textContent=\'Clearing...\';b.disabled=true;'
-            f'fetch(\'/credentials/fields/reset/{src}\',{{method:\'POST\','
-            f'headers:{{\'Content-Type\':\'application/x-www-form-urlencoded\'}},'
-            f'body:new URLSearchParams({{_csrf:CSRF}})}}).then(function(r){{return r.json();}}).then(function(d){{'
-            f'if(d.ok){{toast(\'Fields cleared — click Re-discover to refresh\');setTimeout(function(){{location.reload();}},1000);}}'
-            f'else{{alert(d.error||\'Reset failed\');b.textContent=\'Reset ✕\';b.disabled=false;}}'
-            f'}}).catch(function(){{alert(\'Reset failed\');b.textContent=\'Reset ✕\';b.disabled=false;}});'
-            f'}}).call(this)">Reset ✕</button>'
             f'</div></div></details>'
         )
     else:
         # No fields yet — will appear automatically after next sync
         return (
             f'<div style="margin-top:6px;font-size:12px;color:#aeaeb2;font-style:italic">'
-            f'Data fields appear here after your first sync</div>'
+            f'Data fields will appear automatically after the first sync</div>'
         )
 
 
@@ -4291,35 +4300,15 @@ function removeCred(key, name) {{
 }}
 
 function resetFields(source) {{
+  if (!confirm('Clear all discovered fields for this account? They will be re-discovered automatically on the next sync.')) return;
   fetch('/credentials/fields/reset/' + source, {{
     method: 'POST',
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
     body: new URLSearchParams({{_csrf: CSRF}})
   }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
-    if (d.ok) discoverFields(source);
+    if (d.ok) {{ toast('Fields cleared — will re-discover on next sync'); setTimeout(function() {{ location.reload(); }}, 1200); }}
     else toast(d.error || 'Reset failed', false);
   }}).catch(function() {{ toast('Reset failed — try again', false); }});
-}}
-
-function discoverFields(source) {{
-  var btn = document.getElementById('discover-btn-' + source);
-  if (btn) {{ btn.textContent = 'Discovering...'; btn.disabled = true; }}
-  fetch('/credentials/discover/' + source, {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    body: new URLSearchParams({{_csrf: CSRF}})
-  }}).then(function(r) {{ return r.json(); }}).then(function(data) {{
-    if (data.ok) {{
-      toast(data.fields.length + ' fields found');
-      setTimeout(function() {{ location.reload(); }}, 1200);
-    }} else {{
-      toast(data.error || 'Discovery failed', false);
-      if (btn) {{ btn.textContent = 'Discover data fields'; btn.disabled = false; }}
-    }}
-  }}).catch(function() {{
-    toast('Discovery failed — try syncing again first', false);
-    if (btn) {{ btn.textContent = 'Discover data fields'; btn.disabled = false; }}
-  }});
 }}
 
 function saveFields(source) {{
@@ -4441,6 +4430,7 @@ def credentials_fields_save():
         try: extra = json.loads(decrypt_cred(uid, row["extra_enc"]))
         except Exception: pass
     extra["enabled_fields"] = enabled
+    extra.pop("new_fields", None)  # clear new-field notification once user saves
     new_enc = encrypt_cred(uid, json.dumps(extra)) if extra else ""
     db.execute(
         "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
@@ -4934,10 +4924,12 @@ def _cloud_sync_user(user_id: str, api_key: str, mighty_url: str) -> dict:
         raise
 
 def _auto_discover_missing(uid: str) -> None:
-    """Run field discovery for any connected account that has raw_text but no fields yet."""
+    """Run field discovery for any connected account that has raw_text.
+    Skips accounts whose raw_text hasn't changed since last discovery (hash check)."""
     if not _claude:
         return
     try:
+        import hashlib
         cred_rows = get_db().execute(
             "SELECT source, extra_enc FROM account_credentials WHERE user_id=?", (uid,)
         ).fetchall()
@@ -4945,15 +4937,10 @@ def _auto_discover_missing(uid: str) -> None:
             src = cr["source"]
             if src.startswith("_"):
                 continue
-            has_fields = False
+            ex: dict = {}
             if cr["extra_enc"]:
-                try:
-                    ex = json.loads(decrypt_cred(uid, cr["extra_enc"]))
-                    has_fields = bool(ex.get("discovered_fields"))
-                except Exception:
-                    pass
-            if has_fields:
-                continue
+                try: ex = json.loads(decrypt_cred(uid, cr["extra_enc"]))
+                except Exception: pass
             ad = get_db().execute(
                 "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
                 (uid, src)
@@ -4963,8 +4950,12 @@ def _auto_discover_missing(uid: str) -> None:
             raw_text = decrypt_account_data(uid, ad["data_enc"] or "").get("raw_text", "")
             if not raw_text:
                 continue
+            # Skip if raw_text is identical to the last discovery run
+            raw_hash = hashlib.md5(raw_text.encode()).hexdigest()
+            if ex.get("last_raw_hash") == raw_hash and ex.get("discovered_fields"):
+                continue
             site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == src), src)
-            print(f"[AutoDiscover] {src} for user {uid[:6]}", flush=True)
+            print(f"[AutoDiscover] {src} for user {uid[:6]} (hash {raw_hash[:8]})", flush=True)
             merged: dict = {}
             for _ in range(3):
                 for f in claude_discover_fields(raw_text, site_name):
@@ -4973,6 +4964,22 @@ def _auto_discover_missing(uid: str) -> None:
                     elif k: merged[k]["value"] = f.get("value", "")
             if merged:
                 _save_discovered_fields(uid, src, list(merged.values()))
+                # Store hash so we don't re-discover unchanged pages
+                cred_row2 = get_db().execute(
+                    "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                    (uid, src)
+                ).fetchone()
+                if cred_row2 and cred_row2["extra_enc"]:
+                    try:
+                        ex2 = json.loads(decrypt_cred(uid, cred_row2["extra_enc"]))
+                        ex2["last_raw_hash"] = raw_hash
+                        get_db().execute(
+                            "UPDATE account_credentials SET extra_enc=? WHERE user_id=? AND source=?",
+                            (encrypt_cred(uid, json.dumps(ex2)), uid, src)
+                        )
+                        get_db().commit()
+                    except Exception:
+                        pass
     except Exception as e:
         print(f"[AutoDiscover] Error: {e}", flush=True)
 
