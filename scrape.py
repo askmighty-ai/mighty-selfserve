@@ -370,6 +370,76 @@ def _chrome_path() -> str | None:
 def _base(name, icon, color, url):
     return {"name":name,"icon":icon,"color":color,"url":url,"status":"skipped","items":[]}
 
+# ── Automatic post-login account exploration ──────────────────────────────────
+_ACCOUNT_KEYWORDS = [
+    'account', 'loyalty', 'rewards', 'profile', 'points', 'miles',
+    'credits', 'dashboard', 'membership', 'frequent', 'my trip',
+    'my booking', 'benefit', 'tier', 'status', 'balance', 'history',
+]
+_SKIP_PATTERNS = [
+    'logout', 'signout', 'sign-out', 'register', 'signup', 'sign-up',
+    'help', 'support', 'faq', 'careers', 'press', 'javascript:',
+    'mailto:', 'tel:', '#', 'privacy', 'terms', 'cookie',
+]
+
+def _explore_account_pages(page, max_extra: int = 2) -> str:
+    """After login, find and visit the most relevant account/loyalty pages.
+    Returns combined page text from all visited pages — richer than any single page."""
+    texts = []
+    visited: set = {page.url.rstrip('/')}
+
+    # Capture the current (post-login) page
+    try:
+        texts.append(page.inner_text("body")[:4000])
+    except Exception:
+        pass
+
+    # Find all links on this page
+    try:
+        base_domain = '/'.join(page.url.split('/')[:3])
+        links = page.evaluate("""
+            () => Array.from(document.querySelectorAll('a[href]')).map(a => ({
+                href: a.href || '',
+                text: (a.textContent || a.getAttribute('aria-label') || '').trim().toLowerCase()
+            }))
+        """)
+    except Exception:
+        return "\n".join(texts)
+
+    # Score links by relevance to personal account data
+    scored = []
+    for lnk in links:
+        href = lnk.get("href", "")
+        text = lnk.get("text", "")
+        if not href or not href.startswith(base_domain):
+            continue
+        if any(p in href.lower() or p in text for p in _SKIP_PATTERNS):
+            continue
+        score = sum(kw in text or kw in href.lower() for kw in _ACCOUNT_KEYWORDS)
+        if score:
+            scored.append((score, href.rstrip('/')))
+
+    # Deduplicate and visit top N
+    seen: set = set()
+    for _, url in sorted(scored, reverse=True):
+        if len(seen) >= max_extra:
+            break
+        if url in visited or url in seen:
+            continue
+        seen.add(url)
+        try:
+            page.goto(url, timeout=NAV_TIMEOUT)
+            page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+            page.wait_for_timeout(2_000)
+            page_text = page.inner_text("body")[:4000]
+            texts.append(f"\n\n=== {url} ===\n{page_text}")
+            visited.add(url)
+        except Exception:
+            pass
+
+    return "\n".join(texts)[:12_000]
+
+
 # ── Generic scraper factory ───────────────────────────────────────────────────
 # For sites where login follows standard patterns — AI discovery handles fields.
 def _make_scraper(cfg: dict):
@@ -402,19 +472,21 @@ def _make_scraper(cfg: dict):
             if ok_url:
                 page.wait_for_url(ok_url, timeout=LOGIN_TIMEOUT)
             if post_url:
+                # If explicit post_url given, use it as starting point for exploration
                 page.goto(post_url, timeout=NAV_TIMEOUT)
-            page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+                page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
             if wait_for_not:
-                # Wait for dynamic content to load (text disappears when real data loads)
                 try:
                     page.wait_for_function(
                         f"() => !document.body.innerText.includes({json.dumps(wait_for_not)})",
                         timeout=15_000
                     )
                 except Exception:
-                    pass  # timeout — capture whatever loaded
+                    pass
             page.wait_for_timeout(wait_ms)
-            r.update({"status": "ok", "items": []})
+            # Auto-explore account pages — finds loyalty/account pages regardless of URL structure
+            raw_text = _explore_account_pages(page)
+            r.update({"status": "ok", "items": [], "raw_text": raw_text})
         except Exception as e:
             r.update({"status": "error", "error": str(e).split('\n')[0][:120]})
         return r
@@ -632,19 +704,8 @@ def scrape_amex(page, c, ctx):
         page.wait_for_url("**americanexpress.com/en-us/account/**", timeout=LOGIN_TIMEOUT)
         page.goto("https://www.americanexpress.com/en-us/account/pay/summary", timeout=NAV_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        # Wait until a real dollar amount (not just $0) appears
-        try:
-            page.wait_for_function(
-                "() => /\\$[1-9][\\d,]+/.test(document.body.innerText)",
-                timeout=25_000
-            )
-        except: pass
-        page.wait_for_timeout(3_000)
-        t = page.inner_text("body"); d = _dollars(t)
-        r.update({"status":"ok","items":[
-            {"label":"Current Balance","value":d[0] if d else "–"},
-            {"label":"Payment Due","value":_date(t) or "–"},
-        ]})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -665,12 +726,8 @@ def scrape_chase(page, c, ctx):
         _handle_2fa(page, ctx)
         page.wait_for_url("**chase.com/**", timeout=LOGIN_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        page.wait_for_timeout(3_000)
-        t = page.inner_text("body"); d = _dollars(t)
-        r.update({"status":"ok","items":[
-            {"label":"Balance","value":d[0] if d else "–"},
-            {"label":"Due","value":_date(t) or "–"},
-        ]})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -687,9 +744,8 @@ def scrape_sfcu(page, c, ctx):
         _click(page, ['button[type="submit"]','input[type="submit"]'])
         _handle_2fa(page, ctx)
         page.wait_for_load_state("domcontentloaded", timeout=LOGIN_TIMEOUT)
-        page.wait_for_timeout(3_000)
-        t = page.inner_text("body"); d = _dollars(t)
-        r.update({"status":"ok","items":[{"label":"Balance","value":d[0] if d else "–"}]})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -784,7 +840,8 @@ def scrape_delta(page, c, ctx):
         items = [{"label": "SkyMiles", "value": pts or "–"}]
         if tier:
             items.append({"label": "Status", "value": tier})
-        r.update({"status": "ok", "items": items})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -801,10 +858,8 @@ def scrape_hertz(page, c, ctx):
         _click(page, ['button[type="submit"]','input[type="submit"]'])
         _handle_2fa(page, ctx)
         page.wait_for_load_state("domcontentloaded", timeout=LOGIN_TIMEOUT)
-        page.wait_for_timeout(3_000)
-        t = page.inner_text("body")
-        pts = _points(t, ("points",))
-        r.update({"status":"ok","items":[{"label":"Gold Plus Points","value":pts or "–"}]})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -822,10 +877,8 @@ def scrape_marriott(page, c, ctx):
         _handle_2fa(page, ctx)
         page.wait_for_url("**myAccount**", timeout=LOGIN_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        page.wait_for_timeout(3_000)
-        t = page.inner_text("body")
-        pts = _points(t, ("points","bonvoy"))
-        r.update({"status":"ok","items":[{"label":"Bonvoy Points","value":pts or "–"}]})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -843,10 +896,8 @@ def scrape_hilton(page, c, ctx):
         _handle_2fa(page, ctx)
         page.wait_for_url("**hilton.com**profile**", timeout=LOGIN_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        page.wait_for_timeout(3_000)
-        t = page.inner_text("body")
-        pts = _points(t, ("points","honors"))
-        r.update({"status":"ok","items":[{"label":"Honors Points","value":pts or "–"}]})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -874,17 +925,8 @@ def scrape_disney_plus(page, c, ctx):
             page.wait_for_timeout(3_000)
         page.goto("https://www.disneyplus.com/account", timeout=NAV_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        # Wait until a month name appears (billing date is rendered by JS)
-        try:
-            page.wait_for_function(
-                "() => /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i"
-                ".test(document.body.innerText)",
-                timeout=25_000
-            )
-        except: pass
-        page.wait_for_timeout(2_000)
-        t = page.inner_text("body")
-        r.update({"status":"ok","items":[{"label":"Next Billing","value":_date(t) or "–"}]})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -930,12 +972,8 @@ def scrape_xfinity(page, c, ctx):
         page.wait_for_url("**xfinity.com**", timeout=LOGIN_TIMEOUT)
         page.goto("https://www.xfinity.com/overview", timeout=NAV_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        page.wait_for_timeout(3_000)
-        t = page.inner_text("body"); d = _dollars(t)
-        r.update({"status":"ok","items":[
-            {"label":"Balance","value":d[0] if d else "–"},
-            {"label":"Due Date","value":_date(t) or "–"},
-        ]})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -1007,7 +1045,8 @@ def scrape_pa_utilities(page, c, ctx):
 
         # Ways to Save navigation removed — Gemini discovers these from page text
 
-        r.update({"status": "ok", "items": items})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -1031,10 +1070,8 @@ def scrape_pamf(page, c, ctx):
         appts = re.findall(
             r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:,\s*\d{4})?',
             t, re.IGNORECASE)[:1]
-        r.update({"status":"ok","items":[
-            {"label":"New Messages","value":msgs.group(1) if msgs else "0"},
-            {"label":"Next Appt","value":appts[0] if appts else "–"},
-        ]})
+        raw_text = _explore_account_pages(page)
+        r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r

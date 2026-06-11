@@ -301,30 +301,44 @@ try:
 except ImportError:
     _claude = None
 
-DISCOVER_PROMPT = """You are analyzing a page from a user's {site} account.
+DISCOVER_PROMPT = """You are analyzing one or more pages from a user's {site} account.
+Pages may be separated by === URL === markers.
 
 Page text:
 {text}
 
-Identify data fields useful to monitor in a personal dashboard.
+Extract ONLY data specific to THIS USER — not site-wide announcements, promotions, or generic content.
+
+INCLUDE: balances, points, miles, credits, tier/status, progress toward goals,
+expiration dates, upcoming reservations, payment info, account-specific alerts.
+
+EXCLUDE: promotional banners, site-wide announcements, search form pre-fills,
+"log in to view" placeholders, navigation links, content the same for all users.
+
+LABELING — write labels so they make sense without knowing the site:
+- "Available Points: 24,617" → "Rapid Rewards Points" not "Available Points"
+- "0 out of 20 flights" under A-List section → "A-List Flights Progress"
+- "0 out of 100 flights" under Companion Pass → "Companion Pass Flights Progress"
+- "$2,472.20 Total Payment Due" → "Balance Due" not "Total Payment Due"
+- "Enrolled in Auto Payment Plan" → "Auto-Pay Status"
+Write full descriptive labels, not abbreviated page labels.
+
 Return ONLY a JSON array, no other text:
-[{{"key":"balance","label":"Current Balance","value":"$2,472.20"}}]
+[{{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}]
 
 Rules:
-- key: 1-2 word snake_case ONLY — "balance" not "current_balance", "due_date" not "payment_due_date"
-- label: 2-4 words, human-readable
-- value: exact current value from the page
-- Each CONCEPT appears EXACTLY ONCE — do not split one idea into multiple fields
-- Include: amounts, dates, points/miles, usage, alerts, enrollment status
-- Skip: navigation, help text, marketing, version numbers, account holder name
-- Max 8 fields"""
+- key: snake_case, 1-3 words
+- label: 2-5 words, self-explanatory out of context
+- value: exact current value found on the page
+- Each concept ONCE, no duplicates
+- Max 10 fields"""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
     """Use Gemini Flash to identify all useful data fields in a page."""
     if not _claude or not raw_text:
         return []
     try:
-        prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:6000])
+        prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:10000])
         # Try models in order until one works
         _models = [
             "gemini-2.5-flash",
