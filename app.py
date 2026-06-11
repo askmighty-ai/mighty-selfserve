@@ -3001,6 +3001,21 @@ def dashboard():
                       if synced_at else
                       '<div style="font-size:11px;color:#aeaeb2">Not yet synced</div>')
 
+        # Detect login-wall values in cached fields
+        _BAD = ("log in", "sign in", "login to", "no match found")
+        bad_fields = src in discovered_by_source and any(
+            any(b in str(f.get("value","")).lower() for b in _BAD)
+            for f in discovered_by_source[src]["fields"]
+        )
+        bad_banner = (
+            f'<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;'
+            f'padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;font-size:12px">'
+            f'<span>⚠️</span>'
+            f'<span style="flex:1;color:#92400e">Couldn\'t log in on last sync — fields may be stale.</span>'
+            f'<a href="/credentials#fields-{he(src)}" style="color:#7c3aed;font-weight:600;text-decoration:none;white-space:nowrap">Reset fields →</a>'
+            f'</div>'
+        ) if bad_fields else ""
+
         cards_html += (
             f'<div class="acct-card">'
             f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
@@ -3017,6 +3032,7 @@ def dashboard():
             f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0"></div>'
             f'</div>'
             f'</div>'
+            f'{bad_banner}'
             f'{items_html}'
             f'</div>'
         )
@@ -5008,10 +5024,19 @@ def _auto_discover_missing(uid: str) -> None:
             raw_text = decrypt_account_data(uid, ad["data_enc"] or "").get("raw_text", "")
             if not raw_text:
                 continue
-            # Skip if raw_text is identical to the last discovery run
+            # Skip if raw_text is identical to the last discovery run —
+            # UNLESS existing fields contain login-wall values (means last sync failed to log in)
+            _BAD_VALUES = ("log in", "sign in", "login to", "sign in to", "no match found")
+            existing_fields = ex.get("discovered_fields", [])
+            has_bad_fields = any(
+                any(bad in str(f.get("value", "")).lower() for bad in _BAD_VALUES)
+                for f in existing_fields
+            )
             raw_hash = hashlib.md5(raw_text.encode()).hexdigest()
-            if ex.get("last_raw_hash") == raw_hash and ex.get("discovered_fields"):
+            if ex.get("last_raw_hash") == raw_hash and existing_fields and not has_bad_fields:
                 continue
+            if has_bad_fields:
+                print(f"[AutoDiscover] {src}: forcing re-discovery (stale login-wall fields)", flush=True)
             site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == src), src)
             print(f"[AutoDiscover] {src} for user {uid[:6]} (hash {raw_hash[:8]})", flush=True)
             merged: dict = {}
