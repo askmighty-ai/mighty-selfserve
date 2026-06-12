@@ -150,11 +150,12 @@ const SETTLE_MS = {
 
 // SPA sub-sections to extract via in-page navigation (clicking links).
 // Used for sites like Delta where direct URL changes trigger bot detection.
-// Each entry: { linkText, urlPattern } — finds an <a> whose href matches urlPattern.
+// Each entry: { label, terms[] } — finds an <a> whose href OR text matches any term.
 const SPA_NAV_URLS = {
   delta: [
-    { label: 'certificates', urlPattern: 'my-certificates' },
-    { label: 'wallet',       urlPattern: 'my-wallet' },
+    { label: 'certificates', terms: ['certificate', 'cert', 'ecert', 'voucher'] },
+    { label: 'wallet',       terms: ['wallet', 'eCredit', 'ecredit', 'travel credit'] },
+    { label: 'skymiles',     terms: ['skymiles', 'miles', 'mileage'] },
   ],
 };
 
@@ -234,18 +235,23 @@ async function syncAccount(apiKey, account, urls) {
           // Click the matching link within the current page (stays in same origin session)
           const [clicked] = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            func: (pattern) => {
+            func: (terms) => {
               const links = Array.from(document.querySelectorAll('a[href]'));
-              const match = links.find(a => a.href.includes(pattern));
-              if (match) { match.click(); return true; }
+              const match = links.find(a => {
+                const href = (a.href || '').toLowerCase();
+                const text = (a.textContent || '').toLowerCase().trim();
+                return terms.some(t => href.includes(t.toLowerCase()) || text.includes(t.toLowerCase()));
+              });
+              if (match) { match.click(); return match.href || true; }
               return false;
             },
-            args: [nav.urlPattern],
+            args: [nav.terms],
           });
           if (!clicked?.result) {
-            console.warn(`[Mighty] ${account.name}: no link found for "${nav.label}" — skipping`);
+            console.warn(`[Mighty] ${account.name}: no link found for "${nav.label}" (tried: ${nav.terms.join(', ')}) — skipping`);
             continue;
           }
+          console.log(`[Mighty] ${account.name}: clicked "${nav.label}" → ${clicked.result}`);
           await sleep(6_000); // wait for SPA to render new section
           const [res] = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
