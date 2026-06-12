@@ -720,7 +720,7 @@ def _sw_api_request(session, method: str, path: str, **kwargs):
         "Accept": "application/json",
         "User-Agent": "Southwest/10.0 iOS/17.0",
     }
-    if hasattr(session, "_token"):
+    if hasattr(session, "_token") and session._token:
         headers["token"] = session._token
     req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
     try:
