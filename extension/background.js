@@ -128,12 +128,13 @@ async function runSync() {
 async function syncAccount(apiKey, account, url) {
   console.log(`[Mighty] → ${account.name} (${url})`);
 
-  // Open the account page as a background tab
-  const tab = await chrome.tabs.create({ url, active: false });
+  // Open the account page as an active tab so SPAs fully render.
+  // (Background tabs get throttled — React apps won't finish loading.)
+  const tab = await chrome.tabs.create({ url, active: true });
 
   try {
     await waitForTabLoad(tab.id, 20_000);
-    await sleep(4_000); // let dynamic content render
+    await sleep(8_000); // let SPA content fully render
 
     // Extract all visible text from the page
     const [result] = await chrome.scripting.executeScript({
