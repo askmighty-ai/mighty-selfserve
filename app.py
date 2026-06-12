@@ -4053,10 +4053,16 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
             f'</div></div></details>'
         )
     else:
-        # No fields yet — will appear automatically after next sync
+        # No fields yet — show a manual trigger button alongside the auto message
         return (
-            f'<div style="margin-top:6px;font-size:12px;color:#aeaeb2;font-style:italic">'
-            f'Data fields will appear automatically after the first sync</div>'
+            f'<div style="margin-top:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+            f'<span style="font-size:12px;color:#aeaeb2;font-style:italic">'
+            f'Data fields will appear automatically after the first sync</span>'
+            f'<button onclick="clearAndRediscover(\'{src}\')" '
+            f'style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #e9d5ff;'
+            f'background:#faf5ff;color:#7c3aed;cursor:pointer;font-family:inherit;white-space:nowrap">'
+            f'Discover now →</button>'
+            f'</div>'
         )
 
 
