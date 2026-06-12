@@ -4707,7 +4707,7 @@ def api_data_sync():
     display    = data.get("name", source)
     icon       = data.get("icon", "?")
     color      = data.get("color", "#f0f0f0")
-    # raw_text is sent inside data{} by the scraper — it's already in data dict
+    raw_text   = data.get("raw_text", "") or body.get("raw_text", "")
 
     data_enc   = encrypt_account_data(user["id"], data)
 
