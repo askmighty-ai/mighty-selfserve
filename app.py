@@ -4822,7 +4822,7 @@ def api_extension_accounts():
         return jsonify({"error": "Invalid or missing api_key"}), 401
 
     rows = get_db().execute(
-        "SELECT source, cred_enc FROM account_credentials WHERE user_id=?",
+        "SELECT source, username_enc FROM account_credentials WHERE user_id=?",
         (user["id"],)
     ).fetchall()
 
@@ -4869,12 +4869,8 @@ def api_extension_accounts():
         source = row["source"]
         if source == "_email":
             continue
-        # Only include if credentials are actually stored
-        try:
-            cred = json.loads(decrypt_cred(user["id"], row["cred_enc"]))
-            if not cred.get("username"):
-                continue
-        except Exception:
+        # Only include if a username is stored
+        if not row["username_enc"]:
             continue
 
         meta = SITE_META.get(source)
