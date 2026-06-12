@@ -358,6 +358,7 @@ def claude_discover_fields(raw_text: str, site_name: str) -> list:
     if not _claude or not raw_text:
         return []
     try:
+        print(f"[Mighty] Discovering fields for {site_name} ({len(raw_text)} chars). Preview: {raw_text[:500]!r}", flush=True)
         prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:10000])
         # Try models in order until one works
         _models = [
