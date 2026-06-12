@@ -6,13 +6,25 @@ const SYNC_ALARM    = 'mighty-sync';
 const SYNC_INTERVAL = 240; // minutes (every 4 hours)
 
 // Account page URLs — where to navigate to get each account's data.
-// Keys match the source keys in the Mighty dashboard.
+// Values can be a single URL string or an array of URLs (visited in order,
+// text concatenated) to capture sub-pages like vouchers, travel funds, etc.
 const ACCOUNT_URLS = {
-  southwest:    'https://www.southwest.com/loyalty/myaccount/',
+  southwest: [
+    'https://www.southwest.com/loyalty/myaccount/',
+    'https://www.southwest.com/loyalty/rapidrewards/travelFunds.html',
+    'https://www.southwest.com/loyalty/myaccount/upcoming-trips.html',
+  ],
+  delta: [
+    'https://www.delta.com/myprofile/',
+    'https://www.delta.com/us/en/my-account/my-certificates',
+    'https://www.delta.com/us/en/my-account/my-wallet',
+  ],
   united:       'https://www.united.com/en/us/myaccount/mileageplus',
-  american_air: 'https://www.aa.com/aadvantage-program/overview',
+  american_air: [
+    'https://www.aa.com/aadvantage-program/overview',
+    'https://www.aa.com/loyalty/home.do',
+  ],
   alaska_air:   'https://www.alaskaair.com/account/dashboard',
-  delta:        'https://www.delta.com/myprofile/',
   amex:         'https://www.americanexpress.com/en-us/account/',
   chase:        'https://secure.chase.com/web/auth/dashboard',
   wells_fargo:  'https://connect.secure.wellsfargo.com/auth/login/present',
@@ -102,13 +114,14 @@ async function runSync() {
   let ok = 0, failed = 0;
 
   for (const account of accounts) {
-    const url = ACCOUNT_URLS[account.source];
-    if (!url) {
+    const urlEntry = ACCOUNT_URLS[account.source];
+    if (!urlEntry) {
       console.log(`[Mighty] No URL mapping for ${account.source} — skipping`);
       continue;
     }
+    const urls = Array.isArray(urlEntry) ? urlEntry : [urlEntry];
     try {
-      await syncAccount(api_key, account, url);
+      await syncAccount(api_key, account, urls);
       ok++;
     } catch (e) {
       console.error(`[Mighty] Failed: ${account.name}:`, e.message);
@@ -142,49 +155,65 @@ const BOT_DETECTION_PHRASES = [
 
 // ── Per-account sync ─────────────────────────────────────────────────────────
 
-async function syncAccount(apiKey, account, url) {
-  console.log(`[Mighty] → ${account.name} (${url})`);
+async function syncAccount(apiKey, account, urls) {
+  console.log(`[Mighty] → ${account.name} (${urls.length} page${urls.length > 1 ? 's' : ''})`);
 
   const warmup = WARMUP_URLS[account.source];
+  const allText = [];
 
-  // Open the account page as an active tab so SPAs fully render.
-  // (Background tabs get throttled — React apps won't finish loading.)
-  const startUrl = warmup || url;
+  // Open a tab once, reuse it for all sub-pages
+  const startUrl = warmup || urls[0];
   const tab = await chrome.tabs.create({ url: startUrl, active: true });
 
   try {
     await waitForTabLoad(tab.id, 20_000);
 
-    // If we opened a warm-up page, now navigate to the real account URL.
     if (warmup) {
-      await sleep(3_000); // let warm-up page settle
-      await chrome.tabs.update(tab.id, { url });
+      await sleep(3_000);
+      // Navigate to first real URL after warm-up
+      await chrome.tabs.update(tab.id, { url: urls[0] });
       await waitForTabLoad(tab.id, 20_000);
     }
 
-    await sleep(8_000); // let SPA content fully render
+    for (let i = 0; i < urls.length; i++) {
+      // Already on urls[0] from above; navigate for subsequent pages
+      if (i > 0) {
+        await chrome.tabs.update(tab.id, { url: urls[i] });
+        await waitForTabLoad(tab.id, 20_000);
+      }
 
-    // Extract all visible text from the page
-    const [result] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: extractPageText,
-    });
+      await sleep(i === 0 ? 8_000 : 5_000); // first page gets longer settle time
 
-    const rawText = result?.result || '';
-    if (!rawText || rawText.length < 100) {
-      throw new Error('Page returned too little content — possibly not logged in');
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: extractPageText,
+      });
+
+      const pageText = result?.result || '';
+
+      // Check for bot-detection
+      const lower = pageText.toLowerCase();
+      const blocked = BOT_DETECTION_PHRASES.find(p => lower.includes(p));
+      if (blocked) {
+        console.warn(`[Mighty] ${account.name} page ${i + 1}: bot detection ("${blocked}") — skipping page`);
+        continue;
+      }
+
+      if (pageText.length >= 100) {
+        console.log(`[Mighty] ${account.name} page ${i + 1}: ${pageText.length} chars`);
+        allText.push(`\n\n--- ${urls[i]} ---\n${pageText}`);
+      } else {
+        console.warn(`[Mighty] ${account.name} page ${i + 1}: too short (${pageText.length} chars) — skipping`);
+      }
     }
 
-    // Check for bot-detection / access-denied pages
-    const lowerText = rawText.toLowerCase();
-    const blocked = BOT_DETECTION_PHRASES.find(p => lowerText.includes(p));
-    if (blocked) {
-      throw new Error(`Bot detection triggered ("${blocked}") — skipping`);
+    if (allText.length === 0) {
+      throw new Error('All pages returned too little content — possibly not logged in');
     }
 
-    console.log(`[Mighty] ${account.name}: got ${rawText.length} chars`);
+    const rawText = allText.join('').slice(0, 40_000); // cap at 40k chars
+    console.log(`[Mighty] ${account.name}: total ${rawText.length} chars from ${allText.length} page(s)`);
 
-    // Push to Railway using the existing data sync endpoint
     const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
