@@ -153,9 +153,11 @@ const SETTLE_MS = {
 // Each entry: { label, terms[] } — finds an <a> whose href OR text matches any term.
 const SPA_NAV_URLS = {
   delta: [
-    { label: 'certificates', terms: ['certificate', 'cert', 'ecert', 'voucher'] },
-    { label: 'wallet',       terms: ['wallet', 'eCredit', 'ecredit', 'travel credit'] },
-    { label: 'skymiles',     terms: ['skymiles', 'miles', 'mileage'] },
+    // Navigate to SkyMiles overview first — it has the full account nav
+    { label: 'skymiles',     terms: ['skymiles', 'sky miles', 'mileage'] },
+    // Then try certificates and wallet from the SkyMiles page
+    { label: 'certificates', terms: ['certificate', 'cert', 'ecert', 'voucher', 'travel certificate'] },
+    { label: 'wallet',       terms: ['wallet', 'eCredit', 'ecredit', 'travel credit', 'pay with miles'] },
   ],
 };
 
