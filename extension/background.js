@@ -12,7 +12,7 @@ const ACCOUNT_URLS = {
   united:       'https://www.united.com/en/us/myaccount/mileageplus',
   american_air: 'https://www.aa.com/aadvantage-program/overview',
   alaska_air:   'https://www.alaskaair.com/account/dashboard',
-  delta:        'https://www.delta.com/us/en/skymiles/account-activity',
+  delta:        'https://www.delta.com/myprofile/',
   amex:         'https://www.americanexpress.com/en-us/account/',
   chase:        'https://secure.chase.com/web/auth/dashboard',
   wells_fargo:  'https://connect.secure.wellsfargo.com/auth/login/present',
