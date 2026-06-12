@@ -140,7 +140,8 @@ async function runSync() {
 // Sites that need a warm-up page visit before the real account URL,
 // to establish session context and avoid bot-detection on cold navigation.
 const WARMUP_URLS = {
-  delta: 'https://www.delta.com/',
+  delta:  'https://www.delta.com/',
+  xfinity: 'https://www.xfinity.com/',
 };
 
 // Per-site settle time (ms) after page load before extracting text.
@@ -161,13 +162,15 @@ const SPA_NAV_URLS = {};
 
 // Phrases that indicate a bot-detection or access-denied page.
 const BOT_DETECTION_PHRASES = [
-  'gate change',       // Delta/Akamai
+  'gate change',             // Delta/Akamai
   'access denied',
   'checking your browser',
   'ddos protection',
-  'please wait',       // Cloudflare challenge
+  'please wait',             // Cloudflare challenge
   'cf-browser-verification',
   'unusual traffic',
+  'please enable cookies',   // Xfinity/Akamai cookie-check page
+  'cookie functionality is turned off',
 ];
 
 // ── Per-account sync ─────────────────────────────────────────────────────────
