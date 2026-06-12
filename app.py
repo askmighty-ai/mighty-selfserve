@@ -1654,7 +1654,7 @@ if (document.querySelector('[data-discovering="1"]')) {
   setTimeout(function() { location.reload(); }, 12000);
 }
 
-// Format sync timestamps in user's local time zone
+// Add tooltip with exact local time on hover; keep relative text as-is
 document.querySelectorAll('[data-synced]').forEach(function(el) {
   var ts = el.dataset.synced;
   if (!ts) return;
@@ -1662,7 +1662,7 @@ document.querySelectorAll('[data-synced]').forEach(function(el) {
     var d = new Date(ts);
     var date = d.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
     var time = d.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'});
-    el.textContent = 'Synced ' + date + ' at ' + time;
+    el.title = date + ' at ' + time;
   } catch(e) {}
 });
 
