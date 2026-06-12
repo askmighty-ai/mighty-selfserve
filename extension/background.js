@@ -207,6 +207,16 @@ async function syncAccount(apiKey, account, urls) {
         : SETTLE_MS.subsequent;
       await sleep(settleMs);
 
+      // Dismiss any session-timeout / "stay logged in?" modal before extracting
+      const [dismissed] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: dismissSessionTimeouts,
+      });
+      if (dismissed?.result) {
+        console.log(`[Mighty] ${account.name} page ${i + 1}: dismissed session timeout dialog`);
+        await sleep(2_000); // let page settle after dialog closes
+      }
+
       const [result] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: extractPageText,
@@ -318,6 +328,48 @@ async function syncAccount(apiKey, account, urls) {
   } finally {
     chrome.tabs.remove(tab.id).catch(() => {});
   }
+}
+
+// Runs inside the page context — finds and clicks "Stay logged in" / "Yes" buttons
+// on session-timeout modals. Returns true if a button was clicked.
+function dismissSessionTimeouts() {
+  // Text patterns that appear on session-keepalive buttons
+  const KEEP_ALIVE = [
+    'stay logged in', 'stay signed in', 'keep me logged in', 'keep me signed in',
+    'yes, keep me logged in', 'yes, stay logged in', 'continue session',
+    'remain logged in', 'extend session', 'i\'m still here',
+  ];
+  // Broader fallback: a modal is visible AND a "Yes" / "Continue" button is inside it
+  const MODAL_SELECTORS = [
+    '[role="dialog"]', '[aria-modal="true"]', '.modal', '.dialog',
+    '[class*="timeout"]', '[class*="session"]', '[id*="timeout"]', '[id*="session"]',
+  ];
+
+  // 1. Look for any visible button whose text matches a keep-alive phrase
+  const buttons = Array.from(document.querySelectorAll('button, a[role="button"], input[type="button"], input[type="submit"]'));
+  for (const btn of buttons) {
+    const text = (btn.textContent || btn.value || '').toLowerCase().trim();
+    if (KEEP_ALIVE.some(phrase => text.includes(phrase))) {
+      btn.click();
+      return true;
+    }
+  }
+
+  // 2. Look for a modal dialog containing timeout/session language, then click Yes/Continue/OK
+  for (const sel of MODAL_SELECTORS) {
+    const modal = document.querySelector(sel);
+    if (!modal) continue;
+    const modalText = modal.textContent.toLowerCase();
+    if (!modalText.match(/session|timeout|log.*out|sign.*out|still here|inactiv/)) continue;
+    // Found a session modal — click the affirmative button inside it
+    const inner = Array.from(modal.querySelectorAll('button, a[role="button"]'));
+    const yes = inner.find(b => /^(yes|ok|continue|stay|keep|extend|confirm)\b/i.test((b.textContent || '').trim()));
+    if (yes) { yes.click(); return true; }
+    // Last resort: click the first button in the modal
+    if (inner[0]) { inner[0].click(); return true; }
+  }
+
+  return false;
 }
 
 // Runs inside the page context — extracts visible body text
