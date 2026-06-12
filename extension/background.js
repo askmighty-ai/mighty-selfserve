@@ -48,10 +48,7 @@ const ACCOUNT_URLS = {
   att:          'https://www.att.com/my/#/',
   verizon:      'https://www.verizon.com/myverizon/',
   tmobile:      'https://account.t-mobile.com/overview',
-  xfinity: [
-    'https://customer.xfinity.com/#/services',
-    'https://customer.xfinity.com/secure/billing',
-  ],
+  xfinity:      'https://customer.xfinity.com/#/services',
   hertz:        'https://www.hertz.com/rentacar/member/profile/myprofile',
   cvs:          'https://www.cvs.com/account/login.jsp',
   walgreens:    'https://www.walgreens.com/myaccount/mywalgreenssummary.jsp',
