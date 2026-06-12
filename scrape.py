@@ -701,6 +701,100 @@ _SITE_CFGS = {
 for _k, _cfg in _SITE_CFGS.items():
     globals()[f"scrape_{_k}"] = _make_scraper(_cfg)
 
+# ── Southwest mobile API scraper ──────────────────────────────────────────────
+# Southwest's mobile app uses a documented JSON API that's far more reliable than
+# browser scraping — no bot detection, structured data, no headless browser needed.
+# Overrides the generic Playwright scraper for 'southwest'.
+
+_SW_API_KEY  = "l7xx12ebcbc825eb480faa276e7f192d98d1"   # Southwest mobile app client ID
+_SW_BASE_URL = "https://mobile.southwest.com"
+
+def _sw_api_request(session, method: str, path: str, **kwargs):
+    """Make a Southwest mobile API request, returning parsed JSON or None."""
+    import urllib.request, urllib.error
+    url = _SW_BASE_URL + path
+    data = json.dumps(kwargs["json"]).encode() if "json" in kwargs else None
+    headers = {
+        "X-API-Key": _SW_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Southwest/10.0 iOS/17.0",
+    }
+    if hasattr(session, "_token"):
+        headers["token"] = session._token
+    req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+        return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise Exception(f"SW API {method} {path} → HTTP {e.code}: {body[:200]}")
+
+
+def scrape_southwest(page, c, ctx):
+    r = _base("Southwest", "✈️", "#fef3c7", "https://www.southwest.com/loyalty/myaccount/")
+    try:
+        # ── Step 1: Login via mobile API ──────────────────────────────────
+        class _Session:
+            _token = None
+
+        session = _Session()
+        print("[SW-API] Logging in...", flush=True)
+        login = _sw_api_request(session, "POST", "/api/customer/v1/accounts/login", json={
+            "accountNumberOrUserName": c["username"],
+            "password": c["password"],
+        })
+
+        session._token    = login.get("accessToken", "")
+        account_number    = login.get("accessTokenDetails", {}).get("accountNumber", "")
+        if not account_number:
+            raise Exception("Login succeeded but no account number returned")
+
+        print(f"[SW-API] Logged in, account #{account_number}", flush=True)
+
+        # ── Step 2: Fetch account data ────────────────────────────────────
+        texts = [f"Southwest Rapid Rewards Account: {account_number}\n"]
+
+        # Account summary (points, tier, companion pass, etc.)
+        try:
+            acct = _sw_api_request(session, "GET",
+                f"/api/customer/v1/accounts/account-number/{account_number}")
+            texts.append("=== Account Summary ===\n" + json.dumps(acct, indent=2))
+        except Exception as e:
+            print(f"[SW-API] account summary: {e}", flush=True)
+
+        # Upcoming trips
+        try:
+            trips = _sw_api_request(session, "GET",
+                f"/api/customer/v1/accounts/account-number/{account_number}/upcoming-trips")
+            texts.append("=== Upcoming Trips ===\n" + json.dumps(trips, indent=2))
+        except Exception as e:
+            print(f"[SW-API] upcoming trips: {e}", flush=True)
+
+        # Points activity / history
+        try:
+            activity = _sw_api_request(session, "GET",
+                f"/api/customer/v1/accounts/account-number/{account_number}/activity")
+            texts.append("=== Points Activity ===\n" + json.dumps(activity, indent=2))
+        except Exception as e:
+            print(f"[SW-API] activity: {e}", flush=True)
+
+        raw_text = "\n\n".join(texts)[:12_000]
+        if len(raw_text) < 100:
+            raise Exception("API returned unexpectedly empty data")
+
+        print(f"[SW-API] ✓ Got {len(raw_text)} chars of account data", flush=True)
+        r.update({"status": "ok", "items": [], "raw_text": raw_text})
+
+    except Exception as e:
+        # Fall back to Playwright browser scraping
+        print(f"[SW-API] Failed ({e}) — falling back to browser scraper", flush=True)
+        fallback = _make_scraper(_SITE_CFGS["southwest"])
+        r = fallback(page, c, ctx)
+
+    return r
+
+
 # ── Account scrapers ──────────────────────────────────────────────────────────
 def scrape_amex(page, c, ctx):
     r = _base("American Express","💳","#e8f0fe",
