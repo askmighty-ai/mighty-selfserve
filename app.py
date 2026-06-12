@@ -4809,6 +4809,84 @@ def api_data_sync():
     return jsonify({"ok": True, "source": source})
 
 
+@app.route("/api/extension/accounts", methods=["GET"])
+def api_extension_accounts():
+    """Return connected accounts with metadata for the Chrome extension.
+
+    The extension calls this to discover which accounts to sync and what
+    name/icon/color to use when pushing results back via /api/data/sync.
+    Auth: X-API-Key header.
+    """
+    user, _ = api_user()
+    if not user:
+        return jsonify({"error": "Invalid or missing api_key"}), 401
+
+    rows = get_db().execute(
+        "SELECT source, cred_enc FROM account_credentials WHERE user_id=?",
+        (user["id"],)
+    ).fetchall()
+
+    # Site metadata: name, icon, color — kept in sync with scrape.py SITE_CFGS
+    SITE_META = {
+        "southwest":    ("Southwest",          "✈️",  "#fef3c7"),
+        "united":       ("United Airlines",    "✈️",  "#eff6ff"),
+        "american_air": ("American Airlines",  "✈️",  "#fce7f3"),
+        "alaska_air":   ("Alaska Airlines",    "✈️",  "#ecfdf5"),
+        "delta":        ("Delta",              "✈️",  "#eff6ff"),
+        "amex":         ("American Express",   "💳", "#e8f0fe"),
+        "chase":        ("Chase",              "💳", "#fef3c7"),
+        "wells_fargo":  ("Wells Fargo",        "🏦", "#fef3c7"),
+        "bofa":         ("Bank of America",    "🏦", "#fee2e2"),
+        "capital_one":  ("Capital One",        "💳", "#fce7f3"),
+        "discover":     ("Discover",           "💳", "#fff7ed"),
+        "citi":         ("Citi",               "💳", "#ecfdf5"),
+        "paypal":       ("PayPal",             "💰", "#eff6ff"),
+        "fidelity":     ("Fidelity",           "📈", "#ecfdf5"),
+        "schwab":       ("Charles Schwab",     "📈", "#eff6ff"),
+        "marriott":     ("Marriott Bonvoy",    "🏨", "#fff7ed"),
+        "hilton":       ("Hilton Honors",      "🏨", "#eff6ff"),
+        "hyatt":        ("Hyatt",              "🏨", "#f5f3ff"),
+        "ihg":          ("IHG",                "🏨", "#fff7ed"),
+        "wyndham":      ("Wyndham",            "🏨", "#fce7f3"),
+        "amazon":       ("Amazon",             "📦", "#fff7ed"),
+        "target":       ("Target",             "🎯", "#fee2e2"),
+        "costco":       ("Costco",             "🛒", "#eff6ff"),
+        "netflix":      ("Netflix",            "🎬", "#fee2e2"),
+        "hulu":         ("Hulu",               "📺", "#ecfdf5"),
+        "spotify":      ("Spotify",            "🎵", "#ecfdf5"),
+        "disney_plus":  ("Disney+",            "🎬", "#eff6ff"),
+        "att":          ("AT&T",               "📱", "#eff6ff"),
+        "verizon":      ("Verizon",            "📱", "#fce7f3"),
+        "tmobile":      ("T-Mobile",           "📱", "#fce7f3"),
+        "xfinity":      ("Xfinity",            "📡", "#eff6ff"),
+        "hertz":        ("Hertz",              "🚗", "#fef3c7"),
+        "cvs":          ("CVS",                "💊", "#fee2e2"),
+        "walgreens":    ("Walgreens",          "💊", "#ecfdf5"),
+    }
+
+    accounts = []
+    for row in rows:
+        source = row["source"]
+        if source == "_email":
+            continue
+        # Only include if credentials are actually stored
+        try:
+            cred = json.loads(decrypt_cred(user["id"], row["cred_enc"]))
+            if not cred.get("username"):
+                continue
+        except Exception:
+            continue
+
+        meta = SITE_META.get(source)
+        if not meta:
+            continue
+
+        name, icon, color = meta
+        accounts.append({"source": source, "name": name, "icon": icon, "color": color})
+
+    return jsonify(accounts)
+
+
 @app.route("/api/data", methods=["GET", "POST"])
 @require_login
 def api_data_get():
