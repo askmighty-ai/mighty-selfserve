@@ -1716,6 +1716,17 @@ function cloudSync() {
   });
 }
 
+function resetFields(source) {
+  var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
+  fetch('/credentials/fields/reset/' + source, {
+    method: 'POST',
+    headers: {'X-CSRF-Token': csrf, 'Content-Type': 'application/json'}
+  }).then(function(r){return r.json();}).then(function(d){
+    if (d.ok) { location.reload(); }
+    else { alert('Reset failed — try refreshing'); }
+  }).catch(function(){ alert('Reset failed — try refreshing'); });
+}
+
 function filterFeed(q) {
   q = (q || '').toLowerCase();
   document.querySelectorAll('.action-card').forEach(function(card) {
@@ -3012,7 +3023,7 @@ def dashboard():
             f'padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;font-size:12px">'
             f'<span>⚠️</span>'
             f'<span style="flex:1;color:#92400e">Couldn\'t log in on last sync — fields may be stale.</span>'
-            f'<a href="/credentials#fields-{he(src)}" style="color:#7c3aed;font-weight:600;text-decoration:none;white-space:nowrap">Reset fields →</a>'
+            f'<a href="#" onclick="resetFields(\'{he(src)}\');return false;" style="color:#7c3aed;font-weight:600;text-decoration:none;white-space:nowrap">Reset fields →</a>'
             f'</div>'
         ) if bad_fields else ""
 
