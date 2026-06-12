@@ -50,6 +50,25 @@ except ImportError:
 MIGHTY_API_KEY = os.environ.get("MIGHTY_API_KEY", "")
 MIGHTY_URL     = os.environ.get("MIGHTY_URL",
                   "https://mighty-selfserve-production.up.railway.app")
+
+# ── Residential proxy (optional) ─────────────────────────────────────────────
+# Set PROXY_URL in Railway env vars to route scrapers through a residential IP.
+# Format: http://username:password@gate.smartproxy.com:7000
+# Needed for sites that block cloud IPs (Southwest, Delta, Chase, Amex, etc.)
+_PROXY_URL = os.environ.get("PROXY_URL", "").strip()
+def _proxy_cfg() -> dict | None:
+    """Return Playwright proxy dict if PROXY_URL is set, else None."""
+    if not _PROXY_URL:
+        return None
+    # Parse http://user:pass@host:port into Playwright's format
+    import urllib.parse
+    p = urllib.parse.urlparse(_PROXY_URL)
+    cfg: dict = {"server": f"{p.scheme}://{p.hostname}:{p.port}"}
+    if p.username:
+        cfg["username"] = urllib.parse.unquote(p.username)
+    if p.password:
+        cfg["password"] = urllib.parse.unquote(p.password)
+    return cfg
 BASE_DIR       = Path(__file__).parent
 # On Railway, use persistent volume path for sessions; locally use ./sessions/
 SESSIONS_DIR   = Path(os.environ.get("SESSIONS_DIR",
@@ -354,6 +373,11 @@ def _new_context(pw, key: str):
     chrome = _chrome_path()
     if chrome:
         kwargs["executable_path"] = chrome
+    # Route through residential proxy if configured
+    proxy = _proxy_cfg()
+    if proxy:
+        kwargs["proxy"] = proxy
+        print(f"[Proxy] Using residential proxy: {proxy['server']}", flush=True)
     # else: Playwright uses its bundled Chromium (cloud/Railway environment)
     return pw.chromium.launch_persistent_context(str(SESSIONS_DIR / key), **kwargs)
 
@@ -711,9 +735,13 @@ _SW_BASE_URL = "https://mobile.southwest.com"
 
 def _sw_api_request(session, method: str, path: str, **kwargs):
     """Make a Southwest mobile API request, returning parsed JSON or None."""
-    import urllib.request, urllib.error
+    try:
+        import requests as _requests
+    except ImportError:
+        os.system(f'"{sys.executable}" -m pip install requests --quiet')
+        import requests as _requests
+
     url = _SW_BASE_URL + path
-    data = json.dumps(kwargs["json"]).encode() if "json" in kwargs else None
     headers = {
         "X-API-Key": _SW_API_KEY,
         "Content-Type": "application/json",
@@ -722,13 +750,19 @@ def _sw_api_request(session, method: str, path: str, **kwargs):
     }
     if hasattr(session, "_token") and session._token:
         headers["token"] = session._token
-    req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
-    try:
-        resp = urllib.request.urlopen(req, timeout=15)
-        return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        raise Exception(f"SW API {method} {path} → HTTP {e.code}: {body[:200]}")
+
+    proxies = {"http": _PROXY_URL, "https": _PROXY_URL} if _PROXY_URL else None
+
+    resp = _requests.request(
+        method.upper(), url,
+        json=kwargs.get("json"),
+        headers=headers,
+        proxies=proxies,
+        timeout=15,
+    )
+    if not resp.ok:
+        raise Exception(f"SW API {method} {path} → HTTP {resp.status_code}: {resp.text[:200]}")
+    return resp.json()
 
 
 def scrape_southwest(page, c, ctx):
