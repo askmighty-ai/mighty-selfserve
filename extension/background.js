@@ -123,17 +123,45 @@ async function runSync() {
   console.log('[Mighty]', msg);
 }
 
+// Sites that need a warm-up page visit before the real account URL,
+// to establish session context and avoid bot-detection on cold navigation.
+const WARMUP_URLS = {
+  delta: 'https://www.delta.com/',
+};
+
+// Phrases that indicate a bot-detection or access-denied page.
+const BOT_DETECTION_PHRASES = [
+  'gate change',       // Delta/Akamai
+  'access denied',
+  'checking your browser',
+  'ddos protection',
+  'please wait',       // Cloudflare challenge
+  'cf-browser-verification',
+  'unusual traffic',
+];
+
 // ── Per-account sync ─────────────────────────────────────────────────────────
 
 async function syncAccount(apiKey, account, url) {
   console.log(`[Mighty] → ${account.name} (${url})`);
 
+  const warmup = WARMUP_URLS[account.source];
+
   // Open the account page as an active tab so SPAs fully render.
   // (Background tabs get throttled — React apps won't finish loading.)
-  const tab = await chrome.tabs.create({ url, active: true });
+  const startUrl = warmup || url;
+  const tab = await chrome.tabs.create({ url: startUrl, active: true });
 
   try {
     await waitForTabLoad(tab.id, 20_000);
+
+    // If we opened a warm-up page, now navigate to the real account URL.
+    if (warmup) {
+      await sleep(3_000); // let warm-up page settle
+      await chrome.tabs.update(tab.id, { url });
+      await waitForTabLoad(tab.id, 20_000);
+    }
+
     await sleep(8_000); // let SPA content fully render
 
     // Extract all visible text from the page
@@ -145,6 +173,13 @@ async function syncAccount(apiKey, account, url) {
     const rawText = result?.result || '';
     if (!rawText || rawText.length < 100) {
       throw new Error('Page returned too little content — possibly not logged in');
+    }
+
+    // Check for bot-detection / access-denied pages
+    const lowerText = rawText.toLowerCase();
+    const blocked = BOT_DETECTION_PHRASES.find(p => lowerText.includes(p));
+    if (blocked) {
+      throw new Error(`Bot detection triggered ("${blocked}") — skipping`);
     }
 
     console.log(`[Mighty] ${account.name}: got ${rawText.length} chars`);
