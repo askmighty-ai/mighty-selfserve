@@ -1669,17 +1669,35 @@ if (document.querySelector('[data-discovering="1"]')) {
   sessionStorage.removeItem('mighty-discover-reloads');
 }
 
-// Add tooltip with exact local time on hover; keep relative text as-is
-document.querySelectorAll('[data-synced]').forEach(function(el) {
-  var ts = el.dataset.synced;
-  if (!ts) return;
+// Live-updating relative timestamps
+function fmtRelative(ts) {
   try {
     var d = new Date(ts);
-    var date = d.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
-    var time = d.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'});
-    el.title = date + ' at ' + time;
-  } catch(e) {}
-});
+    var secs = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (secs < 60)  return 'just now';
+    var mins = Math.floor(secs / 60);
+    if (mins < 60)  return mins + ' minute' + (mins === 1 ? '' : 's') + ' ago';
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24)   return hrs + ' hour' + (hrs === 1 ? '' : 's') + ' ago';
+    var days = Math.floor(hrs / 24);
+    return days + ' day' + (days === 1 ? '' : 's') + ' ago';
+  } catch(e) { return ''; }
+}
+function updateSyncTimes() {
+  document.querySelectorAll('[data-synced]').forEach(function(el) {
+    var ts = el.dataset.synced;
+    if (!ts) return;
+    var rel = fmtRelative(ts);
+    if (rel) el.textContent = 'Synced ' + rel;
+    try {
+      var d = new Date(ts);
+      el.title = d.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'})
+               + ' at ' + d.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'});
+    } catch(e) {}
+  });
+}
+updateSyncTimes();
+setInterval(updateSyncTimes, 30000);
 
 // Auto-sync + auto-discover on page load if stale or never synced
 fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
@@ -2933,13 +2951,18 @@ def dashboard():
     # ── Account data tab ──────────────────────────────────────────────────────
     def _fmt_sync(ts):
         try:
-            dt = datetime.fromisoformat(ts)
-            delta = utcnow() - dt
-            mins = int(delta.total_seconds() // 60)
-            if mins < 60: return f"{mins}m ago"
+            clean = ts.replace('Z', '+00:00') if ts and ts.endswith('Z') else ts
+            dt = datetime.fromisoformat(clean)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            secs = int((utcnow() - dt).total_seconds())
+            if secs < 60:   return "just now"
+            mins = secs // 60
+            if mins < 60:   return f"{mins} minute{'s' if mins != 1 else ''} ago"
             hrs = mins // 60
-            if hrs < 24: return f"{hrs}h ago"
-            return f"{hrs // 24}d ago"
+            if hrs < 24:    return f"{hrs} hour{'s' if hrs != 1 else ''} ago"
+            days = hrs // 24
+            return f"{days} day{'s' if days != 1 else ''} ago"
         except Exception:
             return ts[:10] if ts else "—"
 
