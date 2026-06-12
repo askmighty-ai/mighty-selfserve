@@ -4002,12 +4002,15 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
             f'<div style="padding:6px 0 4px;border-top:1px solid #f0ede8;margin-top:6px">'
             f'{new_banner}'
             f'{checkboxes}'
-            f'<div style="display:flex;gap:8px;margin-top:10px">'
+            f'<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
             f'<button class="btn-save" style="font-size:12px;padding:6px 14px" '
             f'onclick="saveFields(\'{src}\')">Save</button>'
             f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;border:1px solid #e5e3df;'
             f'background:#fff;cursor:pointer;color:#6b7280;font-family:inherit" '
             f'onclick="document.getElementById(\'fields-{src}\').open=false">Cancel</button>'
+            f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;border:1px solid #fecaca;'
+            f'background:#fff;cursor:pointer;color:#dc2626;font-family:inherit;margin-left:auto" '
+            f'onclick="clearAndRediscover(\'{src}\')">Clear all &amp; rediscover</button>'
             f'</div></div></details>'
         )
     else:
@@ -4389,6 +4392,24 @@ function saveFields(source) {{
       var det = document.getElementById('fields-' + source);
       if (det) det.open = false;
     }}
+  }});
+}}
+
+function clearAndRediscover(source) {{
+  if (!confirm('Clear all fields for this account and rediscover from the latest sync data?')) return;
+  fetch('/credentials/fields/reset/' + source, {{
+    method: 'POST',
+    headers: {{'X-CSRF-Token': CSRF}}
+  }}).then(r => r.json()).then(function(d) {{
+    if (!d.ok) {{ alert('Reset failed'); return; }}
+    // Trigger rediscovery from stored page text
+    fetch('/credentials/discover/' + source, {{
+      method: 'POST',
+      headers: {{'X-CSRF-Token': CSRF}}
+    }}).then(r => r.json()).then(function(d2) {{
+      if (d2.ok) {{ toast('Fields rediscovered ✓'); setTimeout(function(){{ location.reload(); }}, 800); }}
+      else {{ toast('Reset done — fields will appear after next sync'); setTimeout(function(){{ location.reload(); }}, 1200); }}
+    }});
   }});
 }}
 
