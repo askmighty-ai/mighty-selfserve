@@ -1588,7 +1588,7 @@ function decide(actionId, decision) {
     body: JSON.stringify({decision})
   }).then(() => location.reload());
 }
-// Restore feed scroll position after auto-reload
+// Restore scroll position after any reload
 (function() {
   var fc = document.querySelector('.feed-col');
   var saved = sessionStorage.getItem('mighty-feed-scroll');
@@ -1596,6 +1596,13 @@ function decide(actionId, decision) {
   var sy = sessionStorage.getItem('mighty-scroll-y');
   if (sy) { window.scrollTo(0, parseInt(sy)); sessionStorage.removeItem('mighty-scroll-y'); }
 })();
+
+function reloadWithScroll() {
+  var fc = document.querySelector('.feed-col');
+  if (fc) sessionStorage.setItem('mighty-feed-scroll', fc.scrollTop);
+  sessionStorage.setItem('mighty-scroll-y', window.scrollY || document.documentElement.scrollTop || 0);
+  location.reload();
+}
 
 // ── 2FA pending challenges ────────────────────────────────────────────────────
 function load2FAChallenges() {
@@ -1649,9 +1656,17 @@ function submit2FA(id, pushFlag) {
 setInterval(load2FAChallenges, 15000);
 load2FAChallenges();
 
-// Auto-reload if any account is still discovering fields
+// Auto-reload if any account is still discovering fields (max 4 attempts)
 if (document.querySelector('[data-discovering="1"]')) {
-  setTimeout(function() { location.reload(); }, 12000);
+  var _discoverReloads = parseInt(sessionStorage.getItem('mighty-discover-reloads') || '0');
+  if (_discoverReloads < 4) {
+    sessionStorage.setItem('mighty-discover-reloads', _discoverReloads + 1);
+    setTimeout(reloadWithScroll, 12000);
+  } else {
+    sessionStorage.removeItem('mighty-discover-reloads'); // reset for next time
+  }
+} else {
+  sessionStorage.removeItem('mighty-discover-reloads');
 }
 
 // Add tooltip with exact local time on hover; keep relative text as-is
@@ -1701,7 +1716,7 @@ function cloudSync() {
             clearInterval(poll);
             btn.textContent = '↻ Sync';
             btn.disabled = false;
-            location.reload();
+            reloadWithScroll();
           }
         });
       }, 3000);
@@ -1722,7 +1737,7 @@ function resetFields(source) {
     method: 'POST',
     headers: {'X-CSRF-Token': csrf, 'Content-Type': 'application/json'}
   }).then(function(r){return r.json();}).then(function(d){
-    if (d.ok) { location.reload(); }
+    if (d.ok) { reloadWithScroll(); }
     else { alert('Reset failed — try refreshing'); }
   }).catch(function(){ alert('Reset failed — try refreshing'); });
 }
