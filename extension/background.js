@@ -14,11 +14,9 @@ const ACCOUNT_URLS = {
     'https://www.southwest.com/loyalty/rapidrewards/travelFunds.html',
     'https://www.southwest.com/loyalty/myaccount/upcoming-trips.html',
   ],
-  delta: [
-    'https://www.delta.com/myprofile/',
-    'https://www.delta.com/us/en/my-account/my-certificates',
-    'https://www.delta.com/us/en/my-account/my-wallet',
-  ],
+  // Delta sub-pages beyond myprofile trigger Akamai when navigated directly.
+  // Use SPA_NAV_URLS to navigate via in-page clicks instead of URL changes.
+  delta: ['https://www.delta.com/myprofile/'],
   united:       'https://www.united.com/en/us/myaccount/mileageplus',
   american_air: [
     'https://www.aa.com/aadvantage-program/overview',
@@ -50,7 +48,7 @@ const ACCOUNT_URLS = {
   att:          'https://www.att.com/my/#/',
   verizon:      'https://www.verizon.com/myverizon/',
   tmobile:      'https://account.t-mobile.com/overview',
-  xfinity:      'https://customer.xfinity.com/#/account-details-landing',
+  xfinity:      'https://customer.xfinity.com/',
   hertz:        'https://www.hertz.com/rentacar/member/profile/myprofile',
   cvs:          'https://www.cvs.com/account/login.jsp',
   walgreens:    'https://www.walgreens.com/myaccount/mywalgreenssummary.jsp',
@@ -142,6 +140,24 @@ const WARMUP_URLS = {
   delta: 'https://www.delta.com/',
 };
 
+// Per-site settle time (ms) after page load before extracting text.
+// Override for SPAs that need longer to fully render.
+const SETTLE_MS = {
+  xfinity: 14_000,
+  default:  8_000,
+  subsequent: 5_000, // non-first pages for multi-URL accounts
+};
+
+// SPA sub-sections to extract via in-page navigation (clicking links).
+// Used for sites like Delta where direct URL changes trigger bot detection.
+// Each entry: { linkText, urlPattern } — finds an <a> whose href matches urlPattern.
+const SPA_NAV_URLS = {
+  delta: [
+    { label: 'certificates', urlPattern: 'my-certificates' },
+    { label: 'wallet',       urlPattern: 'my-wallet' },
+  ],
+};
+
 // Phrases that indicate a bot-detection or access-denied page.
 const BOT_DETECTION_PHRASES = [
   'gate change',       // Delta/Akamai
@@ -182,7 +198,10 @@ async function syncAccount(apiKey, account, urls) {
         await waitForTabLoad(tab.id, 20_000);
       }
 
-      await sleep(i === 0 ? 8_000 : 5_000); // first page gets longer settle time
+      const settleMs = i === 0
+        ? (SETTLE_MS[account.source] || SETTLE_MS.default)
+        : SETTLE_MS.subsequent;
+      await sleep(settleMs);
 
       const [result] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
@@ -204,6 +223,46 @@ async function syncAccount(apiKey, account, urls) {
         allText.push(`\n\n--- ${urls[i]} ---\n${pageText}`);
       } else {
         console.warn(`[Mighty] ${account.name} page ${i + 1}: too short (${pageText.length} chars) — skipping`);
+      }
+    }
+
+    // SPA in-page navigation for sites where direct URL changes trigger bot detection
+    const spaNav = SPA_NAV_URLS[account.source];
+    if (spaNav && allText.length > 0) {
+      for (const nav of spaNav) {
+        try {
+          // Click the matching link within the current page (stays in same origin session)
+          const [clicked] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: (pattern) => {
+              const links = Array.from(document.querySelectorAll('a[href]'));
+              const match = links.find(a => a.href.includes(pattern));
+              if (match) { match.click(); return true; }
+              return false;
+            },
+            args: [nav.urlPattern],
+          });
+          if (!clicked?.result) {
+            console.warn(`[Mighty] ${account.name}: no link found for "${nav.label}" — skipping`);
+            continue;
+          }
+          await sleep(6_000); // wait for SPA to render new section
+          const [res] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: extractPageText,
+          });
+          const pageText = res?.result || '';
+          const lower = pageText.toLowerCase();
+          const blocked = BOT_DETECTION_PHRASES.find(p => lower.includes(p));
+          if (blocked) {
+            console.warn(`[Mighty] ${account.name} SPA "${nav.label}": bot detection — skipping`);
+          } else if (pageText.length >= 100) {
+            console.log(`[Mighty] ${account.name} SPA "${nav.label}": ${pageText.length} chars`);
+            allText.push(`\n\n--- ${nav.label} ---\n${pageText}`);
+          }
+        } catch(e) {
+          console.warn(`[Mighty] ${account.name} SPA "${nav.label}" error:`, e.message);
+        }
       }
     }
 
