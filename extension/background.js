@@ -151,15 +151,10 @@ const SETTLE_MS = {
 // SPA sub-sections to extract via in-page navigation (clicking links).
 // Used for sites like Delta where direct URL changes trigger bot detection.
 // Each entry: { label, terms[] } — finds an <a> whose href OR text matches any term.
-const SPA_NAV_URLS = {
-  delta: [
-    // Navigate to SkyMiles overview first — it has the full account nav
-    { label: 'skymiles',     terms: ['skymiles', 'sky miles', 'mileage'] },
-    // Then try certificates and wallet from the SkyMiles page
-    { label: 'certificates', terms: ['certificate', 'cert', 'ecert', 'voucher', 'travel certificate'] },
-    { label: 'wallet',       terms: ['wallet', 'eCredit', 'ecredit', 'travel credit', 'pay with miles'] },
-  ],
-};
+// SPA_NAV_URLS: in-page link clicking for sites where direct URL changes
+// trigger bot detection. Delta's certificate/wallet pages are behind identity
+// verification gates and don't render via this approach — left empty for now.
+const SPA_NAV_URLS = {};
 
 // Phrases that indicate a bot-detection or access-denied page.
 const BOT_DETECTION_PHRASES = [
