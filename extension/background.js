@@ -250,7 +250,15 @@ async function syncAccount(apiKey, account, urls) {
             args: [nav.terms],
           });
           if (!clicked?.result) {
-            console.warn(`[Mighty] ${account.name}: no link found for "${nav.label}" (tried: ${nav.terms.join(', ')}) — skipping`);
+            // Dump all links on the page to help diagnose
+            const [linkDump] = await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: () => Array.from(document.querySelectorAll('a[href]'))
+                .map(a => a.href)
+                .filter(h => h && !h.startsWith('javascript') && h.length < 120)
+                .slice(0, 40),
+            });
+            console.warn(`[Mighty] ${account.name}: no link found for "${nav.label}". Page links:`, linkDump?.result);
             continue;
           }
           console.log(`[Mighty] ${account.name}: clicked "${nav.label}" → ${clicked.result}`);
