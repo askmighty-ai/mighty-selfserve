@@ -48,7 +48,10 @@ const ACCOUNT_URLS = {
   att:          'https://www.att.com/my/#/',
   verizon:      'https://www.verizon.com/myverizon/',
   tmobile:      'https://account.t-mobile.com/overview',
-  xfinity:      'https://customer.xfinity.com/#/services',
+  xfinity: [
+    'https://customer.xfinity.com/#/account',
+    'https://customer.xfinity.com/#/services',
+  ],
   hertz:        'https://www.hertz.com/rentacar/member/profile/myprofile',
   cvs:          'https://www.cvs.com/account/login.jsp',
   walgreens:    'https://www.walgreens.com/myaccount/mywalgreenssummary.jsp',
@@ -143,9 +146,9 @@ const WARMUP_URLS = {
 // Per-site settle time (ms) after page load before extracting text.
 // Override for SPAs that need longer to fully render.
 const SETTLE_MS = {
-  xfinity: 14_000,
+  xfinity: 20_000,
   default:  8_000,
-  subsequent: 5_000, // non-first pages for multi-URL accounts
+  subsequent: 8_000,
 };
 
 // SPA sub-sections to extract via in-page navigation (clicking links).
