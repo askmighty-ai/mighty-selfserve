@@ -84,7 +84,7 @@ async function runSync() {
   let accounts;
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
-      headers: { 'X-API-Key': api_key }
+      headers: { 'X-Mighty-Key': api_key }
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     accounts = await resp.json();
