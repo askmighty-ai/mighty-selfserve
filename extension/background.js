@@ -183,9 +183,16 @@ async function syncAccount(apiKey, account, urls) {
   const warmup = WARMUP_URLS[account.source];
   const allText = [];
 
-  // Open a tab once, reuse it for all sub-pages
+  // Open a minimized popup window so sync tabs never steal focus
   const startUrl = warmup || urls[0];
-  const tab = await chrome.tabs.create({ url: startUrl, active: true });
+  const win = await chrome.windows.create({
+    url: startUrl,
+    type: 'popup',
+    state: 'minimized',
+    width: 800,
+    height: 600,
+  });
+  const tab = { id: win.tabs[0].id };
 
   try {
     await waitForTabLoad(tab.id, 20_000);
@@ -330,7 +337,7 @@ async function syncAccount(apiKey, account, urls) {
     console.log(`[Mighty] ${account.name}: ✓`);
 
   } finally {
-    chrome.tabs.remove(tab.id).catch(() => {});
+    chrome.windows.remove(win.id).catch(() => {});
   }
 }
 
