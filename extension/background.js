@@ -141,7 +141,9 @@ async function runSync() {
 // to establish session context and avoid bot-detection on cold navigation.
 const WARMUP_URLS = {
   delta:  'https://www.delta.com/',
-  xfinity: 'https://www.xfinity.com/',
+  // Warmup must be on customer.xfinity.com (not xfinity.com) — Akamai bot cookies
+  // are domain-scoped, so warming up the wrong domain doesn't help.
+  xfinity: 'https://customer.xfinity.com/',
 };
 
 // Per-site settle time (ms) after page load before extracting text.
@@ -189,7 +191,9 @@ async function syncAccount(apiKey, account, urls) {
     await waitForTabLoad(tab.id, 20_000);
 
     if (warmup) {
-      await sleep(3_000);
+      // Give Akamai/bot-detection time to set its domain cookies before navigating away
+      const warmupWait = SETTLE_MS[account.source] ? 6_000 : 3_000;
+      await sleep(warmupWait);
       // Navigate to first real URL after warm-up
       await chrome.tabs.update(tab.id, { url: urls[0] });
       await waitForTabLoad(tab.id, 20_000);
