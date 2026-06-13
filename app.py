@@ -714,7 +714,7 @@ def send_web_push(user_id, title, body, url, action_id=None):
 
 BASE_CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh}
+body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 a{color:#7c3aed;text-decoration:none}
 a:hover{text-decoration:underline}
 input{font-family:inherit}
@@ -1392,7 +1392,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Mighty</title>
+<title>Dashboard — Mighty</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1473,26 +1473,30 @@ details[open] summary::before{content:"\\25BE "}
 .empty-state-icon{width:40px;height:40px;background:#f3f0ff;border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}
 .empty-state-title{font-size:14px;font-weight:600;color:#6b7280;margin-bottom:6px}
 .empty-state-sub{font-size:12px;color:#9ca3af;line-height:1.6}
-.feed-tab{padding:6px 14px;border-radius:7px;border:1px solid #e5e3df;background:#fff;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer;font-family:inherit;transition:all 0.12s}
-.feed-tab.active{background:#f3f0ff;border-color:#d4c6ff;color:#5b21b6}
+.feed-tab{padding:6px 16px;border-radius:99px;border:1.5px solid #e5e3df;background:#f8f7f5;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer;font-family:inherit;transition:all 0.12s}
+.feed-tab.active{background:#7c3aed;border-color:#7c3aed;color:#fff;box-shadow:0 1px 6px rgba(124,58,237,0.25)}
 .acct-card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:16px 18px;margin-bottom:10px}
 .acct-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
 .acct-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid #f5f3f0}
 .acct-row:last-child{border-bottom:none}
-.acct-lbl{font-size:12px;color:#6b7280}
+.acct-lbl{font-size:12px;color:#6b7280;min-width:180px;flex-shrink:0}
 .acct-val{font-size:13px;font-weight:700;color:#1a1a1a}
+.acct-cards-wrap{max-width:820px;margin:0 auto}
 @media(max-width:768px){body{height:auto;overflow:auto}.feed-col{overflow:visible}.sidebar{overflow:visible}}
 </style>
 </head>
 <body>
 <div class="topbar">
-  <a href="/dashboard" style="text-decoration:none;display:flex;align-items:center;gap:8px">
-    <div class="topbar-logo-mark">
-      <img src="/logo-icon.png" alt="Mighty">
-    </div>
-    <span class="topbar-name">Mighty</span>
-  </a>
-  {agent_status_indicator}
+  <div style="display:flex;align-items:center;gap:12px">
+    <a href="/dashboard" style="text-decoration:none;display:flex;align-items:center;gap:8px">
+      <div class="topbar-logo-mark">
+        <img src="/logo-icon.png" alt="Mighty">
+      </div>
+      <span class="topbar-name">Mighty</span>
+    </a>
+    <span style="color:#e5e3df;font-size:16px;font-weight:200">|</span>
+    {agent_status_indicator}
+  </div>
   <div id="pending-badge" style="display:{pending_display};background:#f3f0ff;border:1px solid #e9d5ff;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#5b21b6">
     {pending_count} awaiting decision
   </div>
@@ -1527,11 +1531,11 @@ details[open] summary::before{content:"\\25BE "}
           {agent_cta_button}
           <a href="/credentials" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;
              border-radius:8px;background:#7c3aed;color:#fff;font-size:12px;font-weight:600;
-             text-decoration:none;white-space:nowrap">+ Connect account</a>
+             text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect account</a>
         </div>
       </div>
       <div class="feed-sub" style="margin-bottom:14px">Live data pulled from your connected accounts</div>
-      <div>{account_data_html}</div>
+      <div class="acct-cards-wrap">{account_data_html}</div>
     </div>
 
     <div id="fview-activity" style="display:none">
@@ -1991,6 +1995,11 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .btn-danger{font-size:12px;font-weight:600;padding:8px 12px;background:#fff;color:#dc2626;border:1.5px solid #fecaca;border-radius:6px;white-space:nowrap;cursor:pointer;transition:all 0.12s;width:100%;text-align:left}
 .btn-danger:hover{background:#fef2f2}
 .ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
+.toggle-row input[type=checkbox]{-webkit-appearance:none;appearance:none;width:16px;height:16px;border:1.5px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;position:relative;flex-shrink:0;margin-top:2px;transition:border-color 0.12s,background 0.12s}
+.toggle-row input[type=checkbox]:checked{background:#7c3aed;border-color:#7c3aed}
+.toggle-row input[type=checkbox]:checked::after{content:'';position:absolute;left:3px;top:1px;width:5px;height:9px;border:2px solid #fff;border-top:none;border-left:none;transform:rotate(45deg)}
+.settings-input{width:100%;padding:10px 14px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#fff;transition:border-color 0.12s}
+.settings-input:focus{border-color:#7c3aed}
 </style>
 </head>
 <body>
@@ -2014,7 +2023,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
     <div class="card">
       <div class="section-title">Notifications</div><span id="save-ind" style="font-size:11px;color:#16a34a;margin-left:8px;display:none">Saved ✓</span>
       <div class="toggle-row">
-        <input type="checkbox" id="notif-push" {push_checked} onchange="save()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
+        <input type="checkbox" id="notif-push" {push_checked} onchange="save()">
         <div>
           <div class="toggle-label">Browser alerts</div>
           <div class="toggle-hint">Desktop popup when your agent needs a decision. Click Allow notifications below to activate.</div>
@@ -2023,7 +2032,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
         </div>
       </div>
       <div class="toggle-row">
-        <input type="checkbox" id="notif-ntfy" {ntfy_checked} onchange="save()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
+        <input type="checkbox" id="notif-ntfy" {ntfy_checked} onchange="save()">
         <div>
           <div class="toggle-label">Mobile alerts (ntfy)</div>
           <div class="toggle-hint">Install the free <a href="https://ntfy.sh" target="_blank" style="color:#7c3aed">ntfy app</a>, then subscribe to your channel on your phone.</div>
@@ -2032,7 +2041,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
         </div>
       </div>
       <div class="toggle-row">
-        <input type="checkbox" id="notif-email" {email_checked} onchange="onEmailToggle()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
+        <input type="checkbox" id="notif-email" {email_checked} onchange="onEmailToggle()">
         <div>
           <div class="toggle-label">Email alerts</div>
           <div class="toggle-hint">Receive an email when your agent requests approval.</div>
@@ -2045,8 +2054,8 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
       <div class="section-title">Account</div>
       <div style="font-size:13px;color:#6b7280;margin-bottom:16px">Signed in as <span style="color:#1a1a1a;font-weight:600">{email}</span></div>
       <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:6px;letter-spacing:0.3px">Change email address</div>
-      <input type="email" id="email-new" placeholder="New email address" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
-      <input type="password" id="email-pw" placeholder="Confirm with current password" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      <input type="email" id="email-new" placeholder="New email address" class="settings-input" style="margin-bottom:10px">
+      <input type="password" id="email-pw" placeholder="Confirm with current password" class="settings-input" style="margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:12px">
         <button class="btn-copy-key" style="padding:8px 16px;font-size:13px" onclick="changeEmail()">Update email</button>
         <span id="email-msg" style="font-size:12px;display:none"></span>
@@ -2056,7 +2065,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
     <div class="card">
       <div class="section-title">Privacy</div>
       <div class="toggle-row">
-        <input type="checkbox" id="minimal-logging" {minimal_logging_checked} onchange="savePrivacy()" style="width:16px;height:16px;accent-color:#7c3aed;flex-shrink:0;margin-top:2px">
+        <input type="checkbox" id="minimal-logging" {minimal_logging_checked} onchange="savePrivacy()">
         <div>
           <div class="toggle-label">Minimal logging</div>
           <div class="toggle-hint">Store only action type and timestamp — not labels or field details. Reduces what Mighty can see, but makes your activity log less useful.</div>
@@ -2083,11 +2092,11 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
       <div class="section-title">Security</div>
       <div style="font-size:13px;color:#6b7280;margin-bottom:16px">Change your account password.</div>
       <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px">Current password</label>
-      <input type="password" id="pw-current" placeholder="Your current password" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:12px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      <input type="password" id="pw-current" placeholder="Your current password" class="settings-input" style="margin-bottom:12px">
       <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px">New password</label>
-      <input type="password" id="pw-new" placeholder="At least 6 characters" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:12px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      <input type="password" id="pw-new" placeholder="At least 6 characters" class="settings-input" style="margin-bottom:12px">
       <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px">Confirm new password</label>
-      <input type="password" id="pw-confirm" placeholder="Repeat new password" style="width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;margin-bottom:12px;outline:none;font-family:inherit;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      <input type="password" id="pw-confirm" placeholder="Repeat new password" class="settings-input" style="margin-bottom:12px">
       <div style="display:flex;align-items:center;gap:12px">
         <button class="btn-copy-key" style="padding:8px 16px;font-size:13px" onclick="changePassword()">Update password</button>
         <span id="pw-msg" style="font-size:12px;display:none"></span>
@@ -2110,7 +2119,7 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
       </div>
       <div id="del-acct-confirm" style="display:none">
         <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px">Confirm with your current password</label>
-        <input type="password" id="del-acct-pw" placeholder="Your password" style="width:100%;padding:10px 12px;border:1.5px solid #fecaca;border-radius:8px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit;color:#1a1a1a">
+        <input type="password" id="del-acct-pw" placeholder="Your password" class="settings-input" style="border-color:#fecaca;margin-bottom:10px">
         <div style="display:flex;gap:8px">
           <button class="btn-danger" style="flex:1" onclick="deleteAccount()">Confirm deletion</button>
           <button onclick="hideDelConfirm()" style="padding:8px 14px;background:#f3f4f6;border:none;border-radius:6px;font-size:13px;font-weight:600;color:#6b7280;cursor:pointer">Cancel</button>
@@ -2933,8 +2942,8 @@ def dashboard():
             )
             agent_cta_button = (
                 '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;font-size:12px;font-weight:600;'
-                'text-decoration:none;white-space:nowrap">+ Connect agent</a>'
+                'border-radius:8px;background:#fff;color:#6b7280;border:1.5px solid #d1d5db;font-size:12px;font-weight:600;'
+                'text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect agent</a>'
             )
             feed = (
                 '<div style="display:flex;flex-direction:column;align-items:center;'
@@ -2978,8 +2987,8 @@ def dashboard():
             )
             agent_cta_button = (
                 '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;font-size:12px;font-weight:600;'
-                'text-decoration:none;white-space:nowrap">+ Connect agent</a>'
+                'border-radius:8px;background:#fff;color:#6b7280;border:1.5px solid #d1d5db;font-size:12px;font-weight:600;'
+                'text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect agent</a>'
             )
         else:
             agent_status_indicator = (
@@ -3091,7 +3100,7 @@ def dashboard():
                           'font-style:italic">Awaiting first sync…</span></div>')
             status_color = "#aeaeb2"
 
-        sync_label = (f'<div style="font-size:11px;color:#9ca3af" '
+        sync_label = (f'<div style="font-size:11px;color:#6b7280" '
                       f'data-synced="{he(synced_at)}">Synced {_fmt_sync(synced_at)}</div>'
                       if synced_at else
                       '<div style="font-size:11px;color:#aeaeb2">Not yet synced</div>')
@@ -3112,7 +3121,7 @@ def dashboard():
         ) if bad_fields else ""
 
         cards_html += (
-            f'<div class="acct-card">'
+            f'<div class="acct-card" style="border-left:3px solid {he(color)}">'
             f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
             f'<div class="acct-icon" style="background:{he(color)}">{he(icon)}</div>'
             f'<div style="flex:1">'
@@ -3124,13 +3133,13 @@ def dashboard():
             f'style="font-size:11px;font-weight:500;color:#7c3aed;text-decoration:none;'
             f'padding:3px 8px;border-radius:6px;border:1px solid #e9d5ff;background:#faf5ff;'
             f'white-space:nowrap;cursor:pointer">Modify fields</a>'
-            f'<button onclick="forceDiscover(\'{he(src)}\', this)" '
-            f'title="Re-run field discovery from stored data" '
-            f'style="font-size:11px;font-weight:500;color:#6b7280;background:#f8f7f5;'
-            f'border:1px solid #e5e3df;border-radius:6px;padding:3px 8px;cursor:pointer;'
-            f'font-family:inherit;white-space:nowrap">↻ Rediscover</button>'
             f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0;'
             f'cursor:help" title="{"Synced recently" if status_color == "#30d158" else "Not yet synced"}"></div>'
+            f'<button onclick="forceDiscover(\'{he(src)}\', this)" '
+            f'title="Re-run field discovery" '
+            f'style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;'
+            f'border-radius:50%;border:1px solid #e5e3df;background:#f8f7f5;cursor:pointer;'
+            f'font-size:13px;color:#9ca3af;padding:0;line-height:1;flex-shrink:0">↻</button>'
             f'</div>'
             f'</div>'
             f'{bad_banner}'
@@ -4123,9 +4132,10 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
         )
 
 
-def _build_credentials_page(user, configured: set, extra_by_source: dict = None) -> str:
+def _build_credentials_page(user, configured: set, extra_by_source: dict = None, synced_at_by_source: dict = None) -> str:
     """Generate the credentials management page HTML."""
     extra_by_source = extra_by_source or {}
+    synced_at_by_source = synced_at_by_source or {}
     csrf = get_csrf_token()
 
     # ── Connected account cards (main page) ──────────────────────────────────
@@ -4137,16 +4147,22 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
             '<button class="btn-remove" onclick="if(confirm(\'Disconnect this account? This will remove saved credentials.\'))removeCred(\''
             + he(key) + '\',\'' + he(name) + '\')" style="cursor:pointer">Disconnect</button>'
         )
+        _cred_synced = synced_at_by_source.get(key, "")
+        _cred_sync_label = (
+            f'<div style="font-size:11px;color:#6b7280;margin-top:2px" data-synced="{he(_cred_synced)}">Synced {_fmt_sync(_cred_synced)}</div>'
+            if _cred_synced else
+            '<div style="font-size:11px;color:#aeaeb2;margin-top:2px">Not yet synced</div>'
+        )
         connected_cards_html += f"""
 <div class="cred-card" id="card-{he(key)}">
   <div style="display:flex;align-items:center;gap:12px">
     <div style="width:36px;height:36px;border-radius:9px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{icon}</div>
     <div style="flex:1">
       <div style="font-size:14px;font-weight:600;color:#1a1a1a">{he(name)}</div>
-      <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>
+      {_cred_sync_label}
     </div>
     <button class="btn-toggle" onclick="openFieldModal('{he(key)}')" id="btn-fields-{he(key)}"
-            style="font-size:11px;color:#7c3aed;border-color:#e9d5ff;background:#faf5ff;cursor:pointer">Edit fields</button>
+            style="font-size:11px;color:#6b7280;border-color:#e5e3df;background:#fff;cursor:pointer">Edit fields</button>
     <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}"
             style="font-size:11px;color:#9ca3af;border-color:#e5e3df;font-weight:400">Edit login</button>
     {remove_btn}
@@ -4280,6 +4296,7 @@ h1{{font-size:20px;font-weight:700}}
     <button class="btn-connect-new" onclick="openModal()">+ Connect account</button>
   </div>
   {connected_cards_html}
+  <div style="text-align:center;padding:16px 0 8px;font-size:12px;color:#9ca3af">Changes take effect on next sync.</div>
 </div>
 
 <!-- Add account modal -->
@@ -4575,6 +4592,31 @@ fetch('/credentials/auto-discover', {{method:'POST',
   headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
   body:new URLSearchParams({{_csrf:CSRF}})}}).catch(function(){{}});
 
+// Live-updating relative sync timestamps
+function fmtRelative(ts) {{
+  try {{
+    var d = new Date(ts);
+    var secs = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (secs < 60) return 'just now';
+    var mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + ' minute' + (mins === 1 ? '' : 's') + ' ago';
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + ' hour' + (hrs === 1 ? '' : 's') + ' ago';
+    var days = Math.floor(hrs / 24);
+    return days + ' day' + (days === 1 ? '' : 's') + ' ago';
+  }} catch(e) {{ return ''; }}
+}}
+function updateSyncTimes() {{
+  document.querySelectorAll('[data-synced]').forEach(function(el) {{
+    var ts = el.dataset.synced;
+    if (!ts) return;
+    var rel = fmtRelative(ts);
+    if (rel) el.textContent = 'Synced ' + rel;
+  }});
+}}
+updateSyncTimes();
+setInterval(updateSyncTimes, 30000);
+
 // Pre-check saved field preferences on load
 fetch('/credentials/fields/load').then(r => r.json()).then(function(data) {{
   if (!data.ok) return;
@@ -4615,7 +4657,12 @@ def credentials_page():
                 )
             except Exception:
                 pass
-    return _build_credentials_page(user, configured, extra_by_source)
+    # Load sync timestamps from account_data
+    sync_rows = get_db().execute(
+        "SELECT source, synced_at FROM account_data WHERE user_id=?", (user["id"],)
+    ).fetchall()
+    synced_at_by_source = {r["source"]: r["synced_at"] for r in sync_rows if r["synced_at"]}
+    return _build_credentials_page(user, configured, extra_by_source, synced_at_by_source)
 
 
 @app.route("/credentials/save", methods=["POST"])
