@@ -1403,10 +1403,11 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .topbar-logo-mark img{height:26px;width:auto}
 .topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .topbar-right{display:flex;align-items:center;gap:16px}
-.topbar-email{font-size:12px;color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar-email{font-size:12px;color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none}
+.topbar-email:hover{color:#6b7280}
 .btn-logout{font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
 .btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
-.main{flex:1;min-height:0;display:grid;grid-template-columns:320px 1fr;gap:24px;max-width:1140px;width:100%;margin:0 auto;padding:28px 24px;box-sizing:border-box}
+.main{flex:1;min-height:0;display:grid;grid-template-columns:1fr;gap:24px;max-width:1140px;width:100%;margin:0 auto;padding:28px 24px;box-sizing:border-box}
 @media(max-width:768px){.main{grid-template-columns:1fr}}
 .sidebar{display:flex;flex-direction:column;gap:14px;overflow-y:auto}
 .feed-col{overflow-y:auto;min-height:0;padding-bottom:28px}
@@ -1478,8 +1479,8 @@ details[open] summary::before{content:"\\25BE "}
 .acct-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
 .acct-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid #f5f3f0}
 .acct-row:last-child{border-bottom:none}
-.acct-lbl{font-size:12px;color:#9ca3af}
-.acct-val{font-size:13px;font-weight:600;color:#1a1a1a}
+.acct-lbl{font-size:12px;color:#6b7280}
+.acct-val{font-size:13px;font-weight:700;color:#1a1a1a}
 @media(max-width:768px){body{height:auto;overflow:auto}.feed-col{overflow:visible}.sidebar{overflow:visible}}
 </style>
 </head>
@@ -1491,6 +1492,7 @@ details[open] summary::before{content:"\\25BE "}
     </div>
     <span class="topbar-name">Mighty</span>
   </a>
+  {agent_status_indicator}
   <div id="pending-badge" style="display:{pending_display};background:#f3f0ff;border:1px solid #e9d5ff;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#5b21b6">
     {pending_count} awaiting decision
   </div>
@@ -1503,16 +1505,15 @@ details[open] summary::before{content:"\\25BE "}
       ↻ Sync
     </button>
     <a href="/settings" style="font-size:12px;color:#6b7280;text-decoration:none">Settings</a>
-    <span class="topbar-email">{email}</span>
+    <a href="/settings" class="topbar-email">{email}</a>
     <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf_token}"><button class="btn-logout" type="submit">Sign out</button></form>
   </div>
 </div>
 
 {onboarding_banner}
 <div id="twofa-banner" style="display:none;max-width:1140px;width:100%;margin:0 auto;padding:0 24px"></div>
+{welcome_state}
 <div class="main">
-  {sidebar_content}
-
   <div class="feed-col" {feed_col_hidden}>
     <div style="display:flex;gap:6px;margin-bottom:18px">
       <button class="feed-tab active" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
@@ -1522,9 +1523,12 @@ details[open] summary::before{content:"\\25BE "}
     <div id="fview-accounts">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
         <div class="feed-title" style="margin-bottom:0">Account Data</div>
-        <a href="/credentials" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;
-           border-radius:8px;background:#7c3aed;color:#fff;font-size:12px;font-weight:600;
-           text-decoration:none;white-space:nowrap">+ Connect account</a>
+        <div style="display:flex;align-items:center;gap:8px">
+          {agent_cta_button}
+          <a href="/credentials" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;
+             border-radius:8px;background:#7c3aed;color:#fff;font-size:12px;font-weight:600;
+             text-decoration:none;white-space:nowrap">+ Connect account</a>
+        </div>
       </div>
       <div class="feed-sub" style="margin-bottom:14px">Live data pulled from your connected accounts</div>
       <div>{account_data_html}</div>
@@ -1761,6 +1765,30 @@ function resetFields(source) {
   }).catch(function(){ alert('Reset failed — try refreshing'); });
 }
 
+function forceDiscover(source, btn) {
+  var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
+  var orig = btn.textContent;
+  btn.textContent = '…';
+  btn.disabled = true;
+  fetch('/api/data/force-discover/' + source, {
+    method: 'POST',
+    headers: {'X-CSRF-Token': csrf}
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (d.ok) {
+      btn.textContent = '✓';
+      setTimeout(function(){ reloadWithScroll(); }, 800);
+    } else {
+      btn.textContent = orig;
+      btn.disabled = false;
+      alert(d.error || 'Discovery failed');
+    }
+  }).catch(function(){
+    btn.textContent = orig;
+    btn.disabled = false;
+    alert('Request failed — try again');
+  });
+}
+
 function filterFeed(q) {
   q = (q || '').toLowerCase();
   document.querySelectorAll('.action-card').forEach(function(card) {
@@ -1940,7 +1968,8 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
 .topbar-logo-mark img{height:26px;width:auto}
 .topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .topbar-right{display:flex;align-items:center;gap:16px}
-.topbar-email{font-size:12px;color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar-email{font-size:12px;color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none}
+.topbar-email:hover{color:#6b7280}
 .btn-logout{font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
 .btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
 .settings-body{flex:1;min-height:0;overflow-y:auto}
@@ -1971,8 +2000,9 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
     <span class="topbar-name">Mighty</span>
   </a>
   <div class="topbar-right">
-    <a href="/dashboard" style="font-size:12px;color:#6b7280;text-decoration:none">&#8592; Dashboard</a>
-    <span class="topbar-email">{email}</span>
+    <a href="/credentials" style="font-size:12px;color:#6b7280;text-decoration:none">Accounts</a>
+    <a href="/settings" style="font-size:12px;color:#6b7280;text-decoration:none">Settings</a>
+    <a href="/settings" class="topbar-email">{email}</a>
     <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf_token}"><button class="btn-logout" type="submit">Sign out</button></form>
   </div>
 </div>
@@ -2039,7 +2069,8 @@ body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:
       <div class="section-title">Connection</div>
       <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Your API key — used to connect your agent to Mighty. Keep it secret.</div>
       <div class="api-key-wrap">
-        <div class="api-key-val" id="apiKeyVal">{api_key}</div>
+        <div class="api-key-val" id="apiKeyVal" data-real="{api_key}">{api_key_masked}</div>
+        <button class="btn-copy-key" id="reveal-key-btn" onclick="toggleRevealKey(this)" title="Show API key">Reveal</button>
         <button class="btn-copy-key" onclick="copyKey(this)">Copy</button>
       </div>
       <div style="font-size:12px;color:#9ca3af;margin-top:6px">Anyone with this key can submit actions on your behalf.</div>
@@ -2187,9 +2218,26 @@ function enablePush() {
   });
 }
 function copyKey(btn) {
-  navigator.clipboard.writeText(document.getElementById('apiKeyVal').textContent.trim());
+  var el = document.getElementById('apiKeyVal');
+  var val = el.dataset.real || el.textContent.trim();
+  navigator.clipboard.writeText(val);
   btn.textContent = 'Copied!';
   setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
+}
+var _keyRevealed = false;
+function toggleRevealKey(btn) {
+  var el = document.getElementById('apiKeyVal');
+  _keyRevealed = !_keyRevealed;
+  if (_keyRevealed) {
+    el.textContent = el.dataset.real;
+    btn.textContent = 'Hide';
+    btn.title = 'Hide API key';
+  } else {
+    var real = el.dataset.real || '';
+    el.textContent = real.slice(0,3) + '•'.repeat(Math.max(0, real.length - 3));
+    btn.textContent = 'Reveal';
+    btn.title = 'Show API key';
+  }
 }
 function changePassword() {
   var cur = document.getElementById('pw-current').value;
@@ -2874,20 +2922,20 @@ def dashboard():
             'Complete setup &#8594;</a></div>'
         )
 
+    welcome_state = ''
     if len(acts) == 0:
         if user["onboarded"]:
-            # Real dashboard layout — sidebar + empty feed
-            sidebar_card = (
-                '<div class="card">'
-                '<div class="status-row">'
-                '<div class="status-dot status-green"></div>'
-                '<div>'
-                '<div class="status-title">Mighty is ready</div>'
-                '<div class="status-sub">Waiting for your first request</div>'
-                '</div></div>'
-                '</div>'
+            # Onboarded but no activity yet — show feed area
+            agent_status_indicator = (
+                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a">'
+                '<div style="width:7px;height:7px;border-radius:50%;background:#16a34a;flex-shrink:0"></div>'
+                'Ready</div>'
             )
-            sidebar_content = '<div class="sidebar">' + sidebar_card + '</div>'
+            agent_cta_button = (
+                '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
+                'border-radius:8px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;font-size:12px;font-weight:600;'
+                'text-decoration:none;white-space:nowrap">+ Connect agent</a>'
+            )
             feed = (
                 '<div style="display:flex;flex-direction:column;align-items:center;'
                 'justify-content:center;padding:60px 24px;text-align:center">'
@@ -2898,10 +2946,13 @@ def dashboard():
             )
             feed_col_hidden = ''
         else:
-            # Not yet onboarded — full-width welcome
-            sidebar_content = (
-                '<div style="grid-column:1/-1;display:flex;flex-direction:column;'
-                'align-items:center;justify-content:center;padding:60px 24px">'
+            # Not yet onboarded — show welcome state full-width, hide the feed column
+            agent_status_indicator = ''
+            agent_cta_button = ''
+            feed_col_hidden = 'style="display:none"'
+            welcome_state = (
+                '<div style="display:flex;flex-direction:column;align-items:center;'
+                'justify-content:center;padding:60px 24px;min-height:60vh">'
                 '<div style="width:100%;max-width:360px;text-align:center">'
                 '<div style="width:52px;height:52px;background:#f3f0ff;border-radius:14px;'
                 'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
@@ -2917,36 +2968,30 @@ def dashboard():
                 '</div>'
                 '</div>'
             )
-            feed_col_hidden = 'style="display:none"'
     else:
-        # Active state: two-column layout
+        # Active state
         if is_connected:
-            sidebar_card = (
-                '<div class="card">'
-                '<div class="status-row">'
-                '<div class="status-dot status-green"></div>'
-                '<div>'
-                '<div class="status-title">Mighty is active</div>'
-                '<div class="status-sub">Your agent is connected</div>'
-                '</div></div>'
-                '<div style="margin-top:14px;padding-top:14px;border-top:1px solid #f0ede8">'
-                '<a href="/onboarding" class="btn-secondary" style="display:block;text-align:center;padding:9px;font-size:13px;font-weight:600;text-decoration:none">'
-                'Connect another agent</a>'
-                '</div>'
-                '</div>'
+            agent_status_indicator = (
+                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a">'
+                '<div style="width:7px;height:7px;border-radius:50%;background:#16a34a;flex-shrink:0"></div>'
+                'Active</div>'
+            )
+            agent_cta_button = (
+                '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
+                'border-radius:8px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;font-size:12px;font-weight:600;'
+                'text-decoration:none;white-space:nowrap">+ Connect agent</a>'
             )
         else:
-            sidebar_card = (
-                '<div class="card">'
-                '<div class="setup-heading">Connect your agent</div>'
-                '<p style="font-size:13px;color:#6b7280;line-height:1.5;margin-bottom:14px">'
-                'Run the setup wizard to connect Claude Desktop, ChatGPT, or a custom agent.</p>'
-                '<a href="/onboarding" style="display:block;text-align:center;padding:10px;'
-                'background:#7c3aed;color:#fff;border-radius:8px;font-size:13px;font-weight:600;'
-                'text-decoration:none">Set up another agent &#8594;</a>'
-                '</div>'
+            agent_status_indicator = (
+                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#9ca3af">'
+                '<div style="width:7px;height:7px;border-radius:50%;background:#9ca3af;flex-shrink:0"></div>'
+                'No agent</div>'
             )
-        sidebar_content = '<div class="sidebar">' + sidebar_card + '</div>'
+            agent_cta_button = (
+                '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
+                'border-radius:8px;background:#7c3aed;color:#fff;font-size:12px;font-weight:600;'
+                'text-decoration:none;white-space:nowrap">Set up agent &#8594;</a>'
+            )
         feed_col_hidden = ''
 
     # ── Account data tab ──────────────────────────────────────────────────────
@@ -3078,8 +3123,14 @@ def dashboard():
             f'<a href="/credentials#fields-{he(src)}" '
             f'style="font-size:11px;font-weight:500;color:#7c3aed;text-decoration:none;'
             f'padding:3px 8px;border-radius:6px;border:1px solid #e9d5ff;background:#faf5ff;'
-            f'white-space:nowrap">Modify fields</a>'
-            f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0"></div>'
+            f'white-space:nowrap;cursor:pointer">Modify fields</a>'
+            f'<button onclick="forceDiscover(\'{he(src)}\', this)" '
+            f'title="Re-run field discovery from stored data" '
+            f'style="font-size:11px;font-weight:500;color:#6b7280;background:#f8f7f5;'
+            f'border:1px solid #e5e3df;border-radius:6px;padding:3px 8px;cursor:pointer;'
+            f'font-family:inherit;white-space:nowrap">↻ Rediscover</button>'
+            f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0;'
+            f'cursor:help" title="{"Synced recently" if status_color == "#30d158" else "Not yet synced"}"></div>'
             f'</div>'
             f'</div>'
             f'{bad_banner}'
@@ -3098,15 +3149,17 @@ def dashboard():
     )
 
     return (DASHBOARD_HTML
-            .replace("{email}",              he(user["email"]))
-            .replace("{feed_html}",          feed)
-            .replace("{pending_count}",      str(pending_count))
-            .replace("{pending_display}",    pending_display)
-            .replace("{sidebar_content}",    sidebar_content)
-            .replace("{feed_col_hidden}",    feed_col_hidden)
-            .replace("{onboarding_banner}",  onboarding_banner)
-            .replace("{account_data_html}",  account_data_html)
-            .replace("{csrf_token}",         get_csrf_token()))
+            .replace("{email}",                   he(user["email"]))
+            .replace("{feed_html}",               feed)
+            .replace("{pending_count}",           str(pending_count))
+            .replace("{pending_display}",         pending_display)
+            .replace("{agent_status_indicator}",  agent_status_indicator)
+            .replace("{agent_cta_button}",        agent_cta_button)
+            .replace("{feed_col_hidden}",         feed_col_hidden)
+            .replace("{welcome_state}",           welcome_state)
+            .replace("{onboarding_banner}",       onboarding_banner)
+            .replace("{account_data_html}",       account_data_html)
+            .replace("{csrf_token}",              get_csrf_token()))
 
 @app.route("/settings")
 @require_login
@@ -3120,9 +3173,14 @@ def settings():
     postmark_ok = bool(POSTMARK_API_KEY)
     # postmark_warn: initially show warning only if email notifs are ON but Postmark not configured
     postmark_warn = "block" if (user["notify_email"] and not postmark_ok) else "none"
+    raw_key = user["api_key"]
+    # Mask: show prefix (up to 3 chars) + bullets
+    key_prefix = raw_key[:3] if raw_key else ""
+    api_key_masked = key_prefix + "•" * max(0, len(raw_key) - 3)
     return (SETTINGS_HTML
             .replace("{email}",                   he(user["email"]))
-            .replace("{api_key}",                 user["api_key"])
+            .replace("{api_key}",                 raw_key)
+            .replace("{api_key_masked}",          he(api_key_masked))
             .replace("{ntfy_topic}",              topic)
             .replace("{push_checked}",            "checked" if user["notify_push"]    else "")
             .replace("{ntfy_checked}",            "checked" if user["notify_ntfy"]    else "")
@@ -4028,41 +4086,40 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
                 f'<span style="flex:1">{flbl}{new_pill}</span>'
                 f'<span style="color:#9ca3af;font-size:11px">{fval}</span></label>'
             )
-        open_attr = "open" if new_keys else ""
+        new_count_badge = (
+            f'<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:99px;'
+            f'background:#7c3aed;color:#fff;margin-left:6px">{len(new_keys)} new</span>'
+            if new_keys else ""
+        )
         return (
-            f'<details class="field-config" id="fields-{src}" {open_attr}>'
-            f'<summary style="font-size:12px;font-weight:600;color:#7c3aed;'
-            f'cursor:pointer;user-select:none;padding:8px 0 4px;display:flex;'
-            f'align-items:center;gap:6px;list-style:none">Modify field selection'
-            + (f'<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:99px;'
-               f'background:#7c3aed;color:#fff;margin-left:6px">{len(new_keys)} new</span>'
-               if new_keys else "")
-            + f'</summary>'
-            f'<div style="padding:6px 0 4px;border-top:1px solid #f0ede8;margin-top:6px">'
+            f'<div id="fields-panel-{src}" style="display:none">'
+            f'<div style="font-size:13px;font-weight:700;color:#1a1a1a;margin-bottom:10px">'
+            f'Field selection{new_count_badge}</div>'
             f'{new_banner}'
             f'{checkboxes}'
             f'<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
             f'<button class="btn-save" style="font-size:12px;padding:6px 14px" '
-            f'onclick="saveFields(\'{src}\')">Save</button>'
+            f'onclick="saveFieldsModal(\'{src}\')">Save</button>'
             f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;border:1px solid #e5e3df;'
             f'background:#fff;cursor:pointer;color:#6b7280;font-family:inherit" '
-            f'onclick="document.getElementById(\'fields-{src}\').open=false">Cancel</button>'
+            f'onclick="closeFieldModal()">Cancel</button>'
             f'<button style="font-size:12px;padding:6px 12px;border-radius:7px;border:1px solid #fecaca;'
             f'background:#fff;cursor:pointer;color:#dc2626;font-family:inherit;margin-left:auto" '
             f'onclick="clearAndRediscover(\'{src}\')">Clear all &amp; rediscover</button>'
-            f'</div></div></details>'
+            f'</div></div>'
         )
     else:
-        # No fields yet — show a manual trigger button alongside the auto message
+        # No fields yet — show a hidden panel with a discover button
         return (
-            f'<div style="margin-top:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+            f'<div id="fields-panel-{src}" style="display:none">'
+            f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0">'
             f'<span style="font-size:12px;color:#aeaeb2;font-style:italic">'
             f'Data fields will appear automatically after the first sync</span>'
             f'<button onclick="clearAndRediscover(\'{src}\')" '
             f'style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #e9d5ff;'
             f'background:#faf5ff;color:#7c3aed;cursor:pointer;font-family:inherit;white-space:nowrap">'
             f'Discover now →</button>'
-            f'</div>'
+            f'</div></div>'
         )
 
 
@@ -4077,8 +4134,8 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
         if key not in configured:
             continue
         remove_btn = (
-            '<button class="btn-remove" onclick="removeCred(\''
-            + he(key) + '\',\'' + he(name) + '\')">Disconnect</button>'
+            '<button class="btn-remove" onclick="if(confirm(\'Disconnect this account? This will remove saved credentials.\'))removeCred(\''
+            + he(key) + '\',\'' + he(name) + '\')" style="cursor:pointer">Disconnect</button>'
         )
         connected_cards_html += f"""
 <div class="cred-card" id="card-{he(key)}">
@@ -4088,6 +4145,8 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None)
       <div style="font-size:14px;font-weight:600;color:#1a1a1a">{he(name)}</div>
       <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>
     </div>
+    <button class="btn-toggle" onclick="openFieldModal('{he(key)}')" id="btn-fields-{he(key)}"
+            style="font-size:11px;color:#7c3aed;border-color:#e9d5ff;background:#faf5ff;cursor:pointer">Edit fields</button>
     <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}"
             style="font-size:11px;color:#9ca3af;border-color:#e5e3df;font-weight:400">Edit login</button>
     {remove_btn}
@@ -4169,8 +4228,8 @@ h1{{font-size:20px;font-weight:700}}
 .cred-form input:focus{{border-color:#7c3aed}}
 .btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #e5e3df;background:#fff;font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;font-family:inherit}}
 .btn-toggle:hover{{background:#f3f0ff;border-color:#d4c6ff}}
-.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #fecaca;background:#fff;font-size:12px;color:#ef4444;cursor:pointer;font-family:inherit}}
-.btn-remove:hover{{background:#fff0f0}}
+.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #d1d5db;background:#fff;font-size:12px;color:#6b7280;cursor:pointer;font-family:inherit}}
+.btn-remove:hover{{background:#f3f4f6;color:#374151}}
 .btn-save{{margin-top:12px;padding:9px 18px;border-radius:8px;background:#7c3aed;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}}
 .btn-save:hover{{background:#6d28d9}}
 /* Modal */
@@ -4208,9 +4267,10 @@ h1{{font-size:20px;font-weight:700}}
     <div class="logo-name">Mighty</div>
   </a>
   <div class="topbar-right">
-    <a class="topbar-link" href="/dashboard">Dashboard</a>
+    <a class="topbar-link" href="/credentials">Accounts</a>
     <a class="topbar-link" href="/settings">Settings</a>
-    <span style="font-size:13px;color:#9ca3af">{he(user["email"])}</span>
+    <a class="topbar-link" href="/settings" style="color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{he(user["email"])}</a>
+    <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf}"><button style="font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s;font-family:inherit" type="submit">Sign out</button></form>
   </div>
 </div>
 
@@ -4265,11 +4325,23 @@ h1{{font-size:20px;font-weight:700}}
   </div>
 </div>
 
+<!-- Field editing modal -->
+<div id="field-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60;align-items:center;justify-content:center" onclick="fieldOverlayClick(event)">
+  <div id="field-modal-box" style="background:#fff;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.18);margin:0 16px">
+    <div style="padding:20px 20px 14px;border-bottom:1px solid #f0ede8;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+      <div style="font-size:16px;font-weight:700" id="field-modal-title">Edit fields</div>
+      <button onclick="closeFieldModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px">&#x2715;</button>
+    </div>
+    <div id="field-modal-body" style="overflow-y:auto;padding:16px 20px 20px;flex:1"></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
 var CSRF = '{csrf}';
 var _modalKey = '';
+var _fieldModalSource = '';
 
 /* ── Modal open/close ─────────────────────────────── */
 function openModal() {{
@@ -4434,10 +4506,41 @@ function saveFields(source) {{
   }}).then(r => r.json()).then(d => {{
     if (d.ok) {{
       toast('Saved ✓');
-      var det = document.getElementById('fields-' + source);
-      if (det) det.open = false;
+      closeFieldModal();
     }}
   }});
+}}
+
+function saveFieldsModal(source) {{
+  saveFields(source);
+}}
+
+/* ── Field edit modal ─────────────────────────────── */
+function openFieldModal(source) {{
+  _fieldModalSource = source;
+  var panel = document.getElementById('fields-panel-' + source);
+  var body = document.getElementById('field-modal-body');
+  var title = document.getElementById('field-modal-title');
+  // Find site name from card
+  var card = document.getElementById('card-' + source);
+  var nameEl = card ? card.querySelector('div[style*="font-weight:600"]') : null;
+  title.textContent = (nameEl ? nameEl.textContent : source) + ' — Edit fields';
+  if (panel) {{
+    body.innerHTML = panel.innerHTML;
+  }} else {{
+    body.innerHTML = '<p style="font-size:13px;color:#9ca3af">No fields available yet. Sync this account first.</p>';
+  }}
+  var overlay = document.getElementById('field-modal-overlay');
+  overlay.style.display = 'flex';
+}}
+
+function closeFieldModal() {{
+  document.getElementById('field-modal-overlay').style.display = 'none';
+  _fieldModalSource = '';
+}}
+
+function fieldOverlayClick(e) {{
+  if (e.target === document.getElementById('field-modal-overlay')) closeFieldModal();
 }}
 
 function clearAndRediscover(source) {{
@@ -4458,15 +4561,12 @@ function clearAndRediscover(source) {{
   }});
 }}
 
-// Auto-open field section if navigated here via anchor (e.g. from dashboard "Modify fields")
+// Auto-open field modal if navigated here via anchor (e.g. from dashboard "Modify fields")
 (function() {{
   var hash = location.hash.slice(1);
   if (hash.startsWith('fields-')) {{
-    var det = document.getElementById(hash);
-    if (det) {{
-      det.open = true;
-      setTimeout(function() {{ det.scrollIntoView({{behavior:'smooth', block:'center'}}); }}, 150);
-    }}
+    var source = hash.replace('fields-', '');
+    setTimeout(function() {{ openFieldModal(source); }}, 200);
   }}
 }})();
 
@@ -4684,6 +4784,21 @@ def _credentials_discover_impl(source):
     return jsonify({"ok": True, "fields": fields})
 
 
+
+
+@app.route("/api/data/force-discover/<source>", methods=["POST"])
+@require_login
+def api_force_discover(source):
+    """Re-run Gemini field discovery on the existing stored raw_text for a source."""
+    from werkzeug.exceptions import HTTPException
+    try:
+        check_csrf()
+    except HTTPException:
+        return jsonify({"ok": False, "error": "Session expired — refresh and try again"}), 403
+    try:
+        return _credentials_discover_impl(source)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Server error: {str(e)[:100]}"}), 500
 
 
 @app.route("/credentials/fields/load")
