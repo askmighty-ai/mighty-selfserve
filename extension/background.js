@@ -188,10 +188,10 @@ async function syncAccount(apiKey, account, urls) {
   const win = await chrome.windows.create({
     url: startUrl,
     type: 'popup',
-    state: 'minimized',
     width: 800,
     height: 600,
   });
+  chrome.windows.update(win.id, { state: 'minimized' });
   const tab = { id: win.tabs[0].id };
 
   try {
