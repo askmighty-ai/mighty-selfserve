@@ -16,6 +16,7 @@ Env vars (all optional):
 """
 
 import os, io, csv, json, re, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html, time, base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from cryptography.fernet import Fernet
@@ -5443,62 +5444,80 @@ def _auto_discover_missing(uid: str) -> None:
         cred_rows = get_db().execute(
             "SELECT source, extra_enc FROM account_credentials WHERE user_id=?", (uid,)
         ).fetchall()
-        for cr in cred_rows:
-            src = cr["source"]
-            if src.startswith("_"):
-                continue
-            ex: dict = {}
-            if cr["extra_enc"]:
-                try: ex = json.loads(decrypt_cred(uid, cr["extra_enc"]))
-                except Exception: pass
-            ad = get_db().execute(
-                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
-                (uid, src)
-            ).fetchone()
-            if not ad:
-                continue
-            raw_text = decrypt_account_data(uid, ad["data_enc"] or "").get("raw_text", "")
-            if not raw_text:
-                continue
-            # Skip if raw_text is identical to the last discovery run —
-            # UNLESS existing fields contain login-wall values (means last sync failed to log in)
-            _BAD_VALUES = ("log in", "sign in", "login to", "sign in to", "no match found")
-            existing_fields = ex.get("discovered_fields", [])
-            has_bad_fields = any(
-                any(bad in str(f.get("value", "")).lower() for bad in _BAD_VALUES)
-                for f in existing_fields
-            )
-            raw_hash = hashlib.md5(raw_text.encode()).hexdigest()
-            if ex.get("last_raw_hash") == raw_hash and existing_fields and not has_bad_fields:
-                continue
-            if has_bad_fields:
-                print(f"[AutoDiscover] {src}: forcing re-discovery (stale login-wall fields)", flush=True)
-            site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == src), src)
-            print(f"[AutoDiscover] {src} for user {uid[:6]} (hash {raw_hash[:8]})", flush=True)
-            merged: dict = {}
-            for _ in range(3):
-                for f in claude_discover_fields(raw_text, site_name):
-                    k = f.get("key", "")
-                    if k and k not in merged: merged[k] = f
-                    elif k: merged[k]["value"] = f.get("value", "")
-            if merged:
-                _save_discovered_fields(uid, src, list(merged.values()))
-                # Store hash so we don't re-discover unchanged pages
-                cred_row2 = get_db().execute(
-                    "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
-                    (uid, src)
-                ).fetchone()
-                if cred_row2 and cred_row2["extra_enc"]:
+
+        def _discover_one(cr):
+            try:
+                src = cr["source"]
+                if src.startswith("_"):
+                    return
+                ex: dict = {}
+                if cr["extra_enc"]:
+                    try: ex = json.loads(decrypt_cred(uid, cr["extra_enc"]))
+                    except Exception: pass
+                try:
+                    ad = get_db().execute(
+                        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                        (uid, src)
+                    ).fetchone()
+                except Exception:
+                    return
+                if not ad:
+                    return
+                raw_text = decrypt_account_data(uid, ad["data_enc"] or "").get("raw_text", "")
+                if not raw_text:
+                    return
+                # Skip if raw_text is identical to the last discovery run —
+                # UNLESS existing fields contain login-wall values (means last sync failed to log in)
+                _BAD_VALUES = ("log in", "sign in", "login to", "sign in to", "no match found")
+                existing_fields = ex.get("discovered_fields", [])
+                has_bad_fields = any(
+                    any(bad in str(f.get("value", "")).lower() for bad in _BAD_VALUES)
+                    for f in existing_fields
+                )
+                raw_hash = hashlib.md5(raw_text.encode()).hexdigest()
+                if ex.get("last_raw_hash") == raw_hash and existing_fields and not has_bad_fields:
+                    return
+                if has_bad_fields:
+                    print(f"[AutoDiscover] {src}: forcing re-discovery (stale login-wall fields)", flush=True)
+                site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == src), src)
+                print(f"[AutoDiscover] {src} for user {uid[:6]} (hash {raw_hash[:8]})", flush=True)
+                merged: dict = {}
+                for _ in range(1):
+                    for f in claude_discover_fields(raw_text, site_name):
+                        k = f.get("key", "")
+                        if k and k not in merged: merged[k] = f
+                        elif k: merged[k]["value"] = f.get("value", "")
+                if merged:
+                    _save_discovered_fields(uid, src, list(merged.values()))
+                    # Store hash so we don't re-discover unchanged pages
                     try:
-                        ex2 = json.loads(decrypt_cred(uid, cred_row2["extra_enc"]))
-                        ex2["last_raw_hash"] = raw_hash
-                        get_db().execute(
-                            "UPDATE account_credentials SET extra_enc=? WHERE user_id=? AND source=?",
-                            (encrypt_cred(uid, json.dumps(ex2)), uid, src)
-                        )
-                        get_db().commit()
+                        cred_row2 = get_db().execute(
+                            "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                            (uid, src)
+                        ).fetchone()
+                        if cred_row2 and cred_row2["extra_enc"]:
+                            try:
+                                ex2 = json.loads(decrypt_cred(uid, cred_row2["extra_enc"]))
+                                ex2["last_raw_hash"] = raw_hash
+                                get_db().execute(
+                                    "UPDATE account_credentials SET extra_enc=? WHERE user_id=? AND source=?",
+                                    (encrypt_cred(uid, json.dumps(ex2)), uid, src)
+                                )
+                                get_db().commit()
+                            except Exception:
+                                pass
                     except Exception:
                         pass
+            except Exception as e:
+                print(f"[AutoDiscover] Error in {cr.get('source', '?')}: {e}", flush=True)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(_discover_one, cr) for cr in cred_rows]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"[AutoDiscover] Thread error: {e}", flush=True)
     except Exception as e:
         print(f"[AutoDiscover] Error: {e}", flush=True)
 

@@ -78,7 +78,7 @@ DASHBOARD_FILE = BASE_DIR / "dashboard.html"
 
 NAV_TIMEOUT   = 60_000
 LOGIN_TIMEOUT = 120_000
-MAX_WORKERS   = 4
+MAX_WORKERS   = 8
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -380,6 +380,42 @@ def _new_context(pw, key: str):
         print(f"[Proxy] Using residential proxy: {proxy['server']}", flush=True)
     # else: Playwright uses its bundled Chromium (cloud/Railway environment)
     return pw.chromium.launch_persistent_context(str(SESSIONS_DIR / key), **kwargs)
+
+
+def _launch_browser(pw):
+    """Launch a single shared Chromium instance for all contexts."""
+    kwargs = dict(
+        headless=True,
+        args=["--disable-blink-features=AutomationControlled",
+              "--no-sandbox", "--disable-dev-shm-usage"],
+        ignore_default_args=["--enable-automation"],
+    )
+    chrome = _chrome_path()
+    if chrome:
+        kwargs["executable_path"] = chrome
+    proxy = _proxy_cfg()
+    if proxy:
+        kwargs["proxy"] = proxy
+    return pw.chromium.launch(**kwargs)
+
+
+def _new_browser_context(browser, key: str):
+    """Create an isolated browser context for one account, reusing saved cookies."""
+    SESSIONS_DIR.mkdir(exist_ok=True)
+    state_file = SESSIONS_DIR / f"{key}_state.json"
+    kwargs = dict(
+        viewport={"width": 1280, "height": 800},
+        user_agent=USER_AGENT,
+    )
+    if state_file.exists():
+        kwargs["storage_state"] = str(state_file)
+    proxy = _proxy_cfg()
+    if proxy:
+        kwargs["proxy"] = proxy
+    ctx = browser.new_context(**kwargs)
+    ctx.add_init_script(STEALTH_JS)
+    return ctx, state_file
+
 
 def _chrome_path() -> str | None:
     """Return path to Chrome, or None to use Playwright's bundled Chromium (cloud)."""
@@ -1376,15 +1412,16 @@ def main() -> None:
     results   = {k: _base(k,"?","#f0f0f0","#") for k in SCRAPERS}
     synced_at = datetime.now().isoformat()
 
-    def run(key: str, stagger: float) -> tuple:
-        time.sleep(stagger)
-        creds = all_creds[key]
-        ctx   = {"fetcher": fetcher, "creds": creds, "log": log}
-        with sync_playwright() as pw:
-            bctx = _new_context(pw, key)
-            bctx.add_init_script(STEALTH_JS)
+    with sync_playwright() as pw:
+        browser = _launch_browser(pw)
+
+        def run(key: str, stagger: float) -> tuple:
+            time.sleep(stagger)
+            creds = all_creds[key]
+            ctx   = {"fetcher": fetcher, "creds": creds, "log": log}
+            bctx, state_file = _new_browser_context(browser, key)
             try:
-                page   = bctx.pages[0] if bctx.pages else bctx.new_page()
+                page   = bctx.new_page()
                 result = SCRAPERS[key](page, creds, ctx)
                 if result["status"] == "ok":
                     vals = ", ".join(i["value"] for i in result.get("items",[]))
@@ -1398,15 +1435,21 @@ def main() -> None:
                           "status":"error","error":str(e).split('\n')[0][:120]}
                 log(f"✗  {key}: {e}")
             finally:
+                try:
+                    bctx.storage_state(path=str(state_file))
+                except Exception:
+                    pass
                 bctx.close()
-        return key, result
+            return key, result
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(run, k, i * 2.0): k
-                   for i, k in enumerate(configured)}
-        for future in as_completed(futures):
-            k, result = future.result()
-            results[k] = result
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(run, k, i * 0.3): k
+                       for i, k in enumerate(configured)}
+            for future in as_completed(futures):
+                k, result = future.result()
+                results[k] = result
+
+        browser.close()
 
     if fetcher: fetcher.close()
 
@@ -1454,15 +1497,16 @@ def run_sync(api_key: str, mighty_url: str = MIGHTY_URL,
     results   = {k: _base(k,"?","#f0f0f0","#") for k in SCRAPERS}
     synced_at = datetime.now().isoformat()
 
-    def run(key: str, stagger: float) -> tuple:
-        time.sleep(stagger)
-        creds = all_creds[key]
-        ctx   = {"fetcher": fetcher, "creds": creds, "log": log}
-        with sync_playwright() as pw:
-            bctx = _new_context(pw, key)
-            bctx.add_init_script(STEALTH_JS)
+    with sync_playwright() as pw:
+        browser = _launch_browser(pw)
+
+        def run(key: str, stagger: float) -> tuple:
+            time.sleep(stagger)
+            creds = all_creds[key]
+            ctx   = {"fetcher": fetcher, "creds": creds, "log": log}
+            bctx, state_file = _new_browser_context(browser, key)
             try:
-                page   = bctx.pages[0] if bctx.pages else bctx.new_page()
+                page   = bctx.new_page()
                 result = SCRAPERS[key](page, creds, ctx)
                 # Capture raw page text for AI field discovery
                 if result.get("status") == "ok" and "raw_text" not in result:
@@ -1481,14 +1525,20 @@ def run_sync(api_key: str, mighty_url: str = MIGHTY_URL,
                           "status":"error","error":str(e).split('\n')[0][:120]}
                 with lock: log(f"✗  {key}: {e}")
             finally:
+                try:
+                    bctx.storage_state(path=str(state_file))
+                except Exception:
+                    pass
                 bctx.close()
-        return key, result
+            return key, result
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(run, k, i * 2.0): k for i, k in enumerate(configured)}
-        for future in as_completed(futures):
-            k, result = future.result()
-            results[k] = result
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(run, k, i * 0.3): k for i, k in enumerate(configured)}
+            for future in as_completed(futures):
+                k, result = future.result()
+                results[k] = result
+
+        browser.close()
 
     if fetcher: fetcher.close()
 
