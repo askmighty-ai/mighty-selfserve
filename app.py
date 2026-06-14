@@ -1781,20 +1781,20 @@ load2FAChallenges();
 
 // Auto-reload if any account is still discovering fields (max 4 attempts)
 if (document.querySelector('[data-discovering="1"]')) {
-  var _discoverReloads = parseInt(sessionStorage.getItem('mighty-discover-reloads') || '0');
+  var _discoverReloads = parseInt(localStorage.getItem('mighty-discover-reloads') || '0');
   if (_discoverReloads < 4) {
-    sessionStorage.setItem('mighty-discover-reloads', _discoverReloads + 1);
+    localStorage.setItem('mighty-discover-reloads', _discoverReloads + 1);
     setTimeout(reloadWithScroll, 12000);
   } else {
     // Retries exhausted — keep counter at 99 so we don't restart the cycle on next page load
     // (counter resets to 0 naturally when fields are successfully found and card loses data-discovering)
-    sessionStorage.setItem('mighty-discover-reloads', '99');
+    localStorage.setItem('mighty-discover-reloads', '99');
     document.querySelectorAll('[data-discovering="1"]').forEach(function(el) {
       el.innerHTML = '<span style="color:#9ca3af;font-size:12px;font-style:italic">No fields found — use ↻ to retry sync</span>';
     });
   }
 } else {
-  sessionStorage.removeItem('mighty-discover-reloads');
+  localStorage.removeItem('mighty-discover-reloads');
 }
 
 // Live-updating relative timestamps
@@ -1933,7 +1933,7 @@ function forceDiscover(source, btn) {
   }).then(function(r){ return r.json(); }).then(function(d){
     if (d.ok) {
       btn.textContent = '✓';
-      sessionStorage.removeItem('mighty-discover-reloads'); // allow discovery to retry
+      localStorage.removeItem('mighty-discover-reloads'); // allow discovery to retry
       setTimeout(function(){ reloadWithScroll(); }, 800);
     } else {
       btn.textContent = orig;

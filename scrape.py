@@ -1163,14 +1163,35 @@ def scrape_xfinity(page, c, ctx):
     try:
         page.goto("https://login.xfinity.com/login", timeout=NAV_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        _fill(page, ["#user",'input[name="user"]','input[type="text"]'], c["username"])
-        _click(page, ["#sign_in",'button[type="submit"]'])
-        page.wait_for_timeout(1_500)
-        _fill(page, ["#passwd",'input[name="passwd"]','input[type="password"]'], c["password"])
+        page.wait_for_timeout(2_000)
+
+        # Step 1: username
+        _fill(page, ["#user", 'input[name="user"]', 'input[type="email"]', 'input[type="text"]'], c["username"])
+        _click(page, ["#sign_in", 'button[type="submit"]'])
+
+        # Step 2: wait for password field to actually appear (Xfinity is multi-step)
+        pw_appeared = False
+        for sel in ["#passwd", 'input[name="passwd"]', 'input[type="password"]']:
+            try:
+                page.locator(sel).first.wait_for(state="visible", timeout=10_000)
+                pw_appeared = True
+                break
+            except Exception:
+                pass
+
+        if not pw_appeared:
+            raise Exception("Password field did not appear after entering username")
+
+        _fill(page, ["#passwd", 'input[name="passwd"]', 'input[type="password"]'], c["password"])
         _inbox_mark(ctx)
-        _click(page, ["#sign_in",'button[type="submit"]'])
+        _click(page, ["#sign_in", 'button[type="submit"]'])
         _handle_2fa(page, ctx)
-        page.wait_for_url("**xfinity.com**", timeout=LOGIN_TIMEOUT)
+
+        # Wait until we leave login.xfinity.com (not just any xfinity.com page)
+        page.wait_for_url(
+            lambda url: "xfinity.com" in url and "login.xfinity.com" not in url,
+            timeout=LOGIN_TIMEOUT
+        )
         page.goto("https://www.xfinity.com/overview", timeout=NAV_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
         raw_text = _explore_account_pages(page)
