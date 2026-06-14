@@ -1643,13 +1643,21 @@ function decide(actionId, decision) {
     body: JSON.stringify({decision})
   }).then(() => location.reload());
 }
-// Restore scroll position after any reload
+// Restore scroll position after any reload — defer until paint to avoid layout-shift reset
 (function() {
   var fc = document.querySelector('.feed-col');
   var saved = sessionStorage.getItem('mighty-feed-scroll');
   if (fc && saved) { fc.scrollTop = parseInt(saved); sessionStorage.removeItem('mighty-feed-scroll'); }
   var sy = sessionStorage.getItem('mighty-scroll-y');
-  if (sy) { window.scrollTo(0, parseInt(sy)); sessionStorage.removeItem('mighty-scroll-y'); }
+  if (sy) {
+    sessionStorage.removeItem('mighty-scroll-y');
+    // double-rAF ensures we run after the browser has committed the first layout
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        window.scrollTo(0, parseInt(sy));
+      });
+    });
+  }
 })();
 
 function reloadWithScroll() {
@@ -1718,7 +1726,11 @@ if (document.querySelector('[data-discovering="1"]')) {
     sessionStorage.setItem('mighty-discover-reloads', _discoverReloads + 1);
     setTimeout(reloadWithScroll, 12000);
   } else {
-    sessionStorage.removeItem('mighty-discover-reloads'); // reset for next time
+    // Retries exhausted — stop spinning and show a useful message
+    sessionStorage.removeItem('mighty-discover-reloads');
+    document.querySelectorAll('[data-discovering="1"]').forEach(function(el) {
+      el.innerHTML = '<span style="color:#9ca3af;font-size:12px;font-style:italic">No fields found — use ↻ to retry sync</span>';
+    });
   }
 } else {
   sessionStorage.removeItem('mighty-discover-reloads');
