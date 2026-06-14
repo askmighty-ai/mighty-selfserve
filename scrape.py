@@ -1158,6 +1158,21 @@ def scrape_ticketmaster(page, c, ctx):
     return r
 
 
+def _xfinity_page_text(page, url: str, wait_ms: int = 5_000) -> str:
+    """Navigate to a Xfinity page and wait for the SPA to render real content."""
+    try:
+        page.goto(url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+        # Xfinity is a React SPA — wait for network to go idle so real content renders
+        try:
+            page.wait_for_load_state("networkidle", timeout=15_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(wait_ms)
+        return page.inner_text("body")[:5_000]
+    except Exception:
+        return ""
+
+
 def scrape_xfinity(page, c, ctx):
     r = _base("Xfinity","📡","#e8f5e9","https://www.xfinity.com/overview")
     try:
@@ -1192,9 +1207,19 @@ def scrape_xfinity(page, c, ctx):
             lambda url: "xfinity.com" in url and "login.xfinity.com" not in url,
             timeout=LOGIN_TIMEOUT
         )
-        page.goto("https://www.xfinity.com/overview", timeout=NAV_TIMEOUT)
-        page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        raw_text = _explore_account_pages(page)
+
+        # Scrape specific Xfinity pages that contain account data, waiting for SPA render
+        texts = []
+        for url in [
+            "https://www.xfinity.com/overview",
+            "https://www.xfinity.com/billing",
+            "https://www.xfinity.com/internet",
+        ]:
+            t = _xfinity_page_text(page, url)
+            if t.strip():
+                texts.append(f"=== {url} ===\n{t}")
+
+        raw_text = "\n\n".join(texts)[:12_000]
         r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
