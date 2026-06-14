@@ -1653,9 +1653,11 @@ function decide(actionId, decision) {
   if (sy) {
     sessionStorage.removeItem('mighty-scroll-y');
     // double-rAF ensures we run after the browser has committed the first layout
+    // NOTE: scroll lives on .main-content (overflow-y:auto), not window
     requestAnimationFrame(function() {
       requestAnimationFrame(function() {
-        window.scrollTo(0, parseInt(sy));
+        var mc = document.querySelector('.main-content');
+        if (mc) { mc.scrollTop = parseInt(sy); } else { window.scrollTo(0, parseInt(sy)); }
       });
     });
   }
@@ -1664,7 +1666,9 @@ function decide(actionId, decision) {
 function reloadWithScroll() {
   var fc = document.querySelector('.feed-col');
   if (fc) sessionStorage.setItem('mighty-feed-scroll', fc.scrollTop);
-  sessionStorage.setItem('mighty-scroll-y', window.scrollY || document.documentElement.scrollTop || 0);
+  // Scroll lives on .main-content, not window
+  var mc = document.querySelector('.main-content');
+  sessionStorage.setItem('mighty-scroll-y', mc ? mc.scrollTop : (window.scrollY || document.documentElement.scrollTop || 0));
   location.reload();
 }
 
@@ -1727,8 +1731,9 @@ if (document.querySelector('[data-discovering="1"]')) {
     sessionStorage.setItem('mighty-discover-reloads', _discoverReloads + 1);
     setTimeout(reloadWithScroll, 12000);
   } else {
-    // Retries exhausted — stop spinning and show a useful message
-    sessionStorage.removeItem('mighty-discover-reloads');
+    // Retries exhausted — keep counter at 99 so we don't restart the cycle on next page load
+    // (counter resets to 0 naturally when fields are successfully found and card loses data-discovering)
+    sessionStorage.setItem('mighty-discover-reloads', '99');
     document.querySelectorAll('[data-discovering="1"]').forEach(function(el) {
       el.innerHTML = '<span style="color:#9ca3af;font-size:12px;font-style:italic">No fields found — use ↻ to retry sync</span>';
     });
@@ -1839,6 +1844,7 @@ function forceDiscover(source, btn) {
   }).then(function(r){ return r.json(); }).then(function(d){
     if (d.ok) {
       btn.textContent = '✓';
+      sessionStorage.removeItem('mighty-discover-reloads'); // allow discovery to retry
       setTimeout(function(){ reloadWithScroll(); }, 800);
     } else {
       btn.textContent = orig;
@@ -1896,7 +1902,8 @@ function checkForUpdates() {
     if (d.pending !== lastPending) {
       var fc = document.querySelector('.feed-col');
       if (fc) sessionStorage.setItem('mighty-feed-scroll', fc.scrollTop);
-      sessionStorage.setItem('mighty-scroll-y', window.scrollY || document.documentElement.scrollTop || 0);
+      var mc = document.querySelector('.main-content');
+      sessionStorage.setItem('mighty-scroll-y', mc ? mc.scrollTop : (window.scrollY || document.documentElement.scrollTop || 0));
       location.reload();
     }
   }).catch(function() {});
