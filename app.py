@@ -1520,11 +1520,10 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 /* Card grid */
 .card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px}
 /* Account cards */
-.acct-card{background:#ffffff;border-radius:12px;overflow:hidden;border:0.5px solid rgba(0,0,0,0.08);box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05);transition:box-shadow 0.15s,border-color 0.15s}
+.acct-card{background:#ffffff;border-radius:12px;overflow:hidden;border:0.5px solid rgba(0,0,0,0.08);box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05);transition:box-shadow 0.2s,border-color 0.2s,opacity 0.2s,transform 0.2s,filter 0.2s}
 .acct-card:hover{border-color:rgba(0,0,0,0.14);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 8px 28px rgba(0,0,0,0.08)}
 .acct-card-header{padding:12px 14px 10px;display:flex;align-items:center;gap:9px}
-.acct-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.acct-name{font-size:12px;font-weight:700;color:#1c1917;line-height:1.2}
+.acct-name{font-size:13px;font-weight:700;color:#1c1917;line-height:1.2}
 .acct-sync-time{font-size:10px;color:#b8b2ac;margin-top:1px}
 .acct-controls{display:flex;align-items:center;gap:5px;margin-left:auto;flex-shrink:0}
 .acct-refresh-btn{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:6px;border:0.5px solid #ede9e4;background:transparent;cursor:pointer;font-size:13px;color:#b8b2ac;padding:0;line-height:1;transition:all 0.12s;font-family:inherit}
@@ -1553,7 +1552,8 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 /* States */
 .acct-card.is-stale{opacity:0.55}
 .acct-card.is-expiring{border-color:rgba(217,119,6,0.35) !important;box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(217,119,6,0.1) !important}
-.acct-card.highlight-off{opacity:0.35}
+.acct-card.highlight-off{opacity:0.28;filter:grayscale(0.3)}
+.acct-card.highlight-on{box-shadow:0 2px 8px rgba(0,0,0,0.08),0 0 0 2px rgba(99,102,241,0.18) !important;transform:translateY(-1px)}
 /* Card footer */
 .acct-footer{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:0.5px solid rgba(0,0,0,0.05);gap:8px}
 .acct-expand-btn{font-size:11px;font-weight:500;color:#9ca3af;background:none;border:none;cursor:pointer;padding:0;font-family:inherit;display:flex;align-items:center;gap:4px;transition:color 0.1s}
@@ -1934,15 +1934,20 @@ function toggleExpiringFilter(banner) {
   var label = document.getElementById('expiring-filter-label');
   if (active) {
     banner.removeAttribute('data-filter');
-    document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('highlight-off'); });
+    document.querySelectorAll('.acct-card').forEach(function(c){
+      c.classList.remove('highlight-off');
+      c.classList.remove('highlight-on');
+    });
     if (label) label.textContent = 'Click to highlight';
   } else {
     banner.setAttribute('data-filter', '1');
     document.querySelectorAll('.acct-card').forEach(function(c){
-      if (c.classList.contains('is-expiring')) {
+      if (c.querySelector('.acct-alert')) {
         c.classList.remove('highlight-off');
+        c.classList.add('highlight-on');
       } else {
         c.classList.add('highlight-off');
+        c.classList.remove('highlight-on');
       }
     });
     if (label) label.textContent = 'Click to clear';
@@ -3521,7 +3526,6 @@ def dashboard():
             grid_cards += (
                 f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}">'
                 f'<div class="acct-card-header">'
-                f'<div class="acct-icon" style="background:{he(color)}">{he(icon)}</div>'
                 f'<div style="flex:1;min-width:0">'
                 f'<div class="acct-name">{he(display_name)}</div>'
                 f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{sync_label}</div>'
