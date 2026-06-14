@@ -1553,7 +1553,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .acct-card.is-stale{opacity:0.55}
 .acct-card.is-expiring{border-color:rgba(217,119,6,0.35) !important;box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(217,119,6,0.1) !important}
 .acct-card.highlight-off{opacity:0.28;filter:grayscale(0.3)}
-.acct-card.highlight-on{box-shadow:0 2px 8px rgba(0,0,0,0.08),0 0 0 2px rgba(99,102,241,0.18) !important;transform:translateY(-1px)}
+.acct-card.highlight-on{box-shadow:0 4px 20px rgba(0,0,0,0.12),0 0 0 2.5px rgba(37,99,235,0.7) !important;transform:translateY(-2px);background:#fff !important}
 /* Card footer */
 .acct-footer{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:0.5px solid rgba(0,0,0,0.05);gap:8px}
 .acct-expand-btn{font-size:11px;font-weight:500;color:#9ca3af;background:none;border:none;cursor:pointer;padding:0;font-family:inherit;display:flex;align-items:center;gap:4px;transition:color 0.1s}
