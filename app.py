@@ -768,7 +768,7 @@ def send_web_push(user_id, title, body, url, action_id=None):
 
 BASE_CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#e8e2da;color:#1c1917;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+body{font-family:'Inter',sans-serif;background:#eae5de;color:#1c1917;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 a{color:#6366f1;text-decoration:none}
 a:hover{text-decoration:underline}
 input,textarea,select{font-family:inherit}
@@ -779,6 +779,25 @@ button{font-family:inherit;cursor:pointer}
 .badge-approved{background:#d1fae5;color:#065f46;border:1px solid #a7f3d0}
 .badge-denied{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
 .badge-timeout{background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb}
+.sidebar{width:224px;flex-shrink:0;background:#0a0c12;border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.sidebar-header{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,0.06)}
+.sidebar-logo{display:flex;align-items:center;gap:9px;text-decoration:none}
+.sidebar-logo:hover{text-decoration:none}
+.sidebar-logo-img{width:26px;height:26px;border-radius:7px;object-fit:cover}
+.sidebar-logo-name{font-size:15px;font-weight:800;letter-spacing:0.3px;background:linear-gradient(135deg,#a5b4fc,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.sidebar-nav{flex:1;padding:8px;display:flex;flex-direction:column;gap:1px;overflow-y:auto}
+.sidebar-link{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;font-size:13px;font-weight:500;color:#5a6480;text-decoration:none;transition:background 0.1s,color 0.1s}
+.sidebar-link:hover{background:rgba(255,255,255,0.05);color:#c4cde0;text-decoration:none}
+.sidebar-link svg{flex-shrink:0;opacity:0.45;transition:opacity 0.1s}
+.sidebar-link:hover svg{opacity:0.7}
+.sidebar-link-active{background:rgba(129,140,248,0.13);color:#c7d2fe !important;font-weight:600}
+.sidebar-link-active svg{opacity:1 !important}
+.sidebar-footer{padding:10px 8px;border-top:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;gap:6px}
+.sidebar-user{display:flex;align-items:center;gap:9px;padding:4px 8px}
+.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
+.sidebar-user-email{font-size:11px;color:#5a6480;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px}
+.sidebar-signout{width:100%;padding:7px 10px;background:none;border:1px solid rgba(255,255,255,0.08);border-radius:7px;font-size:12px;color:#5a6480;cursor:pointer;text-align:left;transition:all 0.1s;font-family:inherit}
+.sidebar-signout:hover{background:rgba(255,255,255,0.05);color:#c4cde0;border-color:rgba(255,255,255,0.15)}
 """
 
 LANDING_HTML = """<!DOCTYPE html>
@@ -1457,93 +1476,77 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 """ + BASE_CSS + """
 /* ── Layout ── */
 html,body{height:100%;overflow:hidden}
-body{display:flex;flex-direction:row}
-/* ── Sidebar ── */
-.sidebar{width:220px;flex-shrink:0;background:linear-gradient(180deg,#0d1017 0%,#070910 100%);border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}
-.sidebar-header{padding:20px 16px 12px;border-bottom:1px solid #1c2030}
-.sidebar-logo{display:flex;align-items:center;gap:9px;text-decoration:none}
-.sidebar-logo:hover{text-decoration:none}
-.sidebar-logo-img{width:26px;height:26px;border-radius:6px;object-fit:cover}
-.sidebar-logo-name{font-size:15px;font-weight:800;letter-spacing:0.4px;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.sidebar-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
-.sidebar-link{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:500;color:#8892a4;text-decoration:none;transition:all 0.12s}
-.sidebar-link:hover{background:rgba(255,255,255,0.05);color:#e2e8f0;text-decoration:none}
-.sidebar-link-active{background:rgba(129,140,248,0.15);color:#818cf8 !important;font-weight:600;border-left:2px solid #818cf8;padding-left:8px}
-.sidebar-link-active svg,.sidebar-link-active span{color:#818cf8}
-.sidebar-link svg{flex-shrink:0;opacity:0.6;transition:opacity 0.12s}
-.sidebar-link:hover svg,.sidebar-link-active svg{opacity:1}
-.sidebar-footer{padding:12px 8px;border-top:1px solid #1c2030;display:flex;flex-direction:column;gap:6px}
-.sidebar-user{display:flex;align-items:center;gap:8px;padding:4px 8px}
-.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
-.sidebar-user-email{font-size:11px;color:#8892a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
-.sidebar-signout{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}
-.sidebar-signout:hover{background:rgba(255,255,255,0.05);color:#e2e8f0;border-color:#2d3450}
+body{display:flex;flex-direction:row;background:#eae5de}
 /* ── Main content ── */
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
-/* topbar removed */
-
-.pending-pill{background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#6366f1}
-.btn-sync{padding:6px 14px;border-radius:7px;border:1px solid #e8e4de;background:#ffffff;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-sync:hover{background:#f5f2ed;border-color:#6366f1}
-/* ── Page content ── */
-.page-body{flex:1;padding:28px 32px;max-width:960px;width:100%;box-sizing:border-box}
-.page-section-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;gap:16px}
-.page-title{font-size:18px;font-weight:700;color:#1c1917}
-.page-sub{font-size:13px;color:#8892a4;margin-top:3px}
+/* ── Page header row ── */
+.page-header-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:12px}
+.page-title{font-size:22px;font-weight:800;color:#1c1917;letter-spacing:-0.4px}
+/* ── Toolbar ── */
+.pending-pill{background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.22);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#6366f1}
+.btn-sync{padding:7px 16px;border-radius:8px;border:1.5px solid #d9d3cc;background:#ffffff;font-size:12px;font-weight:600;color:#1c1917;cursor:pointer;transition:all 0.12s;font-family:inherit;box-shadow:0 1px 2px rgba(0,0,0,0.06)}
+.btn-sync:hover{border-color:#6366f1;color:#6366f1;background:#faf9ff}
 /* ── Feed tabs ── */
-.feed-tabs{display:flex;gap:4px;background:#e8e4de;border:1px solid #ddd9d3;border-radius:9px;padding:3px;margin-bottom:24px;width:fit-content}
-.feed-tab{padding:6px 18px;border-radius:7px;border:none;background:none;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 4px rgba(0,0,0,0.14),0 1px 2px rgba(0,0,0,0.08)}
+.feed-tabs{display:flex;gap:0;background:#e2ddd7;border:1px solid #d5cfc8;border-radius:9px;padding:3px;width:fit-content}
+.feed-tab{padding:6px 20px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:600;color:#7d7670;cursor:pointer;transition:all 0.12s;font-family:inherit;letter-spacing:0.1px}
+.feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10),0 1px 1px rgba(0,0,0,0.06)}
+/* ── Page body ── */
+.page-body{flex:1;padding:28px 36px;max-width:1000px;width:100%;box-sizing:border-box}
 /* ── Account cards ── */
-.acct-card{background:#ffffff;border:1px solid #e4dfd8;border-radius:12px;padding:18px 20px;margin-bottom:12px;transition:all 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
-.acct-card:hover{border-color:#c8c2ba;background:#fdfcfb;box-shadow:0 2px 6px rgba(0,0,0,0.07),0 8px 24px rgba(0,0,0,0.08)}
-.acct-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.acct-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #f5f2ed}
-.acct-row:last-child{border-bottom:none}
-.acct-lbl{font-size:11px;font-weight:600;color:#8892a4;flex-shrink:0;min-width:120px;max-width:45%}
-.acct-val{font-size:13px;font-weight:600;color:#1c1917;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%}
-.acct-cards-wrap{display:flex;flex-direction:column}
+.acct-cards-wrap{display:flex;flex-direction:column;gap:10px}
+.acct-card{background:#ffffff;border:1px solid rgba(0,0,0,0.07);border-radius:14px;overflow:hidden;transition:box-shadow 0.15s,border-color 0.15s;box-shadow:0 1px 1px rgba(0,0,0,0.04),0 4px 20px rgba(0,0,0,0.06)}
+.acct-card:hover{border-color:rgba(0,0,0,0.12);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 8px 32px rgba(0,0,0,0.09)}
+.acct-header{display:flex;align-items:center;gap:12px;padding:16px 20px 14px}
+.acct-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
+.acct-name{font-size:14px;font-weight:700;color:#1c1917;letter-spacing:-0.1px}
+.acct-sync-time{font-size:10px;color:#b0aaa4;margin-top:2px;font-weight:400}
+.acct-controls{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
+.acct-edit-btn{font-size:11px;font-weight:500;color:#9ca3af;text-decoration:none;padding:4px 9px;border-radius:6px;border:1px solid #ede9e4;background:#faf8f6;white-space:nowrap;transition:all 0.12s}
+.acct-edit-btn:hover{color:#6366f1;border-color:#c7d2fe;background:#f5f3ff;text-decoration:none}
+.acct-status-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;cursor:help}
+.acct-refresh-btn{width:27px;height:27px;display:flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid #ede9e4;background:#faf8f6;cursor:pointer;font-size:14px;color:#9ca3af;padding:0;line-height:1;flex-shrink:0;transition:all 0.12s;font-family:inherit}
+.acct-refresh-btn:hover{color:#6366f1;border-color:#c7d2fe;background:#f5f3ff}
+/* ── Stat blocks ── */
+.acct-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(0,0,0,0.06) 10%,rgba(0,0,0,0.06) 90%,transparent);margin:0 20px}
+.acct-stats{display:flex;flex-wrap:wrap;padding:14px 20px 18px;gap:8px 0}
+.stat-block{flex:1 1 140px;padding:4px 16px 4px 0;min-width:0}
+.stat-val{font-size:16px;font-weight:700;color:#1c1917;letter-spacing:-0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}
+.stat-lbl{font-size:10px;font-weight:600;color:#b0aaa4;text-transform:uppercase;letter-spacing:0.7px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* ── Activity log ── */
-.action-card{background:#ffffff;border:1px solid #e4dfd8;border-radius:10px;overflow:hidden;margin-bottom:8px;transition:all 0.12s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 3px 10px rgba(0,0,0,0.05)}
-.action-card:hover{border-color:#c8c2ba;box-shadow:0 2px 6px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.07)}
-.action-card.is-pending{border-color:rgba(245,158,11,0.4);background:#fffbef}
+.action-card{background:#ffffff;border:1px solid rgba(0,0,0,0.07);border-radius:12px;overflow:hidden;margin-bottom:8px;transition:all 0.12s;box-shadow:0 1px 1px rgba(0,0,0,0.04),0 3px 12px rgba(0,0,0,0.05)}
+.action-card:hover{border-color:rgba(0,0,0,0.12);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 6px 20px rgba(0,0,0,0.08)}
+.action-card.is-pending{border-color:rgba(245,158,11,0.3);background:linear-gradient(180deg,#fffcf0 0%,#fff 100%)}
 .action-top{padding:14px 16px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .action-label{font-size:14px;font-weight:600;color:#1c1917;line-height:1.4}
-.action-type{font-size:11px;color:#9ca3af;font-family:ui-monospace,monospace;margin-top:2px}
+.action-type{font-size:11px;color:#b0aaa4;font-family:ui-monospace,monospace;margin-top:2px}
 .action-badges{display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
-.action-time{font-size:11px;color:#9ca3af;margin-top:4px;text-align:right}
+.action-time{font-size:11px;color:#b0aaa4;margin-top:4px;text-align:right}
 .action-fields{padding:10px 16px 14px;display:flex;flex-direction:column;gap:5px}
 .field-row{display:flex;gap:10px;font-size:12px}
-.field-key{color:#9ca3af;font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:0.5px;min-width:80px;flex-shrink:0;padding-top:1px}
-.field-val{color:#8892a4;line-height:1.4;word-break:break-word}
+.field-key{color:#b0aaa4;font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:0.6px;min-width:80px;flex-shrink:0;padding-top:1px}
+.field-val{color:#6b7280;line-height:1.4;word-break:break-word}
 .action-buttons{padding:12px 16px;border-top:1px solid #f5f2ed;display:flex;gap:8px}
-.btn-authorize{flex:1;padding:9px;background:rgba(52,211,153,0.1);color:#34d399;border:1px solid rgba(52,211,153,0.25);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-authorize:hover{background:rgba(52,211,153,0.18);border-color:#34d399}
-.btn-reject{flex:1;padding:9px;background:rgba(248,113,113,0.06);color:#f87171;border:1px solid rgba(248,113,113,0.2);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-reject:hover{background:rgba(248,113,113,0.12);border-color:#f87171}
-/* ── Confidence badges ── */
-.clevel-sensitive{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(59,130,246,0.12);color:#60a5fa;border:1px solid rgba(59,130,246,0.2);letter-spacing:0.3px}
-.clevel-consequential{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(251,191,36,0.1);color:#fbbf24;border:1px solid rgba(251,191,36,0.2);letter-spacing:0.3px}
-.clevel-critical{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(248,113,113,0.1);color:#f87171;border:1px solid rgba(248,113,113,0.2);letter-spacing:0.3px}
-/* ── Feed search ── */
-.feed-search{width:100%;padding:9px 14px;border:1.5px solid #e8e4de;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,0.05)}
-.feed-search:focus{border-color:#6366f1}
+.btn-authorize{flex:1;padding:9px;background:rgba(52,211,153,0.08);color:#059669;border:1px solid rgba(52,211,153,0.2);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
+.btn-authorize:hover{background:rgba(52,211,153,0.15);border-color:#34d399}
+.btn-reject{flex:1;padding:9px;background:rgba(248,113,113,0.05);color:#dc2626;border:1px solid rgba(248,113,113,0.15);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
+.btn-reject:hover{background:rgba(248,113,113,0.1);border-color:#f87171}
+.clevel-sensitive{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.18);letter-spacing:0.3px}
+.clevel-consequential{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(251,191,36,0.1);color:#d97706;border:1px solid rgba(251,191,36,0.18);letter-spacing:0.3px}
+.clevel-critical{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(248,113,113,0.1);color:#dc2626;border:1px solid rgba(248,113,113,0.18);letter-spacing:0.3px}
+.feed-search{width:100%;padding:9px 14px;border:1.5px solid #ddd8d2;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s,box-shadow 0.12s;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+.feed-search:focus{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.08)}
 .feed-search::placeholder{color:#c0bbb5}
-/* ── Status filter chips ── */
-.status-chip{padding:5px 11px;border-radius:20px;border:1px solid #e8e4de;background:#ffffff;font-size:11px;font-weight:600;color:#8892a4;cursor:pointer;font-family:inherit;transition:all 0.12s;white-space:nowrap}
-.status-chip:hover{border-color:#c0bbb5;color:#6b7280}
+.status-chip{padding:5px 12px;border-radius:20px;border:1px solid #ddd8d2;background:#ffffff;font-size:11px;font-weight:600;color:#9ca3af;cursor:pointer;font-family:inherit;transition:all 0.12s;white-space:nowrap}
+.status-chip:hover{border-color:#b5b0aa;color:#6b7280}
 .status-chip.active{background:#1c1917;border-color:#1c1917;color:#ffffff}
-/* ── Buttons ── */
-.btn-primary{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-family:inherit}
+.btn-primary{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-family:inherit;box-shadow:0 1px 3px rgba(99,102,241,0.3)}
 .btn-primary:hover{background:#4f46e5;text-decoration:none;color:#fff}
-.btn-connect{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:8px;background:#6366f1;color:#fff;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;box-sizing:border-box;transition:background 0.12s;font-family:inherit;border:none;cursor:pointer}
+.btn-connect{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:8px;background:#6366f1;color:#fff;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;transition:background 0.12s;font-family:inherit;border:none;cursor:pointer;box-shadow:0 1px 3px rgba(99,102,241,0.3)}
 .btn-connect:hover{background:#4f46e5;text-decoration:none;color:#fff}
-/* ── Pending label ── */
 .pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#6366f1;display:flex;align-items:center;gap:6px;margin-bottom:10px}
 .pending-dot{width:6px;height:6px;border-radius:50%;background:#6366f1;animation:pulse 1.5s infinite;flex-shrink:0}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-/* ── Empty / util ── */
 .feed-col{overflow-y:auto;min-height:0}
 @media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible}}
 </style>
@@ -1553,29 +1556,32 @@ body{display:flex;flex-direction:row}
 
 <div class="main-content">
   {onboarding_banner}
-  <div id="twofa-banner" style="display:none;padding:0 32px 0"></div>
+  <div id="twofa-banner" style="display:none;padding:0 36px 0"></div>
   {welcome_state}
   <div class="page-body" {feed_col_hidden}>
     <input type="hidden" name="_csrf" value="{csrf_token}">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;gap:12px">
-      <div class="feed-tabs" style="margin-bottom:0">
-        <button class="feed-tab active" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
-        <button class="feed-tab" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
-      </div>
+    <div class="page-header-row">
+      <div class="page-title">Dashboard</div>
       <div style="display:flex;align-items:center;gap:8px">
         {agent_status_indicator}
         <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
           {pending_count} awaiting decision
         </div>
-        <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">Sync</button>
+        <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">↻ Sync</button>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:12px">
+      <div class="feed-tabs">
+        <button class="feed-tab active" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
+        <button class="feed-tab" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        {agent_cta_button}
+        <a href="/credentials" class="btn-connect">+ Connect account</a>
       </div>
     </div>
 
     <div id="fview-accounts">
-      <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:16px">
-          {agent_cta_button}
-          <a href="/credentials" class="btn-connect">+ Connect account</a>
-      </div>
       <div class="acct-cards-wrap">{account_data_html}</div>
     </div>
 
@@ -2058,24 +2064,6 @@ SETTINGS_HTML = """<!DOCTYPE html>
 """ + BASE_CSS + """
 html,body{height:100%;overflow:hidden}
 body{display:flex;flex-direction:row}
-.sidebar{width:220px;flex-shrink:0;background:linear-gradient(180deg,#0d1017 0%,#070910 100%);border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}
-.sidebar-header{padding:20px 16px 12px;border-bottom:1px solid #1c2030}
-.sidebar-logo{display:flex;align-items:center;gap:9px;text-decoration:none}
-.sidebar-logo:hover{text-decoration:none}
-.sidebar-logo-img{width:26px;height:26px;border-radius:6px;object-fit:cover}
-.sidebar-logo-name{font-size:15px;font-weight:800;letter-spacing:0.4px;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.sidebar-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
-.sidebar-link{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:500;color:#8892a4;text-decoration:none;transition:all 0.12s}
-.sidebar-link:hover{background:rgba(255,255,255,0.05);color:#e2e8f0;text-decoration:none}
-.sidebar-link-active{background:rgba(129,140,248,0.15);color:#818cf8 !important;font-weight:600;border-left:2px solid #818cf8;padding-left:8px}
-.sidebar-link svg{flex-shrink:0;opacity:0.6;transition:opacity 0.12s}
-.sidebar-link:hover svg,.sidebar-link-active svg{opacity:1;stroke:#818cf8}
-.sidebar-footer{padding:12px 8px;border-top:1px solid #1c2030;display:flex;flex-direction:column;gap:6px}
-.sidebar-user{display:flex;align-items:center;gap:8px;padding:4px 8px}
-.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
-.sidebar-user-email{font-size:11px;color:#8892a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
-.sidebar-signout{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}
-.sidebar-signout:hover{background:rgba(255,255,255,0.05);color:#e2e8f0;border-color:#2d3450}
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto}
 .page-wrap{max-width:560px;margin:0;padding:32px 36px;display:flex;flex-direction:column;gap:16px}
 .page-title{font-size:20px;font-weight:700;color:#1c1917;margin-bottom:4px}
@@ -3186,26 +3174,29 @@ def dashboard():
         status_color = "#30d158"
 
         if items:
-            items_html = "".join(
-                f'<div class="acct-row"><span class="acct-lbl">{he(i["label"])}</span>'
-                f'<span class="acct-val" title="{he(i["value"])}">{he(i["value"])}</span></div>'
+            items_html = '<div class="acct-stats">' + "".join(
+                f'<div class="stat-block">'
+                f'<div class="stat-val" title="{he(i["value"])}">{he(i["value"])}</div>'
+                f'<div class="stat-lbl">{he(i["label"])}</div>'
+                f'</div>'
                 for i in items
-            )
+            ) + '</div>'
         elif synced_at:
-            items_html = ('<div class="acct-row" data-discovering="1" style="padding:10px 0">'
-                          '<span class="acct-lbl" style="color:#6366f1;font-style:normal;font-weight:500">'
+            items_html = ('<div class="acct-stats">'
+                          '<div class="stat-block" data-discovering="1">'
+                          '<div style="color:#6366f1;font-size:13px;font-weight:500">'
                           '<span style="display:inline-block;animation:spin 1.2s linear infinite;margin-right:5px">↻</span>'
-                          'Syncing & discovering fields…</span></div>')
+                          'Syncing & discovering fields…</div>'
+                          '</div></div>')
             status_color = "#9ca3af"
         else:
-            items_html = ('<div class="acct-row" style="padding:10px 0">'
-                          '<span class="acct-lbl" style="color:#9ca3af;font-style:italic">Awaiting first sync…</span></div>')
+            items_html = ('<div class="acct-stats">'
+                          '<div class="stat-block">'
+                          '<div style="color:#b0aaa4;font-style:italic;font-size:13px">Awaiting first sync…</div>'
+                          '</div></div>')
             status_color = "#9ca3af"
 
-        sync_label = (f'<div style="font-size:11px;color:#9ca3af" '
-                      f'data-synced="{he(synced_at)}">Synced {_fmt_sync(synced_at)}</div>'
-                      if synced_at else
-                      '<div style="font-size:11px;color:#9ca3af">Not yet synced</div>')
+        sync_label = (f'Synced {_fmt_sync(synced_at)}' if synced_at else 'Not yet synced')
 
         # Detect login-wall values in cached fields
         _BAD = ("log in", "sign in", "login to", "no match found")
@@ -3222,33 +3213,23 @@ def dashboard():
             f'</div>'
         ) if bad_fields else ""
 
+        synced_title = "Synced recently" if status_color == "#30d158" else "Not yet synced"
         cards_html += (
-            f'<div class="acct-card" style="border-left:3px solid {he(color)}">'
-            f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
+            f'<div class="acct-card">'
+            f'<div class="acct-header">'
             f'<div class="acct-icon" style="background:{he(color)}">{he(icon)}</div>'
-            f'<div style="flex:1">'
-            f'<div style="font-size:13px;font-weight:600;color:#1c1917">{he(display_name)}</div>'
-            f'{sync_label}'
+            f'<div style="flex:1;min-width:0">'
+            f'<div class="acct-name">{he(display_name)}</div>'
+            f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{sync_label}</div>'
             f'</div>'
-            f'<div style="display:flex;align-items:center;gap:6px">'
-            f'<a href="/credentials#fields-{he(src)}" '
-            f'style="font-size:11px;font-weight:500;color:#8892a4;text-decoration:none;'
-            f'padding:3px 8px;border-radius:6px;border:1px solid #e8e4de;background:#f5f2ed;'
-            f'white-space:nowrap;cursor:pointer;transition:all 0.12s" '
-            f'onmouseover="this.style.color=\'#818cf8\';this.style.borderColor=\'#818cf8\'" '
-            f'onmouseout="this.style.color=\'#6b7280\';this.style.borderColor=\'#e8e4de\'">Edit fields</a>'
-            f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;'
-            f'cursor:help" title="{"Synced recently" if status_color == "#30d158" else "Not yet synced"}"></div>'
-            f'<button onclick="forceDiscover(\'{he(src)}\', this)" '
-            f'title="Re-run field discovery" '
-            f'style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;'
-            f'border-radius:6px;border:1px solid #e8e4de;background:#f5f2ed;cursor:pointer;'
-            f'font-size:13px;color:#8892a4;padding:0;line-height:1;flex-shrink:0;transition:all 0.12s" '
-            f'onmouseover="this.style.color=\'#818cf8\';this.style.borderColor=\'#818cf8\'" '
-            f'onmouseout="this.style.color=\'#6b7280\';this.style.borderColor=\'#e8e4de\'">↻</button>'
+            f'<div class="acct-controls">'
+            f'<a href="/credentials#fields-{he(src)}" class="acct-edit-btn">Edit fields</a>'
+            f'<div class="acct-status-dot" style="background:{status_color}" title="{synced_title}"></div>'
+            f'<button onclick="forceDiscover(\'{he(src)}\', this)" title="Re-run field discovery" class="acct-refresh-btn">↻</button>'
             f'</div>'
             f'</div>'
             f'{bad_banner}'
+            f'<div class="acct-divider"></div>'
             f'{items_html}'
             f'</div>'
         )
@@ -4341,26 +4322,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 html,body{{height:100%;overflow:hidden;font-family:'Inter',sans-serif}}
-body{{display:flex;flex-direction:row;background:#e8e2da;color:#1c1917;-webkit-font-smoothing:antialiased}}
-/* ── Sidebar ── */
-.sidebar{{width:220px;flex-shrink:0;background:linear-gradient(180deg,#0d1017 0%,#070910 100%);border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}}
-.sidebar-header{{padding:20px 16px 12px;border-bottom:1px solid #1c2030}}
-.sidebar-logo{{display:flex;align-items:center;gap:9px;text-decoration:none}}
-.sidebar-logo:hover{{text-decoration:none}}
-.sidebar-logo-img{{width:26px;height:26px;border-radius:6px;object-fit:cover}}
-.sidebar-logo-name{{font-size:15px;font-weight:800;letter-spacing:0.4px;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
-.sidebar-nav{{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}}
-.sidebar-link{{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:500;color:#8892a4;text-decoration:none;transition:all 0.12s}}
-.sidebar-link:hover{{background:rgba(255,255,255,0.05);color:#e2e8f0;text-decoration:none}}
-.sidebar-link-active{{background:rgba(129,140,248,0.15);color:#818cf8 !important;font-weight:600;border-left:2px solid #818cf8;padding-left:8px}}
-.sidebar-link svg{{flex-shrink:0;opacity:0.6;transition:opacity 0.12s}}
-.sidebar-link:hover svg,.sidebar-link-active svg{{opacity:1;stroke:#818cf8}}
-.sidebar-footer{{padding:12px 8px;border-top:1px solid #1c2030;display:flex;flex-direction:column;gap:6px}}
-.sidebar-user{{display:flex;align-items:center;gap:8px;padding:4px 8px}}
-.sidebar-avatar{{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}}
-.sidebar-user-email{{font-size:11px;color:#8892a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}}
-.sidebar-signout{{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}}
-.sidebar-signout:hover{{background:rgba(255,255,255,0.05);color:#e2e8f0;border-color:#2d3450}}
+body{{display:flex;flex-direction:row;background:#eae5de;color:#1c1917;-webkit-font-smoothing:antialiased}}
 /* ── Main ── */
 .main-content{{flex:1;min-width:0;height:100vh;overflow-y:auto}}
 .page{{max-width:660px;margin:0 auto;padding:32px 28px}}
