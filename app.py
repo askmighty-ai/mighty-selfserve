@@ -1474,8 +1474,8 @@ body{display:flex;flex-direction:row}
 .sidebar-signout:hover{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}
 /* ── Main content ── */
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
-.topbar{background:#f0ede8;border-bottom:1px solid #e8e4de;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;position:sticky;top:0;z-index:10;}
-.topbar-right{display:flex;align-items:center;gap:10px}
+/* topbar removed */
+
 .pending-pill{background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#6366f1}
 .btn-sync{padding:6px 14px;border-radius:7px;border:1px solid #e8e4de;background:#ffffff;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;transition:all 0.12s;font-family:inherit}
 .btn-sync:hover{background:#f5f2ed;border-color:#6366f1}
@@ -1541,26 +1541,23 @@ body{display:flex;flex-direction:row}
 {_SIDEBAR_}
 
 <div class="main-content">
-  <div class="topbar">
-    <div style="display:flex;align-items:center;gap:10px">
-      {agent_status_indicator}
-    </div>
-    <div class="topbar-right">
-      <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
-        {pending_count} awaiting decision
-      </div>
-      <input type="hidden" name="_csrf" value="{csrf_token}">
-      <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">↻ Sync</button>
-    </div>
-  </div>
-
   {onboarding_banner}
-  <div id="twofa-banner" style="display:none;padding:0 32px"></div>
+  <div id="twofa-banner" style="display:none;padding:0 32px 0"></div>
   {welcome_state}
   <div class="page-body" {feed_col_hidden}>
-    <div class="feed-tabs">
-      <button class="feed-tab active" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
-      <button class="feed-tab" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
+    <input type="hidden" name="_csrf" value="{csrf_token}">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;gap:12px">
+      <div class="feed-tabs" style="margin-bottom:0">
+        <button class="feed-tab active" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
+        <button class="feed-tab" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        {agent_status_indicator}
+        <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
+          {pending_count} awaiting decision
+        </div>
+        <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">Sync</button>
+      </div>
     </div>
 
     <div id="fview-accounts">
