@@ -3387,7 +3387,8 @@ def dashboard():
             else:
                 items = data.get("items", [])
 
-            synced_at = row["synced_at"] if row else ""
+            synced_at   = row["synced_at"] if row else ""
+            sync_status = data.get("sync_status", "ok") if row else ""
             status_color = "#30d158"
 
             # Separate hero stat from secondary stats, and find alerts
@@ -3422,26 +3423,34 @@ def dashboard():
                     f'<div class="hero-lbl">{he(hero_item["label"])}</div>'
                     f'</div>'
                 )
+            elif sync_status == "login_required":
+                hero_html = (
+                    f'<div class="acct-divider"></div>'
+                    f'<div class="acct-hero">'
+                    f'<div style="color:#ef4444;font-size:12px;font-weight:500">⚠ Login required — sync to reconnect</div>'
+                    f'</div>'
+                )
+                status_color = "#ef4444"
             elif synced_at:
-                # Check if discovery already failed (explicit flag or stale > 5 min)
+                # Check discovery_failed flag or time-based stale fallback
                 _disc_info = discovered_by_source.get(src, {})
-                _sync_failed = _disc_info.get("failed", False)
-                if not _sync_failed and synced_at:
+                _no_data = _disc_info.get("failed", False) or sync_status == "no_data"
+                if not _no_data:
                     try:
                         import datetime as _dt
                         _age = (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(synced_at.rstrip("Z"))).total_seconds()
-                        if _age > 300:  # 5 minutes with no data = stuck
-                            _sync_failed = True
+                        if _age > 300:
+                            _no_data = True
                     except Exception:
                         pass
-                if _sync_failed:
+                if _no_data:
                     hero_html = (
                         f'<div class="acct-divider"></div>'
                         f'<div class="acct-hero">'
-                        f'<div style="color:#ef4444;font-size:12px">No account data — sync to retry</div>'
+                        f'<div style="color:#d97706;font-size:12px">No account data — sync to retry</div>'
                         f'</div>'
                     )
-                    status_color = "#ef4444"
+                    status_color = "#f59e0b"
                 else:
                     hero_html = (
                         f'<div class="acct-divider"></div>'
@@ -5406,6 +5415,25 @@ def api_credentials_fetch():
     return jsonify({"ok": True, "credentials": creds, "email": email_cfg})
 
 
+# ── Login-page detection ──────────────────────────────────────────────────────
+
+_LOGIN_SIGNALS = [
+    "sign in to", "sign in with", "log in to", "log in with",
+    "forgot password", "forgot your password", "reset password",
+    "remember me", "create an account", "join now", "join for free",
+    "email or member number", "member number or email",
+    "username and password", "enter your password",
+]
+
+def _is_login_page(raw_text: str) -> bool:
+    """Return True if raw_text looks like a login/sign-in page rather than account data."""
+    if not raw_text:
+        return False
+    sample = raw_text[:3000].lower()
+    hits = sum(1 for sig in _LOGIN_SIGNALS if sig in sample)
+    return hits >= 2
+
+
 # ── Account data sync API ─────────────────────────────────────────────────────
 
 @app.route("/api/data/sync", methods=["POST"])
@@ -5433,6 +5461,17 @@ def api_data_sync():
     color      = data.get("color", "#f0f0f0")
     raw_text   = data.get("raw_text", "") or body.get("raw_text", "")
 
+    # Detect login-page redirects before storing
+    if _is_login_page(raw_text):
+        data["sync_status"] = "login_required"
+        data["items"] = []          # discard any stale items
+        raw_text = ""               # don't run discovery on login page
+        data["raw_text"] = ""
+    elif not data.get("items") and not raw_text:
+        data["sync_status"] = "no_data"
+    else:
+        data["sync_status"] = "ok"
+
     data_enc   = encrypt_account_data(user["id"], data)
 
     db = get_db()
@@ -5457,7 +5496,7 @@ def api_data_sync():
         except Exception:
             pass
 
-    if raw_text and _claude:
+    if raw_text and _claude and data.get("sync_status") == "ok":
         import threading
         site_name = display
         uid       = user["id"]
