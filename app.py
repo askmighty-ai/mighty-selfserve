@@ -1082,8 +1082,8 @@ SIGNUP_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
-.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.logo-mark img{height:32px;width:auto}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:8px;overflow:hidden}
+.logo-mark img{height:32px;width:32px;object-fit:cover}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:22px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
 .sub{font-size:14px;color:#666;margin-bottom:24px;line-height:1.5}
@@ -2180,8 +2180,9 @@ body{display:flex;flex-direction:row}
     <button class="btn-sm" onclick="window.location.href=\'/settings/export-csv\'">↓ Export activity log (CSV)</button>
     <hr style="border:none;border-top:1px solid #f5f2ed;margin:16px 0">
     <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Danger zone</div>
-    <div style="display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;flex-direction:column;gap:6px">
       <button class="btn-danger" id="del-activity-btn" onclick="deleteActivity()">Delete all activity</button>
+      <span style="font-size:12px;color:#9ca3af">Clears your action history. Your account and credentials stay active.</span>
       <span id="del-activity-msg" style="font-size:12px;color:#34d399;display:none">All activity deleted.</span>
     </div>
     <hr style="border:none;border-top:1px solid rgba(248,113,113,0.15);margin:16px 0">
@@ -2548,8 +2549,11 @@ def login():
         return redirect(nxt)
     return redirect("/dashboard")
 
-@app.route("/logout", methods=["POST"])
+@app.route("/logout", methods=["GET", "POST"])
 def logout():
+    if request.method == "GET":
+        session.clear()
+        return redirect("/login")
     check_csrf()
     session.clear()
     return redirect("/")
