@@ -4320,8 +4320,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 html,body{{height:100%;overflow:hidden;font-family:'Inter',sans-serif}}
-body{{display:flex;flex-direction:row;background:#f0ede8;color:#1c1917}}
--webkit-font-smoothing:antialiased;
+body{{display:flex;flex-direction:row;background:#f0ede8;color:#1c1917;-webkit-font-smoothing:antialiased}}
 /* ── Sidebar ── */
 .sidebar{{width:220px;flex-shrink:0;background:#080a10;border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}}
 .sidebar-header{{padding:20px 16px 12px;border-bottom:1px solid #1c2030}}
