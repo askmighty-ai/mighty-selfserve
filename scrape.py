@@ -140,6 +140,13 @@ def push_to_cloud(key: str, result: dict, synced_at: str) -> bool:
         return False
 
 # ── DOM helpers ───────────────────────────────────────────────────────────────
+def _safe_visible(page, selector: str, timeout: int = 2_000) -> bool:
+    """Return True if selector is visible on the page, False otherwise."""
+    try:
+        return page.locator(selector).first.is_visible(timeout=timeout)
+    except Exception:
+        return False
+
 def _fill(page, selectors: list, value: str) -> bool:
     for sel in selectors:
         try:
@@ -1071,13 +1078,28 @@ def scrape_marriott(page, c, ctx):
     try:
         page.goto("https://www.marriott.com/loyalty/myAccount/default.mi", timeout=NAV_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        _fill(page, ["#username",'input[name="username"]','input[id*="user"]'], c["username"])
-        _fill(page, ["#password",'input[name="password"]','input[type="password"]'], c["password"])
-        _inbox_mark(ctx)
-        _click(page, ['button[type="submit"]',"#login-form-submit"])
-        _handle_2fa(page, ctx)
-        page.wait_for_url("**myAccount**", timeout=LOGIN_TIMEOUT)
-        page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+        page.wait_for_timeout(2_000)
+
+        # Marriott uses the same URL logged-in and logged-out — check DOM not URL
+        _login_sels = ['#username', 'input[name="username"]', 'input[id*="user"]', 'input[type="email"]']
+        needs_login = any(
+            _safe_visible(page, sel) for sel in _login_sels
+        )
+
+        if needs_login:
+            _fill(page, _login_sels, c["username"])
+            _fill(page, ["#password", 'input[name="password"]', 'input[type="password"]'], c["password"])
+            _inbox_mark(ctx)
+            _click(page, ['button[type="submit"]', "#login-form-submit", 'button[id*="login"]', 'input[type="submit"]'])
+            _handle_2fa(page, ctx)
+            # Wait for login form to disappear — URL won't change on this SPA
+            try:
+                page.wait_for_selector('input[type="password"]', state="hidden", timeout=LOGIN_TIMEOUT)
+            except Exception:
+                pass
+            page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+            page.wait_for_timeout(4_000)
+
         raw_text = _explore_account_pages(page)
         r.update({"status":"ok","items":[],"raw_text":raw_text})
     except Exception as e:
