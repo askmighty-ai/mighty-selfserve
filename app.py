@@ -796,8 +796,8 @@ body{background:#fff;color:#1a1a1a}
 .nav{position:sticky;top:0;z-index:100;background:#fff;border-bottom:1px solid #e5e3df;height:60px;display:flex;align-items:center;padding:0 24px}
 .nav-inner{max-width:900px;margin:0 auto;width:100%;display:flex;align-items:center;justify-content:space-between}
 .logo{display:flex;align-items:center;gap:10px}
-.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.logo-mark img{height:32px;width:auto}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:8px;overflow:hidden}
+.logo-mark img{height:32px;width:32px;object-fit:cover}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .nav-actions{display:flex;align-items:center;gap:16px}
 .nav-signin{font-size:14px;font-weight:500;color:#444;text-decoration:none}
@@ -1082,7 +1082,7 @@ SIGNUP_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
-.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:8px;overflow:hidden}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:8px;overflow:hidden}
 .logo-mark img{height:32px;width:32px;object-fit:cover}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:22px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
@@ -1136,8 +1136,8 @@ LOGIN_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
-.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.logo-mark img{height:32px;width:auto}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:8px;overflow:hidden}
+.logo-mark img{height:32px;width:32px;object-fit:cover}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:22px;font-weight:700;margin-bottom:6px}
 .sub{font-size:14px;color:#666;margin-bottom:20px}
@@ -1196,8 +1196,8 @@ FORGOT_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
-.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.logo-mark img{height:32px;width:auto}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:8px;overflow:hidden}
+.logo-mark img{height:32px;width:32px;object-fit:cover}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#1a1a1a}
 .sub{font-size:14px;color:#666;margin-bottom:24px;line-height:1.5}
@@ -1245,8 +1245,8 @@ RESET_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
-.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center}
-.logo-mark img{height:32px;width:auto}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:8px;overflow:hidden}
+.logo-mark img{height:32px;width:32px;object-fit:cover}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#1a1a1a}
 .sub{font-size:14px;color:#666;margin-bottom:24px}
@@ -1421,7 +1421,8 @@ NOT_FOUND_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;background:#f8f7f5}
 .wrap{text-align:center;max-width:380px}
 .logo{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:32px}
-.logo-mark img{height:32px;width:auto}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:8px;overflow:hidden}
+.logo-mark img{height:32px;width:32px;object-fit:cover}
 .logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 h1{font-size:72px;font-weight:800;color:#e5e3df;margin-bottom:0;line-height:1}
 h2{font-size:20px;font-weight:700;color:#1a1a1a;margin:8px 0 12px}
@@ -1913,8 +1914,8 @@ ONBOARDING_HTML = """<!DOCTYPE html>
 body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px 24px}
 .wrap{width:100%;max-width:480px;display:flex;flex-direction:column;min-height:calc(100vh - 40px)}
 .logo{display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:16px;flex-shrink:0}
-.logo-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center}
-.logo-mark img{height:28px;width:auto}
+.logo-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:6px;overflow:hidden}
+.logo-mark img{height:28px;width:28px;object-fit:cover}
 .logo-name{font-size:17px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .progress{display:flex;gap:6px;justify-content:center;margin-bottom:16px;flex-shrink:0}
 .progress-dot{width:8px;height:8px;border-radius:50%;background:#e5e3df;transition:all 0.2s;padding:6px;margin:-6px;background-clip:content-box;cursor:default;opacity:0.35}
@@ -2071,7 +2072,7 @@ body{display:flex;flex-direction:row}
 .push-status{font-size:12px;color:#6b7280;margin-top:6px;min-height:16px}
 .push-btn{font-size:12px;font-weight:600;padding:6px 12px;background:#ffffff;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;cursor:pointer;transition:all 0.12s;display:none;margin-top:6px;font-family:inherit}
 .push-btn:hover{background:#f5f2ed;border-color:#6366f1}
-.btn-danger{font-size:12px;font-weight:600;padding:8px 12px;background:transparent;color:#dc2626;border:1px solid rgba(220,38,38,0.2);border-radius:6px;cursor:pointer;transition:all 0.12s;width:100%;text-align:left;font-family:inherit}
+.btn-danger{font-size:12px;font-weight:600;padding:8px 16px;background:transparent;color:#dc2626;border:1px solid rgba(220,38,38,0.2);border-radius:6px;cursor:pointer;transition:all 0.12s;text-align:center;font-family:inherit;width:100%}
 .btn-danger:hover{background:rgba(220,38,38,0.06);border-color:#dc2626}
 .ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:#6366f1;background:#f5f2ed;border:1px solid #e8e4de;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
 .ntfy-link:hover{border-color:#6366f1;text-decoration:none}
@@ -2181,8 +2182,8 @@ body{display:flex;flex-direction:row}
     <hr style="border:none;border-top:1px solid #f5f2ed;margin:16px 0">
     <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Danger zone</div>
     <div style="display:flex;flex-direction:column;gap:6px">
-      <button class="btn-danger" id="del-activity-btn" onclick="deleteActivity()">Delete all activity</button>
       <span style="font-size:12px;color:#9ca3af">Clears your action history. Your account and credentials stay active.</span>
+      <button class="btn-danger" id="del-activity-btn" onclick="deleteActivity()">Delete all activity</button>
       <span id="del-activity-msg" style="font-size:12px;color:#34d399;display:none">All activity deleted.</span>
     </div>
     <hr style="border:none;border-top:1px solid rgba(248,113,113,0.15);margin:16px 0">
@@ -2407,8 +2408,8 @@ APPROVE_HTML = """<!DOCTYPE html>
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;background:#f8f7f5}
 .wrap{width:100%;max-width:480px}
 .brand{display:flex;align-items:center;gap:8px;margin-bottom:20px;justify-content:center}
-.brand-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center}
-.brand-mark img{height:28px;width:auto}
+.brand-mark{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:6px;overflow:hidden}
+.brand-mark img{height:28px;width:28px;object-fit:cover}
 .brand-name{font-size:16px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .card{background:#fff;border:1px solid #e5e3df;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08)}
 .card-header{background:#f5f3ff;border-bottom:1px solid #e9d5ff;padding:16px 20px;display:flex;align-items:center;gap:10px}
@@ -4381,7 +4382,7 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
 .modal-site-row:last-child{{border-bottom:none}}
 .modal-connect-btn{{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;flex-shrink:0;transition:all 0.12s}}
 .modal-connect-btn:hover{{border-color:#6366f1;background:#eef2ff}}
-.modal-cred-screen{{display:none;flex-direction:column;height:100%}}
+.modal-cred-screen{{display:none;flex-direction:column;flex:1;min-height:0}}
 .modal-cred-screen.active{{display:flex}}
 .modal-cred-head{{padding:20px 20px 16px;border-bottom:1px solid #f5f2ed;flex-shrink:0;display:flex;align-items:center;gap:12px}}
 .modal-back-btn{{background:none;border:none;font-size:14px;cursor:pointer;color:#6366f1;font-family:inherit;font-weight:600;padding:0;transition:color 0.12s}}
@@ -4414,7 +4415,7 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
   <div class="modal" id="modal-box">
 
     <!-- Screen 1: site picker -->
-    <div id="screen-picker" style="display:flex;flex-direction:column;height:100%">
+    <div id="screen-picker" style="display:flex;flex-direction:column;flex:1;min-height:0">
       <div class="modal-head">
         <div class="modal-title">
           <span>Connect an account</span>
@@ -4430,7 +4431,7 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
     </div>
 
     <!-- Screen 2: credential entry -->
-    <div id="screen-cred" style="display:none;flex-direction:column;max-height:80vh">
+    <div id="screen-cred" style="display:none;flex-direction:column;flex:1;min-height:0">
       <div class="modal-cred-head">
         <button class="modal-back-btn" onclick="backToPicker()">← Back</button>
         <div id="modal-cred-icon" style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px"></div>
