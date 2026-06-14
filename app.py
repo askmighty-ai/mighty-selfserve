@@ -767,7 +767,7 @@ def send_web_push(user_id, title, body, url, action_id=None):
 
 BASE_CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#f0ede8;color:#1c1917;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+body{font-family:'Inter',sans-serif;background:#e8e2da;color:#1c1917;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 a{color:#6366f1;text-decoration:none}
 a:hover{text-decoration:underline}
 input,textarea,select{font-family:inherit}
@@ -1458,7 +1458,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 html,body{height:100%;overflow:hidden}
 body{display:flex;flex-direction:row}
 /* ── Sidebar ── */
-.sidebar{width:220px;flex-shrink:0;background:#080a10;border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.sidebar{width:220px;flex-shrink:0;background:linear-gradient(180deg,#0d1017 0%,#070910 100%);border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}
 .sidebar-header{padding:20px 16px 12px;border-bottom:1px solid #1c2030}
 .sidebar-logo{display:flex;align-items:center;gap:9px;text-decoration:none}
 .sidebar-logo:hover{text-decoration:none}
@@ -1466,8 +1466,8 @@ body{display:flex;flex-direction:row}
 .sidebar-logo-name{font-size:15px;font-weight:800;letter-spacing:0.4px;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .sidebar-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
 .sidebar-link{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:500;color:#8892a4;text-decoration:none;transition:all 0.12s}
-.sidebar-link:hover{background:#1a1e2e;color:#e2e8f0;text-decoration:none}
-.sidebar-link-active{background:rgba(129,140,248,0.12);color:#818cf8 !important;font-weight:600}
+.sidebar-link:hover{background:rgba(255,255,255,0.05);color:#e2e8f0;text-decoration:none}
+.sidebar-link-active{background:rgba(129,140,248,0.15);color:#818cf8 !important;font-weight:600;border-left:2px solid #818cf8;padding-left:8px}
 .sidebar-link-active svg,.sidebar-link-active span{color:#818cf8}
 .sidebar-link svg{flex-shrink:0;opacity:0.6;transition:opacity 0.12s}
 .sidebar-link:hover svg,.sidebar-link-active svg{opacity:1}
@@ -1476,7 +1476,7 @@ body{display:flex;flex-direction:row}
 .sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
 .sidebar-user-email{font-size:11px;color:#8892a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
 .sidebar-signout{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}
-.sidebar-signout:hover{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}
+.sidebar-signout:hover{background:rgba(255,255,255,0.05);color:#e2e8f0;border-color:#2d3450}
 /* ── Main content ── */
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
 /* topbar removed */
@@ -1492,10 +1492,10 @@ body{display:flex;flex-direction:row}
 /* ── Feed tabs ── */
 .feed-tabs{display:flex;gap:4px;background:#e8e4de;border:1px solid #ddd9d3;border-radius:9px;padding:3px;margin-bottom:24px;width:fit-content}
 .feed-tab{padding:6px 18px;border-radius:7px;border:none;background:none;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.12)}
+.feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 4px rgba(0,0,0,0.14),0 1px 2px rgba(0,0,0,0.08)}
 /* ── Account cards ── */
-.acct-card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:18px 20px;margin-bottom:12px;transition:border-color 0.15s;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.acct-card:hover{border-color:#d0ccc5}
+.acct-card{background:#ffffff;border:1px solid #e4dfd8;border-radius:12px;padding:18px 20px;margin-bottom:12px;transition:all 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
+.acct-card:hover{border-color:#c8c2ba;background:#fdfcfb;box-shadow:0 2px 6px rgba(0,0,0,0.07),0 8px 24px rgba(0,0,0,0.08)}
 .acct-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
 .acct-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #f5f2ed}
 .acct-row:last-child{border-bottom:none}
@@ -1503,8 +1503,8 @@ body{display:flex;flex-direction:row}
 .acct-val{font-size:13px;font-weight:600;color:#1c1917;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%}
 .acct-cards-wrap{display:flex;flex-direction:column}
 /* ── Activity log ── */
-.action-card{background:#ffffff;border:1px solid #e8e4de;border-radius:10px;overflow:hidden;margin-bottom:8px;transition:border-color 0.12s;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
-.action-card:hover{border-color:#d0ccc5}
+.action-card{background:#ffffff;border:1px solid #e4dfd8;border-radius:10px;overflow:hidden;margin-bottom:8px;transition:all 0.12s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 3px 10px rgba(0,0,0,0.05)}
+.action-card:hover{border-color:#c8c2ba;box-shadow:0 2px 6px rgba(0,0,0,0.07),0 6px 20px rgba(0,0,0,0.07)}
 .action-card.is-pending{border-color:rgba(245,158,11,0.4);background:#fffbef}
 .action-top{padding:14px 16px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .action-label{font-size:14px;font-weight:600;color:#1c1917;line-height:1.4}
@@ -1525,7 +1525,7 @@ body{display:flex;flex-direction:row}
 .clevel-consequential{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(251,191,36,0.1);color:#fbbf24;border:1px solid rgba(251,191,36,0.2);letter-spacing:0.3px}
 .clevel-critical{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(248,113,113,0.1);color:#f87171;border:1px solid rgba(248,113,113,0.2);letter-spacing:0.3px}
 /* ── Feed search ── */
-.feed-search{width:100%;padding:9px 14px;border:1.5px solid #e8e4de;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s;margin-bottom:14px}
+.feed-search{width:100%;padding:9px 14px;border:1.5px solid #e8e4de;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,0.05)}
 .feed-search:focus{border-color:#6366f1}
 .feed-search::placeholder{color:#c0bbb5}
 /* ── Status filter chips ── */
@@ -2050,7 +2050,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
 """ + BASE_CSS + """
 html,body{height:100%;overflow:hidden}
 body{display:flex;flex-direction:row}
-.sidebar{width:220px;flex-shrink:0;background:#080a10;border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.sidebar{width:220px;flex-shrink:0;background:linear-gradient(180deg,#0d1017 0%,#070910 100%);border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}
 .sidebar-header{padding:20px 16px 12px;border-bottom:1px solid #1c2030}
 .sidebar-logo{display:flex;align-items:center;gap:9px;text-decoration:none}
 .sidebar-logo:hover{text-decoration:none}
@@ -2058,8 +2058,8 @@ body{display:flex;flex-direction:row}
 .sidebar-logo-name{font-size:15px;font-weight:800;letter-spacing:0.4px;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .sidebar-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
 .sidebar-link{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:500;color:#8892a4;text-decoration:none;transition:all 0.12s}
-.sidebar-link:hover{background:#1a1e2e;color:#e2e8f0;text-decoration:none}
-.sidebar-link-active{background:rgba(129,140,248,0.12);color:#818cf8 !important;font-weight:600}
+.sidebar-link:hover{background:rgba(255,255,255,0.05);color:#e2e8f0;text-decoration:none}
+.sidebar-link-active{background:rgba(129,140,248,0.15);color:#818cf8 !important;font-weight:600;border-left:2px solid #818cf8;padding-left:8px}
 .sidebar-link svg{flex-shrink:0;opacity:0.6;transition:opacity 0.12s}
 .sidebar-link:hover svg,.sidebar-link-active svg{opacity:1;stroke:#818cf8}
 .sidebar-footer{padding:12px 8px;border-top:1px solid #1c2030;display:flex;flex-direction:column;gap:6px}
@@ -2067,11 +2067,11 @@ body{display:flex;flex-direction:row}
 .sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
 .sidebar-user-email{font-size:11px;color:#8892a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
 .sidebar-signout{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}
-.sidebar-signout:hover{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}
+.sidebar-signout:hover{background:rgba(255,255,255,0.05);color:#e2e8f0;border-color:#2d3450}
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto}
 .page-wrap{max-width:560px;margin:0;padding:32px 36px;display:flex;flex-direction:column;gap:16px}
 .page-title{font-size:20px;font-weight:700;color:#1c1917;margin-bottom:4px}
-.card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:24px;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
 .section-title{font-size:11px;font-weight:700;color:#9ca3af;margin-bottom:16px;text-transform:uppercase;letter-spacing:0.7px}
 .toggle-row{display:flex;align-items:flex-start;gap:12px;padding:12px 0}
 .toggle-row+.toggle-row{border-top:1px solid #f5f2ed}
@@ -4333,9 +4333,9 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 html,body{{height:100%;overflow:hidden;font-family:'Inter',sans-serif}}
-body{{display:flex;flex-direction:row;background:#f0ede8;color:#1c1917;-webkit-font-smoothing:antialiased}}
+body{{display:flex;flex-direction:row;background:#e8e2da;color:#1c1917;-webkit-font-smoothing:antialiased}}
 /* ── Sidebar ── */
-.sidebar{{width:220px;flex-shrink:0;background:#080a10;border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}}
+.sidebar{{width:220px;flex-shrink:0;background:linear-gradient(180deg,#0d1017 0%,#070910 100%);border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}}
 .sidebar-header{{padding:20px 16px 12px;border-bottom:1px solid #1c2030}}
 .sidebar-logo{{display:flex;align-items:center;gap:9px;text-decoration:none}}
 .sidebar-logo:hover{{text-decoration:none}}
@@ -4343,8 +4343,8 @@ body{{display:flex;flex-direction:row;background:#f0ede8;color:#1c1917;-webkit-f
 .sidebar-logo-name{{font-size:15px;font-weight:800;letter-spacing:0.4px;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
 .sidebar-nav{{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}}
 .sidebar-link{{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:500;color:#8892a4;text-decoration:none;transition:all 0.12s}}
-.sidebar-link:hover{{background:#1a1e2e;color:#e2e8f0;text-decoration:none}}
-.sidebar-link-active{{background:rgba(129,140,248,0.12);color:#818cf8 !important;font-weight:600}}
+.sidebar-link:hover{{background:rgba(255,255,255,0.05);color:#e2e8f0;text-decoration:none}}
+.sidebar-link-active{{background:rgba(129,140,248,0.15);color:#818cf8 !important;font-weight:600;border-left:2px solid #818cf8;padding-left:8px}}
 .sidebar-link svg{{flex-shrink:0;opacity:0.6;transition:opacity 0.12s}}
 .sidebar-link:hover svg,.sidebar-link-active svg{{opacity:1;stroke:#818cf8}}
 .sidebar-footer{{padding:12px 8px;border-top:1px solid #1c2030;display:flex;flex-direction:column;gap:6px}}
@@ -4352,7 +4352,7 @@ body{{display:flex;flex-direction:row;background:#f0ede8;color:#1c1917;-webkit-f
 .sidebar-avatar{{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}}
 .sidebar-user-email{{font-size:11px;color:#8892a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}}
 .sidebar-signout{{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}}
-.sidebar-signout:hover{{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}}
+.sidebar-signout:hover{{background:rgba(255,255,255,0.05);color:#e2e8f0;border-color:#2d3450}}
 /* ── Main ── */
 .main-content{{flex:1;min-width:0;height:100vh;overflow-y:auto}}
 .page{{max-width:660px;margin:0 auto;padding:32px 28px}}
@@ -4361,7 +4361,7 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
 .btn-connect-new{{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;transition:background 0.12s}}
 .btn-connect-new:hover{{background:#4f46e5}}
 /* ── Cred cards ── */
-.cred-card{{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s}}
+.cred-card{{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}}
 .cred-card:hover{{border-color:#d0ccc5}}
 .cred-form input{{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#ffffff;color:#1c1917}}
 .cred-form input:focus{{border-color:#6366f1}}
