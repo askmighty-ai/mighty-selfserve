@@ -265,6 +265,24 @@ def check_pw(stored, provided):
 def utcnow():
     return datetime.now(timezone.utc)
 
+def _fmt_sync(ts):
+    """Format a UTC ISO timestamp as a human-readable relative time string."""
+    try:
+        clean = ts.replace('Z', '+00:00') if ts and ts.endswith('Z') else ts
+        dt = datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        secs = int((utcnow() - dt).total_seconds())
+        if secs < 60:   return "just now"
+        mins = secs // 60
+        if mins < 60:   return f"{mins} minute{'s' if mins != 1 else ''} ago"
+        hrs = mins // 60
+        if hrs < 24:    return f"{hrs} hour{'s' if hrs != 1 else ''} ago"
+        days = hrs // 24
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    except Exception:
+        return ts[:10] if ts else "—"
+
 # ── Per-user data encryption ───────────────────────────────────────────────────
 # Key is derived from SECRET_KEY + user_id so each user's data uses a distinct key.
 # This protects against raw database theft; the server itself can decrypt (v1 trade-off).
