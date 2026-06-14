@@ -719,6 +719,31 @@ _SITE_CFGS = {
         "p_sels":['#user_password','input[type="password"]'],
         "s_sels":['button[type="submit"]'],
         "ok_url":"**walgreens.com/**"},
+    # Insurance
+    "state_farm":    {"name":"State Farm",       "icon":"🏠","color":"#fef3c7",
+        "login_url":"https://www.statefarm.com/customer-care/sign-in-to-my-account",
+        "u_sels":['#sfg-user-name-input','input[name="username"]','input[type="text"]'],
+        "p_sels":['#sfg-password-input','input[name="password"]','input[type="password"]'],
+        "s_sels":['button[type="submit"]','#ciam-sign-in-btn'],
+        "ok_url":"**statefarm.com/**","wait_ms":4_000},
+    # Telecom — AT&T Wireless (wireless billing portal)
+    "att_wireless":  {"name":"AT&T Wireless",    "icon":"📱","color":"#dbeafe",
+        "login_url":"https://www.att.com/my/#/",
+        "u_sels":['#userID','input[name="userId"]','input[type="text"]'],
+        "p_sels":['#password','input[type="password"]'],
+        "s_sels":['button[type="submit"]','#submitBtn'],
+        "ok_url":"**att.com/**",
+        "post_url":"https://myatt.att.com/exp/myconsumerdashboard/",
+        "wait_ms":5_000},
+    # Coffee / Loyalty
+    "starbucks":     {"name":"Starbucks",         "icon":"☕","color":"#ecfdf5",
+        "login_url":"https://www.starbucks.com/account/signin",
+        "u_sels":['input[type="email"]','input[name="email"]','#email'],
+        "p_sels":['input[type="password"]','input[name="password"]'],
+        "s_sels":['button[type="submit"]'],
+        "ok_url":"**starbucks.com/account**",
+        "post_url":"https://www.starbucks.com/rewards/",
+        "wait_ms":4_000},
 }
 
 # Build scrapers from configs — same pattern, AI discovery handles field extraction
@@ -1238,10 +1263,11 @@ SCRAPERS = {
 
 CATEGORIES = [
     ("Banking & Finance",  ["amex","chase","sfcu"]),
-    ("Shopping",           ["amazon"]),
+    ("Shopping",           ["amazon","starbucks"]),
     ("Travel",             ["delta","hertz","marriott","hilton"]),
     ("Entertainment",      ["disney_plus","ticketmaster"]),
-    ("Utilities & Bills",  ["xfinity","pa_utilities"]),
+    ("Utilities & Bills",  ["xfinity","pa_utilities","att","att_wireless"]),
+    ("Insurance",          ["state_farm"]),
     ("Health",             ["pamf"]),
 ]
 

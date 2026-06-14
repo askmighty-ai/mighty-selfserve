@@ -3085,7 +3085,8 @@ def dashboard():
         "marriott","hilton","hyatt","ihg","wyndham",
         "disney_plus","netflix","hulu","spotify","max","peacock","paramount_plus","ticketmaster",
         "amazon","target","walmart","costco",
-        "xfinity","pa_utilities","att","verizon","tmobile",
+        "xfinity","pa_utilities","att","att_wireless","verizon","tmobile",
+        "starbucks","state_farm",
         "pamf","kaiser","cvs","walgreens",
     ]
     ordered_sources = [s for s in CATEGORY_ORDER if s in connected_sources]
@@ -4005,8 +4006,12 @@ SUPPORTED_SITES = [
     ("xfinity",       "Xfinity",               "📡", "#e8f5e9", "Utilities & Telecom"),
     ("pa_utilities",  "Palo Alto Utilities",    "⚡", "#fff3e0", "Utilities & Telecom"),
     ("att",           "AT&T",                   "📱", "#eff6ff", "Utilities & Telecom"),
+    ("att_wireless",  "AT&T Wireless",          "📱", "#dbeafe", "Utilities & Telecom"),
     ("verizon",       "Verizon",                "📱", "#fce7f3", "Utilities & Telecom"),
     ("tmobile",       "T-Mobile",               "📱", "#fce7f3", "Utilities & Telecom"),
+    # Shopping (loyalty)
+    ("starbucks",     "Starbucks",              "☕", "#ecfdf5", "Shopping"),
+    ("state_farm",    "State Farm",             "🏠", "#fef3c7", "Insurance"),
     # Health
     ("pamf",          "PAMF MyChart",           "🏥", "#e8f5e9", "Health"),
     ("kaiser",        "Kaiser Permanente",      "🏥", "#ecfdf5", "Health"),
