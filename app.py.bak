@@ -283,41 +283,6 @@ def _fmt_sync(ts):
     except Exception:
         return ts[:10] if ts else "—"
 
-def _sidebar_html(active: str, email: str, csrf: str) -> str:
-    """Generate the shared left sidebar HTML."""
-    def _nav(href, label, icon_svg, page_key):
-        cls = "sidebar-link sidebar-link-active" if active == page_key else "sidebar-link"
-        return f'<a href="{href}" class="{cls}">{icon_svg}<span>{label}</span></a>'
-    icon_dash = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>'
-    icon_acct = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>'
-    icon_sett = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>'
-    av = (email[0] if email else "?").upper()
-    short = email if len(email) <= 24 else email[:21] + "…"
-    return (
-        '<aside class="sidebar">'
-        '<div class="sidebar-header">'
-        '<a href="/dashboard" class="sidebar-logo">'
-        '<img src="/logo-icon.png" alt="Mighty" class="sidebar-logo-img">'
-        '<span class="sidebar-logo-name">Mighty</span>'
-        '</a></div>'
-        '<nav class="sidebar-nav">'
-        + _nav('/dashboard', 'Dashboard', icon_dash, 'dashboard')
-        + _nav('/credentials', 'Accounts', icon_acct, 'accounts')
-        + _nav('/settings', 'Settings', icon_sett, 'settings')
-        + '</nav>'
-        '<div class="sidebar-footer">'
-        '<div class="sidebar-user">'
-        f'<div class="sidebar-avatar">{av}</div>'
-        f'<div class="sidebar-user-email" title="{he(email)}">{he(short)}</div>'
-        '</div>'
-        f'<form method="POST" action="/logout" style="margin:0">'
-        f'<input type="hidden" name="_csrf" value="{he(csrf)}">'
-        '<button class="sidebar-signout" type="submit">Sign out</button>'
-        '</form>'
-        '</div>'
-        '</aside>'
-    )
-
 # ── Per-user data encryption ───────────────────────────────────────────────────
 # Key is derived from SECRET_KEY + user_id so each user's data uses a distinct key.
 # This protects against raw database theft; the server itself can decrypt (v1 trade-off).
@@ -767,17 +732,17 @@ def send_web_push(user_id, title, body, url, action_id=None):
 
 BASE_CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#0d0f17;color:#e2e8f0;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-a{color:#818cf8;text-decoration:none}
+body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+a{color:#7c3aed;text-decoration:none}
 a:hover{text-decoration:underline}
-input,textarea,select{font-family:inherit}
+input{font-family:inherit}
 button{font-family:inherit;cursor:pointer}
 .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:0.3px}
-.badge-logged{background:#1e2535;color:#8892a4}
-.badge-pending{background:#2d2410;color:#fbbf24;border:1px solid rgba(251,191,36,0.2)}
-.badge-approved{background:#0d2a1e;color:#34d399;border:1px solid rgba(52,211,153,0.2)}
-.badge-denied{background:#2a1010;color:#f87171;border:1px solid rgba(248,113,113,0.2)}
-.badge-timeout{background:#1e2535;color:#4a5568}
+.badge-logged{background:#f3f4f6;color:#6b7280}
+.badge-pending{background:#fef3c7;color:#d97706}
+.badge-approved{background:#f0fdf4;color:#16a34a}
+.badge-denied{background:#fef2f2;color:#dc2626}
+.badge-timeout{background:#f3f4f6;color:#9ca3af}
 """
 
 LANDING_HTML = """<!DOCTYPE html>
@@ -1449,138 +1414,160 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-/* ── Layout ── */
-html,body{height:100%;overflow:hidden}
-body{display:flex;flex-direction:row}
-/* ── Sidebar ── */
-.sidebar{width:220px;flex-shrink:0;background:#080a10;border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}
-.sidebar-header{padding:20px 16px 12px;border-bottom:1px solid #1c2030}
-.sidebar-logo{display:flex;align-items:center;gap:9px;text-decoration:none}
-.sidebar-logo:hover{text-decoration:none}
-.sidebar-logo-img{width:26px;height:26px;border-radius:6px;object-fit:cover}
-.sidebar-logo-name{font-size:15px;font-weight:800;letter-spacing:0.4px;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.sidebar-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
-.sidebar-link{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:500;color:#8892a4;text-decoration:none;transition:all 0.12s}
-.sidebar-link:hover{background:#1a1e2e;color:#e2e8f0;text-decoration:none}
-.sidebar-link-active{background:rgba(129,140,248,0.12);color:#818cf8 !important;font-weight:600}
-.sidebar-link-active svg,.sidebar-link-active span{color:#818cf8}
-.sidebar-link svg{flex-shrink:0;opacity:0.6;transition:opacity 0.12s}
-.sidebar-link:hover svg,.sidebar-link-active svg{opacity:1}
-.sidebar-footer{padding:12px 8px;border-top:1px solid #1c2030;display:flex;flex-direction:column;gap:6px}
-.sidebar-user{display:flex;align-items:center;gap:8px;padding:4px 8px}
-.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
-.sidebar-user-email{font-size:11px;color:#8892a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
-.sidebar-signout{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}
-.sidebar-signout:hover{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}
-/* ── Main content ── */
-.main-content{flex:1;min-width:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
-.topbar{background:#0d0f17;border-bottom:1px solid #1c2030;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;position:sticky;top:0;z-index:10;backdrop-filter:blur(8px)}
-.topbar-right{display:flex;align-items:center;gap:10px}
-.pending-pill{background:rgba(129,140,248,0.15);border:1px solid rgba(129,140,248,0.3);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#818cf8}
-.btn-sync{padding:6px 14px;border-radius:7px;border:1px solid #252a3d;background:#141720;font-size:12px;font-weight:600;color:#818cf8;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-sync:hover{background:#1a1e2e;border-color:#818cf8}
-/* ── Page content ── */
-.page-body{flex:1;padding:28px 32px;max-width:960px;width:100%;box-sizing:border-box}
-.page-section-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;gap:16px}
-.page-title{font-size:18px;font-weight:700;color:#e2e8f0}
-.page-sub{font-size:13px;color:#8892a4;margin-top:3px}
-/* ── Feed tabs ── */
-.feed-tabs{display:flex;gap:4px;background:#141720;border:1px solid #252a3d;border-radius:9px;padding:3px;margin-bottom:24px;width:fit-content}
-.feed-tab{padding:6px 18px;border-radius:7px;border:none;background:none;font-size:12px;font-weight:600;color:#8892a4;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.feed-tab.active{background:#1a1e2e;color:#e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.4)}
-/* ── Account cards ── */
-.acct-card{background:#141720;border:1px solid #252a3d;border-radius:12px;padding:18px 20px;margin-bottom:12px;transition:border-color 0.15s}
-.acct-card:hover{border-color:#2d3450}
-.acct-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.acct-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1c2030}
-.acct-row:last-child{border-bottom:none}
-.acct-lbl{font-size:11px;font-weight:600;color:#8892a4;flex-shrink:0;min-width:160px}
-.acct-val{font-size:13px;font-weight:600;color:#e2e8f0;text-align:right}
-.acct-cards-wrap{display:flex;flex-direction:column}
-/* ── Activity log ── */
-.action-card{background:#141720;border:1px solid #252a3d;border-radius:10px;overflow:hidden;margin-bottom:8px;transition:border-color 0.12s}
-.action-card:hover{border-color:#2d3450}
-.action-card.is-pending{border-color:rgba(251,191,36,0.35);background:#161510}
+body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f8f7f5}
+.topbar{background:#fff;border-bottom:1px solid #e5e3df;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.topbar-logo{display:flex;align-items:center;gap:8px}
+.topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
+.topbar-logo-mark img{height:26px;width:auto}
+.topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.topbar-right{display:flex;align-items:center;gap:16px}
+.topbar-email{font-size:12px;color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none}
+.topbar-email:hover{color:#6b7280}
+.btn-logout{font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
+.btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
+.main{flex:1;min-height:0;display:grid;grid-template-columns:1fr;gap:24px;max-width:1140px;width:100%;margin:0 auto;padding:28px 24px;box-sizing:border-box}
+@media(max-width:768px){.main{grid-template-columns:1fr}}
+.sidebar{display:flex;flex-direction:column;gap:14px;overflow-y:auto}
+.feed-col{overflow-y:auto;min-height:0;padding-bottom:28px}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:20px}
+.setup-heading{font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:14px}
+.tab-bar{display:flex;gap:4px;background:#f3f4f6;border-radius:8px;padding:3px;margin-bottom:16px}
+.tab{flex:1;padding:6px 10px;border:none;background:none;border-radius:6px;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer;transition:all 0.12s}
+.tab.active{background:#fff;color:#1a1a1a;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+.tab-content{display:none}.tab-content.active{display:block}
+.step{display:flex;gap:10px;margin-bottom:14px}
+.step-num{width:20px;height:20px;border-radius:50%;background:#f3f0ff;color:#7c3aed;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.step-body{min-width:0;flex:1}
+.step-title{font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px}
+.step-hint{font-size:12px;color:#6b7280;line-height:1.5;margin-top:4px}
+.code-box{font-family:ui-monospace,monospace;font-size:10px;color:#6b7280;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;white-space:pre;overflow-x:auto;margin:6px 0;max-width:100%;box-sizing:border-box}
+.path-box{font-family:ui-monospace,monospace;font-size:10px;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:10px;word-break:break-all;line-height:1.5;margin:6px 0}
+.btn-action{width:100%;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;transition:background 0.12s;cursor:pointer;margin-bottom:4px}
+.btn-action:hover{background:#6d28d9}
+.btn-secondary{width:100%;padding:9px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:8px;font-size:13px;font-weight:600;transition:background 0.12s;cursor:pointer;text-decoration:none;display:block;text-align:center}
+.btn-secondary:hover{background:#ede9fe;text-decoration:none}
+details{margin-top:12px}
+summary{font-size:12px;color:#6b7280;cursor:pointer;user-select:none;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"\\25B8 "}
+details[open] summary::before{content:"\\25BE "}
+.api-key-wrap{margin-top:10px;display:flex;align-items:center;gap:8px}
+.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:10px;color:#6b7280;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:7px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-copy-key{font-size:12px;font-weight:600;padding:5px 10px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;white-space:nowrap;cursor:pointer;transition:background 0.12s}
+.btn-copy-key:hover{background:#ede9fe}
+.status-row{display:flex;align-items:center;gap:12px;padding:2px 0}
+.status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:2px}
+.status-green{background:#16a34a;box-shadow:0 0 0 3px #dcfce7}
+.status-title{font-size:14px;font-weight:600;color:#1a1a1a}
+.status-sub{font-size:12px;color:#6b7280;margin-top:2px}
+.prompt-hidden{display:none}
+.feed-title{font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
+.feed-sub{font-size:12px;color:#6b7280;margin-bottom:20px}
+.feed{display:flex;flex-direction:column;gap:10px}
+.pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#7c3aed;display:flex;align-items:center;gap:6px;margin-bottom:10px}
+.pending-dot{width:6px;height:6px;border-radius:50%;background:#7c3aed;animation:pulse 1.5s infinite;flex-shrink:0}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.action-card{background:#fff;border:1px solid #e5e3df;border-radius:10px;overflow:hidden}
+.action-card:hover{box-shadow:0 2px 10px rgba(0,0,0,0.06)}
+.action-card.is-pending{border-color:#fbbf24}
 .action-top{padding:14px 16px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-.action-label{font-size:14px;font-weight:600;color:#e2e8f0;line-height:1.4}
-.action-type{font-size:11px;color:#3d4a5c;font-family:ui-monospace,monospace;margin-top:2px}
+.action-label{font-size:14px;font-weight:600;color:#1a1a1a;line-height:1.4}
+.action-type{font-size:11px;color:#9ca3af;font-family:ui-monospace,monospace;margin-top:2px}
 .action-badges{display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
-.action-time{font-size:11px;color:#3d4a5c;margin-top:4px;text-align:right}
+.action-time{font-size:11px;color:#9ca3af;margin-top:4px;text-align:right}
 .action-fields{padding:10px 16px 14px;display:flex;flex-direction:column;gap:5px}
 .field-row{display:flex;gap:10px;font-size:12px}
-.field-key{color:#3d4a5c;font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:0.5px;min-width:80px;flex-shrink:0;padding-top:1px}
-.field-val{color:#8892a4;line-height:1.4;word-break:break-word}
-.action-buttons{padding:12px 16px;border-top:1px solid #1c2030;display:flex;gap:8px}
-.btn-authorize{flex:1;padding:9px;background:rgba(52,211,153,0.1);color:#34d399;border:1px solid rgba(52,211,153,0.25);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-authorize:hover{background:rgba(52,211,153,0.18);border-color:#34d399}
-.btn-reject{flex:1;padding:9px;background:rgba(248,113,113,0.06);color:#f87171;border:1px solid rgba(248,113,113,0.2);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-reject:hover{background:rgba(248,113,113,0.12);border-color:#f87171}
-/* ── Confidence badges ── */
-.clevel-sensitive{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(59,130,246,0.12);color:#60a5fa;border:1px solid rgba(59,130,246,0.2);letter-spacing:0.3px}
-.clevel-consequential{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(251,191,36,0.1);color:#fbbf24;border:1px solid rgba(251,191,36,0.2);letter-spacing:0.3px}
-.clevel-critical{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(248,113,113,0.1);color:#f87171;border:1px solid rgba(248,113,113,0.2);letter-spacing:0.3px}
-/* ── Feed search ── */
-.feed-search{width:100%;padding:9px 14px;border:1.5px solid #252a3d;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#e2e8f0;background:#141720;transition:border-color 0.12s;margin-bottom:14px}
-.feed-search:focus{border-color:#818cf8}
-.feed-search::placeholder{color:#3d4a5c}
-/* ── Buttons ── */
-.btn-primary{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-family:inherit}
-.btn-primary:hover{background:#4f46e5;text-decoration:none;color:#fff}
-.btn-connect{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:8px;background:#6366f1;color:#fff;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;box-sizing:border-box;transition:background 0.12s;font-family:inherit;border:none;cursor:pointer}
-.btn-connect:hover{background:#4f46e5;text-decoration:none;color:#fff}
-/* ── Pending label ── */
-.pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#818cf8;display:flex;align-items:center;gap:6px;margin-bottom:10px}
-.pending-dot{width:6px;height:6px;border-radius:50%;background:#818cf8;animation:pulse 1.5s infinite;flex-shrink:0}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-/* ── Empty / util ── */
-.feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible}}
+.field-key{color:#9ca3af;font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:0.5px;min-width:80px;flex-shrink:0;padding-top:1px}
+.field-val{color:#374151;line-height:1.4;word-break:break-word}
+.action-buttons{padding:12px 16px;border-top:1px solid #f0ede8;display:flex;gap:8px}
+.btn-authorize{flex:1;padding:9px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s}
+.btn-authorize:hover{background:#15803d}
+.btn-reject{flex:1;padding:9px;background:#fff;color:#dc2626;border:1.5px solid #fecaca;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s}
+.btn-reject:hover{background:#fef2f2}
+.clevel-sensitive{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:#eff6ff;color:#2563eb;letter-spacing:0.3px}
+.clevel-consequential{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:#fffbeb;color:#d97706;letter-spacing:0.3px}
+.clevel-critical{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:#fef2f2;color:#dc2626;letter-spacing:0.3px}
+.empty-state{text-align:center;padding:40px 20px}
+.empty-state-icon{width:40px;height:40px;background:#f3f0ff;border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}
+.empty-state-title{font-size:14px;font-weight:600;color:#6b7280;margin-bottom:6px}
+.empty-state-sub{font-size:12px;color:#9ca3af;line-height:1.6}
+.feed-tab{padding:6px 16px;border-radius:99px;border:1.5px solid #e5e3df;background:#f8f7f5;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer;font-family:inherit;transition:all 0.12s}
+.feed-tab.active{background:#7c3aed;border-color:#7c3aed;color:#fff;box-shadow:0 1px 6px rgba(124,58,237,0.25)}
+.acct-card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:16px 18px;margin-bottom:10px}
+.acct-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.acct-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid #f5f3f0}
+.acct-row:last-child{border-bottom:none}
+.acct-lbl{font-size:12px;color:#6b7280;min-width:180px;flex-shrink:0}
+.acct-val{font-size:13px;font-weight:700;color:#1a1a1a}
+.acct-cards-wrap{max-width:820px;margin:0 auto}
+@media(max-width:768px){body{height:auto;overflow:auto}.feed-col{overflow:visible}.sidebar{overflow:visible}}
 </style>
 </head>
 <body>
-{_SIDEBAR_}
-
-<div class="main-content">
-  <div class="topbar">
-    <div style="display:flex;align-items:center;gap:10px">
-      {agent_status_indicator}
-    </div>
-    <div class="topbar-right">
-      <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
-        {pending_count} awaiting decision
+<div class="topbar">
+  <div style="display:flex;align-items:center;gap:12px">
+    <a href="/dashboard" style="text-decoration:none;display:flex;align-items:center;gap:8px">
+      <div class="topbar-logo-mark">
+        <img src="/logo-icon.png" alt="Mighty">
       </div>
-      <input type="hidden" name="_csrf" value="{csrf_token}">
-      <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">↻ Sync</button>
-    </div>
+      <span class="topbar-name">Mighty</span>
+    </a>
+    <span style="color:#e5e3df;font-size:16px;font-weight:200">|</span>
+    {agent_status_indicator}
   </div>
+  <div id="pending-badge" style="display:{pending_display};background:#f3f0ff;border:1px solid #e9d5ff;border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#5b21b6">
+    {pending_count} awaiting decision
+  </div>
+  <div class="topbar-right">
+    <a href="/credentials" style="font-size:12px;color:#6b7280;text-decoration:none">Accounts</a>
+    <input type="hidden" name="_csrf" value="{csrf_token}">
+    <button id="cloud-sync-btn" onclick="cloudSync()"
+            style="padding:5px 12px;border-radius:7px;border:1px solid #e5e3df;background:#fff;
+                   font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;font-family:inherit">
+      ↻ Sync
+    </button>
+    <a href="/settings" style="font-size:12px;color:#6b7280;text-decoration:none">Settings</a>
+    <a href="/settings" class="topbar-email">{email}</a>
+    <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf_token}"><button class="btn-logout" type="submit">Sign out</button></form>
+  </div>
+</div>
 
-  {onboarding_banner}
-  <div id="twofa-banner" style="display:none;padding:0 32px"></div>
-  {welcome_state}
-  <div class="page-body" {feed_col_hidden}>
-    <div class="feed-tabs">
+{onboarding_banner}
+<div id="twofa-banner" style="display:none;max-width:1140px;width:100%;margin:0 auto;padding:0 24px"></div>
+{welcome_state}
+<div class="main">
+  <div class="feed-col" {feed_col_hidden}>
+    <div style="display:flex;gap:6px;margin-bottom:18px">
       <button class="feed-tab active" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
       <button class="feed-tab" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
     </div>
 
     <div id="fview-accounts">
-      <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <div class="feed-title" style="margin-bottom:0">Account Data</div>
+        <div style="display:flex;align-items:center;gap:8px">
           {agent_cta_button}
-          <a href="/credentials" class="btn-connect">+ Connect account</a>
+          <a href="/credentials" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;
+             border-radius:8px;background:#7c3aed;color:#fff;font-size:12px;font-weight:600;
+             text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect account</a>
+        </div>
       </div>
+      <div class="feed-sub" style="margin-bottom:14px">Live data pulled from your connected accounts</div>
       <div class="acct-cards-wrap">{account_data_html}</div>
     </div>
 
     <div id="fview-activity" style="display:none">
-
-      <input type="text" class="feed-search" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)">
-      <div id="feed">
+      <div class="feed-title">Activity Log</div>
+      <div class="feed-sub">A live log of everything your agent does</div>
+      <div style="margin-bottom:14px">
+        <input type="text" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)" style="width:100%;padding:8px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#fff;transition:border-color 0.12s" onfocus="this.style.borderColor='#7c3aed'" onblur="this.style.borderColor='#e5e3df'">
+      </div>
+      <div class="feed" id="feed">
         {feed_html}
       </div>
     </div>
   </div>
 </div>
-
 
 <script>
 function switchTab(name, btn) {
@@ -1656,25 +1643,25 @@ function load2FAChallenges() {
     var html = '';
     d.challenges.forEach(function(c) {
       var isCode = c.challenge_type === 'sms' || c.challenge_type === 'email_code';
-      html += '<div style="background:#141720;border:1px solid #252a3d;border-radius:10px;padding:14px 16px;margin-bottom:8px">'
-        + '<div style="font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:4px">'
+      html += '<div style="background:#fff;border:1px solid #e5e3df;border-radius:10px;padding:14px 16px;margin-bottom:8px">'
+        + '<div style="font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:4px">'
         + '🔐 ' + c.account_name + ' needs ' + (isCode ? 'a verification code' : 'push approval')
         + '</div>'
-        + (c.message ? '<div style="font-size:12px;color:#8892a4;margin-bottom:8px">' + c.message + '</div>' : '')
+        + (c.message ? '<div style="font-size:12px;color:#6b7280;margin-bottom:8px">' + c.message + '</div>' : '')
         + (isCode
           ? '<div style="display:flex;gap:8px;align-items:center">'
             + '<input type="text" id="code-' + c.id + '" placeholder="Enter code" maxlength="8" '
-            + 'style="padding:7px 10px;border:1.5px solid #252a3d;border-radius:7px;font-size:13px;width:120px;outline:none;background:#0d0f17;color:#e2e8f0">'
+            + 'style="padding:7px 10px;border:1.5px solid #e5e3df;border-radius:7px;font-size:13px;width:120px;outline:none">'
             + '<button data-cid="' + c.id + '" data-push="0" onclick="submit2FA(this.dataset.cid,this.dataset.push)" '
-            + 'style="padding:7px 14px;background:#6366f1;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">Submit</button>'
+            + 'style="padding:7px 14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">Submit</button>'
             + '</div>'
           : '<button data-cid="' + c.id + '" data-push="1" onclick="submit2FA(this.dataset.cid,this.dataset.push)" '
-            + 'style="padding:7px 14px;background:#6366f1;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">I approved it ✓</button>'
+            + 'style="padding:7px 14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">I approved it ✓</button>'
         )
         + '</div>';
     });
-    banner.innerHTML = '<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:12px;padding:14px 16px;margin-bottom:16px">'
-      + '<div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:8px">⚠ 2FA approval needed</div>'
+    banner.innerHTML = '<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:12px;padding:14px 16px;margin-bottom:16px">'
+      + '<div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:8px">⚠ 2FA approval needed</div>'
       + html + '</div>';
   });
 }
@@ -1995,173 +1982,171 @@ SETTINGS_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-html,body{height:100%;overflow:hidden}
-body{display:flex;flex-direction:row}
-.sidebar{width:220px;flex-shrink:0;background:#080a10;border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}
-.sidebar-header{padding:20px 16px 12px;border-bottom:1px solid #1c2030}
-.sidebar-logo{display:flex;align-items:center;gap:9px;text-decoration:none}
-.sidebar-logo:hover{text-decoration:none}
-.sidebar-logo-img{width:26px;height:26px;border-radius:6px;object-fit:cover}
-.sidebar-logo-name{font-size:15px;font-weight:800;letter-spacing:0.4px;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.sidebar-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
-.sidebar-link{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:500;color:#8892a4;text-decoration:none;transition:all 0.12s}
-.sidebar-link:hover{background:#1a1e2e;color:#e2e8f0;text-decoration:none}
-.sidebar-link-active{background:rgba(129,140,248,0.12);color:#818cf8 !important;font-weight:600}
-.sidebar-link svg{flex-shrink:0;opacity:0.6;transition:opacity 0.12s}
-.sidebar-link:hover svg,.sidebar-link-active svg{opacity:1;stroke:#818cf8}
-.sidebar-footer{padding:12px 8px;border-top:1px solid #1c2030;display:flex;flex-direction:column;gap:6px}
-.sidebar-user{display:flex;align-items:center;gap:8px;padding:4px 8px}
-.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
-.sidebar-user-email{font-size:11px;color:#8892a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
-.sidebar-signout{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}
-.sidebar-signout:hover{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}
-.main-content{flex:1;min-width:0;height:100vh;overflow-y:auto}
-.page-wrap{max-width:540px;margin:0 auto;padding:32px 28px;display:flex;flex-direction:column;gap:16px}
-.page-title{font-size:20px;font-weight:700;color:#e2e8f0;margin-bottom:4px}
-.card{background:#141720;border:1px solid #252a3d;border-radius:12px;padding:24px}
-.section-title{font-size:11px;font-weight:700;color:#8892a4;margin-bottom:16px;text-transform:uppercase;letter-spacing:0.7px}
+body{display:flex;flex-direction:column;height:100vh;overflow:hidden;background:#f8f7f5}
+@media(max-width:768px){body{height:auto;overflow:auto}.settings-body{overflow:visible}}
+.topbar{background:#fff;border-bottom:1px solid #e5e3df;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.topbar-logo{display:flex;align-items:center;gap:8px}
+.topbar-logo-mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}
+.topbar-logo-mark img{height:26px;width:auto}
+.topbar-name{font-size:14px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.topbar-right{display:flex;align-items:center;gap:16px}
+.topbar-email{font-size:12px;color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none}
+.topbar-email:hover{color:#6b7280}
+.btn-logout{font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s}
+.btn-logout:hover{background:#f3f4f6;color:#1a1a1a}
+.settings-body{flex:1;min-height:0;overflow-y:auto}
+.settings-wrap{max-width:520px;margin:0 auto;padding:32px 24px;display:flex;flex-direction:column;gap:16px}
+.page-title{font-size:18px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
+.card{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:24px}
+.section-title{font-size:14px;font-weight:700;color:#1a1a1a;margin-bottom:16px}
 .toggle-row{display:flex;align-items:flex-start;gap:12px;padding:12px 0}
-.toggle-row+.toggle-row{border-top:1px solid #1c2030}
-.toggle-label{font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:3px}
-.toggle-hint{font-size:12px;color:#8892a4;line-height:1.5}
+.toggle-row+.toggle-row{border-top:1px solid #f3f4f6}
+.toggle-label{font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:3px}
+.toggle-hint{font-size:12px;color:#6b7280;line-height:1.5}
 .api-key-wrap{display:flex;align-items:center;gap:8px;margin-top:4px}
-.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:#8892a4;background:#0d0f17;border:1px solid #252a3d;border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.btn-sm{font-size:12px;font-weight:600;padding:6px 12px;background:#1a1e2e;color:#818cf8;border:1px solid #252a3d;border-radius:6px;white-space:nowrap;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-sm:hover{background:#252a3d;border-color:#818cf8}
-.push-status{font-size:12px;color:#8892a4;margin-top:6px;min-height:16px}
-.push-btn{font-size:12px;font-weight:600;padding:6px 12px;background:#1a1e2e;color:#818cf8;border:1px solid #252a3d;border-radius:6px;cursor:pointer;transition:all 0.12s;display:none;margin-top:6px;font-family:inherit}
-.push-btn:hover{background:#252a3d;border-color:#818cf8}
-.btn-danger{font-size:12px;font-weight:600;padding:8px 12px;background:transparent;color:#f87171;border:1px solid rgba(248,113,113,0.25);border-radius:6px;cursor:pointer;transition:all 0.12s;width:100%;text-align:left;font-family:inherit}
-.btn-danger:hover{background:rgba(248,113,113,0.08);border-color:#f87171}
-.ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:#818cf8;background:#0d0f17;border:1px solid #252a3d;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
-.ntfy-link:hover{border-color:#818cf8;text-decoration:none}
-.toggle-row input[type=checkbox]{-webkit-appearance:none;appearance:none;width:16px;height:16px;border:1.5px solid #252a3d;border-radius:4px;background:#0d0f17;cursor:pointer;position:relative;flex-shrink:0;margin-top:2px;transition:border-color 0.12s,background 0.12s}
-.toggle-row input[type=checkbox]:checked{background:#6366f1;border-color:#6366f1}
-.toggle-row input[type=checkbox]:checked::after{content:\'\';position:absolute;left:3px;top:1px;width:5px;height:9px;border:2px solid #fff;border-top:none;border-left:none;transform:rotate(45deg)}
-.settings-input{width:100%;padding:10px 14px;border:1.5px solid #252a3d;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#e2e8f0;background:#0d0f17;transition:border-color 0.12s}
-.settings-input:focus{border-color:#818cf8}
-.settings-input::placeholder{color:#3d4a5c}
-.settings-label{display:block;font-size:11px;font-weight:600;color:#8892a4;margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible}}
+.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:#6b7280;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-copy-key{font-size:12px;font-weight:600;padding:6px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;white-space:nowrap;cursor:pointer;transition:background 0.12s}
+.btn-copy-key:hover{background:#ede9fe}
+.push-status{font-size:12px;color:#6b7280;margin-top:6px;min-height:16px}
+.push-btn{font-size:12px;font-weight:600;padding:6px 12px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;cursor:pointer;transition:background 0.12s;display:none;margin-top:6px}
+.push-btn:hover{background:#ede9fe}
+.btn-danger{font-size:12px;font-weight:600;padding:8px 12px;background:#fff;color:#dc2626;border:1.5px solid #fecaca;border-radius:6px;white-space:nowrap;cursor:pointer;transition:all 0.12s;width:100%;text-align:left}
+.btn-danger:hover{background:#fef2f2}
+.ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:#7c3aed;background:#f8f7f5;border:1px solid #e5e3df;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
+.toggle-row input[type=checkbox]{-webkit-appearance:none;appearance:none;width:16px;height:16px;border:1.5px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;position:relative;flex-shrink:0;margin-top:2px;transition:border-color 0.12s,background 0.12s}
+.toggle-row input[type=checkbox]:checked{background:#7c3aed;border-color:#7c3aed}
+.toggle-row input[type=checkbox]:checked::after{content:'';position:absolute;left:3px;top:1px;width:5px;height:9px;border:2px solid #fff;border-top:none;border-left:none;transform:rotate(45deg)}
+.settings-input{width:100%;padding:10px 14px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#fff;transition:border-color 0.12s}
+.settings-input:focus{border-color:#7c3aed}
 </style>
 </head>
 <body>
-{_SIDEBAR_}
+<div class="topbar">
+  <a href="/dashboard" style="text-decoration:none;display:flex;align-items:center;gap:8px">
+    <div class="topbar-logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
+    <span class="topbar-name">Mighty</span>
+  </a>
+  <div class="topbar-right">
+    <a href="/credentials" style="font-size:12px;color:#6b7280;text-decoration:none">Accounts</a>
+    <a href="/settings" style="font-size:12px;color:#6b7280;text-decoration:none">Settings</a>
+    <a href="/settings" class="topbar-email">{email}</a>
+    <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf_token}"><button class="btn-logout" type="submit">Sign out</button></form>
+  </div>
+</div>
 
-<div class="main-content">
-<div class="page-wrap">
-  <div class="page-title">Settings</div>
+<div class="settings-body">
+  <div class="settings-wrap">
+    <div class="page-title">Settings</div>
 
-  <div class="card">
-    <div class="section-title">Notifications</div><span id="save-ind" style="font-size:11px;color:#34d399;margin-left:8px;display:none">Saved ✓</span>
-    <div class="toggle-row">
-      <input type="checkbox" id="notif-push" {push_checked} onchange="save()">
-      <div>
-        <div class="toggle-label">Browser alerts</div>
-        <div class="toggle-hint">Desktop popup when your agent needs a decision.</div>
-        <div id="push-status" class="push-status"></div>
-        <button id="push-enable-btn" class="push-btn" onclick="enablePush()">Allow notifications →</button>
+    <div class="card">
+      <div class="section-title">Notifications</div><span id="save-ind" style="font-size:11px;color:#16a34a;margin-left:8px;display:none">Saved ✓</span>
+      <div class="toggle-row">
+        <input type="checkbox" id="notif-push" {push_checked} onchange="save()">
+        <div>
+          <div class="toggle-label">Browser alerts</div>
+          <div class="toggle-hint">Desktop popup when your agent needs a decision. Click Allow notifications below to activate.</div>
+          <div id="push-status" class="push-status"></div>
+          <button id="push-enable-btn" class="push-btn" onclick="enablePush()">Allow notifications &#8594;</button>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <input type="checkbox" id="notif-ntfy" {ntfy_checked} onchange="save()">
+        <div>
+          <div class="toggle-label">Mobile alerts (ntfy)</div>
+          <div class="toggle-hint">Install the free <a href="https://ntfy.sh" target="_blank" style="color:#7c3aed">ntfy app</a>, then subscribe to your channel on your phone.</div>
+          <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="ntfy-link">ntfy.sh/{ntfy_topic} &#8599;</a>
+          <div style="font-size:11px;color:#9ca3af;margin-top:6px">Only action labels and approval links are sent — no account data.</div>
+        </div>
+      </div>
+      <div class="toggle-row">
+        <input type="checkbox" id="notif-email" {email_checked} onchange="onEmailToggle()">
+        <div>
+          <div class="toggle-label">Email alerts</div>
+          <div class="toggle-hint">Receive an email when your agent requests approval.</div>
+          <div id="email-notif-warn" style="display:{postmark_warn};margin-top:6px;font-size:12px;color:#d97706;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 10px;line-height:1.5">Email alerts require the POSTMARK_API_KEY environment variable to be set on your server.</div>
+        </div>
       </div>
     </div>
-    <div class="toggle-row">
-      <input type="checkbox" id="notif-ntfy" {ntfy_checked} onchange="save()">
-      <div>
-        <div class="toggle-label">Mobile alerts (ntfy)</div>
-        <div class="toggle-hint">Install the free <a href="https://ntfy.sh" target="_blank">ntfy app</a>, then subscribe to your channel on your phone.</div>
-        <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="ntfy-link">ntfy.sh/{ntfy_topic} ↗</a>
-        <div style="font-size:11px;color:#3d4a5c;margin-top:6px">Only action labels and approval links are sent — no account data.</div>
+
+    <div class="card">
+      <div class="section-title">Account</div>
+      <div style="font-size:13px;color:#6b7280;margin-bottom:16px">Signed in as <span style="color:#1a1a1a;font-weight:600">{email}</span></div>
+      <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:6px;letter-spacing:0.3px">Change email address</div>
+      <input type="email" id="email-new" placeholder="New email address" class="settings-input" style="margin-bottom:10px">
+      <input type="password" id="email-pw" placeholder="Confirm with current password" class="settings-input" style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="btn-copy-key" style="padding:8px 16px;font-size:13px" onclick="changeEmail()">Update email</button>
+        <span id="email-msg" style="font-size:12px;display:none"></span>
       </div>
     </div>
-    <div class="toggle-row">
-      <input type="checkbox" id="notif-email" {email_checked} onchange="onEmailToggle()">
-      <div>
-        <div class="toggle-label">Email alerts</div>
-        <div class="toggle-hint">Receive an email when your agent requests approval.</div>
-        <div id="email-notif-warn" style="display:{postmark_warn};margin-top:6px;font-size:12px;color:#fbbf24;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:6px;padding:6px 10px;line-height:1.5">Email alerts require the POSTMARK_API_KEY environment variable to be set on your server.</div>
+
+    <div class="card">
+      <div class="section-title">Privacy</div>
+      <div class="toggle-row">
+        <input type="checkbox" id="minimal-logging" {minimal_logging_checked} onchange="savePrivacy()">
+        <div>
+          <div class="toggle-label">Minimal logging</div>
+          <div class="toggle-hint">Store only action type and timestamp — not labels or field details. Reduces what Mighty can see, but makes your activity log less useful.</div>
+          <span id="privacy-ind" style="display:none;font-size:12px;color:#16a34a;margin-top:4px">Saved</span>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div class="card">
-    <div class="section-title">Account</div>
-    <div style="font-size:13px;color:#8892a4;margin-bottom:16px">Signed in as <span style="color:#e2e8f0;font-weight:600">{email}</span></div>
-    <label class="settings-label">Change email address</label>
-    <input type="email" id="email-new" placeholder="New email address" class="settings-input" style="margin-bottom:10px">
-    <input type="password" id="email-pw" placeholder="Confirm with current password" class="settings-input" style="margin-bottom:10px">
-    <div style="display:flex;align-items:center;gap:12px">
-      <button class="btn-sm" style="padding:8px 16px;font-size:13px" onclick="changeEmail()">Update email</button>
-      <span id="email-msg" style="font-size:12px;display:none"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="section-title">Privacy</div>
-    <div class="toggle-row">
-      <input type="checkbox" id="minimal-logging" {minimal_logging_checked} onchange="savePrivacy()">
-      <div>
-        <div class="toggle-label">Minimal logging</div>
-        <div class="toggle-hint">Store only action type and timestamp — not labels or field details. Reduces what Mighty can see, but makes your activity log less useful.</div>
-        <span id="privacy-ind" style="display:none;font-size:12px;color:#34d399;margin-top:4px">Saved</span>
+    <div class="card">
+      <div class="section-title">Connection</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Your API key — used to connect your agent to Mighty. Keep it secret.</div>
+      <div class="api-key-wrap">
+        <div class="api-key-val" id="apiKeyVal" data-real="{api_key}">{api_key_masked}</div>
+        <button class="btn-copy-key" id="reveal-key-btn" onclick="toggleRevealKey(this)" title="Show API key">Reveal</button>
+        <button class="btn-copy-key" onclick="copyKey(this)">Copy</button>
+      </div>
+      <div style="font-size:12px;color:#9ca3af;margin-top:6px">Anyone with this key can submit actions on your behalf.</div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f3f4f6">
+        <a href="/onboarding" style="display:inline-block;margin-top:4px;padding:8px 14px;background:#f3f0ff;color:#7c3aed;border:1px solid #e9d5ff;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">&#8635; Re-run setup</a>
       </div>
     </div>
-  </div>
 
-  <div class="card">
-    <div class="section-title">Connection</div>
-    <div style="font-size:12px;color:#8892a4;margin-bottom:8px">Your API key — used to connect your agent to Mighty. Keep it secret.</div>
-    <div class="api-key-wrap">
-      <div class="api-key-val" id="apiKeyVal" data-real="{api_key}">{api_key_masked}</div>
-      <button class="btn-sm" id="reveal-key-btn" onclick="toggleRevealKey(this)">Reveal</button>
-      <button class="btn-sm" onclick="copyKey(this)">Copy</button>
-    </div>
-    <div style="font-size:11px;color:#3d4a5c;margin-top:8px">Anyone with this key can submit actions on your behalf.</div>
-    <div style="margin-top:16px;padding-top:16px;border-top:1px solid #1c2030">
-      <a href="/onboarding" style="display:inline-block;padding:8px 14px;background:#1a1e2e;color:#818cf8;border:1px solid #252a3d;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">↺ Re-run setup</a>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="section-title">Security</div>
-    <div style="font-size:13px;color:#8892a4;margin-bottom:16px">Change your account password.</div>
-    <label class="settings-label">Current password</label>
-    <input type="password" id="pw-current" placeholder="Your current password" class="settings-input" style="margin-bottom:12px">
-    <label class="settings-label">New password</label>
-    <input type="password" id="pw-new" placeholder="At least 6 characters" class="settings-input" style="margin-bottom:12px">
-    <label class="settings-label">Confirm new password</label>
-    <input type="password" id="pw-confirm" placeholder="Repeat new password" class="settings-input" style="margin-bottom:12px">
-    <div style="display:flex;align-items:center;gap:12px">
-      <button class="btn-sm" style="padding:8px 16px;font-size:13px" onclick="changePassword()">Update password</button>
-      <span id="pw-msg" style="font-size:12px;display:none"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="section-title">Data &amp; Privacy</div>
-    <button class="btn-sm" onclick="window.location.href=\'/settings/export-csv\'">↓ Export activity log (CSV)</button>
-    <hr style="border:none;border-top:1px solid #1c2030;margin:16px 0">
-    <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Danger zone</div>
-    <div style="display:flex;flex-direction:column;gap:10px">
-      <button class="btn-danger" id="del-activity-btn" onclick="deleteActivity()">Delete all activity</button>
-      <span id="del-activity-msg" style="font-size:12px;color:#34d399;display:none">All activity deleted.</span>
-    </div>
-    <hr style="border:none;border-top:1px solid rgba(248,113,113,0.15);margin:16px 0">
-    <div style="font-size:13px;color:#8892a4;margin-bottom:12px;line-height:1.5">Permanently deletes your account and all data. This cannot be undone.</div>
-    <div id="del-acct-btn-wrap">
-      <button class="btn-danger btn-danger-severe" onclick="showDelConfirm()">Delete my account</button>
-    </div>
-    <div id="del-acct-confirm" style="display:none">
-      <label class="settings-label" style="margin-top:12px">Confirm with your current password</label>
-      <input type="password" id="del-acct-pw" placeholder="Your password" class="settings-input" style="border-color:rgba(248,113,113,0.35);margin-bottom:10px">
-      <div style="display:flex;gap:8px">
-        <button class="btn-danger" style="flex:1" onclick="deleteAccount()">Confirm deletion</button>
-        <button onclick="hideDelConfirm()" style="padding:8px 14px;background:#1a1e2e;border:1px solid #252a3d;border-radius:6px;font-size:13px;font-weight:600;color:#8892a4;cursor:pointer;font-family:inherit">Cancel</button>
+    <div class="card">
+      <div class="section-title">Security</div>
+      <div style="font-size:13px;color:#6b7280;margin-bottom:16px">Change your account password.</div>
+      <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px">Current password</label>
+      <input type="password" id="pw-current" placeholder="Your current password" class="settings-input" style="margin-bottom:12px">
+      <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px">New password</label>
+      <input type="password" id="pw-new" placeholder="At least 6 characters" class="settings-input" style="margin-bottom:12px">
+      <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px">Confirm new password</label>
+      <input type="password" id="pw-confirm" placeholder="Repeat new password" class="settings-input" style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="btn-copy-key" style="padding:8px 16px;font-size:13px" onclick="changePassword()">Update password</button>
+        <span id="pw-msg" style="font-size:12px;display:none"></span>
       </div>
-      <div id="del-acct-err" style="font-size:12px;color:#f87171;margin-top:8px;display:none"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Data &amp; Privacy</div>
+      <button class="btn-copy-key" onclick="window.location.href='/settings/export-csv'">&#8595; Export activity log (CSV)</button>
+      <hr style="border:none;border-top:1px solid #f3f4f6;margin:16px 0">
+      <div style="font-size:12px;font-weight:700;color:#dc2626;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Danger zone</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn-danger" id="del-activity-btn" onclick="deleteActivity()">Delete all activity</button>
+        <span id="del-activity-msg" style="font-size:12px;color:#16a34a;display:none">All activity deleted.</span>
+      </div>
+      <hr style="border:none;border-top:1px solid #fecaca;margin:16px 0">
+      <div style="font-size:13px;color:#6b7280;margin-bottom:12px;line-height:1.5">Permanently deletes your account and all data. This cannot be undone.</div>
+      <div id="del-acct-btn-wrap">
+        <button class="btn-danger" onclick="showDelConfirm()">Delete my account</button>
+      </div>
+      <div id="del-acct-confirm" style="display:none">
+        <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px">Confirm with your current password</label>
+        <input type="password" id="del-acct-pw" placeholder="Your password" class="settings-input" style="border-color:#fecaca;margin-bottom:10px">
+        <div style="display:flex;gap:8px">
+          <button class="btn-danger" style="flex:1" onclick="deleteAccount()">Confirm deletion</button>
+          <button onclick="hideDelConfirm()" style="padding:8px 14px;background:#f3f4f6;border:none;border-radius:6px;font-size:13px;font-weight:600;color:#6b7280;cursor:pointer">Cancel</button>
+        </div>
+        <div id="del-acct-err" style="font-size:12px;color:#dc2626;margin-top:8px;display:none"></div>
+      </div>
     </div>
   </div>
 </div>
-</div>
-
 
 <script>
 var swReg = null;
@@ -2955,12 +2940,12 @@ def dashboard():
     # Only show the banner in the active (non-empty) state — the empty welcome state handles its own CTA
     if not user["onboarded"] and len(acts) > 0:
         onboarding_banner = (
-            '<div style="background:rgba(129,140,248,0.08);border:1px solid rgba(129,140,248,0.2);'
+            '<div style="grid-column:1/-1;background:#f3f0ff;border:1px solid #e9d5ff;'
             'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
-            'justify-content:space-between;gap:16px;margin:0 32px 8px">'
-            '<div style="font-size:13px;color:#8892a4">'
+            'justify-content:space-between;gap:16px;margin-bottom:16px">'
+            '<div style="font-size:13px;color:#5b21b6">'
             'Finish setting up Mighty to connect your first agent.</div>'
-            '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#818cf8;white-space:nowrap">'
+            '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#7c3aed;white-space:nowrap">'
             'Complete setup &#8594;</a></div>'
         )
 
@@ -2969,20 +2954,20 @@ def dashboard():
         if user["onboarded"]:
             # Onboarded but no activity yet — show feed area
             agent_status_indicator = (
-                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#34d399">'
-                '<div style="width:7px;height:7px;border-radius:50%;background:#34d399;flex-shrink:0"></div>'
+                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a">'
+                '<div style="width:7px;height:7px;border-radius:50%;background:#16a34a;flex-shrink:0"></div>'
                 'Ready</div>'
             )
             agent_cta_button = (
                 '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#1a1e2e;color:#8892a4;border:1px solid #252a3d;font-size:12px;font-weight:600;'
+                'border-radius:8px;background:#fff;color:#6b7280;border:1.5px solid #d1d5db;font-size:12px;font-weight:600;'
                 'text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect agent</a>'
             )
             feed = (
                 '<div style="display:flex;flex-direction:column;align-items:center;'
                 'justify-content:center;padding:60px 24px;text-align:center">'
-                '<div style="font-size:14px;font-weight:600;color:#8892a4;margin-bottom:8px">No requests yet</div>'
-                '<div style="font-size:13px;color:#3d4a5c;line-height:1.6;max-width:280px">'
+                '<div style="font-size:14px;font-weight:600;color:#9ca3af;margin-bottom:8px">No requests yet</div>'
+                '<div style="font-size:13px;color:#b0b8c4;line-height:1.6;max-width:280px">'
                 'Ask your agent to do something that needs approval and the request will appear here.</div>'
                 '</div>'
             )
@@ -2996,16 +2981,16 @@ def dashboard():
                 '<div style="display:flex;flex-direction:column;align-items:center;'
                 'justify-content:center;padding:60px 24px;min-height:60vh">'
                 '<div style="width:100%;max-width:360px;text-align:center">'
-                '<div style="width:52px;height:52px;background:rgba(129,140,248,0.1);border:1px solid rgba(129,140,248,0.2);border-radius:14px;'
+                '<div style="width:52px;height:52px;background:#f3f0ff;border-radius:14px;'
                 'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
-                '<svg width="22" height="22" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                '<svg width="22" height="22" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
                 '<polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></svg></div>'
-                '<div style="font-size:22px;font-weight:700;color:#e2e8f0;margin-bottom:10px">'
+                '<div style="font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:10px">'
                 'Welcome to Mighty</div>'
-                '<div style="font-size:14px;color:#8892a4;line-height:1.6;margin-bottom:28px">'
+                '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
                 'Connect your agent in about 5 minutes. Once connected, approval requests from your agent will appear here.</div>'
                 '<a href="/onboarding" style="display:block;padding:13px 20px;'
-                'background:#6366f1;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
+                'background:#7c3aed;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
                 'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
                 '</div>'
                 '</div>'
@@ -3014,24 +2999,24 @@ def dashboard():
         # Active state
         if is_connected:
             agent_status_indicator = (
-                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#34d399">'
-                '<div style="width:7px;height:7px;border-radius:50%;background:#34d399;flex-shrink:0"></div>'
+                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a">'
+                '<div style="width:7px;height:7px;border-radius:50%;background:#16a34a;flex-shrink:0"></div>'
                 'Active</div>'
             )
             agent_cta_button = (
                 '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#1a1e2e;color:#8892a4;border:1px solid #252a3d;font-size:12px;font-weight:600;'
+                'border-radius:8px;background:#fff;color:#6b7280;border:1.5px solid #d1d5db;font-size:12px;font-weight:600;'
                 'text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect agent</a>'
             )
         else:
             agent_status_indicator = (
-                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#3d4a5c">'
-                '<div style="width:7px;height:7px;border-radius:50%;background:#3d4a5c;flex-shrink:0"></div>'
+                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#9ca3af">'
+                '<div style="width:7px;height:7px;border-radius:50%;background:#9ca3af;flex-shrink:0"></div>'
                 'No agent</div>'
             )
             agent_cta_button = (
                 '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#6366f1;color:#fff;font-size:12px;font-weight:600;'
+                'border-radius:8px;background:#7c3aed;color:#fff;font-size:12px;font-weight:600;'
                 'text-decoration:none;white-space:nowrap">Set up agent &#8594;</a>'
             )
         feed_col_hidden = ''
@@ -3125,18 +3110,18 @@ def dashboard():
             )
         elif synced_at:
             items_html = ('<div class="acct-row" data-discovering="1">'
-                          '<span class="acct-lbl" style="color:#3d4a5c;'
+                          '<span class="acct-lbl" style="color:#aeaeb2;'
                           'font-style:italic">Syncing & discovering fields…</span></div>')
-            status_color = "#3d4a5c"
+            status_color = "#aeaeb2"
         else:
-            items_html = ('<div class="acct-row"><span class="acct-lbl" style="color:#3d4a5c;'
+            items_html = ('<div class="acct-row"><span class="acct-lbl" style="color:#aeaeb2;'
                           'font-style:italic">Awaiting first sync…</span></div>')
-            status_color = "#3d4a5c"
+            status_color = "#aeaeb2"
 
-        sync_label = (f'<div style="font-size:11px;color:#3d4a5c" '
+        sync_label = (f'<div style="font-size:11px;color:#6b7280" '
                       f'data-synced="{he(synced_at)}">Synced {_fmt_sync(synced_at)}</div>'
                       if synced_at else
-                      '<div style="font-size:11px;color:#3d4a5c">Not yet synced</div>')
+                      '<div style="font-size:11px;color:#aeaeb2">Not yet synced</div>')
 
         # Detect login-wall values in cached fields
         _BAD = ("log in", "sign in", "login to", "no match found")
@@ -3145,38 +3130,34 @@ def dashboard():
             for f in discovered_by_source[src]["fields"]
         )
         bad_banner = (
-            f'<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;'
+            f'<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;'
             f'padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;font-size:12px">'
             f'<span>⚠️</span>'
-            f'<span style="flex:1;color:#fbbf24">Couldn\'t log in on last sync — fields may be stale.</span>'
-            f'<a href="#" onclick="resetFields(\'{he(src)}\');return false;" style="color:#818cf8;font-weight:600;text-decoration:none;white-space:nowrap">Reset fields →</a>'
+            f'<span style="flex:1;color:#92400e">Couldn\'t log in on last sync — fields may be stale.</span>'
+            f'<a href="#" onclick="resetFields(\'{he(src)}\');return false;" style="color:#7c3aed;font-weight:600;text-decoration:none;white-space:nowrap">Reset fields →</a>'
             f'</div>'
         ) if bad_fields else ""
 
         cards_html += (
             f'<div class="acct-card" style="border-left:3px solid {he(color)}">'
-            f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
+            f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
             f'<div class="acct-icon" style="background:{he(color)}">{he(icon)}</div>'
             f'<div style="flex:1">'
-            f'<div style="font-size:13px;font-weight:600;color:#e2e8f0">{he(display_name)}</div>'
+            f'<div style="font-size:13px;font-weight:600;color:#1a1a1a">{he(display_name)}</div>'
             f'{sync_label}'
             f'</div>'
-            f'<div style="display:flex;align-items:center;gap:6px">'
+            f'<div style="display:flex;align-items:center;gap:8px">'
             f'<a href="/credentials#fields-{he(src)}" '
-            f'style="font-size:11px;font-weight:500;color:#8892a4;text-decoration:none;'
-            f'padding:3px 8px;border-radius:6px;border:1px solid #252a3d;background:#1a1e2e;'
-            f'white-space:nowrap;cursor:pointer;transition:all 0.12s" '
-            f'onmouseover="this.style.color=\'#818cf8\';this.style.borderColor=\'#818cf8\'" '
-            f'onmouseout="this.style.color=\'#8892a4\';this.style.borderColor=\'#252a3d\'">Modify fields</a>'
-            f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;'
+            f'style="font-size:11px;font-weight:500;color:#7c3aed;text-decoration:none;'
+            f'padding:3px 8px;border-radius:6px;border:1px solid #e9d5ff;background:#faf5ff;'
+            f'white-space:nowrap;cursor:pointer">Modify fields</a>'
+            f'<div style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0;'
             f'cursor:help" title="{"Synced recently" if status_color == "#30d158" else "Not yet synced"}"></div>'
             f'<button onclick="forceDiscover(\'{he(src)}\', this)" '
             f'title="Re-run field discovery" '
-            f'style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;'
-            f'border-radius:6px;border:1px solid #252a3d;background:#1a1e2e;cursor:pointer;'
-            f'font-size:13px;color:#8892a4;padding:0;line-height:1;flex-shrink:0;transition:all 0.12s" '
-            f'onmouseover="this.style.color=\'#818cf8\';this.style.borderColor=\'#818cf8\'" '
-            f'onmouseout="this.style.color=\'#8892a4\';this.style.borderColor=\'#252a3d\'">↻</button>'
+            f'style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;'
+            f'border-radius:50%;border:1px solid #e5e3df;background:#f8f7f5;cursor:pointer;'
+            f'font-size:13px;color:#9ca3af;padding:0;line-height:1;flex-shrink:0">↻</button>'
             f'</div>'
             f'</div>'
             f'{bad_banner}'
@@ -3185,18 +3166,16 @@ def dashboard():
         )
 
     account_data_html = cards_html if cards_html else (
-        '<div style="text-align:center;padding:56px 24px">'
-        '<div style="font-size:36px;margin-bottom:14px">🔗</div>'
-        '<div style="font-size:14px;font-weight:600;color:#8892a4;margin-bottom:16px">No accounts connected yet</div>'
-        '<a href="/credentials" style="display:inline-block;padding:9px 20px;background:#6366f1;'
+        '<div style="text-align:center;padding:48px 24px">'
+        '<div style="font-size:32px;margin-bottom:12px">🔗</div>'
+        '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:16px">No accounts connected yet</div>'
+        '<a href="/credentials" style="display:inline-block;padding:9px 20px;background:#7c3aed;'
         'color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none">'
         '+ Connect your first account</a>'
         '</div>'
     )
 
-    _csrf = get_csrf_token()
     return (DASHBOARD_HTML
-            .replace("{_SIDEBAR_}",               _sidebar_html('dashboard', user["email"], _csrf))
             .replace("{email}",                   he(user["email"]))
             .replace("{feed_html}",               feed)
             .replace("{pending_count}",           str(pending_count))
@@ -3207,7 +3186,7 @@ def dashboard():
             .replace("{welcome_state}",           welcome_state)
             .replace("{onboarding_banner}",       onboarding_banner)
             .replace("{account_data_html}",       account_data_html)
-            .replace("{csrf_token}",              _csrf))
+            .replace("{csrf_token}",              get_csrf_token()))
 
 @app.route("/settings")
 @require_login
@@ -3225,9 +3204,7 @@ def settings():
     # Mask: show prefix (up to 3 chars) + bullets
     key_prefix = raw_key[:3] if raw_key else ""
     api_key_masked = key_prefix + "•" * max(0, len(raw_key) - 3)
-    _csrf = get_csrf_token()
     return (SETTINGS_HTML
-            .replace("{_SIDEBAR_}",               _sidebar_html('settings', user["email"], _csrf))
             .replace("{email}",                   he(user["email"]))
             .replace("{api_key}",                 raw_key)
             .replace("{api_key_masked}",          he(api_key_masked))
@@ -3238,7 +3215,7 @@ def settings():
             .replace("{minimal_logging_checked}", "checked" if user["minimal_logging"] else "")
             .replace("{postmark_warn}",           postmark_warn)
             .replace("{postmark_js}",             "true" if postmark_ok else "false")
-            .replace("{csrf_token}",              _csrf))
+            .replace("{csrf_token}",              get_csrf_token()))
 
 @app.route("/settings/export-csv")
 @require_login
@@ -4190,30 +4167,31 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
         )
         _cred_synced = synced_at_by_source.get(key, "")
         _cred_sync_label = (
-            f'<div style="font-size:11px;color:#8892a4;margin-top:2px" data-synced="{he(_cred_synced)}">Synced {_fmt_sync(_cred_synced)}</div>'
+            f'<div style="font-size:11px;color:#6b7280;margin-top:2px" data-synced="{he(_cred_synced)}">Synced {_fmt_sync(_cred_synced)}</div>'
             if _cred_synced else
-            '<div style="font-size:11px;color:#3d4a5c;margin-top:2px">Not yet synced</div>'
+            '<div style="font-size:11px;color:#aeaeb2;margin-top:2px">Not yet synced</div>'
         )
         connected_cards_html += f"""
 <div class="cred-card" id="card-{he(key)}">
   <div style="display:flex;align-items:center;gap:12px">
     <div style="width:36px;height:36px;border-radius:9px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{icon}</div>
     <div style="flex:1">
-      <div style="font-size:14px;font-weight:600;color:#e2e8f0">{he(name)}</div>
+      <div style="font-size:14px;font-weight:600;color:#1a1a1a">{he(name)}</div>
       {_cred_sync_label}
     </div>
-    <button class="btn-toggle" onclick="openFieldModal('{he(key)}')" id="btn-fields-{he(key)}">Edit fields</button>
+    <button class="btn-toggle" onclick="openFieldModal('{he(key)}')" id="btn-fields-{he(key)}"
+            style="font-size:11px;color:#6b7280;border-color:#e5e3df;background:#fff;cursor:pointer">Edit fields</button>
     <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}"
-            style="color:#8892a4;font-weight:500">Edit login</button>
+            style="font-size:11px;color:#9ca3af;border-color:#e5e3df;font-weight:400">Edit login</button>
     {remove_btn}
   </div>
   <div class="cred-form" id="form-{he(key)}" style="display:none;margin-top:14px">
     <input type="text" name="username" placeholder="Username or email" autocomplete="off" id="u-{he(key)}">
     <input type="password" name="password" placeholder="Password" autocomplete="new-password" id="p-{he(key)}">
     <details style="margin-top:8px">
-      <summary style="font-size:12px;color:#8892a4;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
+      <summary style="font-size:12px;color:#6b7280;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
       <input type="text" name="totp" placeholder="TOTP secret key" style="margin-top:6px" id="t-{he(key)}">
-      <div style="font-size:11px;color:#3d4a5c;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
     </details>
     <button class="btn-save" onclick="saveCred('{he(key)}')">Save & Sync</button>
   </div>
@@ -4239,7 +4217,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
         for key, name, icon, color in sites:
             already = key in configured
             if already:
-                action = f'<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:rgba(52,211,153,0.1);color:#34d399;border:1px solid rgba(52,211,153,0.25)">Connected</span>'
+                action = f'<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0">Connected</span>'
             else:
                 action = (
                     f'<button class="modal-connect-btn" '
@@ -4249,12 +4227,12 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
             site_rows += f"""
 <div class="modal-site-row" data-name="{he(name.lower())}">
   <div style="width:30px;height:30px;border-radius:7px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">{icon}</div>
-  <div style="flex:1;font-size:13px;font-weight:500;color:#e2e8f0">{he(name)}</div>
+  <div style="flex:1;font-size:13px;font-weight:500;color:#1a1a1a">{he(name)}</div>
   {action}
 </div>"""
         modal_sections += f"""
 <div class="modal-cat-group">
-  <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#3d4a5c;margin:16px 0 6px">{he(cat)}</div>
+  <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9ca3af;margin:16px 0 6px">{he(cat)}</div>
   {site_rows}
 </div>"""
 
@@ -4264,95 +4242,80 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Connected Accounts — Mighty</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-html,body{{height:100%;overflow:hidden;font-family:'Inter',sans-serif}}
-body{{display:flex;flex-direction:row;background:#0d0f17;color:#e2e8f0}}
--webkit-font-smoothing:antialiased;
-/* ── Sidebar ── */
-.sidebar{{width:220px;flex-shrink:0;background:#080a10;border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}}
-.sidebar-header{{padding:20px 16px 12px;border-bottom:1px solid #1c2030}}
-.sidebar-logo{{display:flex;align-items:center;gap:9px;text-decoration:none}}
-.sidebar-logo:hover{{text-decoration:none}}
-.sidebar-logo-img{{width:26px;height:26px;border-radius:6px;object-fit:cover}}
-.sidebar-logo-name{{font-size:15px;font-weight:800;letter-spacing:0.4px;background:linear-gradient(135deg,#818cf8,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
-.sidebar-nav{{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}}
-.sidebar-link{{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;font-size:13px;font-weight:500;color:#8892a4;text-decoration:none;transition:all 0.12s}}
-.sidebar-link:hover{{background:#1a1e2e;color:#e2e8f0;text-decoration:none}}
-.sidebar-link-active{{background:rgba(129,140,248,0.12);color:#818cf8 !important;font-weight:600}}
-.sidebar-link svg{{flex-shrink:0;opacity:0.6;transition:opacity 0.12s}}
-.sidebar-link:hover svg,.sidebar-link-active svg{{opacity:1;stroke:#818cf8}}
-.sidebar-footer{{padding:12px 8px;border-top:1px solid #1c2030;display:flex;flex-direction:column;gap:6px}}
-.sidebar-user{{display:flex;align-items:center;gap:8px;padding:4px 8px}}
-.sidebar-avatar{{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}}
-.sidebar-user-email{{font-size:11px;color:#8892a4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}}
-.sidebar-signout{{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}}
-.sidebar-signout:hover{{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}}
-/* ── Main ── */
-.main-content{{flex:1;min-width:0;height:100vh;overflow-y:auto}}
-.page{{max-width:660px;margin:0 auto;padding:32px 28px}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:100vh}}
+.topbar{{height:56px;border-bottom:1px solid #e5e3df;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:10}}
+.topbar-logo{{display:flex;align-items:center;gap:8px;text-decoration:none}}
+.logo-mark{{width:28px;height:28px;border-radius:7px;overflow:hidden}}
+.logo-mark img{{width:100%;height:100%;object-fit:cover}}
+.logo-name{{font-size:15px;font-weight:800;letter-spacing:.4px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}}
+.topbar-right{{display:flex;align-items:center;gap:16px}}
+.topbar-link{{font-size:13px;color:#6b7280;text-decoration:none}}
+.page{{max-width:640px;margin:0 auto;padding:32px 24px}}
 .page-header{{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}}
-h1{{font-size:20px;font-weight:700;color:#e2e8f0}}
-.btn-connect-new{{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;transition:background 0.12s}}
-.btn-connect-new:hover{{background:#4f46e5}}
-/* ── Cred cards ── */
-.cred-card{{background:#141720;border:1px solid #252a3d;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s}}
-.cred-card:hover{{border-color:#2d3450}}
-.cred-form input{{width:100%;padding:9px 12px;border:1.5px solid #252a3d;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#0d0f17;color:#e2e8f0}}
-.cred-form input:focus{{border-color:#818cf8}}
-.cred-form input::placeholder{{color:#3d4a5c}}
-.cred-form details summary{{font-size:12px;color:#8892a4;cursor:pointer;user-select:none;margin-top:8px}}
-.btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #252a3d;background:#1a1e2e;font-size:12px;font-weight:600;color:#818cf8;cursor:pointer;font-family:inherit;transition:all 0.12s}}
-.btn-toggle:hover{{border-color:#818cf8;background:#252a3d}}
-.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #252a3d;background:transparent;font-size:12px;color:#8892a4;cursor:pointer;font-family:inherit;transition:all 0.12s}}
-.btn-remove:hover{{background:rgba(248,113,113,0.08);border-color:rgba(248,113,113,0.3);color:#f87171}}
-.btn-save{{margin-top:12px;padding:9px 18px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.12s}}
-.btn-save:hover{{background:#4f46e5}}
-/* ── Modal ── */
-.modal-overlay{{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:64px;backdrop-filter:blur(2px)}}
+h1{{font-size:20px;font-weight:700}}
+.btn-connect-new{{padding:8px 16px;border-radius:8px;background:#7c3aed;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px}}
+.btn-connect-new:hover{{background:#6d28d9}}
+.cred-card{{background:#fff;border:1px solid #e5e3df;border-radius:12px;padding:16px 18px;margin-bottom:10px}}
+.cred-form input{{width:100%;padding:8px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#fff;color:#1a1a1a}}
+.cred-form input:focus{{border-color:#7c3aed}}
+.btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #e5e3df;background:#fff;font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;font-family:inherit}}
+.btn-toggle:hover{{background:#f3f0ff;border-color:#d4c6ff}}
+.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #d1d5db;background:#fff;font-size:12px;color:#6b7280;cursor:pointer;font-family:inherit}}
+.btn-remove:hover{{background:#f3f4f6;color:#374151}}
+.btn-save{{margin-top:12px;padding:9px 18px;border-radius:8px;background:#7c3aed;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}}
+.btn-save:hover{{background:#6d28d9}}
+/* Modal */
+.modal-overlay{{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:64px}}
 .modal-overlay.open{{display:flex}}
-.modal{{background:#141720;border:1px solid #252a3d;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.5)}}
-.modal-head{{padding:20px 20px 12px;border-bottom:1px solid #1c2030;flex-shrink:0}}
-.modal-title{{font-size:16px;font-weight:700;color:#e2e8f0;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}}
-.modal-close{{background:none;border:none;font-size:20px;cursor:pointer;color:#8892a4;line-height:1;padding:2px 6px;transition:color 0.12s}}
-.modal-close:hover{{color:#e2e8f0}}
-.modal-search{{width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #252a3d;font-size:13px;font-family:inherit;outline:none;color:#e2e8f0;background:#0d0f17;transition:border-color .12s}}
-.modal-search:focus{{border-color:#818cf8}}
-.modal-search::placeholder{{color:#3d4a5c}}
+.modal{{background:#fff;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.18)}}
+.modal-head{{padding:20px 20px 12px;border-bottom:1px solid #f0ede8;flex-shrink:0}}
+.modal-title{{font-size:16px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}}
+.modal-close{{background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px}}
+.modal-close:hover{{color:#1a1a1a}}
+.modal-search{{width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #e5e3df;font-size:13px;font-family:inherit;outline:none;color:#1a1a1a;background:#f8f7f5;transition:border-color .12s}}
+.modal-search:focus{{border-color:#7c3aed;background:#fff}}
 .modal-body{{overflow-y:auto;padding:0 20px 20px;flex:1}}
-.modal-cat-group .modal-cat-label{{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#3d4a5c;margin:16px 0 6px}}
-.modal-site-row{{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #1c2030}}
+.modal-site-row{{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f8f6f2}}
 .modal-site-row:last-child{{border-bottom:none}}
-.modal-connect-btn{{padding:5px 12px;border-radius:7px;border:1px solid #252a3d;background:#1a1e2e;font-size:12px;font-weight:600;color:#818cf8;cursor:pointer;font-family:inherit;flex-shrink:0;transition:all 0.12s}}
-.modal-connect-btn:hover{{border-color:#818cf8;background:#252a3d}}
+.modal-connect-btn{{padding:5px 12px;border-radius:7px;border:1px solid #e5e3df;background:#fff;font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;font-family:inherit;flex-shrink:0}}
+.modal-connect-btn:hover{{background:#f3f0ff;border-color:#d4c6ff}}
+/* Credential form inside modal */
 .modal-cred-screen{{display:none;flex-direction:column;height:100%}}
 .modal-cred-screen.active{{display:flex}}
-.modal-cred-head{{padding:20px 20px 16px;border-bottom:1px solid #1c2030;flex-shrink:0;display:flex;align-items:center;gap:12px}}
-.modal-back-btn{{background:none;border:none;font-size:14px;cursor:pointer;color:#818cf8;font-family:inherit;font-weight:600;padding:0;transition:color 0.12s}}
-.modal-back-btn:hover{{color:#6366f1}}
+.modal-cred-head{{padding:20px 20px 16px;border-bottom:1px solid #f0ede8;flex-shrink:0;display:flex;align-items:center;gap:12px}}
+.modal-back-btn{{background:none;border:none;font-size:14px;cursor:pointer;color:#7c3aed;font-family:inherit;font-weight:600;padding:0}}
+.modal-back-btn:hover{{color:#6d28d9}}
 .modal-cred-body{{padding:20px;overflow-y:auto;flex:1}}
-.modal-cred-body input{{width:100%;padding:9px 12px;border:1.5px solid #252a3d;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:10px;transition:border-color .12s;background:#0d0f17;color:#e2e8f0}}
-.modal-cred-body input:focus{{border-color:#818cf8}}
-.modal-cred-body input::placeholder{{color:#3d4a5c}}
-.toast{{position:fixed;bottom:24px;right:24px;background:#1a1e2e;color:#e2e8f0;border:1px solid #252a3d;padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,0.4)}}
+.modal-cred-body input{{width:100%;padding:9px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:10px;transition:border-color .12s;background:#fff;color:#1a1a1a}}
+.modal-cred-body input:focus{{border-color:#7c3aed}}
+.toast{{position:fixed;bottom:24px;right:24px;background:#1a1a1a;color:#fff;padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:200}}
 .toast.show{{opacity:1}}
-@media(max-width:768px){{html,body{{height:auto;overflow:auto}}.sidebar{{display:none}}.main-content{{height:auto;overflow:visible}}}}
 </style>
 </head>
 <body>
-{_sidebar_html('accounts', user["email"], csrf)}
+<div class="topbar">
+  <a class="topbar-logo" href="/dashboard">
+    <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
+    <div class="logo-name">Mighty</div>
+  </a>
+  <div class="topbar-right">
+    <a class="topbar-link" href="/credentials">Accounts</a>
+    <a class="topbar-link" href="/settings">Settings</a>
+    <a class="topbar-link" href="/settings" style="color:#9ca3af;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{he(user["email"])}</a>
+    <form method="POST" action="/logout" style="margin:0"><input type="hidden" name="_csrf" value="{csrf}"><button style="font-size:12px;color:#6b7280;background:none;border:none;cursor:pointer;padding:4px 8px;border-radius:5px;transition:background 0.12s;font-family:inherit" type="submit">Sign out</button></form>
+  </div>
+</div>
 
-<div class="main-content">
 <div class="page">
   <div class="page-header">
     <h1>Connected accounts</h1>
     <button class="btn-connect-new" onclick="openModal()">+ Connect account</button>
   </div>
   {connected_cards_html}
-  <div style="text-align:center;padding:16px 0 8px;font-size:12px;color:#3d4a5c">Changes take effect on next sync.</div>
+  <div style="text-align:center;padding:16px 0 8px;font-size:12px;color:#9ca3af">Changes take effect on next sync.</div>
 </div>
-
 
 <!-- Add account modal -->
 <div class="modal-overlay" id="modal-overlay" onclick="overlayClick(event)">
@@ -4386,9 +4349,9 @@ h1{{font-size:20px;font-weight:700;color:#e2e8f0}}
         <input type="text" id="modal-u" placeholder="Username or email" autocomplete="off">
         <input type="password" id="modal-p" placeholder="Password" autocomplete="new-password">
         <details style="margin-top:10px">
-          <summary style="font-size:12px;color:#8892a4;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
+          <summary style="font-size:12px;color:#6b7280;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
           <input type="text" id="modal-t" placeholder="TOTP secret key" style="margin-top:6px">
-          <div style="font-size:11px;color:#3d4a5c;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
         </details>
         <button class="btn-save" style="width:100%;margin-top:16px" onclick="saveModalCred()">Save & Sync</button>
       </div>
