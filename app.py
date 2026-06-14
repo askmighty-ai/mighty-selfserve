@@ -773,11 +773,11 @@ a:hover{text-decoration:underline}
 input,textarea,select{font-family:inherit}
 button{font-family:inherit;cursor:pointer}
 .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:0.3px}
-.badge-logged{background:#1e2535;color:#8892a4}
-.badge-pending{background:#2d2410;color:#fbbf24;border:1px solid rgba(251,191,36,0.2)}
-.badge-approved{background:#0d2a1e;color:#34d399;border:1px solid rgba(52,211,153,0.2)}
-.badge-denied{background:#2a1010;color:#f87171;border:1px solid rgba(248,113,113,0.2)}
-.badge-timeout{background:#1e2535;color:#4a5568}
+.badge-logged{background:#f3f4f6;color:#6b7280}
+.badge-pending{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
+.badge-approved{background:#d1fae5;color:#065f46;border:1px solid #a7f3d0}
+.badge-denied{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
+.badge-timeout{background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb}
 """
 
 LANDING_HTML = """<!DOCTYPE html>
@@ -896,6 +896,10 @@ body{background:#fff;color:#1a1a1a}
       <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
       <div class="logo-name">Mighty</div>
     </a>
+    <div class="nav-actions">
+      <a href="/login" class="nav-signin">Sign in</a>
+      <a href="/signup" class="btn-nav">Create account</a>
+    </div>
   </div>
 </nav>
 
@@ -1494,8 +1498,8 @@ body{display:flex;flex-direction:row}
 .acct-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
 .acct-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #f5f2ed}
 .acct-row:last-child{border-bottom:none}
-.acct-lbl{font-size:11px;font-weight:600;color:#8892a4;flex-shrink:0;min-width:160px}
-.acct-val{font-size:13px;font-weight:600;color:#1c1917;text-align:right}
+.acct-lbl{font-size:11px;font-weight:600;color:#8892a4;flex-shrink:0;min-width:120px;max-width:45%}
+.acct-val{font-size:13px;font-weight:600;color:#1c1917;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%}
 .acct-cards-wrap{display:flex;flex-direction:column}
 /* ── Activity log ── */
 .action-card{background:#ffffff;border:1px solid #e8e4de;border-radius:10px;overflow:hidden;margin-bottom:8px;transition:border-color 0.12s;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
@@ -1523,6 +1527,10 @@ body{display:flex;flex-direction:row}
 .feed-search{width:100%;padding:9px 14px;border:1.5px solid #e8e4de;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s;margin-bottom:14px}
 .feed-search:focus{border-color:#6366f1}
 .feed-search::placeholder{color:#c0bbb5}
+/* ── Status filter chips ── */
+.status-chip{padding:5px 11px;border-radius:20px;border:1px solid #e8e4de;background:#ffffff;font-size:11px;font-weight:600;color:#8892a4;cursor:pointer;font-family:inherit;transition:all 0.12s;white-space:nowrap}
+.status-chip:hover{border-color:#c0bbb5;color:#6b7280}
+.status-chip.active{background:#1c1917;border-color:#1c1917;color:#ffffff}
 /* ── Buttons ── */
 .btn-primary{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-family:inherit}
 .btn-primary:hover{background:#4f46e5;text-decoration:none;color:#fff}
@@ -1532,6 +1540,7 @@ body{display:flex;flex-direction:row}
 .pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#6366f1;display:flex;align-items:center;gap:6px;margin-bottom:10px}
 .pending-dot{width:6px;height:6px;border-radius:50%;background:#6366f1;animation:pulse 1.5s infinite;flex-shrink:0}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 /* ── Empty / util ── */
 .feed-col{overflow-y:auto;min-height:0}
 @media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible}}
@@ -1569,8 +1578,16 @@ body{display:flex;flex-direction:row}
     </div>
 
     <div id="fview-activity" style="display:none">
-
-      <input type="text" class="feed-search" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <input type="text" class="feed-search" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)" style="flex:1;min-width:160px;margin-bottom:0">
+        <div style="display:flex;gap:6px;flex-shrink:0" id="status-filters">
+          <button class="status-chip active" onclick="setStatusFilter('all',this)">All</button>
+          <button class="status-chip" onclick="setStatusFilter('pending',this)">Pending</button>
+          <button class="status-chip" onclick="setStatusFilter('approved',this)">Approved</button>
+          <button class="status-chip" onclick="setStatusFilter('denied',this)">Denied</button>
+          <button class="status-chip" onclick="setStatusFilter('timed_out',this)">Timed out</button>
+        </div>
+      </div>
       <div id="feed">
         {feed_html}
       </div>
@@ -1821,10 +1838,32 @@ function forceDiscover(source, btn) {
   });
 }
 
+var _activeStatusFilter = 'all';
+function setStatusFilter(status, btn) {
+  _activeStatusFilter = status;
+  document.querySelectorAll('.status-chip').forEach(function(b) { b.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  applyFeedFilters();
+}
 function filterFeed(q) {
-  q = (q || '').toLowerCase();
+  applyFeedFilters();
+}
+function applyFeedFilters() {
+  var q = (document.getElementById('feed-search') ? document.getElementById('feed-search').value : '').toLowerCase();
   document.querySelectorAll('.action-card').forEach(function(card) {
-    card.style.display = card.textContent.toLowerCase().includes(q) ? '' : 'none';
+    var textMatch = !q || card.textContent.toLowerCase().includes(q);
+    var statusMatch = _activeStatusFilter === 'all';
+    if (!statusMatch) {
+      var badge = card.querySelector('.badge-approved,.badge-denied,.badge-pending,.badge-logged,.badge-timeout');
+      if (badge) {
+        var cls = badge.className;
+        if (_activeStatusFilter === 'approved' && cls.includes('badge-approved')) statusMatch = true;
+        if (_activeStatusFilter === 'denied' && cls.includes('badge-denied')) statusMatch = true;
+        if (_activeStatusFilter === 'pending' && (cls.includes('badge-pending') || card.classList.contains('is-pending'))) statusMatch = true;
+        if (_activeStatusFilter === 'timed_out' && cls.includes('badge-timeout')) statusMatch = true;
+      }
+    }
+    card.style.display = (textMatch && statusMatch) ? '' : 'none';
   });
 }
 
@@ -2013,7 +2052,7 @@ body{display:flex;flex-direction:row}
 .sidebar-signout{width:100%;padding:7px 10px;background:none;border:1px solid #252a3d;border-radius:7px;font-size:12px;color:#8892a4;cursor:pointer;text-align:left;transition:all 0.12s;font-family:inherit}
 .sidebar-signout:hover{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto}
-.page-wrap{max-width:540px;margin:0 auto;padding:32px 28px;display:flex;flex-direction:column;gap:16px}
+.page-wrap{max-width:560px;margin:0;padding:32px 36px;display:flex;flex-direction:column;gap:16px}
 .page-title{font-size:20px;font-weight:700;color:#1c1917;margin-bottom:4px}
 .card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
 .section-title{font-size:11px;font-weight:700;color:#9ca3af;margin-bottom:16px;text-transform:uppercase;letter-spacing:0.7px}
@@ -2896,13 +2935,14 @@ def action_card_html(a, base, show_buttons):
     detail_html = ""
     if extra:
         detail_html = (
-            f'<div id="detail-{aid}" style="display:none;padding:6px 16px 12px;border-top:1px solid #f3f4f6">'
-            + "".join(f'<span style="font-size:11px;color:#9ca3af;background:#f8f7f5;border-radius:4px;padding:2px 7px;margin-right:6px;display:inline-block">{e}</span>' for e in extra)
+            f'<div id="detail-{aid}" style="display:none;padding:8px 16px 12px;border-top:1px solid #f0ede8;background:#f8f7f5">'
+            + "".join(f'<span style="font-size:11px;color:#6b7280;border-radius:4px;padding:2px 0;margin-right:12px;display:inline-block">{e}</span>' for e in extra)
             + '</div>'
         )
     detail_toggle = (
-        f'<button onclick="toggleDetail(\'{aid}\')" style="font-size:11px;color:#9ca3af;'
-        'background:none;border:none;cursor:pointer;padding:0;margin-left:4px">details</button>'
+        f'<button onclick="toggleDetail(\'{aid}\')" style="font-size:11px;color:#6366f1;'
+        'background:none;border:none;cursor:pointer;padding:0;margin-left:6px;font-weight:600;'
+        'text-decoration:underline;text-underline-offset:2px">details ↓</button>'
         if extra else ""
     )
     return f'''<div class="action-card{pending_cls}" id="action-{aid}">
@@ -3118,17 +3158,18 @@ def dashboard():
         if items:
             items_html = "".join(
                 f'<div class="acct-row"><span class="acct-lbl">{he(i["label"])}</span>'
-                f'<span class="acct-val">{he(i["value"])}</span></div>'
+                f'<span class="acct-val" title="{he(i["value"])}">{he(i["value"])}</span></div>'
                 for i in items
             )
         elif synced_at:
-            items_html = ('<div class="acct-row" data-discovering="1">'
-                          '<span class="acct-lbl" style="color:#9ca3af;'
-                          'font-style:italic">Syncing & discovering fields…</span></div>')
+            items_html = ('<div class="acct-row" data-discovering="1" style="padding:10px 0">'
+                          '<span class="acct-lbl" style="color:#6366f1;font-style:normal;font-weight:500">'
+                          '<span style="display:inline-block;animation:spin 1.2s linear infinite;margin-right:5px">↻</span>'
+                          'Syncing & discovering fields…</span></div>')
             status_color = "#9ca3af"
         else:
-            items_html = ('<div class="acct-row"><span class="acct-lbl" style="color:#9ca3af;'
-                          'font-style:italic">Awaiting first sync…</span></div>')
+            items_html = ('<div class="acct-row" style="padding:10px 0">'
+                          '<span class="acct-lbl" style="color:#9ca3af;font-style:italic">Awaiting first sync…</span></div>')
             status_color = "#9ca3af"
 
         sync_label = (f'<div style="font-size:11px;color:#9ca3af" '
@@ -3165,7 +3206,7 @@ def dashboard():
             f'padding:3px 8px;border-radius:6px;border:1px solid #e8e4de;background:#f5f2ed;'
             f'white-space:nowrap;cursor:pointer;transition:all 0.12s" '
             f'onmouseover="this.style.color=\'#818cf8\';this.style.borderColor=\'#818cf8\'" '
-            f'onmouseout="this.style.color=\'#6b7280\';this.style.borderColor=\'#e8e4de\'">Modify fields</a>'
+            f'onmouseout="this.style.color=\'#6b7280\';this.style.borderColor=\'#e8e4de\'">Edit fields</a>'
             f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;'
             f'cursor:help" title="{"Synced recently" if status_color == "#30d158" else "Not yet synced"}"></div>'
             f'<button onclick="forceDiscover(\'{he(src)}\', this)" '
@@ -4304,11 +4345,15 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
 .cred-form input{{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#ffffff;color:#1c1917}}
 .cred-form input:focus{{border-color:#6366f1}}
 .cred-form input::placeholder{{color:#c0bbb5}}
-.cred-form details summary{{font-size:12px;color:#6b7280;cursor:pointer;user-select:none;margin-top:8px}}
+.cred-form details{{margin-top:8px;border:1px solid #e8e4de;border-radius:8px;overflow:hidden}}
+.cred-form details summary{{font-size:12px;color:#6b7280;cursor:pointer;user-select:none;padding:8px 12px;background:#f5f2ed;list-style:none;display:flex;align-items:center;justify-content:space-between}}
+.cred-form details summary::after{{content:'＋';font-size:14px;color:#9ca3af}}
+.cred-form details[open] summary::after{{content:'－'}}
+.cred-form details input{{margin:0;border:none;border-top:1px solid #e8e4de;border-radius:0}}
 .btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;transition:all 0.12s}}
 .btn-toggle:hover{{border-color:#6366f1;background:#eef2ff}}
-.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #e8e4de;background:transparent;font-size:12px;color:#9ca3af;cursor:pointer;font-family:inherit;transition:all 0.12s}}
-.btn-remove:hover{{background:rgba(220,38,38,0.06);border-color:rgba(220,38,38,0.3);color:#dc2626}}
+.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid rgba(220,38,38,0.25);background:transparent;font-size:12px;color:#dc2626;cursor:pointer;font-family:inherit;transition:all 0.12s}}
+.btn-remove:hover{{background:rgba(220,38,38,0.06);border-color:#dc2626}}
 .btn-save{{margin-top:12px;padding:9px 18px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.12s}}
 .btn-save:hover{{background:#4f46e5}}
 /* ── Modal ── */
