@@ -285,21 +285,19 @@ def _fmt_sync(ts):
         return ts[:10] if ts else "—"
 
 def _sidebar_html(active: str, email: str, csrf: str) -> str:
-    """Generate the shared left sidebar HTML."""
-    def _nav(href, label, icon_svg, page_key):
+    """Generate the shared left sidebar HTML — icon-only, 48px."""
+    def _nav(href, title, icon_svg, page_key):
         cls = "sidebar-link sidebar-link-active" if active == page_key else "sidebar-link"
-        return f'<a href="{href}" class="{cls}">{icon_svg}<span>{label}</span></a>'
-    icon_dash = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>'
-    icon_acct = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>'
-    icon_sett = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>'
+        return f'<a href="{href}" class="{cls}" title="{title}">{icon_svg}</a>'
+    icon_dash = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>'
+    icon_acct = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>'
+    icon_sett = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>'
     av = (email[0] if email else "?").upper()
-    short = email if len(email) <= 24 else email[:21] + "…"
     return (
         '<aside class="sidebar">'
         '<div class="sidebar-header">'
-        '<a href="/dashboard" class="sidebar-logo">'
+        '<a href="/dashboard" class="sidebar-logo" title="Mighty">'
         '<img src="/logo-icon.png" alt="Mighty" class="sidebar-logo-img">'
-        '<span class="sidebar-logo-name">Mighty</span>'
         '</a></div>'
         '<nav class="sidebar-nav">'
         + _nav('/dashboard', 'Dashboard', icon_dash, 'dashboard')
@@ -307,13 +305,9 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         + _nav('/settings', 'Settings', icon_sett, 'settings')
         + '</nav>'
         '<div class="sidebar-footer">'
-        '<div class="sidebar-user">'
-        f'<div class="sidebar-avatar">{av}</div>'
-        f'<div class="sidebar-user-email" title="{he(email)}">{he(short)}</div>'
-        '</div>'
-        f'<form method="POST" action="/logout" style="margin:0">'
+        f'<form method="POST" action="/logout" style="margin:0;display:flex;justify-content:center">'
         f'<input type="hidden" name="_csrf" value="{he(csrf)}">'
-        '<button class="sidebar-signout" type="submit">Sign out</button>'
+        f'<button class="sidebar-avatar" type="submit" title="Sign out ({he(email)})">{av}</button>'
         '</form>'
         '</div>'
         '</aside>'
@@ -779,25 +773,18 @@ button{font-family:inherit;cursor:pointer}
 .badge-approved{background:#d1fae5;color:#065f46;border:1px solid #a7f3d0}
 .badge-denied{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
 .badge-timeout{background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb}
-.sidebar{width:224px;flex-shrink:0;background:#0a0c12;border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;height:100vh;overflow:hidden}
-.sidebar-header{padding:18px 16px 14px;border-bottom:1px solid rgba(255,255,255,0.06)}
-.sidebar-logo{display:flex;align-items:center;gap:9px;text-decoration:none}
+.sidebar{width:48px;flex-shrink:0;background:#0a0c12;border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;height:100vh;overflow:hidden;align-items:center}
+.sidebar-header{padding:14px 0 10px;border-bottom:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}
+.sidebar-logo{display:flex;align-items:center;justify-content:center;text-decoration:none}
 .sidebar-logo:hover{text-decoration:none}
 .sidebar-logo-img{width:26px;height:26px;border-radius:7px;object-fit:cover}
-.sidebar-logo-name{font-size:15px;font-weight:800;letter-spacing:0.3px;background:linear-gradient(135deg,#a5b4fc,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.sidebar-nav{flex:1;padding:8px;display:flex;flex-direction:column;gap:1px;overflow-y:auto}
-.sidebar-link{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;font-size:13px;font-weight:500;color:#5a6480;text-decoration:none;transition:background 0.1s,color 0.1s}
-.sidebar-link:hover{background:rgba(255,255,255,0.05);color:#c4cde0;text-decoration:none}
-.sidebar-link svg{flex-shrink:0;opacity:0.45;transition:opacity 0.1s}
-.sidebar-link:hover svg{opacity:0.7}
-.sidebar-link-active{background:rgba(129,140,248,0.13);color:#c7d2fe !important;font-weight:600}
-.sidebar-link-active svg{opacity:1 !important}
-.sidebar-footer{padding:10px 8px;border-top:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;gap:6px}
-.sidebar-user{display:flex;align-items:center;gap:9px;padding:4px 8px}
-.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
-.sidebar-user-email{font-size:11px;color:#5a6480;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px}
-.sidebar-signout{width:100%;padding:7px 10px;background:none;border:1px solid rgba(255,255,255,0.08);border-radius:7px;font-size:12px;color:#5a6480;cursor:pointer;text-align:left;transition:all 0.1s;font-family:inherit}
-.sidebar-signout:hover{background:rgba(255,255,255,0.05);color:#c4cde0;border-color:rgba(255,255,255,0.15)}
+.sidebar-nav{flex:1;padding:8px 0;display:flex;flex-direction:column;align-items:center;gap:2px;overflow-y:auto;width:100%}
+.sidebar-link{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#3d4560;text-decoration:none;transition:background 0.1s,color 0.1s}
+.sidebar-link:hover{background:rgba(255,255,255,0.07);color:#c4cde0;text-decoration:none}
+.sidebar-link svg{flex-shrink:0}
+.sidebar-link-active{background:rgba(129,140,248,0.15);color:#818cf8 !important}
+.sidebar-footer{padding:10px 0 12px;border-top:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}
+.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;border:none;cursor:pointer;font-family:inherit}
 """
 
 LANDING_HTML = """<!DOCTYPE html>
@@ -1474,47 +1461,68 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-/* ── Layout ── */
 html,body{height:100%;overflow:hidden}
-body{display:flex;flex-direction:row;background:#eae5de}
-/* ── Main content ── */
+body{display:flex;flex-direction:row;background:#eee9e2}
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
-/* ── Page header row ── */
-.page-header-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:12px}
-.page-title{font-size:22px;font-weight:800;color:#1c1917;letter-spacing:-0.4px}
-/* ── Toolbar ── */
-.pending-pill{background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.22);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#6366f1}
-.btn-sync{padding:7px 16px;border-radius:8px;border:1.5px solid #d9d3cc;background:#ffffff;font-size:12px;font-weight:600;color:#1c1917;cursor:pointer;transition:all 0.12s;font-family:inherit;box-shadow:0 1px 2px rgba(0,0,0,0.06)}
-.btn-sync:hover{border-color:#6366f1;color:#6366f1;background:#faf9ff}
-/* ── Feed tabs ── */
-.feed-tabs{display:flex;gap:0;background:#e2ddd7;border:1px solid #d5cfc8;border-radius:9px;padding:3px;width:fit-content}
-.feed-tab{padding:6px 20px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:600;color:#7d7670;cursor:pointer;transition:all 0.12s;font-family:inherit;letter-spacing:0.1px}
-.feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10),0 1px 1px rgba(0,0,0,0.06)}
-/* ── Page body ── */
-.page-body{flex:1;padding:28px 36px;max-width:1000px;width:100%;box-sizing:border-box}
-/* ── Account cards ── */
-.acct-cards-wrap{display:flex;flex-direction:column;gap:10px}
-.acct-card{background:#ffffff;border:1px solid rgba(0,0,0,0.07);border-radius:14px;overflow:hidden;transition:box-shadow 0.15s,border-color 0.15s;box-shadow:0 1px 1px rgba(0,0,0,0.04),0 4px 20px rgba(0,0,0,0.06)}
-.acct-card:hover{border-color:rgba(0,0,0,0.12);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 8px 32px rgba(0,0,0,0.09)}
-.acct-header{display:flex;align-items:center;gap:12px;padding:16px 20px 14px}
-.acct-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
-.acct-name{font-size:14px;font-weight:700;color:#1c1917;letter-spacing:-0.1px}
-.acct-sync-time{font-size:10px;color:#b0aaa4;margin-top:2px;font-weight:400}
-.acct-controls{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
-.acct-edit-btn{font-size:11px;font-weight:500;color:#9ca3af;text-decoration:none;padding:4px 9px;border-radius:6px;border:1px solid #ede9e4;background:#faf8f6;white-space:nowrap;transition:all 0.12s}
-.acct-edit-btn:hover{color:#6366f1;border-color:#c7d2fe;background:#f5f3ff;text-decoration:none}
-.acct-status-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;cursor:help}
-.acct-refresh-btn{width:27px;height:27px;display:flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid #ede9e4;background:#faf8f6;cursor:pointer;font-size:14px;color:#9ca3af;padding:0;line-height:1;flex-shrink:0;transition:all 0.12s;font-family:inherit}
+/* Top bar */
+.topbar{padding:14px 24px;display:flex;align-items:center;gap:10px;flex-shrink:0;background:#eee9e2;position:sticky;top:0;z-index:2;border-bottom:0.5px solid rgba(0,0,0,0.07)}
+.topbar-search{flex:1;display:flex;align-items:center;gap:8px;background:#fff;border:0.5px solid rgba(0,0,0,0.1);border-radius:9px;padding:8px 14px;cursor:text;max-width:340px}
+.topbar-search input{border:none;outline:none;font-size:13px;color:#1c1917;background:transparent;width:100%;font-family:inherit}
+.topbar-search input::placeholder{color:#c0bab4}
+.topbar-search svg{flex-shrink:0;color:#b0aaa4}
+.expiring-pill{font-size:11px;font-weight:600;color:#d97706;background:rgba(217,119,6,0.1);border:0.5px solid rgba(217,119,6,0.25);border-radius:20px;padding:4px 11px;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.pending-pill{background:rgba(99,102,241,0.1);border:0.5px solid rgba(99,102,241,0.22);border-radius:20px;padding:4px 11px;font-size:11px;font-weight:600;color:#6366f1;white-space:nowrap}
+.btn-sync{padding:7px 14px;border-radius:8px;border:0.5px solid rgba(0,0,0,0.12);background:#ffffff;font-size:12px;font-weight:600;color:#1c1917;cursor:pointer;transition:all 0.12s;font-family:inherit;box-shadow:0 1px 2px rgba(0,0,0,0.05);white-space:nowrap}
+.btn-sync:hover{border-color:#6366f1;color:#6366f1}
+/* Feed tabs */
+.feed-tabs{display:flex;gap:0;background:#e4dfd8;border:0.5px solid #d5cfc8;border-radius:9px;padding:3px;width:fit-content}
+.feed-tab{padding:5px 18px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:600;color:#7d7670;cursor:pointer;transition:all 0.12s;font-family:inherit}
+.feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10)}
+/* Page body */
+.page-body{flex:1;padding:20px 24px 32px;box-sizing:border-box}
+/* Category groups */
+.cat-group{margin-bottom:22px}
+.cat-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.cat-label{font-size:11px;font-weight:600;color:#a09a94;text-transform:uppercase;letter-spacing:0.7px;white-space:nowrap}
+.cat-rule{flex:1;height:0.5px;background:rgba(0,0,0,0.08)}
+/* Card grid */
+.card-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+/* Account cards */
+.acct-card{background:#ffffff;border-radius:12px;overflow:hidden;border:0.5px solid rgba(0,0,0,0.08);box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05);transition:box-shadow 0.15s,border-color 0.15s}
+.acct-card:hover{border-color:rgba(0,0,0,0.14);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 8px 28px rgba(0,0,0,0.08)}
+.acct-card-header{padding:12px 14px 10px;display:flex;align-items:center;gap:9px}
+.acct-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.acct-name{font-size:12px;font-weight:700;color:#1c1917;line-height:1.2}
+.acct-sync-time{font-size:10px;color:#b8b2ac;margin-top:1px}
+.acct-controls{display:flex;align-items:center;gap:5px;margin-left:auto;flex-shrink:0}
+.acct-refresh-btn{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:6px;border:0.5px solid #ede9e4;background:transparent;cursor:pointer;font-size:13px;color:#b8b2ac;padding:0;line-height:1;transition:all 0.12s;font-family:inherit}
 .acct-refresh-btn:hover{color:#6366f1;border-color:#c7d2fe;background:#f5f3ff}
-/* ── Stat blocks ── */
-.acct-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(0,0,0,0.06) 10%,rgba(0,0,0,0.06) 90%,transparent);margin:0 20px}
-.acct-stats{display:flex;flex-wrap:wrap;padding:14px 20px 18px;gap:8px 0}
-.stat-block{flex:1 1 140px;padding:4px 16px 4px 0;min-width:0}
-.stat-val{font-size:16px;font-weight:700;color:#1c1917;letter-spacing:-0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}
-.stat-lbl{font-size:10px;font-weight:600;color:#b0aaa4;text-transform:uppercase;letter-spacing:0.7px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* ── Activity log ── */
-.action-card{background:#ffffff;border:1px solid rgba(0,0,0,0.07);border-radius:12px;overflow:hidden;margin-bottom:8px;transition:all 0.12s;box-shadow:0 1px 1px rgba(0,0,0,0.04),0 3px 12px rgba(0,0,0,0.05)}
-.action-card:hover{border-color:rgba(0,0,0,0.12);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 6px 20px rgba(0,0,0,0.08)}
+/* Hero stat */
+.acct-divider{height:0.5px;background:rgba(0,0,0,0.06);margin:0 14px}
+.acct-hero{padding:10px 14px 6px}
+.hero-val{font-size:20px;font-weight:700;color:#1c1917;letter-spacing:-0.4px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hero-lbl{font-size:9px;font-weight:600;color:#b8b2ac;text-transform:uppercase;letter-spacing:0.7px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Secondary stats */
+.acct-secondary{padding:4px 14px 12px;display:flex;flex-direction:column;gap:3px}
+.sec-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.sec-lbl{font-size:10px;color:#b8b2ac;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1}
+.sec-val{font-size:11px;font-weight:600;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;max-width:55%}
+/* Time-sensitive alert row */
+.acct-alert{margin:0 10px 10px;border-radius:7px;padding:7px 10px;display:flex;align-items:flex-start;gap:7px}
+.acct-alert-amber{background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3)}
+.acct-alert-red{background:#fef2f2;border:0.5px solid rgba(220,38,38,0.2)}
+.alert-icon{font-size:12px;flex-shrink:0;margin-top:1px}
+.alert-lbl{font-size:11px;font-weight:600;line-height:1.3}
+.alert-amber .alert-lbl,.acct-alert-amber .alert-lbl{color:#92400e}
+.alert-sub{font-size:10px;margin-top:1px}
+.acct-alert-amber .alert-sub{color:#b45309}
+.acct-alert-red .alert-lbl{color:#991b1b}
+.acct-alert-red .alert-sub{color:#b91c1c}
+/* States */
+.acct-card.is-stale{opacity:0.55}
+/* Activity log */
+.action-card{background:#ffffff;border:0.5px solid rgba(0,0,0,0.08);border-radius:12px;overflow:hidden;margin-bottom:8px;transition:all 0.12s;box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05)}
+.action-card:hover{border-color:rgba(0,0,0,0.13);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 6px 20px rgba(0,0,0,0.08)}
 .action-card.is-pending{border-color:rgba(245,158,11,0.3);background:linear-gradient(180deg,#fffcf0 0%,#fff 100%)}
 .action-top{padding:14px 16px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .action-label{font-size:14px;font-weight:600;color:#1c1917;line-height:1.4}
@@ -1526,22 +1534,22 @@ body{display:flex;flex-direction:row;background:#eae5de}
 .field-key{color:#b0aaa4;font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:0.6px;min-width:80px;flex-shrink:0;padding-top:1px}
 .field-val{color:#6b7280;line-height:1.4;word-break:break-word}
 .action-buttons{padding:12px 16px;border-top:1px solid #f5f2ed;display:flex;gap:8px}
-.btn-authorize{flex:1;padding:9px;background:rgba(52,211,153,0.08);color:#059669;border:1px solid rgba(52,211,153,0.2);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
+.btn-authorize{flex:1;padding:9px;background:rgba(52,211,153,0.08);color:#059669;border:0.5px solid rgba(52,211,153,0.2);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
 .btn-authorize:hover{background:rgba(52,211,153,0.15);border-color:#34d399}
-.btn-reject{flex:1;padding:9px;background:rgba(248,113,113,0.05);color:#dc2626;border:1px solid rgba(248,113,113,0.15);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
+.btn-reject{flex:1;padding:9px;background:rgba(248,113,113,0.05);color:#dc2626;border:0.5px solid rgba(248,113,113,0.15);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
 .btn-reject:hover{background:rgba(248,113,113,0.1);border-color:#f87171}
-.clevel-sensitive{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.18);letter-spacing:0.3px}
-.clevel-consequential{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(251,191,36,0.1);color:#d97706;border:1px solid rgba(251,191,36,0.18);letter-spacing:0.3px}
-.clevel-critical{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(248,113,113,0.1);color:#dc2626;border:1px solid rgba(248,113,113,0.18);letter-spacing:0.3px}
-.feed-search{width:100%;padding:9px 14px;border:1.5px solid #ddd8d2;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s,box-shadow 0.12s;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+.clevel-sensitive{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(59,130,246,0.1);color:#3b82f6;border:0.5px solid rgba(59,130,246,0.18)}
+.clevel-consequential{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(251,191,36,0.1);color:#d97706;border:0.5px solid rgba(251,191,36,0.18)}
+.clevel-critical{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(248,113,113,0.1);color:#dc2626;border:0.5px solid rgba(248,113,113,0.18)}
+.feed-search{width:100%;padding:9px 14px;border:0.5px solid #ddd8d2;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s,box-shadow 0.12s;margin-bottom:14px}
 .feed-search:focus{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.08)}
 .feed-search::placeholder{color:#c0bbb5}
-.status-chip{padding:5px 12px;border-radius:20px;border:1px solid #ddd8d2;background:#ffffff;font-size:11px;font-weight:600;color:#9ca3af;cursor:pointer;font-family:inherit;transition:all 0.12s;white-space:nowrap}
+.status-chip{padding:5px 12px;border-radius:20px;border:0.5px solid #ddd8d2;background:#ffffff;font-size:11px;font-weight:600;color:#9ca3af;cursor:pointer;font-family:inherit;transition:all 0.12s;white-space:nowrap}
 .status-chip:hover{border-color:#b5b0aa;color:#6b7280}
 .status-chip.active{background:#1c1917;border-color:#1c1917;color:#ffffff}
-.btn-primary{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-family:inherit;box-shadow:0 1px 3px rgba(99,102,241,0.3)}
+.btn-primary{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-family:inherit}
 .btn-primary:hover{background:#4f46e5;text-decoration:none;color:#fff}
-.btn-connect{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:8px;background:#6366f1;color:#fff;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;transition:background 0.12s;font-family:inherit;border:none;cursor:pointer;box-shadow:0 1px 3px rgba(99,102,241,0.3)}
+.btn-connect{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:8px;background:#6366f1;color:#fff;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;transition:background 0.12s;font-family:inherit;border:none;cursor:pointer}
 .btn-connect:hover{background:#4f46e5;text-decoration:none;color:#fff}
 .pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#6366f1;display:flex;align-items:center;gap:6px;margin-bottom:10px}
 .pending-dot{width:6px;height:6px;border-radius:50%;background:#6366f1;animation:pulse 1.5s infinite;flex-shrink:0}
@@ -1556,21 +1564,30 @@ body{display:flex;flex-direction:row;background:#eae5de}
 
 <div class="main-content">
   {onboarding_banner}
-  <div id="twofa-banner" style="display:none;padding:0 36px 0"></div>
+  <div id="twofa-banner" style="display:none;padding:0 24px 0"></div>
   {welcome_state}
+
+  <div class="topbar">
+    <div class="topbar-search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" placeholder="Search accounts…" oninput="filterCards(this.value)" id="card-search">
+    </div>
+    <div style="flex:1"></div>
+    {agent_status_indicator}
+    <div id="expiring-pill" style="display:{expiring_display}" class="expiring-pill">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <span id="expiring-count">{expiring_count}</span> expiring soon
+    </div>
+    <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
+      {pending_count} awaiting decision
+    </div>
+    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">↻ Sync</button>
+  </div>
+
   <div class="page-body" {feed_col_hidden}>
     <input type="hidden" name="_csrf" value="{csrf_token}">
-    <div class="page-header-row">
-      <div class="page-title">Dashboard</div>
-      <div style="display:flex;align-items:center;gap:8px">
-        {agent_status_indicator}
-        <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
-          {pending_count} awaiting decision
-        </div>
-        <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">↻ Sync</button>
-      </div>
-    </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:12px">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:12px">
       <div class="feed-tabs">
         <button class="feed-tab active" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
         <button class="feed-tab" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
@@ -1582,7 +1599,7 @@ body{display:flex;flex-direction:row;background:#eae5de}
     </div>
 
     <div id="fview-accounts">
-      <div class="acct-cards-wrap">{account_data_html}</div>
+      {account_data_html}
     </div>
 
     <div id="fview-activity" style="display:none">
@@ -1605,6 +1622,18 @@ body{display:flex;flex-direction:row;background:#eae5de}
 
 
 <script>
+function filterCards(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('.acct-card').forEach(function(card) {
+    var name = (card.dataset.name || '').toLowerCase();
+    card.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+  // Hide/show category groups if all cards in them are hidden
+  document.querySelectorAll('.cat-group').forEach(function(g) {
+    var visible = Array.from(g.querySelectorAll('.acct-card')).some(function(c) { return c.style.display !== 'none'; });
+    g.style.display = visible ? '' : 'none';
+  });
+}
 function switchTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
@@ -3109,6 +3138,24 @@ def dashboard():
         except Exception:
             return ts[:10] if ts else "—"
 
+    import re as _re
+    _TIME_LABELS = ("due", "expir", "ends", "end date", "valid until", "promo", "offer end", "deadline", "renewal", "renew", "cancel")
+    _URGENT_LABELS = ("due", "payment due", "bill due", "past due")
+    _DATE_RE = _re.compile(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+\d{1,2}', _re.I)
+
+    def _classify_alert(label: str, value: str):
+        """Return 'red', 'amber', or None for a field row."""
+        lbl_low = label.lower()
+        val_low = value.lower()
+        combined = lbl_low + " " + val_low
+        if any(t in lbl_low for t in _URGENT_LABELS):
+            return "red"
+        if any(t in combined for t in _TIME_LABELS):
+            return "amber"
+        if _DATE_RE.search(value):
+            return "amber"
+        return None
+
     # Step 1: get ALL connected accounts (have credentials, not internal keys)
     cred_rows = get_db().execute(
         "SELECT source, extra_enc FROM account_credentials WHERE user_id=?",
@@ -3135,104 +3182,167 @@ def dashboard():
     ).fetchall()
     synced_map = {r["source"]: r for r in acct_rows}
 
-    # Step 3: build cards for ALL connected accounts, ordered by category
-    CATEGORY_ORDER = [
-        "amex","chase","sfcu","wells_fargo","bofa","capital_one","discover","citi",
-        "paypal","fidelity","schwab",
-        "delta","united","southwest","american_air","alaska_air","hertz",
-        "marriott","hilton","hyatt","ihg","wyndham",
-        "disney_plus","netflix","hulu","spotify","max","peacock","paramount_plus","ticketmaster",
-        "amazon","target","walmart","costco",
-        "xfinity","pa_utilities","att","att_wireless","verizon","tmobile",
-        "starbucks","state_farm",
-        "pamf","kaiser","cvs","walgreens",
-    ]
-    ordered_sources = [s for s in CATEGORY_ORDER if s in connected_sources]
-    ordered_sources += [s for s in connected_sources if s not in CATEGORY_ORDER]
+    # Step 3: build cards for ALL connected accounts, grouped by category
+    configured = connected_sources
+
+    # Group configured sources by category
+    _cat_order = []
+    _cat_map = {}
+    for key, name, icon, color, cat in SUPPORTED_SITES:
+        if key not in configured:
+            continue
+        if cat not in _cat_map:
+            _cat_order.append(cat)
+            _cat_map[cat] = []
+        _cat_map[cat].append((key, name, icon, color))
 
     cards_html = ""
-    for src in ordered_sources:
-        row  = synced_map.get(src)
-        data = decrypt_account_data(user["id"], row["data_enc"] or "") if row else {}
+    total_expiring = 0
 
-        # Determine items to display
-        if src in discovered_by_source:
-            disc  = discovered_by_source[src]
-            items = [
-                {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
-                for f in disc["fields"] if f.get("key") in disc["enabled"]
-            ]
-        else:
-            items = data.get("items", [])
+    for cat in _cat_order:
+        grid_cards = ""
+        for src, display_name, icon, color in _cat_map[cat]:
+            row   = synced_map.get(src)
+            data  = decrypt_account_data(user["id"], row["data_enc"] or "") if row else {}
 
-        # Get display metadata (icon/color) from SUPPORTED_SITES or stored data
-        site_meta = next(((n, ic, co) for k, n, ic, co, _ in SUPPORTED_SITES if k == src), None)
-        display_name = site_meta[0] if site_meta else (row["display_name"] if row else src)
-        icon         = site_meta[1] if site_meta else (row["icon"] if row else "?")
-        color        = site_meta[2] if site_meta else (row["color"] if row else "#f0f0f0")
-        synced_at    = row["synced_at"] if row else ""
-        status_color = "#30d158"
+            # Determine items to display
+            if src in discovered_by_source:
+                disc  = discovered_by_source[src]
+                items = [
+                    {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
+                    for f in disc["fields"] if f.get("key") in disc["enabled"]
+                ]
+            else:
+                items = data.get("items", [])
 
-        if items:
-            items_html = '<div class="acct-stats">' + "".join(
-                f'<div class="stat-block">'
-                f'<div class="stat-val" title="{he(i["value"])}">{he(i["value"])}</div>'
-                f'<div class="stat-lbl">{he(i["label"])}</div>'
+            synced_at = row["synced_at"] if row else ""
+            status_color = "#30d158"
+
+            # Separate hero stat from secondary stats, and find alerts
+            hero_item = None
+            secondary_items = []
+            alert_item = None
+            alert_level = None
+
+            for i in items:
+                lbl = i.get("label", "")
+                val = i.get("value", "")
+                lvl = _classify_alert(lbl, val)
+                if lvl and not alert_item:
+                    alert_item = i
+                    alert_level = lvl
+                    total_expiring += 1
+                elif not hero_item:
+                    hero_item = i
+                else:
+                    secondary_items.append(i)
+
+            # If we have an alert but no hero, use first secondary as hero
+            if alert_item and not hero_item and secondary_items:
+                hero_item = secondary_items.pop(0)
+
+            # Build hero section
+            if hero_item:
+                hero_html = (
+                    f'<div class="acct-divider"></div>'
+                    f'<div class="acct-hero">'
+                    f'<div class="hero-val" title="{he(hero_item["value"])}">{he(hero_item["value"])}</div>'
+                    f'<div class="hero-lbl">{he(hero_item["label"])}</div>'
+                    f'</div>'
+                )
+            elif synced_at:
+                hero_html = (
+                    f'<div class="acct-divider"></div>'
+                    f'<div class="acct-hero" data-discovering="1">'
+                    f'<div style="color:#6366f1;font-size:12px;font-weight:500">'
+                    f'<span style="display:inline-block;animation:spin 1.2s linear infinite;margin-right:4px">↻</span>'
+                    f'Discovering fields…</div>'
+                    f'</div>'
+                )
+                status_color = "#9ca3af"
+            else:
+                hero_html = (
+                    f'<div class="acct-divider"></div>'
+                    f'<div class="acct-hero">'
+                    f'<div style="color:#c0bab4;font-style:italic;font-size:12px">Awaiting sync…</div>'
+                    f'</div>'
+                )
+                status_color = "#9ca3af"
+
+            # Build secondary stats (up to 3)
+            sec_html = ""
+            if secondary_items:
+                rows = "".join(
+                    f'<div class="sec-row">'
+                    f'<span class="sec-lbl">{he(i["label"])}</span>'
+                    f'<span class="sec-val" title="{he(i["value"])}">{he(i["value"])}</span>'
+                    f'</div>'
+                    for i in secondary_items[:3]
+                )
+                sec_html = f'<div class="acct-secondary">{rows}</div>'
+
+            # Build alert row
+            alert_html = ""
+            if alert_item:
+                cls = "acct-alert-red" if alert_level == "red" else "acct-alert-amber"
+                alert_html = (
+                    f'<div class="acct-alert {cls}">'
+                    f'<div>'
+                    f'<div class="alert-lbl">{he(alert_item["label"])}</div>'
+                    f'<div class="alert-sub">{he(alert_item["value"])}</div>'
+                    f'</div>'
+                    f'</div>'
+                )
+
+            # Detect login-wall values
+            _BAD = ("log in", "sign in", "login to", "no match found")
+            bad_fields = src in discovered_by_source and any(
+                any(b in str(f.get("value","")).lower() for b in _BAD)
+                for f in discovered_by_source[src]["fields"]
+            )
+            bad_banner = (
+                f'<div style="margin:0 10px 8px;background:#fffbef;border:0.5px solid rgba(245,158,11,0.35);border-radius:7px;'
+                f'padding:7px 10px;display:flex;align-items:center;gap:7px;font-size:11px">'
+                f'<span>⚠️</span>'
+                f'<span style="flex:1;color:#b45309">Couldn\'t log in — fields may be stale.</span>'
+                f'<a href="#" onclick="resetFields(\'{he(src)}\');return false;" style="color:#6366f1;font-weight:600;text-decoration:none;white-space:nowrap">Reset →</a>'
                 f'</div>'
-                for i in items
-            ) + '</div>'
-        elif synced_at:
-            items_html = ('<div class="acct-stats">'
-                          '<div class="stat-block" data-discovering="1">'
-                          '<div style="color:#6366f1;font-size:13px;font-weight:500">'
-                          '<span style="display:inline-block;animation:spin 1.2s linear infinite;margin-right:5px">↻</span>'
-                          'Syncing & discovering fields…</div>'
-                          '</div></div>')
-            status_color = "#9ca3af"
-        else:
-            items_html = ('<div class="acct-stats">'
-                          '<div class="stat-block">'
-                          '<div style="color:#b0aaa4;font-style:italic;font-size:13px">Awaiting first sync…</div>'
-                          '</div></div>')
-            status_color = "#9ca3af"
+            ) if bad_fields else ""
 
-        sync_label = (f'Synced {_fmt_sync(synced_at)}' if synced_at else 'Not yet synced')
+            sync_label = f'Synced {_fmt_sync(synced_at)}' if synced_at else 'Not yet synced'
+            synced_title = "Synced recently" if status_color == "#30d158" else "Not yet synced"
+            stale_cls = " is-stale" if not synced_at else ""
 
-        # Detect login-wall values in cached fields
-        _BAD = ("log in", "sign in", "login to", "no match found")
-        bad_fields = src in discovered_by_source and any(
-            any(b in str(f.get("value","")).lower() for b in _BAD)
-            for f in discovered_by_source[src]["fields"]
-        )
-        bad_banner = (
-            f'<div style="background:#fffbef;border:1px solid rgba(245,158,11,0.35);border-radius:8px;'
-            f'padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;font-size:12px">'
-            f'<span>⚠️</span>'
-            f'<span style="flex:1;color:#b45309">Couldn\'t log in on last sync — fields may be stale.</span>'
-            f'<a href="#" onclick="resetFields(\'{he(src)}\');return false;" style="color:#6366f1;font-weight:600;text-decoration:none;white-space:nowrap">Reset fields →</a>'
-            f'</div>'
-        ) if bad_fields else ""
+            grid_cards += (
+                f'<div class="acct-card{stale_cls}" data-name="{he(display_name)}">'
+                f'<div class="acct-card-header">'
+                f'<div class="acct-icon" style="background:{he(color)}">{he(icon)}</div>'
+                f'<div style="flex:1;min-width:0">'
+                f'<div class="acct-name">{he(display_name)}</div>'
+                f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{sync_label}</div>'
+                f'</div>'
+                f'<div class="acct-controls">'
+                f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;cursor:help" title="{synced_title}"></div>'
+                f'<button onclick="forceDiscover(\'{he(src)}\', this)" title="Re-run field discovery" class="acct-refresh-btn">↻</button>'
+                f'</div>'
+                f'</div>'
+                f'{bad_banner}'
+                f'{hero_html}'
+                f'{sec_html}'
+                f'{alert_html}'
+                f'</div>'
+            )
 
-        synced_title = "Synced recently" if status_color == "#30d158" else "Not yet synced"
-        cards_html += (
-            f'<div class="acct-card">'
-            f'<div class="acct-header">'
-            f'<div class="acct-icon" style="background:{he(color)}">{he(icon)}</div>'
-            f'<div style="flex:1;min-width:0">'
-            f'<div class="acct-name">{he(display_name)}</div>'
-            f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{sync_label}</div>'
-            f'</div>'
-            f'<div class="acct-controls">'
-            f'<a href="/credentials#fields-{he(src)}" class="acct-edit-btn">Edit fields</a>'
-            f'<div class="acct-status-dot" style="background:{status_color}" title="{synced_title}"></div>'
-            f'<button onclick="forceDiscover(\'{he(src)}\', this)" title="Re-run field discovery" class="acct-refresh-btn">↻</button>'
-            f'</div>'
-            f'</div>'
-            f'{bad_banner}'
-            f'<div class="acct-divider"></div>'
-            f'{items_html}'
-            f'</div>'
-        )
+        if grid_cards:
+            cards_html += (
+                f'<div class="cat-group">'
+                f'<div class="cat-header">'
+                f'<span class="cat-label">{he(cat)}</span>'
+                f'<div class="cat-rule"></div>'
+                f'</div>'
+                f'<div class="card-grid">{grid_cards}</div>'
+                f'</div>'
+            )
 
     account_data_html = cards_html if cards_html else (
         '<div style="text-align:center;padding:56px 24px">'
@@ -3251,6 +3361,8 @@ def dashboard():
             .replace("{feed_html}",               feed)
             .replace("{pending_count}",           str(pending_count))
             .replace("{pending_display}",         pending_display)
+            .replace("{expiring_count}",          str(total_expiring))
+            .replace("{expiring_display}",        "flex" if total_expiring > 0 else "none")
             .replace("{agent_status_indicator}",  agent_status_indicator)
             .replace("{agent_cta_button}",        agent_cta_button)
             .replace("{feed_col_hidden}",         feed_col_hidden)
@@ -4323,6 +4435,19 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 *{{box-sizing:border-box;margin:0;padding:0}}
 html,body{{height:100%;overflow:hidden;font-family:'Inter',sans-serif}}
 body{{display:flex;flex-direction:row;background:#eae5de;color:#1c1917;-webkit-font-smoothing:antialiased}}
+/* ── Sidebar ── */
+.sidebar{{width:48px;flex-shrink:0;background:#0a0c12;border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;height:100vh;overflow:hidden;align-items:center}}
+.sidebar-header{{padding:14px 0 10px;border-bottom:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}}
+.sidebar-logo{{display:flex;align-items:center;justify-content:center;text-decoration:none}}
+.sidebar-logo:hover{{text-decoration:none}}
+.sidebar-logo-img{{width:26px;height:26px;border-radius:7px;object-fit:cover}}
+.sidebar-nav{{flex:1;padding:8px 0;display:flex;flex-direction:column;align-items:center;gap:2px;overflow-y:auto;width:100%}}
+.sidebar-link{{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#3d4560;text-decoration:none;transition:background 0.1s,color 0.1s}}
+.sidebar-link:hover{{background:rgba(255,255,255,0.07);color:#c4cde0;text-decoration:none}}
+.sidebar-link svg{{flex-shrink:0}}
+.sidebar-link-active{{background:rgba(129,140,248,0.15);color:#818cf8 !important}}
+.sidebar-footer{{padding:10px 0 12px;border-top:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}}
+.sidebar-avatar{{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;border:none;cursor:pointer;font-family:inherit}}
 /* ── Main ── */
 .main-content{{flex:1;min-width:0;height:100vh;overflow-y:auto}}
 .page{{max-width:660px;margin:0 auto;padding:32px 28px}}
