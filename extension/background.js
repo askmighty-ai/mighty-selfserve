@@ -55,8 +55,8 @@ const ACCOUNT_URLS = {
   verizon:      'https://www.verizon.com/myverizon/',
   tmobile:      'https://account.t-mobile.com/overview',
   xfinity: [
-    'https://customer.xfinity.com/#/account',
-    'https://customer.xfinity.com/#/services',
+    'https://customer.xfinity.com/#/billing',
+    'https://customer.xfinity.com/#/internet',
   ],
   hertz:        'https://www.hertz.com/rentacar/member/profile/myprofile',
   cvs:          'https://www.cvs.com/account/login.jsp',
@@ -231,7 +231,7 @@ async function syncAccount(apiKey, account, urls) {
       });
       if (dismissed?.result) {
         console.log(`[Mighty] ${account.name} page ${i + 1}: dismissed session timeout dialog`);
-        await sleep(2_000); // let page settle after dialog closes
+        await sleep(8_000); // SPA needs time to re-render real content after session refresh
       }
 
       const [result] = await chrome.scripting.executeScript({
