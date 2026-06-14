@@ -1544,9 +1544,9 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .acct-alert-amber{background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3)}
 .acct-alert-red{background:#fef2f2;border:0.5px solid rgba(220,38,38,0.2)}
 .alert-icon{font-size:12px;flex-shrink:0;margin-top:1px}
-.alert-lbl{font-size:11px;font-weight:600;line-height:1.3}
+.alert-lbl{font-size:12px;font-weight:600;line-height:1.3}
 .alert-amber .alert-lbl,.acct-alert-amber .alert-lbl{color:#92400e}
-.alert-sub{font-size:10px;margin-top:1px}
+.alert-sub{font-size:11px;margin-top:1px}
 .acct-alert-amber .alert-sub{color:#b45309}
 .acct-alert-red .alert-lbl{color:#991b1b}
 .acct-alert-red .alert-sub{color:#b91c1c}
@@ -1567,8 +1567,8 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .acct-card.is-expanded .acct-expanded{display:block}
 .exp-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-bottom:0.5px solid rgba(0,0,0,0.04)}
 .exp-row:last-child{border-bottom:none}
-.exp-lbl{font-size:11px;color:#b8b2ac;flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.exp-val{font-size:12px;font-weight:600;color:#374151;text-align:right;flex-shrink:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exp-lbl{font-size:11px;color:#b8b2ac;flex-shrink:1;min-width:32%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exp-val{font-size:12px;font-weight:600;color:#374151;text-align:right;flex-shrink:0;max-width:62%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Activity log */
 .action-card{background:#ffffff;border:0.5px solid rgba(0,0,0,0.08);border-radius:12px;overflow:hidden;margin-bottom:8px;transition:all 0.12s;box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05)}
 .action-card:hover{border-color:rgba(0,0,0,0.13);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 6px 20px rgba(0,0,0,0.08)}
@@ -1669,6 +1669,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       </div>
       <div id="feed">
         {feed_html}
+        <div id="feed-no-results" style="display:none;padding:40px 0;text-align:center;color:#b8b2ac;font-size:13px">No matching actions</div>
       </div>
     </div>
   </div>
@@ -1999,6 +2000,7 @@ function filterFeed(q) {
 }
 function applyFeedFilters() {
   var q = (document.getElementById('feed-search') ? document.getElementById('feed-search').value : '').toLowerCase();
+  var visible = 0;
   document.querySelectorAll('.action-card').forEach(function(card) {
     var textMatch = !q || card.textContent.toLowerCase().includes(q);
     var statusMatch = _activeStatusFilter === 'all';
@@ -2012,8 +2014,12 @@ function applyFeedFilters() {
         if (_activeStatusFilter === 'timed_out' && cls.includes('badge-timeout')) statusMatch = true;
       }
     }
-    card.style.display = (textMatch && statusMatch) ? '' : 'none';
+    var show = textMatch && statusMatch;
+    card.style.display = show ? '' : 'none';
+    if (show) visible++;
   });
+  var noResults = document.getElementById('feed-no-results');
+  if (noResults) noResults.style.display = visible === 0 ? '' : 'none';
 }
 
 function toggleDetail(id) {
@@ -3453,7 +3459,7 @@ def dashboard():
             if extra_items:
                 exp_rows = "".join(
                     f'<div class="exp-row">'
-                    f'<span class="exp-lbl">{he(i["label"])}</span>'
+                    f'<span class="exp-lbl" title="{he(i["label"])}">{he(i["label"])}</span>'
                     f'<span class="exp-val" title="{he(i["value"])}">{he(i["value"])}</span>'
                     f'</div>'
                     for i in extra_items
@@ -3508,7 +3514,7 @@ def dashboard():
             card_footer = (
                 f'<div class="acct-footer">'
                 f'{expand_btn}'
-                f'<a href="/credentials#fields-{he(src)}" class="acct-edit-btn">Edit fields</a>'
+                f'<a href="/credentials#card-{he(src)}" class="acct-edit-btn">Edit fields</a>'
                 f'</div>'
             )
 
