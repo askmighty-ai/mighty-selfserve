@@ -400,7 +400,7 @@ Rules:
 - value: exact current value — if empty or a login prompt, skip the field entirely
 - Each concept ONCE, no duplicates
 - Max 10 fields
-- If you find fewer than 3 fields that pass the hard-exclude test, return an empty array []"""
+- If you find zero fields that pass the hard-exclude test, return an empty array []"""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
     """Use Gemini Flash to identify all useful data fields in a page."""
@@ -5146,6 +5146,26 @@ def _credentials_discover_impl(source):
     return jsonify({"ok": True, "fields": fields})
 
 
+
+
+@app.route("/api/debug/raw/<source>", methods=["GET"])
+@require_login
+def api_debug_raw(source):
+    """Show stored raw_text for a source — for debugging field discovery."""
+    row = get_db().execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+        (session["user_id"], source)
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "No data stored for this source"}), 404
+    data = decrypt_account_data(session["user_id"], row["data_enc"] or "")
+    raw = data.get("raw_text", "")
+    return jsonify({
+        "source": source,
+        "raw_text_len": len(raw),
+        "raw_text_preview": raw[:2000],
+        "items": data.get("items", []),
+    })
 
 
 @app.route("/api/data/force-discover/<source>", methods=["POST"])
