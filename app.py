@@ -1869,7 +1869,11 @@ function applyFeedFilters() {
 
 function toggleDetail(id) {
   var el = document.getElementById('detail-' + id);
-  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  if (!el) return;
+  var open = el.style.display === 'none';
+  el.style.display = open ? 'block' : 'none';
+  var btn = document.getElementById('dtoggle-' + id);
+  if (btn) btn.textContent = open ? 'details ↑' : 'details ↓';
 }
 
 var lastPending = document.querySelectorAll('.is-pending').length > 0;
@@ -2940,8 +2944,9 @@ def action_card_html(a, base, show_buttons):
             + '</div>'
         )
     detail_toggle = (
-        f'<button onclick="toggleDetail(\'{aid}\')" style="font-size:11px;color:#6366f1;'
-        'background:none;border:none;cursor:pointer;padding:0;margin-left:6px;font-weight:600;'
+        f'<span style="color:#d1d5db;margin:0 5px">·</span>'
+        f'<button id="dtoggle-{aid}" onclick="toggleDetail(\'{aid}\')" style="font-size:11px;color:#6366f1;'
+        'background:none;border:none;cursor:pointer;padding:0;font-weight:600;'
         'text-decoration:underline;text-underline-offset:2px">details ↓</button>'
         if extra else ""
     )
@@ -4367,7 +4372,7 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
 .modal-search{{width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #e8e4de;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#f5f2ed;transition:border-color .12s}}
 .modal-search:focus{{border-color:#6366f1}}
 .modal-search::placeholder{{color:#c0bbb5}}
-.modal-body{{overflow-y:auto;padding:0 20px 20px;flex:1}}
+.modal-body{{overflow-y:auto;padding:0 20px 20px;flex:1;min-height:0}}
 .modal-cat-group .modal-cat-label{{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9ca3af;margin:16px 0 6px}}
 .modal-site-row{{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f5f2ed}}
 .modal-site-row:last-child{{border-bottom:none}}
@@ -4378,7 +4383,7 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
 .modal-cred-head{{padding:20px 20px 16px;border-bottom:1px solid #f5f2ed;flex-shrink:0;display:flex;align-items:center;gap:12px}}
 .modal-back-btn{{background:none;border:none;font-size:14px;cursor:pointer;color:#6366f1;font-family:inherit;font-weight:600;padding:0;transition:color 0.12s}}
 .modal-back-btn:hover{{color:#4f46e5}}
-.modal-cred-body{{padding:20px;overflow-y:auto;flex:1}}
+.modal-cred-body{{padding:20px;overflow-y:auto;flex:1;min-height:0}}
 .modal-cred-body input{{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:10px;transition:border-color .12s;background:#ffffff;color:#1c1917}}
 .modal-cred-body input:focus{{border-color:#6366f1}}
 .modal-cred-body input::placeholder{{color:#c0bbb5}}
@@ -4451,7 +4456,7 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
       <div style="font-size:16px;font-weight:700" id="field-modal-title">Edit fields</div>
       <button onclick="closeFieldModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px">&#x2715;</button>
     </div>
-    <div id="field-modal-body" style="overflow-y:auto;padding:16px 20px 20px;flex:1"></div>
+    <div id="field-modal-body" style="overflow-y:auto;padding:16px 20px 20px;flex:1;min-height:0"></div>
   </div>
 </div>
 
