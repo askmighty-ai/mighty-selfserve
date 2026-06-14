@@ -767,8 +767,8 @@ def send_web_push(user_id, title, body, url, action_id=None):
 
 BASE_CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#0d0f17;color:#e2e8f0;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-a{color:#818cf8;text-decoration:none}
+body{font-family:'Inter',sans-serif;background:#f0ede8;color:#1c1917;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+a{color:#6366f1;text-decoration:none}
 a:hover{text-decoration:underline}
 input,textarea,select{font-family:inherit}
 button{font-family:inherit;cursor:pointer}
@@ -1474,43 +1474,43 @@ body{display:flex;flex-direction:row}
 .sidebar-signout:hover{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}
 /* ── Main content ── */
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
-.topbar{background:#0d0f17;border-bottom:1px solid #1c2030;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;position:sticky;top:0;z-index:10;backdrop-filter:blur(8px)}
+.topbar{background:#f0ede8;border-bottom:1px solid #e8e4de;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;position:sticky;top:0;z-index:10;}
 .topbar-right{display:flex;align-items:center;gap:10px}
-.pending-pill{background:rgba(129,140,248,0.15);border:1px solid rgba(129,140,248,0.3);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#818cf8}
-.btn-sync{padding:6px 14px;border-radius:7px;border:1px solid #252a3d;background:#141720;font-size:12px;font-weight:600;color:#818cf8;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-sync:hover{background:#1a1e2e;border-color:#818cf8}
+.pending-pill{background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:#6366f1}
+.btn-sync{padding:6px 14px;border-radius:7px;border:1px solid #e8e4de;background:#ffffff;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;transition:all 0.12s;font-family:inherit}
+.btn-sync:hover{background:#f5f2ed;border-color:#6366f1}
 /* ── Page content ── */
 .page-body{flex:1;padding:28px 32px;max-width:960px;width:100%;box-sizing:border-box}
 .page-section-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;gap:16px}
-.page-title{font-size:18px;font-weight:700;color:#e2e8f0}
+.page-title{font-size:18px;font-weight:700;color:#1c1917}
 .page-sub{font-size:13px;color:#8892a4;margin-top:3px}
 /* ── Feed tabs ── */
-.feed-tabs{display:flex;gap:4px;background:#141720;border:1px solid #252a3d;border-radius:9px;padding:3px;margin-bottom:24px;width:fit-content}
-.feed-tab{padding:6px 18px;border-radius:7px;border:none;background:none;font-size:12px;font-weight:600;color:#8892a4;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.feed-tab.active{background:#1a1e2e;color:#e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,0.4)}
+.feed-tabs{display:flex;gap:4px;background:#e8e4de;border:1px solid #ddd9d3;border-radius:9px;padding:3px;margin-bottom:24px;width:fit-content}
+.feed-tab{padding:6px 18px;border-radius:7px;border:none;background:none;font-size:12px;font-weight:600;color:#6b7280;cursor:pointer;transition:all 0.12s;font-family:inherit}
+.feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.12)}
 /* ── Account cards ── */
-.acct-card{background:#141720;border:1px solid #252a3d;border-radius:12px;padding:18px 20px;margin-bottom:12px;transition:border-color 0.15s}
-.acct-card:hover{border-color:#2d3450}
+.acct-card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:18px 20px;margin-bottom:12px;transition:border-color 0.15s;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.acct-card:hover{border-color:#d0ccc5}
 .acct-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.acct-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1c2030}
+.acct-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #f5f2ed}
 .acct-row:last-child{border-bottom:none}
 .acct-lbl{font-size:11px;font-weight:600;color:#8892a4;flex-shrink:0;min-width:160px}
-.acct-val{font-size:13px;font-weight:600;color:#e2e8f0;text-align:right}
+.acct-val{font-size:13px;font-weight:600;color:#1c1917;text-align:right}
 .acct-cards-wrap{display:flex;flex-direction:column}
 /* ── Activity log ── */
-.action-card{background:#141720;border:1px solid #252a3d;border-radius:10px;overflow:hidden;margin-bottom:8px;transition:border-color 0.12s}
-.action-card:hover{border-color:#2d3450}
-.action-card.is-pending{border-color:rgba(251,191,36,0.35);background:#161510}
+.action-card{background:#ffffff;border:1px solid #e8e4de;border-radius:10px;overflow:hidden;margin-bottom:8px;transition:border-color 0.12s;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.action-card:hover{border-color:#d0ccc5}
+.action-card.is-pending{border-color:rgba(245,158,11,0.4);background:#fffbef}
 .action-top{padding:14px 16px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-.action-label{font-size:14px;font-weight:600;color:#e2e8f0;line-height:1.4}
-.action-type{font-size:11px;color:#3d4a5c;font-family:ui-monospace,monospace;margin-top:2px}
+.action-label{font-size:14px;font-weight:600;color:#1c1917;line-height:1.4}
+.action-type{font-size:11px;color:#9ca3af;font-family:ui-monospace,monospace;margin-top:2px}
 .action-badges{display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
-.action-time{font-size:11px;color:#3d4a5c;margin-top:4px;text-align:right}
+.action-time{font-size:11px;color:#9ca3af;margin-top:4px;text-align:right}
 .action-fields{padding:10px 16px 14px;display:flex;flex-direction:column;gap:5px}
 .field-row{display:flex;gap:10px;font-size:12px}
-.field-key{color:#3d4a5c;font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:0.5px;min-width:80px;flex-shrink:0;padding-top:1px}
+.field-key{color:#9ca3af;font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:0.5px;min-width:80px;flex-shrink:0;padding-top:1px}
 .field-val{color:#8892a4;line-height:1.4;word-break:break-word}
-.action-buttons{padding:12px 16px;border-top:1px solid #1c2030;display:flex;gap:8px}
+.action-buttons{padding:12px 16px;border-top:1px solid #f5f2ed;display:flex;gap:8px}
 .btn-authorize{flex:1;padding:9px;background:rgba(52,211,153,0.1);color:#34d399;border:1px solid rgba(52,211,153,0.25);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
 .btn-authorize:hover{background:rgba(52,211,153,0.18);border-color:#34d399}
 .btn-reject{flex:1;padding:9px;background:rgba(248,113,113,0.06);color:#f87171;border:1px solid rgba(248,113,113,0.2);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;font-family:inherit}
@@ -1520,17 +1520,17 @@ body{display:flex;flex-direction:row}
 .clevel-consequential{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(251,191,36,0.1);color:#fbbf24;border:1px solid rgba(251,191,36,0.2);letter-spacing:0.3px}
 .clevel-critical{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:20px;background:rgba(248,113,113,0.1);color:#f87171;border:1px solid rgba(248,113,113,0.2);letter-spacing:0.3px}
 /* ── Feed search ── */
-.feed-search{width:100%;padding:9px 14px;border:1.5px solid #252a3d;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#e2e8f0;background:#141720;transition:border-color 0.12s;margin-bottom:14px}
-.feed-search:focus{border-color:#818cf8}
-.feed-search::placeholder{color:#3d4a5c}
+.feed-search{width:100%;padding:9px 14px;border:1.5px solid #e8e4de;border-radius:9px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s;margin-bottom:14px}
+.feed-search:focus{border-color:#6366f1}
+.feed-search::placeholder{color:#c0bbb5}
 /* ── Buttons ── */
 .btn-primary{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;transition:background 0.12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-family:inherit}
 .btn-primary:hover{background:#4f46e5;text-decoration:none;color:#fff}
 .btn-connect{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:8px;background:#6366f1;color:#fff;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;box-sizing:border-box;transition:background 0.12s;font-family:inherit;border:none;cursor:pointer}
 .btn-connect:hover{background:#4f46e5;text-decoration:none;color:#fff}
 /* ── Pending label ── */
-.pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#818cf8;display:flex;align-items:center;gap:6px;margin-bottom:10px}
-.pending-dot{width:6px;height:6px;border-radius:50%;background:#818cf8;animation:pulse 1.5s infinite;flex-shrink:0}
+.pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#6366f1;display:flex;align-items:center;gap:6px;margin-bottom:10px}
+.pending-dot{width:6px;height:6px;border-radius:50%;background:#6366f1;animation:pulse 1.5s infinite;flex-shrink:0}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 /* ── Empty / util ── */
 .feed-col{overflow-y:auto;min-height:0}
@@ -1656,15 +1656,15 @@ function load2FAChallenges() {
     var html = '';
     d.challenges.forEach(function(c) {
       var isCode = c.challenge_type === 'sms' || c.challenge_type === 'email_code';
-      html += '<div style="background:#141720;border:1px solid #252a3d;border-radius:10px;padding:14px 16px;margin-bottom:8px">'
-        + '<div style="font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:4px">'
+      html += '<div style="background:#ffffff;border:1px solid #e8e4de;border-radius:10px;padding:14px 16px;margin-bottom:8px">'
+        + '<div style="font-size:13px;font-weight:600;color:#1c1917;margin-bottom:4px">'
         + '🔐 ' + c.account_name + ' needs ' + (isCode ? 'a verification code' : 'push approval')
         + '</div>'
-        + (c.message ? '<div style="font-size:12px;color:#8892a4;margin-bottom:8px">' + c.message + '</div>' : '')
+        + (c.message ? '<div style="font-size:12px;color:#6b7280;margin-bottom:8px">' + c.message + '</div>' : '')
         + (isCode
           ? '<div style="display:flex;gap:8px;align-items:center">'
             + '<input type="text" id="code-' + c.id + '" placeholder="Enter code" maxlength="8" '
-            + 'style="padding:7px 10px;border:1.5px solid #252a3d;border-radius:7px;font-size:13px;width:120px;outline:none;background:#0d0f17;color:#e2e8f0">'
+            + 'style="padding:7px 10px;border:1.5px solid #e8e4de;border-radius:7px;font-size:13px;width:120px;outline:none;background:#ffffff;color:#1c1917">'
             + '<button data-cid="' + c.id + '" data-push="0" onclick="submit2FA(this.dataset.cid,this.dataset.push)" '
             + 'style="padding:7px 14px;background:#6366f1;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">Submit</button>'
             + '</div>'
@@ -1673,8 +1673,8 @@ function load2FAChallenges() {
         )
         + '</div>';
     });
-    banner.innerHTML = '<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:12px;padding:14px 16px;margin-bottom:16px">'
-      + '<div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:8px">⚠ 2FA approval needed</div>'
+    banner.innerHTML = '<div style="background:#fffbef;border:1px solid rgba(245,158,11,0.35);border-radius:12px;padding:14px 16px;margin-bottom:16px">'
+      + '<div style="font-size:12px;font-weight:700;color:#b45309;margin-bottom:8px">⚠ 2FA approval needed</div>'
       + html + '</div>';
   });
 }
@@ -2017,31 +2017,31 @@ body{display:flex;flex-direction:row}
 .sidebar-signout:hover{background:#1a1e2e;color:#e2e8f0;border-color:#2d3450}
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto}
 .page-wrap{max-width:540px;margin:0 auto;padding:32px 28px;display:flex;flex-direction:column;gap:16px}
-.page-title{font-size:20px;font-weight:700;color:#e2e8f0;margin-bottom:4px}
-.card{background:#141720;border:1px solid #252a3d;border-radius:12px;padding:24px}
-.section-title{font-size:11px;font-weight:700;color:#8892a4;margin-bottom:16px;text-transform:uppercase;letter-spacing:0.7px}
+.page-title{font-size:20px;font-weight:700;color:#1c1917;margin-bottom:4px}
+.card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.section-title{font-size:11px;font-weight:700;color:#9ca3af;margin-bottom:16px;text-transform:uppercase;letter-spacing:0.7px}
 .toggle-row{display:flex;align-items:flex-start;gap:12px;padding:12px 0}
-.toggle-row+.toggle-row{border-top:1px solid #1c2030}
-.toggle-label{font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:3px}
-.toggle-hint{font-size:12px;color:#8892a4;line-height:1.5}
+.toggle-row+.toggle-row{border-top:1px solid #f5f2ed}
+.toggle-label{font-size:13px;font-weight:600;color:#1c1917;margin-bottom:3px}
+.toggle-hint{font-size:12px;color:#6b7280;line-height:1.5}
 .api-key-wrap{display:flex;align-items:center;gap:8px;margin-top:4px}
-.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:#8892a4;background:#0d0f17;border:1px solid #252a3d;border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.btn-sm{font-size:12px;font-weight:600;padding:6px 12px;background:#1a1e2e;color:#818cf8;border:1px solid #252a3d;border-radius:6px;white-space:nowrap;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-sm:hover{background:#252a3d;border-color:#818cf8}
-.push-status{font-size:12px;color:#8892a4;margin-top:6px;min-height:16px}
-.push-btn{font-size:12px;font-weight:600;padding:6px 12px;background:#1a1e2e;color:#818cf8;border:1px solid #252a3d;border-radius:6px;cursor:pointer;transition:all 0.12s;display:none;margin-top:6px;font-family:inherit}
-.push-btn:hover{background:#252a3d;border-color:#818cf8}
-.btn-danger{font-size:12px;font-weight:600;padding:8px 12px;background:transparent;color:#f87171;border:1px solid rgba(248,113,113,0.25);border-radius:6px;cursor:pointer;transition:all 0.12s;width:100%;text-align:left;font-family:inherit}
-.btn-danger:hover{background:rgba(248,113,113,0.08);border-color:#f87171}
-.ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:#818cf8;background:#0d0f17;border:1px solid #252a3d;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
-.ntfy-link:hover{border-color:#818cf8;text-decoration:none}
-.toggle-row input[type=checkbox]{-webkit-appearance:none;appearance:none;width:16px;height:16px;border:1.5px solid #252a3d;border-radius:4px;background:#0d0f17;cursor:pointer;position:relative;flex-shrink:0;margin-top:2px;transition:border-color 0.12s,background 0.12s}
+.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:#6b7280;background:#f5f2ed;border:1px solid #e8e4de;border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-sm{font-size:12px;font-weight:600;padding:6px 12px;background:#ffffff;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;white-space:nowrap;cursor:pointer;transition:all 0.12s;font-family:inherit}
+.btn-sm:hover{background:#f5f2ed;border-color:#6366f1}
+.push-status{font-size:12px;color:#6b7280;margin-top:6px;min-height:16px}
+.push-btn{font-size:12px;font-weight:600;padding:6px 12px;background:#ffffff;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;cursor:pointer;transition:all 0.12s;display:none;margin-top:6px;font-family:inherit}
+.push-btn:hover{background:#f5f2ed;border-color:#6366f1}
+.btn-danger{font-size:12px;font-weight:600;padding:8px 12px;background:transparent;color:#dc2626;border:1px solid rgba(220,38,38,0.2);border-radius:6px;cursor:pointer;transition:all 0.12s;width:100%;text-align:left;font-family:inherit}
+.btn-danger:hover{background:rgba(220,38,38,0.06);border-color:#dc2626}
+.ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:#6366f1;background:#f5f2ed;border:1px solid #e8e4de;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
+.ntfy-link:hover{border-color:#6366f1;text-decoration:none}
+.toggle-row input[type=checkbox]{-webkit-appearance:none;appearance:none;width:16px;height:16px;border:1.5px solid #e8e4de;border-radius:4px;background:#ffffff;cursor:pointer;position:relative;flex-shrink:0;margin-top:2px;transition:border-color 0.12s,background 0.12s}
 .toggle-row input[type=checkbox]:checked{background:#6366f1;border-color:#6366f1}
 .toggle-row input[type=checkbox]:checked::after{content:\'\';position:absolute;left:3px;top:1px;width:5px;height:9px;border:2px solid #fff;border-top:none;border-left:none;transform:rotate(45deg)}
-.settings-input{width:100%;padding:10px 14px;border:1.5px solid #252a3d;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#e2e8f0;background:#0d0f17;transition:border-color 0.12s}
-.settings-input:focus{border-color:#818cf8}
-.settings-input::placeholder{color:#3d4a5c}
-.settings-label{display:block;font-size:11px;font-weight:600;color:#8892a4;margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase}
+.settings-input{width:100%;padding:10px 14px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s}
+.settings-input:focus{border-color:#6366f1}
+.settings-input::placeholder{color:#c0bbb5}
+.settings-label{display:block;font-size:11px;font-weight:600;color:#9ca3af;margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase}
 @media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible}}
 </style>
 </head>
@@ -2069,7 +2069,7 @@ body{display:flex;flex-direction:row}
         <div class="toggle-label">Mobile alerts (ntfy)</div>
         <div class="toggle-hint">Install the free <a href="https://ntfy.sh" target="_blank">ntfy app</a>, then subscribe to your channel on your phone.</div>
         <a href="https://ntfy.sh/{ntfy_topic}" target="_blank" class="ntfy-link">ntfy.sh/{ntfy_topic} ↗</a>
-        <div style="font-size:11px;color:#3d4a5c;margin-top:6px">Only action labels and approval links are sent — no account data.</div>
+        <div style="font-size:11px;color:#9ca3af;margin-top:6px">Only action labels and approval links are sent — no account data.</div>
       </div>
     </div>
     <div class="toggle-row">
@@ -2084,7 +2084,7 @@ body{display:flex;flex-direction:row}
 
   <div class="card">
     <div class="section-title">Account</div>
-    <div style="font-size:13px;color:#8892a4;margin-bottom:16px">Signed in as <span style="color:#e2e8f0;font-weight:600">{email}</span></div>
+    <div style="font-size:13px;color:#8892a4;margin-bottom:16px">Signed in as <span style="color:#1c1917;font-weight:600">{email}</span></div>
     <label class="settings-label">Change email address</label>
     <input type="email" id="email-new" placeholder="New email address" class="settings-input" style="margin-bottom:10px">
     <input type="password" id="email-pw" placeholder="Confirm with current password" class="settings-input" style="margin-bottom:10px">
@@ -2114,9 +2114,9 @@ body{display:flex;flex-direction:row}
       <button class="btn-sm" id="reveal-key-btn" onclick="toggleRevealKey(this)">Reveal</button>
       <button class="btn-sm" onclick="copyKey(this)">Copy</button>
     </div>
-    <div style="font-size:11px;color:#3d4a5c;margin-top:8px">Anyone with this key can submit actions on your behalf.</div>
-    <div style="margin-top:16px;padding-top:16px;border-top:1px solid #1c2030">
-      <a href="/onboarding" style="display:inline-block;padding:8px 14px;background:#1a1e2e;color:#818cf8;border:1px solid #252a3d;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">↺ Re-run setup</a>
+    <div style="font-size:11px;color:#9ca3af;margin-top:8px">Anyone with this key can submit actions on your behalf.</div>
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f5f2ed">
+      <a href="/onboarding" style="display:inline-block;padding:8px 14px;background:#f5f2ed;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">↺ Re-run setup</a>
     </div>
   </div>
 
@@ -2138,7 +2138,7 @@ body{display:flex;flex-direction:row}
   <div class="card">
     <div class="section-title">Data &amp; Privacy</div>
     <button class="btn-sm" onclick="window.location.href=\'/settings/export-csv\'">↓ Export activity log (CSV)</button>
-    <hr style="border:none;border-top:1px solid #1c2030;margin:16px 0">
+    <hr style="border:none;border-top:1px solid #f5f2ed;margin:16px 0">
     <div style="font-size:11px;font-weight:700;color:#f87171;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Danger zone</div>
     <div style="display:flex;flex-direction:column;gap:10px">
       <button class="btn-danger" id="del-activity-btn" onclick="deleteActivity()">Delete all activity</button>
@@ -2154,7 +2154,7 @@ body{display:flex;flex-direction:row}
       <input type="password" id="del-acct-pw" placeholder="Your password" class="settings-input" style="border-color:rgba(248,113,113,0.35);margin-bottom:10px">
       <div style="display:flex;gap:8px">
         <button class="btn-danger" style="flex:1" onclick="deleteAccount()">Confirm deletion</button>
-        <button onclick="hideDelConfirm()" style="padding:8px 14px;background:#1a1e2e;border:1px solid #252a3d;border-radius:6px;font-size:13px;font-weight:600;color:#8892a4;cursor:pointer;font-family:inherit">Cancel</button>
+        <button onclick="hideDelConfirm()" style="padding:8px 14px;background:#f5f2ed;border:1px solid #e8e4de;border-radius:6px;font-size:13px;font-weight:600;color:#8892a4;cursor:pointer;font-family:inherit">Cancel</button>
       </div>
       <div id="del-acct-err" style="font-size:12px;color:#f87171;margin-top:8px;display:none"></div>
     </div>
@@ -2958,9 +2958,9 @@ def dashboard():
             '<div style="background:rgba(129,140,248,0.08);border:1px solid rgba(129,140,248,0.2);'
             'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
             'justify-content:space-between;gap:16px;margin:0 32px 8px">'
-            '<div style="font-size:13px;color:#8892a4">'
+            '<div style="font-size:13px;color:#4338ca">'
             'Finish setting up Mighty to connect your first agent.</div>'
-            '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#818cf8;white-space:nowrap">'
+            '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#6366f1;white-space:nowrap">'
             'Complete setup &#8594;</a></div>'
         )
 
@@ -2975,14 +2975,14 @@ def dashboard():
             )
             agent_cta_button = (
                 '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#1a1e2e;color:#8892a4;border:1px solid #252a3d;font-size:12px;font-weight:600;'
+                'border-radius:8px;background:#ffffff;color:#6b7280;border:1px solid #e8e4de;font-size:12px;font-weight:600;'
                 'text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect agent</a>'
             )
             feed = (
                 '<div style="display:flex;flex-direction:column;align-items:center;'
                 'justify-content:center;padding:60px 24px;text-align:center">'
-                '<div style="font-size:14px;font-weight:600;color:#8892a4;margin-bottom:8px">No requests yet</div>'
-                '<div style="font-size:13px;color:#3d4a5c;line-height:1.6;max-width:280px">'
+                '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:8px">No requests yet</div>'
+                '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:280px">'
                 'Ask your agent to do something that needs approval and the request will appear here.</div>'
                 '</div>'
             )
@@ -2998,11 +2998,11 @@ def dashboard():
                 '<div style="width:100%;max-width:360px;text-align:center">'
                 '<div style="width:52px;height:52px;background:rgba(129,140,248,0.1);border:1px solid rgba(129,140,248,0.2);border-radius:14px;'
                 'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
-                '<svg width="22" height="22" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                '<svg width="22" height="22" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
                 '<polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></svg></div>'
-                '<div style="font-size:22px;font-weight:700;color:#e2e8f0;margin-bottom:10px">'
+                '<div style="font-size:22px;font-weight:700;color:#1c1917;margin-bottom:10px">'
                 'Welcome to Mighty</div>'
-                '<div style="font-size:14px;color:#8892a4;line-height:1.6;margin-bottom:28px">'
+                '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
                 'Connect your agent in about 5 minutes. Once connected, approval requests from your agent will appear here.</div>'
                 '<a href="/onboarding" style="display:block;padding:13px 20px;'
                 'background:#6366f1;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
@@ -3020,13 +3020,13 @@ def dashboard():
             )
             agent_cta_button = (
                 '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#1a1e2e;color:#8892a4;border:1px solid #252a3d;font-size:12px;font-weight:600;'
+                'border-radius:8px;background:#ffffff;color:#6b7280;border:1px solid #e8e4de;font-size:12px;font-weight:600;'
                 'text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect agent</a>'
             )
         else:
             agent_status_indicator = (
-                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#3d4a5c">'
-                '<div style="width:7px;height:7px;border-radius:50%;background:#3d4a5c;flex-shrink:0"></div>'
+                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#9ca3af">'
+                '<div style="width:7px;height:7px;border-radius:50%;background:#9ca3af;flex-shrink:0"></div>'
                 'No agent</div>'
             )
             agent_cta_button = (
@@ -3125,18 +3125,18 @@ def dashboard():
             )
         elif synced_at:
             items_html = ('<div class="acct-row" data-discovering="1">'
-                          '<span class="acct-lbl" style="color:#3d4a5c;'
+                          '<span class="acct-lbl" style="color:#9ca3af;'
                           'font-style:italic">Syncing & discovering fields…</span></div>')
-            status_color = "#3d4a5c"
+            status_color = "#9ca3af"
         else:
-            items_html = ('<div class="acct-row"><span class="acct-lbl" style="color:#3d4a5c;'
+            items_html = ('<div class="acct-row"><span class="acct-lbl" style="color:#9ca3af;'
                           'font-style:italic">Awaiting first sync…</span></div>')
-            status_color = "#3d4a5c"
+            status_color = "#9ca3af"
 
-        sync_label = (f'<div style="font-size:11px;color:#3d4a5c" '
+        sync_label = (f'<div style="font-size:11px;color:#9ca3af" '
                       f'data-synced="{he(synced_at)}">Synced {_fmt_sync(synced_at)}</div>'
                       if synced_at else
-                      '<div style="font-size:11px;color:#3d4a5c">Not yet synced</div>')
+                      '<div style="font-size:11px;color:#9ca3af">Not yet synced</div>')
 
         # Detect login-wall values in cached fields
         _BAD = ("log in", "sign in", "login to", "no match found")
@@ -3145,11 +3145,11 @@ def dashboard():
             for f in discovered_by_source[src]["fields"]
         )
         bad_banner = (
-            f'<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;'
+            f'<div style="background:#fffbef;border:1px solid rgba(245,158,11,0.35);border-radius:8px;'
             f'padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;font-size:12px">'
             f'<span>⚠️</span>'
-            f'<span style="flex:1;color:#fbbf24">Couldn\'t log in on last sync — fields may be stale.</span>'
-            f'<a href="#" onclick="resetFields(\'{he(src)}\');return false;" style="color:#818cf8;font-weight:600;text-decoration:none;white-space:nowrap">Reset fields →</a>'
+            f'<span style="flex:1;color:#b45309">Couldn\'t log in on last sync — fields may be stale.</span>'
+            f'<a href="#" onclick="resetFields(\'{he(src)}\');return false;" style="color:#6366f1;font-weight:600;text-decoration:none;white-space:nowrap">Reset fields →</a>'
             f'</div>'
         ) if bad_fields else ""
 
@@ -3158,25 +3158,25 @@ def dashboard():
             f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
             f'<div class="acct-icon" style="background:{he(color)}">{he(icon)}</div>'
             f'<div style="flex:1">'
-            f'<div style="font-size:13px;font-weight:600;color:#e2e8f0">{he(display_name)}</div>'
+            f'<div style="font-size:13px;font-weight:600;color:#1c1917">{he(display_name)}</div>'
             f'{sync_label}'
             f'</div>'
             f'<div style="display:flex;align-items:center;gap:6px">'
             f'<a href="/credentials#fields-{he(src)}" '
             f'style="font-size:11px;font-weight:500;color:#8892a4;text-decoration:none;'
-            f'padding:3px 8px;border-radius:6px;border:1px solid #252a3d;background:#1a1e2e;'
+            f'padding:3px 8px;border-radius:6px;border:1px solid #e8e4de;background:#f5f2ed;'
             f'white-space:nowrap;cursor:pointer;transition:all 0.12s" '
             f'onmouseover="this.style.color=\'#818cf8\';this.style.borderColor=\'#818cf8\'" '
-            f'onmouseout="this.style.color=\'#8892a4\';this.style.borderColor=\'#252a3d\'">Modify fields</a>'
+            f'onmouseout="this.style.color=\'#6b7280\';this.style.borderColor=\'#e8e4de\'">Modify fields</a>'
             f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;'
             f'cursor:help" title="{"Synced recently" if status_color == "#30d158" else "Not yet synced"}"></div>'
             f'<button onclick="forceDiscover(\'{he(src)}\', this)" '
             f'title="Re-run field discovery" '
             f'style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;'
-            f'border-radius:6px;border:1px solid #252a3d;background:#1a1e2e;cursor:pointer;'
+            f'border-radius:6px;border:1px solid #e8e4de;background:#f5f2ed;cursor:pointer;'
             f'font-size:13px;color:#8892a4;padding:0;line-height:1;flex-shrink:0;transition:all 0.12s" '
             f'onmouseover="this.style.color=\'#818cf8\';this.style.borderColor=\'#818cf8\'" '
-            f'onmouseout="this.style.color=\'#8892a4\';this.style.borderColor=\'#252a3d\'">↻</button>'
+            f'onmouseout="this.style.color=\'#6b7280\';this.style.borderColor=\'#e8e4de\'">↻</button>'
             f'</div>'
             f'</div>'
             f'{bad_banner}'
@@ -3187,7 +3187,7 @@ def dashboard():
     account_data_html = cards_html if cards_html else (
         '<div style="text-align:center;padding:56px 24px">'
         '<div style="font-size:36px;margin-bottom:14px">🔗</div>'
-        '<div style="font-size:14px;font-weight:600;color:#8892a4;margin-bottom:16px">No accounts connected yet</div>'
+        '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:16px">No accounts connected yet</div>'
         '<a href="/credentials" style="display:inline-block;padding:9px 20px;background:#6366f1;'
         'color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none">'
         '+ Connect your first account</a>'
@@ -4192,14 +4192,14 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
         _cred_sync_label = (
             f'<div style="font-size:11px;color:#8892a4;margin-top:2px" data-synced="{he(_cred_synced)}">Synced {_fmt_sync(_cred_synced)}</div>'
             if _cred_synced else
-            '<div style="font-size:11px;color:#3d4a5c;margin-top:2px">Not yet synced</div>'
+            '<div style="font-size:11px;color:#9ca3af;margin-top:2px">Not yet synced</div>'
         )
         connected_cards_html += f"""
 <div class="cred-card" id="card-{he(key)}">
   <div style="display:flex;align-items:center;gap:12px">
     <div style="width:36px;height:36px;border-radius:9px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{icon}</div>
     <div style="flex:1">
-      <div style="font-size:14px;font-weight:600;color:#e2e8f0">{he(name)}</div>
+      <div style="font-size:14px;font-weight:600;color:#1c1917">{he(name)}</div>
       {_cred_sync_label}
     </div>
     <button class="btn-toggle" onclick="openFieldModal('{he(key)}')" id="btn-fields-{he(key)}">Edit fields</button>
@@ -4213,7 +4213,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
     <details style="margin-top:8px">
       <summary style="font-size:12px;color:#8892a4;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
       <input type="text" name="totp" placeholder="TOTP secret key" style="margin-top:6px" id="t-{he(key)}">
-      <div style="font-size:11px;color:#3d4a5c;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
     </details>
     <button class="btn-save" onclick="saveCred('{he(key)}')">Save & Sync</button>
   </div>
@@ -4249,12 +4249,12 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
             site_rows += f"""
 <div class="modal-site-row" data-name="{he(name.lower())}">
   <div style="width:30px;height:30px;border-radius:7px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">{icon}</div>
-  <div style="flex:1;font-size:13px;font-weight:500;color:#e2e8f0">{he(name)}</div>
+  <div style="flex:1;font-size:13px;font-weight:500;color:#1c1917">{he(name)}</div>
   {action}
 </div>"""
         modal_sections += f"""
 <div class="modal-cat-group">
-  <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#3d4a5c;margin:16px 0 6px">{he(cat)}</div>
+  <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9ca3af;margin:16px 0 6px">{he(cat)}</div>
   {site_rows}
 </div>"""
 
@@ -4268,7 +4268,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 html,body{{height:100%;overflow:hidden;font-family:'Inter',sans-serif}}
-body{{display:flex;flex-direction:row;background:#0d0f17;color:#e2e8f0}}
+body{{display:flex;flex-direction:row;background:#f0ede8;color:#1c1917}}
 -webkit-font-smoothing:antialiased;
 /* ── Sidebar ── */
 .sidebar{{width:220px;flex-shrink:0;background:#080a10;border-right:1px solid #1c2030;display:flex;flex-direction:column;height:100vh;overflow:hidden}}
@@ -4293,49 +4293,49 @@ body{{display:flex;flex-direction:row;background:#0d0f17;color:#e2e8f0}}
 .main-content{{flex:1;min-width:0;height:100vh;overflow-y:auto}}
 .page{{max-width:660px;margin:0 auto;padding:32px 28px}}
 .page-header{{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}}
-h1{{font-size:20px;font-weight:700;color:#e2e8f0}}
+h1{{font-size:20px;font-weight:700;color:#1c1917}}
 .btn-connect-new{{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;transition:background 0.12s}}
 .btn-connect-new:hover{{background:#4f46e5}}
 /* ── Cred cards ── */
-.cred-card{{background:#141720;border:1px solid #252a3d;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s}}
-.cred-card:hover{{border-color:#2d3450}}
-.cred-form input{{width:100%;padding:9px 12px;border:1.5px solid #252a3d;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#0d0f17;color:#e2e8f0}}
-.cred-form input:focus{{border-color:#818cf8}}
-.cred-form input::placeholder{{color:#3d4a5c}}
-.cred-form details summary{{font-size:12px;color:#8892a4;cursor:pointer;user-select:none;margin-top:8px}}
-.btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #252a3d;background:#1a1e2e;font-size:12px;font-weight:600;color:#818cf8;cursor:pointer;font-family:inherit;transition:all 0.12s}}
-.btn-toggle:hover{{border-color:#818cf8;background:#252a3d}}
-.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #252a3d;background:transparent;font-size:12px;color:#8892a4;cursor:pointer;font-family:inherit;transition:all 0.12s}}
-.btn-remove:hover{{background:rgba(248,113,113,0.08);border-color:rgba(248,113,113,0.3);color:#f87171}}
+.cred-card{{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s}}
+.cred-card:hover{{border-color:#d0ccc5}}
+.cred-form input{{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#ffffff;color:#1c1917}}
+.cred-form input:focus{{border-color:#6366f1}}
+.cred-form input::placeholder{{color:#c0bbb5}}
+.cred-form details summary{{font-size:12px;color:#6b7280;cursor:pointer;user-select:none;margin-top:8px}}
+.btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;transition:all 0.12s}}
+.btn-toggle:hover{{border-color:#6366f1;background:#eef2ff}}
+.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid #e8e4de;background:transparent;font-size:12px;color:#9ca3af;cursor:pointer;font-family:inherit;transition:all 0.12s}}
+.btn-remove:hover{{background:rgba(220,38,38,0.06);border-color:rgba(220,38,38,0.3);color:#dc2626}}
 .btn-save{{margin-top:12px;padding:9px 18px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.12s}}
 .btn-save:hover{{background:#4f46e5}}
 /* ── Modal ── */
-.modal-overlay{{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:64px;backdrop-filter:blur(2px)}}
+.modal-overlay{{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:64px;backdrop-filter:blur(2px)}}
 .modal-overlay.open{{display:flex}}
-.modal{{background:#141720;border:1px solid #252a3d;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.5)}}
-.modal-head{{padding:20px 20px 12px;border-bottom:1px solid #1c2030;flex-shrink:0}}
-.modal-title{{font-size:16px;font-weight:700;color:#e2e8f0;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}}
-.modal-close{{background:none;border:none;font-size:20px;cursor:pointer;color:#8892a4;line-height:1;padding:2px 6px;transition:color 0.12s}}
-.modal-close:hover{{color:#e2e8f0}}
-.modal-search{{width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #252a3d;font-size:13px;font-family:inherit;outline:none;color:#e2e8f0;background:#0d0f17;transition:border-color .12s}}
-.modal-search:focus{{border-color:#818cf8}}
-.modal-search::placeholder{{color:#3d4a5c}}
+.modal{{background:#ffffff;border:1px solid #e8e4de;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.15)}}
+.modal-head{{padding:20px 20px 12px;border-bottom:1px solid #f5f2ed;flex-shrink:0}}
+.modal-title{{font-size:16px;font-weight:700;color:#1c1917;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}}
+.modal-close{{background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px;transition:color 0.12s}}
+.modal-close:hover{{color:#1c1917}}
+.modal-search{{width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #e8e4de;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#f5f2ed;transition:border-color .12s}}
+.modal-search:focus{{border-color:#6366f1}}
+.modal-search::placeholder{{color:#c0bbb5}}
 .modal-body{{overflow-y:auto;padding:0 20px 20px;flex:1}}
-.modal-cat-group .modal-cat-label{{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#3d4a5c;margin:16px 0 6px}}
-.modal-site-row{{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #1c2030}}
+.modal-cat-group .modal-cat-label{{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9ca3af;margin:16px 0 6px}}
+.modal-site-row{{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f5f2ed}}
 .modal-site-row:last-child{{border-bottom:none}}
-.modal-connect-btn{{padding:5px 12px;border-radius:7px;border:1px solid #252a3d;background:#1a1e2e;font-size:12px;font-weight:600;color:#818cf8;cursor:pointer;font-family:inherit;flex-shrink:0;transition:all 0.12s}}
-.modal-connect-btn:hover{{border-color:#818cf8;background:#252a3d}}
+.modal-connect-btn{{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;flex-shrink:0;transition:all 0.12s}}
+.modal-connect-btn:hover{{border-color:#6366f1;background:#eef2ff}}
 .modal-cred-screen{{display:none;flex-direction:column;height:100%}}
 .modal-cred-screen.active{{display:flex}}
-.modal-cred-head{{padding:20px 20px 16px;border-bottom:1px solid #1c2030;flex-shrink:0;display:flex;align-items:center;gap:12px}}
-.modal-back-btn{{background:none;border:none;font-size:14px;cursor:pointer;color:#818cf8;font-family:inherit;font-weight:600;padding:0;transition:color 0.12s}}
-.modal-back-btn:hover{{color:#6366f1}}
+.modal-cred-head{{padding:20px 20px 16px;border-bottom:1px solid #f5f2ed;flex-shrink:0;display:flex;align-items:center;gap:12px}}
+.modal-back-btn{{background:none;border:none;font-size:14px;cursor:pointer;color:#6366f1;font-family:inherit;font-weight:600;padding:0;transition:color 0.12s}}
+.modal-back-btn:hover{{color:#4f46e5}}
 .modal-cred-body{{padding:20px;overflow-y:auto;flex:1}}
-.modal-cred-body input{{width:100%;padding:9px 12px;border:1.5px solid #252a3d;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:10px;transition:border-color .12s;background:#0d0f17;color:#e2e8f0}}
-.modal-cred-body input:focus{{border-color:#818cf8}}
-.modal-cred-body input::placeholder{{color:#3d4a5c}}
-.toast{{position:fixed;bottom:24px;right:24px;background:#1a1e2e;color:#e2e8f0;border:1px solid #252a3d;padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,0.4)}}
+.modal-cred-body input{{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:10px;transition:border-color .12s;background:#ffffff;color:#1c1917}}
+.modal-cred-body input:focus{{border-color:#6366f1}}
+.modal-cred-body input::placeholder{{color:#c0bbb5}}
+.toast{{position:fixed;bottom:24px;right:24px;background:#1c1917;color:#f5f2ed;border:1px solid #333;padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,0.15)}}
 .toast.show{{opacity:1}}
 @media(max-width:768px){{html,body{{height:auto;overflow:auto}}.sidebar{{display:none}}.main-content{{height:auto;overflow:visible}}}}
 </style>
@@ -4350,7 +4350,7 @@ h1{{font-size:20px;font-weight:700;color:#e2e8f0}}
     <button class="btn-connect-new" onclick="openModal()">+ Connect account</button>
   </div>
   {connected_cards_html}
-  <div style="text-align:center;padding:16px 0 8px;font-size:12px;color:#3d4a5c">Changes take effect on next sync.</div>
+  <div style="text-align:center;padding:16px 0 8px;font-size:12px;color:#9ca3af">Changes take effect on next sync.</div>
 </div>
 
 
@@ -4388,7 +4388,7 @@ h1{{font-size:20px;font-weight:700;color:#e2e8f0}}
         <details style="margin-top:10px">
           <summary style="font-size:12px;color:#8892a4;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
           <input type="text" id="modal-t" placeholder="TOTP secret key" style="margin-top:6px">
-          <div style="font-size:11px;color:#3d4a5c;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
         </details>
         <button class="btn-save" style="width:100%;margin-top:16px" onclick="saveModalCred()">Save & Sync</button>
       </div>
