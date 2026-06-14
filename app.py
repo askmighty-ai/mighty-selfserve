@@ -286,9 +286,9 @@ def _fmt_sync(ts):
 
 def _sidebar_html(active: str, email: str, csrf: str) -> str:
     """Generate the shared left sidebar HTML — icon-only, 48px."""
-    def _nav(href, title, icon_svg, page_key):
+    def _nav(href, label, icon_svg, page_key):
         cls = "sidebar-link sidebar-link-active" if active == page_key else "sidebar-link"
-        return f'<a href="{href}" class="{cls}" title="{title}">{icon_svg}</a>'
+        return f'<a href="{href}" class="{cls}">{icon_svg}<span class="sidebar-tip">{label}</span></a>'
     icon_dash = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>'
     icon_acct = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>'
     icon_sett = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>'
@@ -296,8 +296,9 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
     return (
         '<aside class="sidebar">'
         '<div class="sidebar-header">'
-        '<a href="/dashboard" class="sidebar-logo" title="Mighty">'
+        '<a href="/dashboard" class="sidebar-logo">'
         '<img src="/logo-icon.png" alt="Mighty" class="sidebar-logo-img">'
+        '<span class="sidebar-tip">Mighty</span>'
         '</a></div>'
         '<nav class="sidebar-nav">'
         + _nav('/dashboard', 'Dashboard', icon_dash, 'dashboard')
@@ -307,7 +308,7 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         '<div class="sidebar-footer">'
         f'<form method="POST" action="/logout" style="margin:0;display:flex;justify-content:center">'
         f'<input type="hidden" name="_csrf" value="{he(csrf)}">'
-        f'<button class="sidebar-avatar" type="submit" title="Sign out ({he(email)})">{av}</button>'
+        f'<button class="sidebar-avatar" type="submit">{av}<span class="sidebar-tip">Sign out</span></button>'
         '</form>'
         '</div>'
         '</aside>'
@@ -784,7 +785,9 @@ button{font-family:inherit;cursor:pointer}
 .sidebar-link svg{flex-shrink:0}
 .sidebar-link-active{background:rgba(129,140,248,0.15);color:#818cf8 !important}
 .sidebar-footer{padding:10px 0 12px;border-top:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}
-.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;border:none;cursor:pointer;font-family:inherit}
+.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;border:none;cursor:pointer;font-family:inherit;position:relative}
+.sidebar-tip{position:fixed;left:54px;background:#1a1d2e;color:#e2e8f0;font-size:12px;font-weight:500;padding:5px 10px;border-radius:7px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity 0.1s;z-index:999;border:1px solid rgba(255,255,255,0.08)}
+.sidebar-link:hover .sidebar-tip,.sidebar-logo:hover .sidebar-tip,.sidebar-avatar:hover .sidebar-tip{opacity:1}
 """
 
 LANDING_HTML = """<!DOCTYPE html>
