@@ -795,8 +795,11 @@ LANDING_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <meta name="description" content="Mighty adds approval checkpoints and a permanent activity log to any AI agent. Works with Claude, ChatGPT, and custom agents. Set up in 5 minutes. Free to start.">
 <title>Mighty — Your AI agents, accountable to you.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1085,7 +1088,10 @@ SIGNUP_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Create account — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1139,7 +1145,10 @@ LOGIN_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Sign in — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1199,7 +1208,10 @@ FORGOT_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Reset password — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1248,7 +1260,10 @@ RESET_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Set new password — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1298,7 +1313,10 @@ PRIVACY_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Privacy — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1364,7 +1382,10 @@ TOS_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Terms of Service — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1424,7 +1445,10 @@ NOT_FOUND_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Page not found — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1460,7 +1484,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Dashboard — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -1475,8 +1502,10 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .topbar-search svg{flex-shrink:0;color:#b0aaa4}
 .expiring-pill{font-size:11px;font-weight:600;color:#d97706;background:rgba(217,119,6,0.1);border:0.5px solid rgba(217,119,6,0.25);border-radius:20px;padding:4px 11px;display:flex;align-items:center;gap:5px;white-space:nowrap}
 .pending-pill{background:rgba(99,102,241,0.1);border:0.5px solid rgba(99,102,241,0.22);border-radius:20px;padding:4px 11px;font-size:11px;font-weight:600;color:#6366f1;white-space:nowrap}
-.btn-sync{padding:7px 14px;border-radius:8px;border:0.5px solid rgba(0,0,0,0.12);background:#ffffff;font-size:12px;font-weight:600;color:#1c1917;cursor:pointer;transition:all 0.12s;font-family:inherit;box-shadow:0 1px 2px rgba(0,0,0,0.05);white-space:nowrap}
+.btn-sync{padding:7px 14px;border-radius:8px;border:0.5px solid rgba(0,0,0,0.12);background:#ffffff;font-size:12px;font-weight:600;color:#1c1917;cursor:pointer;transition:all 0.12s;font-family:inherit;box-shadow:0 1px 2px rgba(0,0,0,0.05);white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
 .btn-sync:hover{border-color:#6366f1;color:#6366f1}
+@keyframes spin-sync{to{transform:rotate(360deg)}}
+.btn-sync.syncing #sync-icon{animation:spin-sync 0.8s linear infinite}
 /* Feed tabs */
 .feed-tabs{display:flex;gap:0;background:#e4dfd8;border:0.5px solid #d5cfc8;border-radius:9px;padding:3px;width:fit-content}
 .feed-tab{padding:5px 18px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:600;color:#7d7670;cursor:pointer;transition:all 0.12s;font-family:inherit}
@@ -1489,7 +1518,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .cat-label{font-size:11px;font-weight:600;color:#a09a94;text-transform:uppercase;letter-spacing:0.7px;white-space:nowrap}
 .cat-rule{flex:1;height:0.5px;background:rgba(0,0,0,0.08)}
 /* Card grid */
-.card-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px}
 /* Account cards */
 .acct-card{background:#ffffff;border-radius:12px;overflow:hidden;border:0.5px solid rgba(0,0,0,0.08);box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05);transition:box-shadow 0.15s,border-color 0.15s}
 .acct-card:hover{border-color:rgba(0,0,0,0.14);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 8px 28px rgba(0,0,0,0.08)}
@@ -1504,12 +1533,12 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .acct-divider{height:0.5px;background:rgba(0,0,0,0.06);margin:0 14px}
 .acct-hero{padding:10px 14px 6px}
 .hero-val{font-size:20px;font-weight:700;color:#1c1917;letter-spacing:-0.4px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hero-lbl{font-size:9px;font-weight:600;color:#b8b2ac;text-transform:uppercase;letter-spacing:0.7px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hero-lbl{font-size:11px;font-weight:600;color:#b8b2ac;text-transform:uppercase;letter-spacing:0.6px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Secondary stats */
 .acct-secondary{padding:4px 14px 12px;display:flex;flex-direction:column;gap:3px}
 .sec-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
-.sec-lbl{font-size:10px;color:#b8b2ac;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1}
-.sec-val{font-size:11px;font-weight:600;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;max-width:55%}
+.sec-lbl{font-size:12px;color:#b8b2ac;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1}
+.sec-val{font-size:12px;font-weight:600;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;max-width:55%}
 /* Time-sensitive alert row */
 .acct-alert{margin:0 10px 10px;border-radius:7px;padding:7px 10px;display:flex;align-items:flex-start;gap:7px}
 .acct-alert-amber{background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3)}
@@ -1529,15 +1558,17 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .acct-footer{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:0.5px solid rgba(0,0,0,0.05);gap:8px}
 .acct-expand-btn{font-size:11px;font-weight:500;color:#9ca3af;background:none;border:none;cursor:pointer;padding:0;font-family:inherit;display:flex;align-items:center;gap:4px;transition:color 0.1s}
 .acct-expand-btn:hover{color:#6366f1}
+.acct-expand-btn svg{transition:transform 0.15s}
+.acct-card.is-expanded .acct-expand-btn svg{transform:rotate(180deg)}
 .acct-edit-btn{font-size:11px;font-weight:500;color:#9ca3af;text-decoration:none;padding:3px 8px;border-radius:5px;border:0.5px solid #ede9e4;background:#faf8f6;white-space:nowrap;transition:all 0.12s}
 .acct-edit-btn:hover{color:#6366f1;border-color:#c7d2fe;background:#f5f3ff;text-decoration:none}
 /* Expanded fields */
-.acct-expanded{display:none;padding:6px 14px 10px;border-top:0.5px solid rgba(0,0,0,0.05)}
+.acct-expanded{display:none;padding:6px 14px 10px}
 .acct-card.is-expanded .acct-expanded{display:block}
 .exp-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-bottom:0.5px solid rgba(0,0,0,0.04)}
 .exp-row:last-child{border-bottom:none}
-.exp-lbl{font-size:10px;color:#b8b2ac;flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.exp-val{font-size:11px;font-weight:600;color:#374151;text-align:right;flex-shrink:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exp-lbl{font-size:11px;color:#b8b2ac;flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exp-val{font-size:12px;font-weight:600;color:#374151;text-align:right;flex-shrink:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Activity log */
 .action-card{background:#ffffff;border:0.5px solid rgba(0,0,0,0.08);border-radius:12px;overflow:hidden;margin-bottom:8px;transition:all 0.12s;box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05)}
 .action-card:hover{border-color:rgba(0,0,0,0.13);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 6px 20px rgba(0,0,0,0.08)}
@@ -1595,7 +1626,10 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
-    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">↻ Sync</button>
+    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">
+      <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+      <span id="sync-label">Sync</span>
+    </button>
   </div>
 
   <div class="page-body" {feed_col_hidden}>
@@ -1612,7 +1646,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       </div>
     </div>
 
-    <div id="expiring-banner" style="display:{expiring_display};align-items:center;gap:10px;background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;cursor:pointer" onclick="toggleExpiringFilter(this)">
+    <div id="expiring-banner" style="display:{expiring_display};align-items:center;gap:10px;background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;cursor:pointer" data-base-display="{expiring_display}" onclick="toggleExpiringFilter(this)">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       <span style="font-size:13px;font-weight:600;color:#92400e"><span id="expiring-count">{expiring_count}</span> account{expiring_plural} with expiring benefits or upcoming due dates</span>
       <span style="font-size:11px;color:#b45309;margin-left:auto" id="expiring-filter-label">Click to highlight</span>
@@ -1665,15 +1699,15 @@ function switchFeedTab(name, btn) {
     document.getElementById('fview-' + n).style.display = n === name ? '' : 'none';
     document.getElementById('ftab-' + n).classList.toggle('active', n === name);
   });
+  // Hide expiring banner on activity log — it only applies to account cards
+  var banner = document.getElementById('expiring-banner');
+  if (banner) banner.style.display = name === 'activity' ? 'none' : (banner.dataset.baseDisplay || 'none');
   sessionStorage.setItem('mighty-feed-tab', name);
 }
-// Restore feed tab after reload (default: accounts)
+// Always open on Account Data — don't persist activity log tab across page loads
 (function() {
-  var t = sessionStorage.getItem('mighty-feed-tab') || 'accounts';
-  if (t !== 'accounts') {
-    var btn = document.getElementById('ftab-' + t);
-    if (btn) switchFeedTab(t, btn);
-  }
+  var banner = document.getElementById('expiring-banner');
+  if (banner) banner.dataset.baseDisplay = banner.style.display;
 })();
 function copyMcpConfig(btn) {
   navigator.clipboard.writeText(document.getElementById('mcpConfigBox').textContent);
@@ -1843,10 +1877,15 @@ fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
   }
 }).catch(function(){});
 
+function _setSyncLabel(text) {
+  var lbl = document.getElementById('sync-label');
+  if (lbl) lbl.textContent = text;
+}
 function cloudSync() {
   var btn = document.getElementById('cloud-sync-btn');
   if (!btn) return;
-  btn.textContent = '↻ Syncing...';
+  btn.classList.add('syncing');
+  _setSyncLabel('Syncing…');
   btn.disabled = true;
   fetch('/sync/now', {method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},
@@ -1854,25 +1893,26 @@ function cloudSync() {
       document.querySelector('input[name="_csrf"]').value : '')
   }).then(function(r){return r.json();}).then(function(d){
     if (d.ok) {
-      btn.textContent = '↻ Syncing…';
-      // Poll status every 3s until done
       var poll = setInterval(function(){
         fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
           if (!s.running) {
             clearInterval(poll);
-            btn.textContent = '↻ Sync';
+            btn.classList.remove('syncing');
+            _setSyncLabel('Sync');
             btn.disabled = false;
             reloadWithScroll();
           }
         });
       }, 3000);
     } else {
-      btn.textContent = '↻ Sync';
+      btn.classList.remove('syncing');
+      _setSyncLabel('Sync');
       btn.disabled = false;
       alert(d.error || 'Sync failed');
     }
   }).catch(function(){
-    btn.textContent = '↻ Sync';
+    btn.classList.remove('syncing');
+    _setSyncLabel('Sync');
     btn.disabled = false;
   });
 }
@@ -2016,7 +2056,10 @@ ONBOARDING_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Get started — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -2141,14 +2184,17 @@ SETTINGS_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Settings — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
 html,body{height:100%;overflow:hidden}
 body{display:flex;flex-direction:row}
 .main-content{flex:1;min-width:0;height:100vh;overflow-y:auto}
-.page-wrap{max-width:560px;margin:0;padding:32px 36px;display:flex;flex-direction:column;gap:16px}
+.page-wrap{max-width:600px;margin:0 auto;padding:32px 36px;display:flex;flex-direction:column;gap:16px}
 .page-title{font-size:20px;font-weight:700;color:#1c1917;margin-bottom:4px}
 .card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:24px;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
 .section-title{font-size:11px;font-weight:700;color:#9ca3af;margin-bottom:16px;text-transform:uppercase;letter-spacing:0.7px}
@@ -2165,6 +2211,10 @@ body{display:flex;flex-direction:row}
 .push-btn:hover{background:#f5f2ed;border-color:#6366f1}
 .btn-danger{font-size:12px;font-weight:600;padding:8px 16px;background:transparent;color:#dc2626;border:1px solid rgba(220,38,38,0.2);border-radius:6px;cursor:pointer;transition:all 0.12s;text-align:center;font-family:inherit;width:100%}
 .btn-danger:hover{background:rgba(220,38,38,0.06);border-color:#dc2626}
+.btn-danger-severe{background:#dc2626;color:#fff;border-color:#dc2626}
+.btn-danger-severe:hover{background:#b91c1c;border-color:#b91c1c;color:#fff}
+.btn-settings-primary{font-size:13px;font-weight:600;padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background 0.12s;font-family:inherit}
+.btn-settings-primary:hover{background:#4f46e5}
 .ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:#6366f1;background:#f5f2ed;border:1px solid #e8e4de;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
 .ntfy-link:hover{border-color:#6366f1;text-decoration:none}
 .toggle-row input[type=checkbox]{-webkit-appearance:none;appearance:none;width:16px;height:16px;border:1.5px solid #e8e4de;border-radius:4px;background:#ffffff;cursor:pointer;position:relative;flex-shrink:0;margin-top:2px;transition:border-color 0.12s,background 0.12s}
@@ -2185,14 +2235,14 @@ body{display:flex;flex-direction:row}
   <div class="page-title">Settings</div>
 
   <div class="card">
-    <div class="section-title">Notifications</div><span id="save-ind" style="font-size:11px;color:#34d399;margin-left:8px;display:none">Saved ✓</span>
+    <div class="section-title">Notifications</div>
     <div class="toggle-row">
       <input type="checkbox" id="notif-push" {push_checked} onchange="save()">
       <div>
         <div class="toggle-label">Browser alerts</div>
         <div class="toggle-hint">Desktop popup when your agent needs a decision.</div>
         <div id="push-status" class="push-status"></div>
-        <button id="push-enable-btn" class="push-btn" onclick="enablePush()">Allow notifications →</button>
+        <button id="push-enable-btn" class="push-btn" onclick="enablePush()">Enable browser notifications</button>
       </div>
     </div>
     <div class="toggle-row">
@@ -2211,6 +2261,8 @@ body{display:flex;flex-direction:row}
         <div class="toggle-hint">Receive an email when your agent requests approval.</div>
         <div id="email-notif-warn" style="display:{postmark_warn};margin-top:6px;font-size:12px;color:#fbbf24;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:6px;padding:6px 10px;line-height:1.5">Email alerts require the POSTMARK_API_KEY environment variable to be set on your server.</div>
       </div>
+    <div style="display:flex;align-items:center;justify-content:flex-end;margin-top:4px">
+      <span id="save-ind" style="font-size:11px;color:#34d399;display:none">Saved ✓</span>
     </div>
   </div>
 
@@ -2221,7 +2273,7 @@ body{display:flex;flex-direction:row}
     <input type="email" id="email-new" placeholder="New email address" class="settings-input" style="margin-bottom:10px">
     <input type="password" id="email-pw" placeholder="Confirm with current password" class="settings-input" style="margin-bottom:10px">
     <div style="display:flex;align-items:center;gap:12px">
-      <button class="btn-sm" style="padding:8px 16px;font-size:13px" onclick="changeEmail()">Update email</button>
+      <button class="btn-settings-primary" onclick="changeEmail()">Update email</button>
       <span id="email-msg" style="font-size:12px;display:none"></span>
     </div>
   </div>
@@ -2262,7 +2314,7 @@ body{display:flex;flex-direction:row}
     <label class="settings-label">Confirm new password</label>
     <input type="password" id="pw-confirm" placeholder="Repeat new password" class="settings-input" style="margin-bottom:12px">
     <div style="display:flex;align-items:center;gap:12px">
-      <button class="btn-sm" style="padding:8px 16px;font-size:13px" onclick="changePassword()">Update password</button>
+      <button class="btn-settings-primary" onclick="changePassword()">Update password</button>
       <span id="pw-msg" style="font-size:12px;display:none"></span>
     </div>
   </div>
@@ -2277,10 +2329,12 @@ body{display:flex;flex-direction:row}
       <button class="btn-danger" id="del-activity-btn" onclick="deleteActivity()">Delete all activity</button>
       <span id="del-activity-msg" style="font-size:12px;color:#34d399;display:none">All activity deleted.</span>
     </div>
-    <hr style="border:none;border-top:1px solid rgba(248,113,113,0.15);margin:16px 0">
-    <div style="font-size:13px;color:#8892a4;margin-bottom:12px;line-height:1.5">Permanently deletes your account and all data. This cannot be undone.</div>
-    <div id="del-acct-btn-wrap">
-      <button class="btn-danger btn-danger-severe" onclick="showDelConfirm()">Delete my account</button>
+    <div style="background:rgba(220,38,38,0.04);border:1px solid rgba(220,38,38,0.15);border-radius:8px;padding:14px;margin-top:8px">
+      <div style="font-size:13px;font-weight:600;color:#dc2626;margin-bottom:4px">Permanently delete account</div>
+      <div style="font-size:12px;color:#9ca3af;margin-bottom:12px;line-height:1.5">Deletes your account and all data immediately. This cannot be undone.</div>
+      <div id="del-acct-btn-wrap">
+        <button class="btn-danger btn-danger-severe" onclick="showDelConfirm()">Delete my account</button>
+      </div>
     </div>
     <div id="del-acct-confirm" style="display:none">
       <label class="settings-label" style="margin-top:12px">Confirm with your current password</label>
@@ -2491,8 +2545,11 @@ APPROVE_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <meta name="theme-color" content="#7c3aed">
 <title>Authorize action — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
@@ -3193,20 +3250,68 @@ def dashboard():
             return ts[:10] if ts else "—"
 
     import re as _re
+    from datetime import date as _date, datetime as _datetime
     _TIME_LABELS = ("due", "expir", "ends", "end date", "valid until", "promo", "offer end", "deadline", "renewal", "renew", "cancel")
-    _URGENT_LABELS = ("due", "payment due", "bill due", "past due")
-    _DATE_RE = _re.compile(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+\d{1,2}', _re.I)
+    _URGENT_LABELS = ("payment due", "bill due", "past due", "amount due")
+    _MONTHS = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"
+
+    def _parse_date_from_value(value: str):
+        """Try to extract a date from a field value string. Returns a date object or None."""
+        # MM/DD/YYYY or M/D/YYYY
+        m = _re.search(r'\b(\d{1,2})/(\d{1,2})/(\d{4})\b', value)
+        if m:
+            try: return _date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+            except ValueError: pass
+        # YYYY-MM-DD
+        m = _re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', value)
+        if m:
+            try: return _date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError: pass
+        # "Month DD, YYYY" or "Month DD YYYY"
+        m = _re.search(rf'\b({_MONTHS})\w*\.?\s+(\d{{1,2}}),?\s+(\d{{4}})\b', value, _re.I)
+        if m:
+            try: return _datetime.strptime(f"{m.group(1)[:3].capitalize()} {m.group(2)} {m.group(3)}", "%b %d %Y").date()
+            except ValueError: pass
+        # "Month DD" without year — assume current or next year
+        m = _re.search(rf'\b({_MONTHS})\w*\.?\s+(\d{{1,2}})\b', value, _re.I)
+        if m:
+            try:
+                today = _date.today()
+                d = _datetime.strptime(f"{m.group(1)[:3].capitalize()} {m.group(2)} {today.year}", "%b %d %Y").date()
+                if d < today:
+                    d = d.replace(year=today.year + 1)
+                return d
+            except ValueError: pass
+        return None
+
+    def _fmt_date_value(value: str) -> str:
+        """Normalize a date value to human-readable 'Mon DD, YYYY' format if parseable."""
+        d = _parse_date_from_value(value)
+        if d:
+            return d.strftime("%b %-d, %Y")
+        return value
 
     def _classify_alert(label: str, value: str):
-        """Return 'red', 'amber', or None for a field row."""
+        """Return 'red', 'amber', or None.
+        Date-aware: only flags if the date is within 60 days (amber) or past/≤7 days (red).
+        Falls back to label heuristics when no date is parseable."""
         lbl_low = label.lower()
         val_low = value.lower()
         combined = lbl_low + " " + val_low
+
+        today = _date.today()
+        parsed = _parse_date_from_value(value)
+
+        if parsed is not None:
+            delta = (parsed - today).days
+            if delta <= 7:   return "red"    # past-due or imminent
+            if delta <= 60:  return "amber"  # within 2 months
+            return None                       # too far out — no alert
+
+        # No parseable date — fall back to label keywords
         if any(t in lbl_low for t in _URGENT_LABELS):
             return "red"
         if any(t in combined for t in _TIME_LABELS):
-            return "amber"
-        if _DATE_RE.search(value):
             return "amber"
         return None
 
@@ -3363,7 +3468,7 @@ def dashboard():
                     f'<div class="acct-alert {cls}">'
                     f'<div>'
                     f'<div class="alert-lbl">{he(alert_item["label"])}</div>'
-                    f'<div class="alert-sub">{he(alert_item["value"])}</div>'
+                    f'<div class="alert-sub">{he(_fmt_date_value(alert_item["value"]))}</div>'
                     f'</div>'
                     f'</div>'
                 )
@@ -4526,7 +4631,10 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>Connected Accounts — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
@@ -4544,7 +4652,9 @@ body{{display:flex;flex-direction:row;background:#eae5de;color:#1c1917;-webkit-f
 .sidebar-link svg{{flex-shrink:0}}
 .sidebar-link-active{{background:rgba(129,140,248,0.15);color:#818cf8 !important}}
 .sidebar-footer{{padding:10px 0 12px;border-top:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}}
-.sidebar-avatar{{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;border:none;cursor:pointer;font-family:inherit}}
+.sidebar-avatar{{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;border:none;cursor:pointer;font-family:inherit;position:relative}}
+.sidebar-tip{{position:fixed;left:54px;background:#1a1d2e;color:#e2e8f0;font-size:12px;font-weight:500;padding:5px 10px;border-radius:7px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity 0.1s;z-index:999;border:1px solid rgba(255,255,255,0.08)}}
+.sidebar-link:hover .sidebar-tip,.sidebar-logo:hover .sidebar-tip,.sidebar-avatar:hover .sidebar-tip{{opacity:1}}
 /* ── Main ── */
 .main-content{{flex:1;min-width:0;height:100vh;overflow-y:auto}}
 .page{{max-width:660px;margin:0 auto;padding:32px 28px}}
@@ -4687,6 +4797,14 @@ function closeModal() {{
 function overlayClick(e) {{
   if (e.target === document.getElementById('modal-overlay')) closeModal();
 }}
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape') {{
+    var mo = document.getElementById('modal-overlay');
+    if (mo && mo.classList.contains('open')) closeModal();
+    var fo = document.getElementById('field-modal-overlay');
+    if (fo && fo.style.display !== 'none') fo.style.display = 'none';
+  }}
+}});
 function showPicker() {{
   document.getElementById('screen-picker').style.display = 'flex';
   document.getElementById('screen-cred').style.display = 'none';
