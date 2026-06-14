@@ -3343,6 +3343,8 @@ def dashboard():
                 enabled    = set(ex.get("enabled_fields", []))
                 if discovered and enabled:
                     discovered_by_source[cr["source"]] = {"fields": discovered, "enabled": enabled}
+                elif ex.get("discovery_failed"):
+                    discovered_by_source[cr["source"]] = {"fields": [], "enabled": set(), "failed": True}
             except Exception:
                 pass
 
@@ -3421,15 +3423,35 @@ def dashboard():
                     f'</div>'
                 )
             elif synced_at:
-                hero_html = (
-                    f'<div class="acct-divider"></div>'
-                    f'<div class="acct-hero" data-discovering="1">'
-                    f'<div style="color:#6366f1;font-size:12px;font-weight:500">'
-                    f'<span style="display:inline-block;animation:spin 1.2s linear infinite;margin-right:4px">↻</span>'
-                    f'Discovering fields…</div>'
-                    f'</div>'
-                )
-                status_color = "#9ca3af"
+                # Check if discovery already failed (explicit flag or stale > 5 min)
+                _disc_info = discovered_by_source.get(src, {})
+                _sync_failed = _disc_info.get("failed", False)
+                if not _sync_failed and synced_at:
+                    try:
+                        import datetime as _dt
+                        _age = (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(synced_at.rstrip("Z"))).total_seconds()
+                        if _age > 300:  # 5 minutes with no data = stuck
+                            _sync_failed = True
+                    except Exception:
+                        pass
+                if _sync_failed:
+                    hero_html = (
+                        f'<div class="acct-divider"></div>'
+                        f'<div class="acct-hero">'
+                        f'<div style="color:#ef4444;font-size:12px">No account data — sync to retry</div>'
+                        f'</div>'
+                    )
+                    status_color = "#ef4444"
+                else:
+                    hero_html = (
+                        f'<div class="acct-divider"></div>'
+                        f'<div class="acct-hero" data-discovering="1">'
+                        f'<div style="color:#6366f1;font-size:12px;font-weight:500">'
+                        f'<span style="display:inline-block;animation:spin 1.2s linear infinite;margin-right:4px">↻</span>'
+                        f'Discovering fields…</div>'
+                        f'</div>'
+                    )
+                    status_color = "#9ca3af"
             else:
                 hero_html = (
                     f'<div class="acct-divider"></div>'
@@ -5444,24 +5466,30 @@ def api_data_sync():
             # First-time: discover fields
             def _bg_discover():
                 fields = claude_discover_fields(raw_text, site_name)
+                ex2 = {}
+                if cred_row and cred_row["extra_enc"]:
+                    try: ex2 = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
+                    except Exception: pass
                 if fields:
                     enabled = [f["key"] for f in fields]
-                    ex2 = {}
-                    if cred_row and cred_row["extra_enc"]:
-                        try: ex2 = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
-                        except Exception: pass
                     ex2["enabled_fields"]    = enabled
                     ex2["discovered_fields"] = fields
                     ex2["discovered_at"]     = iso()
-                    new_enc = encrypt_cred(uid, json.dumps(ex2))
-                    with app.app_context():
-                        _db = get_db()
-                        _db.execute(
-                            "UPDATE account_credentials SET extra_enc=?, updated_at=? "
-                            "WHERE user_id=? AND source=?",
-                            (new_enc, iso(), uid, source)
-                        )
-                        _db.commit()
+                    ex2.pop("discovery_failed", None)
+                else:
+                    # Discovery ran but found nothing (e.g. got a login page)
+                    ex2["discovery_failed"]  = True
+                    ex2.setdefault("enabled_fields",    [])
+                    ex2.setdefault("discovered_fields", [])
+                new_enc = encrypt_cred(uid, json.dumps(ex2))
+                with app.app_context():
+                    _db = get_db()
+                    _db.execute(
+                        "UPDATE account_credentials SET extra_enc=?, updated_at=? "
+                        "WHERE user_id=? AND source=?",
+                        (new_enc, iso(), uid, source)
+                    )
+                    _db.commit()
             threading.Thread(target=_bg_discover, daemon=True).start()
         else:
             # Existing prefs: re-extract values for discovered fields from new page text
