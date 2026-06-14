@@ -1523,6 +1523,21 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .acct-alert-red .alert-sub{color:#b91c1c}
 /* States */
 .acct-card.is-stale{opacity:0.55}
+.acct-card.is-expiring{border-color:rgba(217,119,6,0.35) !important;box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(217,119,6,0.1) !important}
+.acct-card.highlight-off{opacity:0.35}
+/* Card footer */
+.acct-footer{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:0.5px solid rgba(0,0,0,0.05);gap:8px}
+.acct-expand-btn{font-size:11px;font-weight:500;color:#9ca3af;background:none;border:none;cursor:pointer;padding:0;font-family:inherit;display:flex;align-items:center;gap:4px;transition:color 0.1s}
+.acct-expand-btn:hover{color:#6366f1}
+.acct-edit-btn{font-size:11px;font-weight:500;color:#9ca3af;text-decoration:none;padding:3px 8px;border-radius:5px;border:0.5px solid #ede9e4;background:#faf8f6;white-space:nowrap;transition:all 0.12s}
+.acct-edit-btn:hover{color:#6366f1;border-color:#c7d2fe;background:#f5f3ff;text-decoration:none}
+/* Expanded fields */
+.acct-expanded{display:none;padding:6px 14px 10px;border-top:0.5px solid rgba(0,0,0,0.05)}
+.acct-card.is-expanded .acct-expanded{display:block}
+.exp-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-bottom:0.5px solid rgba(0,0,0,0.04)}
+.exp-row:last-child{border-bottom:none}
+.exp-lbl{font-size:10px;color:#b8b2ac;flex-shrink:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.exp-val{font-size:11px;font-weight:600;color:#374151;text-align:right;flex-shrink:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Activity log */
 .action-card{background:#ffffff;border:0.5px solid rgba(0,0,0,0.08);border-radius:12px;overflow:hidden;margin-bottom:8px;transition:all 0.12s;box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05)}
 .action-card:hover{border-color:rgba(0,0,0,0.13);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 6px 20px rgba(0,0,0,0.08)}
@@ -1577,10 +1592,6 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     </div>
     <div style="flex:1"></div>
     {agent_status_indicator}
-    <div id="expiring-pill" style="display:{expiring_display}" class="expiring-pill">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-      <span id="expiring-count">{expiring_count}</span> expiring soon
-    </div>
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
@@ -1599,6 +1610,12 @@ body{display:flex;flex-direction:row;background:#eee9e2}
         {agent_cta_button}
         <a href="/credentials" class="btn-connect">+ Connect account</a>
       </div>
+    </div>
+
+    <div id="expiring-banner" style="display:{expiring_display};align-items:center;gap:10px;background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;cursor:pointer" onclick="toggleExpiringFilter(this)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <span style="font-size:13px;font-weight:600;color:#92400e"><span id="expiring-count">{expiring_count}</span> account{expiring_plural} with expiring benefits or upcoming due dates</span>
+      <span style="font-size:11px;color:#b45309;margin-left:auto" id="expiring-filter-label">Click to highlight</span>
     </div>
 
     <div id="fview-accounts">
@@ -1869,6 +1886,40 @@ function resetFields(source) {
     if (d.ok) { reloadWithScroll(); }
     else { alert('Reset failed — try refreshing'); }
   }).catch(function(){ alert('Reset failed — try refreshing'); });
+}
+
+function toggleExpiringFilter(banner) {
+  var active = banner.getAttribute('data-filter') === '1';
+  var label = document.getElementById('expiring-filter-label');
+  if (active) {
+    banner.removeAttribute('data-filter');
+    document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('highlight-off'); });
+    if (label) label.textContent = 'Click to highlight';
+  } else {
+    banner.setAttribute('data-filter', '1');
+    document.querySelectorAll('.acct-card').forEach(function(c){
+      if (c.classList.contains('is-expiring')) {
+        c.classList.remove('highlight-off');
+      } else {
+        c.classList.add('highlight-off');
+      }
+    });
+    if (label) label.textContent = 'Click to clear';
+  }
+}
+
+function toggleExpand(btn) {
+  var card = btn.closest('.acct-card');
+  if (!card) return;
+  var expanded = card.classList.toggle('is-expanded');
+  var count = btn.getAttribute('data-count');
+  var svg = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var svgUp = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 6l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  if (expanded) {
+    btn.innerHTML = svgUp + 'Show less';
+  } else {
+    btn.innerHTML = svg + count + ' more field' + (count == 1 ? '' : 's');
+  }
 }
 
 function forceDiscover(source, btn) {
@@ -3272,7 +3323,7 @@ def dashboard():
                 )
                 status_color = "#9ca3af"
 
-            # Build secondary stats (up to 3)
+            # Build secondary stats (up to 2 visible)
             sec_html = ""
             if secondary_items:
                 rows = "".join(
@@ -3280,9 +3331,29 @@ def dashboard():
                     f'<span class="sec-lbl">{he(i["label"])}</span>'
                     f'<span class="sec-val" title="{he(i["value"])}">{he(i["value"])}</span>'
                     f'</div>'
-                    for i in secondary_items[:3]
+                    for i in secondary_items[:2]
                 )
                 sec_html = f'<div class="acct-secondary">{rows}</div>'
+
+            # Build expanded fields (all items not already shown)
+            shown_keys = set()
+            if hero_item:
+                shown_keys.add(hero_item.get("key"))
+            if alert_item:
+                shown_keys.add(alert_item.get("key"))
+            for i in secondary_items[:2]:
+                shown_keys.add(i.get("key"))
+            extra_items = [i for i in items if i.get("key") not in shown_keys]
+            expanded_html = ""
+            if extra_items:
+                exp_rows = "".join(
+                    f'<div class="exp-row">'
+                    f'<span class="exp-lbl">{he(i["label"])}</span>'
+                    f'<span class="exp-val" title="{he(i["value"])}">{he(i["value"])}</span>'
+                    f'</div>'
+                    for i in extra_items
+                )
+                expanded_html = f'<div class="acct-expanded">{exp_rows}</div>'
 
             # Build alert row
             alert_html = ""
@@ -3315,9 +3386,29 @@ def dashboard():
             sync_label = f'Synced {_fmt_sync(synced_at)}' if synced_at else 'Not yet synced'
             synced_title = "Synced recently" if status_color == "#30d158" else "Not yet synced"
             stale_cls = " is-stale" if not synced_at else ""
+            expiring_cls = " is-expiring" if alert_item else ""
+
+            # Footer: expand toggle only if there are extra items
+            if extra_items:
+                expand_btn = (
+                    f'<button class="acct-expand-btn" onclick="toggleExpand(this)" '
+                    f'data-count="{len(extra_items)}">'
+                    f'<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                    f'{len(extra_items)} more field{"s" if len(extra_items)!=1 else ""}'
+                    f'</button>'
+                )
+            else:
+                expand_btn = '<span style="flex:1"></span>'
+
+            card_footer = (
+                f'<div class="acct-footer">'
+                f'{expand_btn}'
+                f'<a href="/credentials#fields-{he(src)}" class="acct-edit-btn">Edit fields</a>'
+                f'</div>'
+            )
 
             grid_cards += (
-                f'<div class="acct-card{stale_cls}" data-name="{he(display_name)}">'
+                f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}">'
                 f'<div class="acct-card-header">'
                 f'<div class="acct-icon" style="background:{he(color)}">{he(icon)}</div>'
                 f'<div style="flex:1;min-width:0">'
@@ -3333,6 +3424,8 @@ def dashboard():
                 f'{hero_html}'
                 f'{sec_html}'
                 f'{alert_html}'
+                f'{expanded_html}'
+                f'{card_footer}'
                 f'</div>'
             )
 
@@ -3365,6 +3458,7 @@ def dashboard():
             .replace("{pending_count}",           str(pending_count))
             .replace("{pending_display}",         pending_display)
             .replace("{expiring_count}",          str(total_expiring))
+            .replace("{expiring_plural}",         "s" if total_expiring != 1 else "")
             .replace("{expiring_display}",        "flex" if total_expiring > 0 else "none")
             .replace("{agent_status_indicator}",  agent_status_indicator)
             .replace("{agent_cta_button}",        agent_cta_button)
