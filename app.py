@@ -1543,6 +1543,8 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px}
 /* Account cards */
 .acct-card{background:#ffffff;border-radius:12px;overflow:hidden;border:0.5px solid rgba(0,0,0,0.08);box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05);transition:box-shadow 0.2s,border-color 0.2s,opacity 0.2s,transform 0.2s,filter 0.2s}
+.acct-card.is-syncing{border-color:rgba(99,102,241,0.3);box-shadow:0 0 0 2px rgba(99,102,241,0.08),0 3px 12px rgba(0,0,0,0.05);animation:card-pulse 1.8s ease-in-out infinite}
+@keyframes card-pulse{0%,100%{box-shadow:0 0 0 2px rgba(99,102,241,0.08),0 3px 12px rgba(0,0,0,0.05)}50%{box-shadow:0 0 0 3px rgba(99,102,241,0.18),0 3px 12px rgba(0,0,0,0.05)}}
 .acct-card:hover{border-color:rgba(0,0,0,0.14);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 8px 28px rgba(0,0,0,0.08)}
 .acct-card-header{padding:12px 14px 10px;display:flex;align-items:center;gap:9px}
 .acct-name{font-size:13px;font-weight:700;color:#1c1917;line-height:1.2}
@@ -1650,9 +1652,9 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
-    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync">
+    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Refresh all account data">
       <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
-      <span id="sync-label">Sync</span>
+      <span id="sync-label">Sync All</span>
     </button>
   </div>
 
@@ -1912,6 +1914,8 @@ function cloudSync() {
   btn.classList.add('syncing');
   _setSyncLabel('Syncing…');
   btn.disabled = true;
+  // Pulse all cards to show sync is in progress
+  document.querySelectorAll('.acct-card').forEach(function(c) { c.classList.add('is-syncing'); });
   fetch('/sync/now', {method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},
     body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
@@ -1922,22 +1926,24 @@ function cloudSync() {
         fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
           if (!s.running) {
             clearInterval(poll);
+            document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
             btn.classList.remove('syncing');
-            _setSyncLabel('Sync');
+            _setSyncLabel('Sync All');
             btn.disabled = false;
             reloadWithScroll();
           }
         });
       }, 3000);
     } else {
+      document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
       btn.classList.remove('syncing');
-      _setSyncLabel('Sync');
+      _setSyncLabel('Sync All');
       btn.disabled = false;
-      alert(d.error || 'Sync failed');
     }
   }).catch(function(){
+    document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
     btn.classList.remove('syncing');
-    _setSyncLabel('Sync');
+    _setSyncLabel('Sync All');
     btn.disabled = false;
   });
 }
@@ -3678,12 +3684,32 @@ def dashboard():
             )
 
     account_data_html = cards_html if cards_html else (
-        '<div style="text-align:center;padding:56px 24px">'
+        '<div style="text-align:center;padding:48px 24px;max-width:540px;margin:0 auto">'
         '<div style="font-size:36px;margin-bottom:14px">🔗</div>'
-        '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:16px">No accounts connected yet</div>'
-        '<a href="/credentials" style="display:inline-block;padding:9px 20px;background:#6366f1;'
-        'color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none">'
-        '+ Connect your first account</a>'
+        '<div style="font-size:16px;font-weight:700;color:#1c1917;margin-bottom:8px">Connect your first account</div>'
+        '<div style="font-size:13px;color:#6b7280;line-height:1.65;margin-bottom:28px">'
+        'Mighty uses the Chrome extension to read your account data directly from the sites you\'re already logged into — '
+        'no passwords stored here.</div>'
+        '<div style="display:flex;flex-direction:column;gap:10px;text-align:left;margin-bottom:28px">'
+        '<div style="display:flex;align-items:flex-start;gap:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px">'
+        '<div style="font-size:18px;flex-shrink:0">1️⃣</div>'
+        '<div><div style="font-size:13px;font-weight:600;color:#111827">Install the Chrome extension</div>'
+        '<div style="font-size:12px;color:#6b7280;margin-top:2px">Then visit <a href="/extension-setup" target="_blank" style="color:#6366f1;font-weight:500">Settings → Setup Extension</a> to auto-configure it</div></div></div>'
+        '<div style="display:flex;align-items:flex-start;gap:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px">'
+        '<div style="font-size:18px;flex-shrink:0">2️⃣</div>'
+        '<div><div style="font-size:13px;font-weight:600;color:#111827">Log into your accounts in Chrome</div>'
+        '<div style="font-size:12px;color:#6b7280;margin-top:2px">The extension automatically detects and captures account pages as you browse</div></div></div>'
+        '<div style="display:flex;align-items:flex-start;gap:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px">'
+        '<div style="font-size:18px;flex-shrink:0">3️⃣</div>'
+        '<div><div style="font-size:13px;font-weight:600;color:#111827">Your data appears here automatically</div>'
+        '<div style="font-size:12px;color:#6b7280;margin-top:2px">Points, balances, alerts, and expiring benefits — all in one place</div></div></div>'
+        '</div>'
+        '<a href="/credentials" style="display:inline-block;padding:10px 22px;background:#6366f1;'
+        'color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;margin-right:10px">'
+        '+ Connect account manually</a>'
+        '<a href="/extension-setup" target="_blank" style="display:inline-block;padding:10px 22px;background:#fff;'
+        'color:#6366f1;border:1px solid #c7d2fe;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none">'
+        '🔌 Setup Extension</a>'
         '</div>'
     )
 

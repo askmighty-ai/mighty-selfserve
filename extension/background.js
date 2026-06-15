@@ -330,8 +330,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }).then(([result]) => {
     const key = result?.result;
     if (key) {
-      chrome.storage.local.set({ api_key: key });
-      console.log('[Mighty] API key auto-configured from /extension-setup');
+      chrome.storage.local.set({ api_key: key }, () => {
+        console.log('[Mighty] API key auto-configured from /extension-setup — starting sync');
+        // Kick off an immediate sync so data appears right away
+        runSync();
+      });
     }
   }).catch(() => {});
 });
