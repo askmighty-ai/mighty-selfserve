@@ -3710,7 +3710,7 @@ def dashboard():
     _ten_min_ago = (datetime.utcnow() - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S")
     _new_custom = db.execute(
         "SELECT source, synced_at FROM account_data WHERE user_id=? AND source LIKE 'custom_%' "
-        "AND synced_at >= ? AND sync_status='ok' ORDER BY synced_at DESC",
+        "AND synced_at >= ? ORDER BY synced_at DESC",
         (user["id"], _ten_min_ago)
     ).fetchall()
     if _new_custom:
@@ -5496,10 +5496,10 @@ def extension_poll(source):
     # For known sources (delta, marriott, etc.) we look for the exact source key
     # OR any custom_* source captured recently that references this source.
     row = db.execute(
-        "SELECT synced_at, sync_status FROM account_data WHERE user_id=? AND source=? ORDER BY synced_at DESC LIMIT 1",
+        "SELECT synced_at FROM account_data WHERE user_id=? AND source=? ORDER BY synced_at DESC LIMIT 1",
         (uid, source)
     ).fetchone()
-    if row and row["sync_status"] == "ok":
+    if row:
         return jsonify({"captured": True, "synced_at": row["synced_at"]})
     return jsonify({"captured": False})
 
