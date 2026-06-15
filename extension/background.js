@@ -465,7 +465,9 @@ async function _autoCapturePage(tabId, tab) {
 // Sites that need a warm-up page visit before the real account URL,
 // to establish session context and avoid bot-detection on cold navigation.
 const WARMUP_URLS = {
-  delta:  'https://www.delta.com/',
+  // Warm up on the profile page so the account session is hot before hitting wallet.
+  // delta.com homepage alone isn't enough — Akamai still gates the wallet cold.
+  delta:  'https://www.delta.com/myprofile/',
   // Warmup must be on customer.xfinity.com (not xfinity.com) — Akamai bot cookies
   // are domain-scoped, so warming up the wrong domain doesn't help.
   xfinity: 'https://customer.xfinity.com/',
@@ -476,7 +478,8 @@ const WARMUP_URLS = {
 const SETTLE_MS = {
   xfinity:            20_000,
   xfinity_subsequent: 20_000,  // Xfinity SPA redirects between hash routes; needs full settle
-  delta_subsequent:   12_000,  // Delta wallet pages need extra render time
+  delta:              18_000,  // Delta wallet renders certificates late via React hydration
+  delta_subsequent:   15_000,  // eCredits also dynamic
   default:             8_000,
   subsequent:          8_000,
 };
@@ -579,7 +582,7 @@ async function syncAccount(apiKey, account, urls) {
         }
       }
 
-      const pageText = result?.result || '';
+      let pageText = result?.result || '';
 
       // Check for bot-detection
       const lower = pageText.toLowerCase();
@@ -587,6 +590,16 @@ async function syncAccount(apiKey, account, urls) {
       if (blocked) {
         console.warn(`[Mighty] ${account.name} page ${i + 1}: bot detection ("${blocked}") — skipping page`);
         continue;
+      }
+
+      // For Delta wallet/eCredits: retry once if content looks thin (certificates render late)
+      if (pageText.length < 2000 && urls[i] && urls[i].includes('delta.com/us/en/my-account')) {
+        console.log(`[Mighty] ${account.name} page ${i + 1}: thin content (${pageText.length} chars), waiting 12s for React render…`);
+        await sleep(12_000);
+        try {
+          const [r2] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageText });
+          if ((r2?.result || '').length > pageText.length) pageText = r2.result;
+        } catch (_) {}
       }
 
       if (pageText.length >= 100) {
