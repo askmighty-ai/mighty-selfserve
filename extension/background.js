@@ -14,9 +14,11 @@ const ACCOUNT_URLS = {
     'https://www.southwest.com/loyalty/rapidrewards/travelFunds.html',
     'https://www.southwest.com/loyalty/myaccount/upcoming-trips.html',
   ],
-  // Delta sub-pages beyond myprofile trigger Akamai when navigated directly.
-  // Use SPA_NAV_URLS to navigate via in-page clicks instead of URL changes.
-  delta: ['https://www.delta.com/myprofile/'],
+  delta: [
+    'https://www.delta.com/myprofile/',
+    'https://www.delta.com/us/en/my-account/wallet',
+    'https://www.delta.com/us/en/my-account/eCredits',
+  ],
   united:       'https://www.united.com/en/us/myaccount/mileageplus',
   american_air: [
     'https://www.aa.com/aadvantage-program/overview',
@@ -155,9 +157,11 @@ const WARMUP_URLS = {
 // Per-site settle time (ms) after page load before extracting text.
 // Override for SPAs that need longer to fully render.
 const SETTLE_MS = {
-  xfinity: 20_000,
-  default:  8_000,
-  subsequent: 8_000,
+  xfinity:            20_000,
+  xfinity_subsequent: 20_000,  // Xfinity SPA redirects between hash routes; needs full settle
+  delta_subsequent:   12_000,  // Delta wallet pages need extra render time
+  default:             8_000,
+  subsequent:          8_000,
 };
 
 // SPA sub-sections to extract via in-page navigation (clicking links).
@@ -221,23 +225,42 @@ async function syncAccount(apiKey, account, urls) {
 
       const settleMs = i === 0
         ? (SETTLE_MS[account.source] || SETTLE_MS.default)
-        : SETTLE_MS.subsequent;
+        : (SETTLE_MS[`${account.source}_subsequent`] || SETTLE_MS.subsequent);
       await sleep(settleMs);
 
       // Dismiss any session-timeout / "stay logged in?" modal before extracting
-      const [dismissed] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: dismissSessionTimeouts,
-      });
-      if (dismissed?.result) {
-        console.log(`[Mighty] ${account.name} page ${i + 1}: dismissed session timeout dialog`);
-        await sleep(8_000); // SPA needs time to re-render real content after session refresh
-      }
+      try {
+        const [dismissed] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: dismissSessionTimeouts,
+        });
+        if (dismissed?.result) {
+          console.log(`[Mighty] ${account.name} page ${i + 1}: dismissed session timeout dialog`);
+          await sleep(8_000); // SPA needs time to re-render real content after session refresh
+        }
+      } catch (_) { /* frame may have briefly navigated — proceed */ }
 
-      const [result] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: extractPageText,
-      });
+      // Extract text with one retry if the frame was momentarily removed
+      let result;
+      try {
+        [result] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: extractPageText,
+        });
+      } catch (frameErr) {
+        if (frameErr.message && frameErr.message.includes('Frame with ID')) {
+          console.log(`[Mighty] ${account.name} page ${i + 1}: frame removed, retrying in 5s…`);
+          await sleep(5_000);
+          try {
+            [result] = await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: extractPageText,
+            });
+          } catch (_) { result = undefined; }
+        } else {
+          throw frameErr;
+        }
+      }
 
       const pageText = result?.result || '';
 
