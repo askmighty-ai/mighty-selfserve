@@ -366,7 +366,7 @@ INCLUDE:
 - Confirmed upcoming reservations or bookings (with real dates/details)
 - Account credits, vouchers, certificates, or free nights with quantities or values
 - Personalized perks or benefits assigned to THIS user's account (e.g. "2 suite upgrade awards", "Priority Pass membership", "Free checked bag on next flight")
-- Payment info (balance due, autopay status, next payment date)
+- Payment info (balance due, autopay status, next payment date, last payment received date and amount)
 - Special offers or promotions that show a personalized deadline, qualifying requirement, or individual reward (e.g. "Earn 5,000 bonus points if you stay by Aug 31")
 
 HARD EXCLUDE — never include these even if they appear on the page:
@@ -390,6 +390,8 @@ CONCRETE INCLUDE EXAMPLES:
 - "24,617 Rapid Rewards points" → INCLUDE as {{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}
 - "0 of 20 flights" in A-List section → INCLUDE as {{"key":"alist_flights","label":"A-List Flights Progress","value":"0 of 20"}}
 - "$2,472.20 Total Payment Due" → INCLUDE as {{"key":"balance_due","label":"Balance Due","value":"$2,472.20"}}
+- "Last payment: $2,472.20 received Jun 11, 2026" → INCLUDE as {{"key":"last_payment","label":"Last Payment Received","value":"$2,472.20 on Jun 11, 2026"}}
+- "AutoPay: Enrolled" → INCLUDE as {{"key":"autopay_status","label":"Auto Pay Status","value":"Enrolled"}}
 - "Free Night Award — expires Dec 31, 2026" → INCLUDE as {{"key":"free_night_award","label":"Free Night Award Expiry","value":"Dec 31, 2026"}}
 - "2 Suite Night Awards available" → INCLUDE as {{"key":"suite_night_awards","label":"Suite Night Awards","value":"2 available"}}
 - "Annual travel credit: $187 remaining" → INCLUDE as {{"key":"travel_credit_remaining","label":"Travel Credit Remaining","value":"$187"}}
@@ -3464,9 +3466,27 @@ def dashboard():
             alert_item = None
             alert_level = None
 
+            # Check if autopay is enrolled — suppresses payment due date alerts
+            _AUTOPAY_LABELS = ("auto pay", "autopay", "automatic payment", "auto-pay")
+            _AUTOPAY_ENROLLED = ("enrolled", "active", "on", "yes", "enabled", "scheduled")
+            _autopay_on = any(
+                any(ap in i.get("label", "").lower() for ap in _AUTOPAY_LABELS)
+                and any(ev in i.get("value", "").lower() for ev in _AUTOPAY_ENROLLED)
+                for i in items
+            )
+            _PAYMENT_DUE_LABELS = ("payment due", "due date", "bill due", "amount due")
+
             for i in items:
                 lbl = i.get("label", "")
                 val = i.get("value", "")
+                # Suppress payment due alerts when autopay is confirmed enrolled
+                if _autopay_on and any(p in lbl.lower() for p in _PAYMENT_DUE_LABELS):
+                    secondary_items.append(i) if hero_item else None
+                    if not hero_item:
+                        hero_item = i
+                    else:
+                        secondary_items.append(i)
+                    continue
                 lvl = _classify_alert(lbl, val)
                 if lvl and not alert_item:
                     alert_item = i
