@@ -1051,8 +1051,24 @@ def scrape_delta(page, c, ctx):
         items = [{"label": "SkyMiles", "value": pts or "–"}]
         if tier:
             items.append({"label": "Status", "value": tier})
+        # Explicitly visit high-value benefit pages before generic exploration
+        _benefit_pages = [
+            "https://www.delta.com/us/en/my-account/wallet",
+            "https://www.delta.com/us/en/my-account/eCredits",
+        ]
+        benefit_texts = []
+        for bp in _benefit_pages:
+            try:
+                page.goto(bp, timeout=NAV_TIMEOUT)
+                page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+                page.wait_for_timeout(2_500)
+                benefit_texts.append(f"\n\n=== {bp} ===\n{page.inner_text('body')[:4000]}")
+            except Exception:
+                pass
+
         raw_text = _explore_account_pages(page)
-        r.update({"status":"ok","items":[],"raw_text":raw_text})
+        raw_text = "\n".join(benefit_texts) + "\n\n" + raw_text
+        r.update({"status":"ok","items":[],"raw_text":raw_text[:12_000]})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -1147,8 +1163,24 @@ def scrape_marriott(page, c, ctx):
         else:
             log("Marriott: session active, no login needed")
 
+        # Explicitly visit high-value Bonvoy benefit pages before generic exploration
+        _benefit_pages = [
+            "https://www.marriott.com/loyalty/myAccount/certificates.mi",
+            "https://www.marriott.com/loyalty/myAccount/benefits.mi",
+        ]
+        benefit_texts = []
+        for bp in _benefit_pages:
+            try:
+                page.goto(bp, timeout=NAV_TIMEOUT)
+                page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+                page.wait_for_timeout(3_000)
+                benefit_texts.append(f"\n\n=== {bp} ===\n{page.inner_text('body')[:4000]}")
+            except Exception:
+                pass
+
         raw_text = _explore_account_pages(page)
-        r.update({"status": "ok", "items": [], "raw_text": raw_text})
+        raw_text = "\n".join(benefit_texts) + "\n\n" + raw_text
+        r.update({"status": "ok", "items": [], "raw_text": raw_text[:12_000]})
     except Exception as e:
         r.update({"status": "error", "error": str(e).split('\n')[0][:120]})
     return r
@@ -1166,8 +1198,25 @@ def scrape_hilton(page, c, ctx):
         _handle_2fa(page, ctx)
         page.wait_for_url("**hilton.com**profile**", timeout=LOGIN_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+
+        # Explicitly visit high-value Hilton benefit pages
+        _benefit_pages = [
+            "https://www.hilton.com/en/hilton-honors/profile/awards/",
+            "https://www.hilton.com/en/hilton-honors/profile/benefits/",
+        ]
+        benefit_texts = []
+        for bp in _benefit_pages:
+            try:
+                page.goto(bp, timeout=NAV_TIMEOUT)
+                page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+                page.wait_for_timeout(2_500)
+                benefit_texts.append(f"\n\n=== {bp} ===\n{page.inner_text('body')[:4000]}")
+            except Exception:
+                pass
+
         raw_text = _explore_account_pages(page)
-        r.update({"status":"ok","items":[],"raw_text":raw_text})
+        raw_text = "\n".join(benefit_texts) + "\n\n" + raw_text
+        r.update({"status":"ok","items":[],"raw_text":raw_text[:12_000]})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
