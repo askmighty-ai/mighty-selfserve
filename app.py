@@ -1993,6 +1993,30 @@ function forceDiscover(source, btn) {
   });
 }
 
+function syncAccount(source, btn) {
+  var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
+  var orig = btn.innerHTML;
+  btn.innerHTML = '…';
+  btn.disabled = true;
+  fetch('/sync/account/' + source, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({_csrf: csrf})
+  }).then(function() {
+    var poll = setInterval(function() {
+      fetch('/sync/status').then(function(r){ return r.json(); }).then(function(s) {
+        if (!s.running) {
+          clearInterval(poll);
+          reloadWithScroll();
+        }
+      });
+    }, 2000);
+  }).catch(function() {
+    btn.innerHTML = orig;
+    btn.disabled = false;
+  });
+}
+
 var _activeStatusFilter = 'all';
 function setStatusFilter(status, btn) {
   _activeStatusFilter = status;
@@ -3563,7 +3587,7 @@ def dashboard():
                 f'</div>'
                 f'<div class="acct-controls">'
                 f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;cursor:help" title="{synced_title}"></div>'
-                f'<button onclick="forceDiscover(\'{he(src)}\', this)" title="Re-run field discovery" class="acct-refresh-btn">↻</button>'
+                f'<button onclick="syncAccount(\'{he(src)}\', this)" title="Sync this account" class="acct-refresh-btn">↻</button>'
                 f'</div>'
                 f'</div>'
                 f'{bad_banner}'
