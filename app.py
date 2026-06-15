@@ -356,16 +356,18 @@ Pages may be separated by === URL === markers.
 Page text:
 {text}
 
-Extract ONLY data that is SPECIFIC TO THIS USER's account — personalized numbers, statuses, and dates.
+Extract ONLY data that is SPECIFIC TO THIS USER's account — personalized numbers, statuses, dates, and benefits.
 
 INCLUDE:
 - Loyalty/rewards balances and point totals
 - Tier or status level (Gold, Platinum, A-List, etc.)
 - Progress toward goals (e.g. "4 of 20 flights to A-List")
-- Expiration dates for points, credits, or status
+- Expiration dates for points, credits, status, or benefits
 - Confirmed upcoming reservations or bookings (with real dates/details)
-- Account credits, vouchers, or certificates with values
+- Account credits, vouchers, certificates, or free nights with quantities or values
+- Personalized perks or benefits assigned to THIS user's account (e.g. "2 suite upgrade awards", "Priority Pass membership", "Free checked bag on next flight")
 - Payment info (balance due, autopay status, next payment date)
+- Special offers or promotions that show a personalized deadline, qualifying requirement, or individual reward (e.g. "Earn 5,000 bonus points if you stay by Aug 31")
 
 HARD EXCLUDE — never include these even if they appear on the page:
 - Any value containing "log in", "sign in", "login to view", "sign in to see"
@@ -373,21 +375,25 @@ HARD EXCLUDE — never include these even if they appear on the page:
 - Site-wide availability notices (e.g. "Book travel through [date]")
 - "No match found", "None", "N/A", "–", or empty values
 - Navigation items, links, or menu text
-- Promotional banners or offers available to all users
+- Generic marketing copy available to all users with no personalized quantity, deadline, or condition
 - Generic labels with no user-specific data behind them
 
 CONCRETE REJECT EXAMPLES:
-- "Points Balance Alert: Log in to view points balance" → REJECT (login wall, not real data)
-- "Reservations Through: March 10, 2027" → REJECT (site-wide booking window, not personal)
-- "Depart Date: Fri, Jun 12, 2026" from a search widget → REJECT (search form pre-fill)
+- "Points Balance Alert: Log in to view points balance" → REJECT (login wall)
+- "Reservations Through: March 10, 2027" → REJECT (site-wide booking window)
+- "Depart Date: Fri, Jun 12, 2026" from a search widget → REJECT (search form)
 - "Depart Airport Status: No match found" → REJECT (search form state)
-- "Upcoming Trips: None" → REJECT (empty, no real value)
+- "Upcoming Trips: None" → REJECT (empty value)
+- "Earn more points with our partners" → REJECT (generic marketing, no personalized amount)
 
 CONCRETE INCLUDE EXAMPLES:
 - "24,617 Rapid Rewards points" → INCLUDE as {{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}
 - "0 of 20 flights" in A-List section → INCLUDE as {{"key":"alist_flights","label":"A-List Flights Progress","value":"0 of 20"}}
-- "Companion Pass: 0 of 100 flights" → INCLUDE as {{"key":"companion_pass_flights","label":"Companion Pass Flights Progress","value":"0 of 100"}}
 - "$2,472.20 Total Payment Due" → INCLUDE as {{"key":"balance_due","label":"Balance Due","value":"$2,472.20"}}
+- "Free Night Award — expires Dec 31, 2026" → INCLUDE as {{"key":"free_night_award","label":"Free Night Award Expiry","value":"Dec 31, 2026"}}
+- "2 Suite Night Awards available" → INCLUDE as {{"key":"suite_night_awards","label":"Suite Night Awards","value":"2 available"}}
+- "Annual travel credit: $187 remaining" → INCLUDE as {{"key":"travel_credit_remaining","label":"Travel Credit Remaining","value":"$187"}}
+- "Earn 5,000 bonus miles — book by Jul 15" → INCLUDE as {{"key":"bonus_miles_offer","label":"Bonus Miles Offer Deadline","value":"Jul 15, 2026"}}
 
 LABELING: write labels that make sense without knowing the site (no abbreviations, no page jargon).
 
@@ -399,7 +405,7 @@ Rules:
 - label: 2-5 words, self-explanatory out of context
 - value: exact current value — if empty or a login prompt, skip the field entirely
 - Each concept ONCE, no duplicates
-- Max 10 fields
+- Max 15 fields
 - If you find zero fields that pass the hard-exclude test, return an empty array []"""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:

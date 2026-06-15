@@ -441,7 +441,10 @@ def _base(name, icon, color, url):
 _ACCOUNT_KEYWORDS = [
     'account', 'loyalty', 'rewards', 'profile', 'points', 'miles',
     'credits', 'dashboard', 'membership', 'frequent', 'my trip',
-    'my booking', 'benefit', 'tier', 'status', 'balance', 'history',
+    'my booking', 'benefit', 'benefits', 'tier', 'status', 'balance',
+    'history', 'offer', 'offers', 'certificate', 'certificates',
+    'voucher', 'vouchers', 'perk', 'perks', 'upgrade', 'free night',
+    'credit', 'wallet', 'my rewards', 'my benefits', 'expiring',
 ]
 _SKIP_PATTERNS = [
     'logout', 'signout', 'sign-out', 'register', 'signup', 'sign-up',
