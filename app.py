@@ -5816,58 +5816,61 @@ def api_force_discover(source):
 @require_login
 def api_rediscover_all():
     """Re-run field discovery on ALL accounts' existing raw_text in a background thread."""
-    check_csrf()
-    uid = session["user_id"]
-    db  = get_db()
-    rows = db.execute(
-        "SELECT source, data_enc, raw_text_enc FROM account_data WHERE user_id=?", (uid,)
-    ).fetchall()
+    try:
+        check_csrf()
+    except Exception:
+        return jsonify({"ok": False, "error": "Session expired"}), 403
+    try:
+        uid = session["user_id"]
+        db  = get_db()
+        rows = db.execute(
+            "SELECT source, data_enc FROM account_data WHERE user_id=?", (uid,)
+        ).fetchall()
 
-    def _run_all():
-        for row in rows:
-            src = row["source"]
-            try:
-                raw = decrypt_account_data(uid, row["data_enc"] or "").get("raw_text") or ""
-                if not raw and row.get("raw_text_enc"):
-                    raw = decrypt_account_data(uid, row["raw_text_enc"] or "").get("raw_text") or ""
-                if not raw:
-                    continue
-                # Get display name for site_name
-                cred = db.execute(
-                    "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
-                    (uid, src)
-                ).fetchone()
-                site_name = src.replace("_", " ").title()
-                if cred and cred["extra_enc"]:
-                    try:
-                        ex = json.loads(decrypt_cred(uid, cred["extra_enc"]))
-                        site_name = ex.get("display_name") or site_name
-                    except Exception:
-                        pass
-                fields = claude_discover_fields(raw, site_name)
-                if fields:
-                    existing = db.execute(
-                        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+        def _run_all():
+            for row in rows:
+                src = row["source"]
+                try:
+                    raw = decrypt_account_data(uid, row["data_enc"] or "").get("raw_text") or ""
+                    if not raw:
+                        continue
+                    cred = db.execute(
+                        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
                         (uid, src)
                     ).fetchone()
-                    existing_data = {}
-                    if existing and existing["data_enc"]:
+                    site_name = src.replace("_", " ").title()
+                    if cred and cred["extra_enc"]:
                         try:
-                            existing_data = json.loads(decrypt_account_data(uid, existing["data_enc"]) or "{}")
+                            ex = json.loads(decrypt_cred(uid, cred["extra_enc"]))
+                            site_name = ex.get("display_name") or site_name
                         except Exception:
                             pass
-                    existing_data["discovered_fields"] = fields
-                    db.execute(
-                        "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
-                        (encrypt_account_data(uid, json.dumps(existing_data)), uid, src)
-                    )
-                    db.commit()
-                    print(f"[Rediscover] {src}: {len(fields)} fields", flush=True)
-            except Exception as ex:
-                print(f"[Rediscover] {src}: error {ex}", flush=True)
+                    fields = claude_discover_fields(raw, site_name)
+                    if fields:
+                        existing = db.execute(
+                            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                            (uid, src)
+                        ).fetchone()
+                        existing_data = {}
+                        if existing and existing["data_enc"]:
+                            try:
+                                existing_data = decrypt_account_data(uid, existing["data_enc"])
+                            except Exception:
+                                pass
+                        existing_data["discovered_fields"] = fields
+                        db.execute(
+                            "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                            (encrypt_account_data(uid, json.dumps(existing_data)), uid, src)
+                        )
+                        db.commit()
+                        print(f"[Rediscover] {src}: {len(fields)} fields", flush=True)
+                except Exception as ex:
+                    print(f"[Rediscover] {src}: error {ex}", flush=True)
 
-    threading.Thread(target=_run_all, daemon=True).start()
-    return jsonify({"ok": True, "sources": len(rows)})
+        threading.Thread(target=_run_all, daemon=True).start()
+        return jsonify({"ok": True, "sources": len(rows)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:120]}), 500
 
 
 @app.route("/credentials/fields/load")
