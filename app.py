@@ -5487,9 +5487,21 @@ def api_data_sync():
 
     # Detect login-page redirects before storing
     if _is_login_page(raw_text):
+        # Don't overwrite good existing data with a failed login-page scrape
+        db = get_db()
+        existing = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+            (user["id"], source)
+        ).fetchone()
+        if existing:
+            ex_data = decrypt_account_data(user["id"], existing["data_enc"] or "")
+            if ex_data.get("sync_status") == "ok":
+                print(f"[Mighty] Skipping login-page overwrite for {source} — good data exists", flush=True)
+                return jsonify({"ok": True, "skipped": True,
+                                "reason": "login_page_but_good_data_exists"})
         data["sync_status"] = "login_required"
-        data["items"] = []          # discard any stale items
-        raw_text = ""               # don't run discovery on login page
+        data["items"] = []
+        raw_text = ""
         data["raw_text"] = ""
     elif not data.get("items") and not raw_text:
         data["sync_status"] = "no_data"
