@@ -1592,6 +1592,10 @@ def run_sync(api_key: str, mighty_url: str = MIGHTY_URL,
         return {"ok": False, "error": str(e), "synced": 0, "errors": 0, "results": {}}
 
     configured = [k for k in all_creds if k in SCRAPERS and all_creds[k].get("username")]
+    skipped = [k for k in all_creds if k in SCRAPERS and not all_creds[k].get("username")]
+    if skipped:
+        log(f"Skipping (no username saved): {', '.join(skipped)}")
+    log(f"Configured: {', '.join(configured) or 'none'}")
     if only_source:
         configured = [only_source] if only_source in configured else []
     if not configured:
