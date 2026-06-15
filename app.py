@@ -6070,48 +6070,14 @@ def api_data_sync():
                     _db.commit()
             threading.Thread(target=_bg_discover, daemon=True).start()
         else:
-            # Existing prefs: re-extract values for discovered fields from new page text
-            ex_data = ex  # already parsed above
+            # Existing prefs: re-run full discovery so new fields (credits, offers, certs)
+            # from freshly-scraped benefit pages are picked up and merged in.
             def _bg_refresh():
-                discovered = ex_data.get("discovered_fields", [])
-                enabled_keys = set(ex_data.get("enabled_fields", []))
-                if not discovered or not enabled_keys:
-                    return
                 new_fields = claude_discover_fields(raw_text, site_name)
                 if not new_fields:
                     return
-                # Update values for matching keys
-                new_vals = {f["key"]: f.get("value", "") for f in new_fields}
-                updated = [
-                    {**f, "value": new_vals.get(f["key"], f.get("value", "–"))}
-                    for f in discovered
-                ]
-                ai_items = [
-                    {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
-                    for f in updated if f.get("key") in enabled_keys
-                ]
                 with app.app_context():
-                    _db = get_db()
-                    ad = _db.execute(
-                        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
-                        (uid, source)
-                    ).fetchone()
-                    if ad and ai_items:
-                        ad_data = decrypt_account_data(uid, ad["data_enc"] or "")
-                        ad_data["items"] = ai_items
-                        # Update discovered_fields values in credentials too
-                        ex_data["discovered_fields"] = updated
-                        ex_data["discovered_at"]     = iso()
-                        _db.execute(
-                            "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
-                            (encrypt_account_data(uid, ad_data), uid, source)
-                        )
-                        _db.execute(
-                            "UPDATE account_credentials SET extra_enc=?, updated_at=? "
-                            "WHERE user_id=? AND source=?",
-                            (encrypt_cred(uid, json.dumps(ex_data)), iso(), uid, source)
-                        )
-                        _db.commit()
+                    _save_discovered_fields(uid, source, new_fields)
             threading.Thread(target=_bg_refresh, daemon=True).start()
 
     return jsonify({"ok": True, "source": source})
