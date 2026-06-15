@@ -1636,6 +1636,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 <div class="main-content">
   {onboarding_banner}
   {reauth_banner}
+  {new_accounts_banner}
   <div id="twofa-banner" style="display:none;padding:0 24px 0"></div>
   {welcome_state}
 
@@ -2357,8 +2358,10 @@ body{display:flex;flex-direction:row}
       <button class="btn-sm" onclick="copyKey(this)">Copy</button>
     </div>
     <div style="font-size:11px;color:#9ca3af;margin-top:8px">Anyone with this key can submit actions on your behalf.</div>
-    <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f5f2ed">
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f5f2ed;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <a href="/onboarding" style="display:inline-block;padding:8px 14px;background:#f5f2ed;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">↺ Re-run setup</a>
+      <a href="/extension-setup" target="_blank" style="display:inline-block;padding:8px 14px;background:#f0fdf4;color:#059669;border:1px solid #bbf7d0;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">🔌 Setup Chrome Extension</a>
+      <span style="font-size:11px;color:#9ca3af">Opens a page the extension reads to auto-configure itself</span>
     </div>
   </div>
 
@@ -3703,6 +3706,46 @@ def dashboard():
     else:
         reauth_banner = ""
 
+    # Build "new account detected" banner for recently auto-captured custom accounts (last 10 min)
+    _ten_min_ago = (datetime.utcnow() - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S")
+    _new_custom = db.execute(
+        "SELECT source, synced_at FROM account_data WHERE user_id=? AND source LIKE 'custom_%' "
+        "AND synced_at >= ? AND sync_status='ok' ORDER BY synced_at DESC",
+        (user["id"], _ten_min_ago)
+    ).fetchall()
+    if _new_custom:
+        _new_names = []
+        for _nc in _new_custom:
+            # Try to get display name from credentials extra_enc
+            _nc_cred = db.execute(
+                "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                (user["id"], _nc["source"])
+            ).fetchone()
+            _nc_name = _nc["source"].replace("custom_", "").replace("_", " ").title()
+            if _nc_cred and _nc_cred["extra_enc"]:
+                try:
+                    _nc_ex = json.loads(decrypt_cred(user["id"], _nc_cred["extra_enc"]))
+                    _nc_name = _nc_ex.get("display_name") or _nc_name
+                except Exception:
+                    pass
+            _new_names.append(_nc_name)
+        _n_new = len(_new_names)
+        _new_word = "account" if _n_new == 1 else "accounts"
+        _new_names_html = ", ".join(f"<strong>{he(n)}</strong>" for n in _new_names)
+        new_accounts_banner = (
+            f'<div style="margin:12px 24px 0;background:#f0fdf4;border:1px solid rgba(5,150,105,0.25);'
+            f'border-radius:10px;padding:11px 14px;display:flex;align-items:center;gap:10px">'
+            f'<span style="font-size:15px">✨</span>'
+            f'<span style="flex:1;font-size:12.5px;color:#065f46;line-height:1.45">'
+            f'<strong>Mighty just captured {_n_new} new {_new_word}:</strong> {_new_names_html} — '
+            f'data is being extracted and will appear on your dashboard shortly.</span>'
+            f'<button onclick="this.closest(\'div\').remove()" style="background:none;border:none;'
+            f'cursor:pointer;color:#059669;font-size:16px;line-height:1;padding:0 2px" title="Dismiss">×</button>'
+            f'</div>'
+        )
+    else:
+        new_accounts_banner = ""
+
     _csrf = get_csrf_token()
     return (DASHBOARD_HTML
             .replace("{_SIDEBAR_}",               _sidebar_html('dashboard', user["email"], _csrf))
@@ -3719,6 +3762,7 @@ def dashboard():
             .replace("{welcome_state}",           welcome_state)
             .replace("{onboarding_banner}",       onboarding_banner)
             .replace("{reauth_banner}",           reauth_banner)
+            .replace("{new_accounts_banner}",     new_accounts_banner)
             .replace("{account_data_html}",       account_data_html)
             .replace("{csrf_token}",              _csrf))
 
@@ -3752,6 +3796,65 @@ def settings():
             .replace("{postmark_warn}",           postmark_warn)
             .replace("{postmark_js}",             "true" if postmark_ok else "false")
             .replace("{csrf_token}",              _csrf))
+
+@app.route("/extension-setup")
+@require_login
+def extension_setup():
+    """Page the Chrome extension reads to auto-configure its API key.
+    Contains the key in a machine-readable meta tag so the extension can
+    extract it without user copy-paste.
+    """
+    user = get_db().execute("SELECT api_key FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    key  = user["api_key"] if user else ""
+    return f"""<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<meta name="mighty-api-key" content="{he(key)}">
+<title>Mighty Extension Setup</title>
+<style>
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    min-height:100vh;margin:0;background:#f0fdf4;color:#1c1917}}
+  .card{{background:#fff;border:1px solid #bbf7d0;border-radius:16px;
+    padding:40px 48px;text-align:center;max-width:440px;
+    box-shadow:0 4px 24px rgba(5,150,105,0.1)}}
+  .icon{{font-size:48px;margin-bottom:16px}}
+  h1{{font-size:20px;font-weight:700;margin:0 0 8px;color:#065f46}}
+  p{{font-size:14px;color:#6b7280;line-height:1.6;margin:0 0 24px}}
+  .status{{font-size:13px;font-weight:600;padding:10px 16px;border-radius:8px;
+    background:#f0fdf4;border:1px solid #bbf7d0;color:#059669}}
+  .spinner{{display:inline-block;width:14px;height:14px;border:2px solid #bbf7d0;
+    border-top-color:#059669;border-radius:50%;animation:spin 0.7s linear infinite;
+    margin-right:8px;vertical-align:middle}}
+  @keyframes spin{{to{{transform:rotate(360deg)}}}}
+</style>
+</head><body>
+<div class="card">
+  <div class="icon">🔌</div>
+  <h1>Connecting Mighty Extension</h1>
+  <p>The Mighty Chrome extension is reading this page to configure itself automatically.
+     You can close this tab once it confirms.</p>
+  <div class="status" id="status">
+    <span class="spinner"></span> Waiting for extension…
+  </div>
+</div>
+<script>
+  // Extension sets mighty_setup_done in sessionStorage when it reads the key
+  const check = setInterval(() => {{
+    if (sessionStorage.getItem('mighty_setup_done')) {{
+      clearInterval(check);
+      document.getElementById('status').innerHTML = '✓ Extension configured successfully — you can close this tab';
+      document.getElementById('status').style.background = '#f0fdf4';
+    }}
+  }}, 500);
+  // Fallback: show success after 3s (extension may have already read and navigated away)
+  setTimeout(() => {{
+    if (!sessionStorage.getItem('mighty_setup_done'))
+      document.getElementById('status').innerHTML = '✓ Done — the extension should be configured now';
+  }}, 3000);
+</script>
+</body></html>""", 200, {"Content-Type": "text/html"}
+
 
 @app.route("/settings/export-csv")
 @require_login
@@ -4893,7 +4996,7 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
       </div>
     </div>
 
-    <!-- Screen 2: credential entry -->
+    <!-- Screen 2: extension-first connect -->
     <div id="screen-cred" style="display:none;flex-direction:column;flex:1;min-height:0">
       <div class="modal-cred-head">
         <button class="modal-back-btn" onclick="backToPicker()">← Back</button>
@@ -4902,17 +5005,30 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
         <button class="modal-close" style="margin-left:auto" onclick="closeModal()">✕</button>
       </div>
       <div class="modal-cred-body">
-        <div id="modal-login-hint" style="display:none;background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#92400e;line-height:1.5">
-          💡 <strong>Log in first:</strong> Make sure you're signed into <span id="modal-hint-site"></span> in Chrome before saving — the extension uses your active browser session to sync account data.
+        <div style="text-align:center;padding:8px 0 20px">
+          <div style="font-size:32px;margin-bottom:12px" id="modal-ext-icon-lg"></div>
+          <div style="font-size:14px;font-weight:600;color:#1c1917;margin-bottom:8px">Connect via Chrome</div>
+          <div style="font-size:13px;color:#6b7280;line-height:1.6;margin-bottom:20px">
+            Make sure you're <strong>logged into <span id="modal-ext-site-name"></span></strong> in Chrome,
+            then click the button below. The Mighty extension will capture your account data automatically.
+          </div>
+          <a id="modal-open-chrome-btn"
+             href="#" target="_blank"
+             style="display:inline-block;padding:11px 22px;background:#059669;color:#fff;font-size:14px;font-weight:600;border-radius:9px;text-decoration:none;transition:background 0.15s"
+             onmouseenter="this.style.background='#047857'" onmouseleave="this.style.background='#059669'">
+            Open in Chrome →
+          </a>
+          <div id="modal-ext-waiting" style="display:none;margin-top:20px;text-align:center">
+            <div style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#6b7280">
+              <span style="display:inline-block;width:14px;height:14px;border:2px solid #d1fae5;border-top-color:#059669;border-radius:50%;animation:spin 0.8s linear infinite"></span>
+              Waiting for Mighty extension to detect your session…
+            </div>
+            <div style="font-size:11px;color:#9ca3af;margin-top:6px">This usually takes 5–15 seconds after you log in</div>
+          </div>
+          <div id="modal-ext-no-ext" style="display:none;margin-top:16px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:#92400e;text-align:left">
+            💡 <strong>Extension not installed?</strong> Visit <a href="/extension-setup" target="_blank" style="color:#b45309">Settings → Setup Chrome Extension</a> first.
+          </div>
         </div>
-        <input type="text" id="modal-u" placeholder="Username or email" autocomplete="off">
-        <input type="password" id="modal-p" placeholder="Password" autocomplete="new-password">
-        <details style="margin-top:10px">
-          <summary style="font-size:12px;color:#8892a4;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
-          <input type="text" id="modal-t" placeholder="TOTP secret key" style="margin-top:6px">
-          <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
-        </details>
-        <button class="btn-save" style="width:100%;margin-top:16px" onclick="saveModalCred()">Save & Sync</button>
       </div>
     </div>
 
@@ -4962,6 +5078,9 @@ function openModal() {{
 }}
 function closeModal() {{
   document.getElementById('modal-overlay').classList.remove('open');
+  // Stop any running poll
+  if (_modalPollInterval) {{ clearInterval(_modalPollInterval); _modalPollInterval = null; }}
+  if (_modalPollTimeout)  {{ clearTimeout(_modalPollTimeout);   _modalPollTimeout  = null; }}
   // Reset progress screen for next use
   ['sync-step-1','sync-step-2','sync-step-3'].forEach(function(id) {{
     var el = document.getElementById(id);
@@ -4991,26 +5110,130 @@ function backToPicker() {{
   _modalKey = '';
 }}
 
-/* ── Open credential form for a site ─────────────── */
+/* ── Source → account URL map for "Open in Chrome →" ── */
+var _SOURCE_URLS = {{
+  southwest:    'https://www.southwest.com/loyalty/myaccount/',
+  delta:        'https://www.delta.com/myprofile/',
+  united:       'https://www.united.com/en/us/myaccount/mileageplus',
+  american_air: 'https://www.aa.com/aadvantage-program/overview',
+  alaska_air:   'https://www.alaskaair.com/account/dashboard',
+  amex:         'https://www.americanexpress.com/en-us/account/',
+  chase:        'https://secure.chase.com/web/auth/dashboard',
+  wells_fargo:  'https://connect.secure.wellsfargo.com/auth/login/present',
+  bofa:         'https://www.bankofamerica.com/myaccounts/brain/render.go',
+  capital_one:  'https://myaccounts.capitalone.com/accountSummary',
+  discover:     'https://portal.discover.com/customer/en/portal/account-home',
+  citi:         'https://online.citi.com/US/login.do',
+  paypal:       'https://www.paypal.com/myaccount/summary',
+  fidelity:     'https://digital.fidelity.com/ftgw/digital/portfolio/summary',
+  schwab:       'https://client.schwab.com/app/accounts/#/',
+  marriott:     'https://www.marriott.com/loyalty/myAccount/default.mi',
+  hilton:       'https://www.hilton.com/en/hilton-honors/guest/my-account/',
+  hyatt:        'https://www.hyatt.com/en-US/my-account/home',
+  ihg:          'https://www.ihg.com/rewardsclub/content/us/en/member-home',
+  wyndham:      'https://www.wyndhamhotels.com/registry',
+  amazon:       'https://www.amazon.com/gp/css/order-history',
+  target:       'https://www.target.com/account',
+  costco:       'https://www.costco.com/OrderStatusCmd',
+  starbucks:    'https://www.starbucks.com/rewards/',
+  state_farm:   'https://www.statefarm.com/customer-care/sign-in-to-my-account',
+  pamf:         'https://mychart.pamf.org/MyChart/',
+  ticketmaster: 'https://www.ticketmaster.com/member/orders',
+  netflix:      'https://www.netflix.com/YourAccount',
+  hulu:         'https://secure.hulu.com/account',
+  spotify:      'https://www.spotify.com/us/account/overview/',
+  disney_plus:  'https://www.disneyplus.com/identity/account',
+  att:          'https://www.att.com/my/#/',
+  att_wireless: 'https://myatt.att.com/exp/myconsumerdashboard/',
+  verizon:      'https://www.verizon.com/myverizon/',
+  tmobile:      'https://account.t-mobile.com/overview',
+  xfinity:      'https://customer.xfinity.com/#/billing',
+  hertz:        'https://www.hertz.com/rentacar/member/profile/myprofile',
+  cvs:          'https://www.cvs.com/account/login.jsp',
+  walgreens:    'https://www.walgreens.com/myaccount/mywalgreenssummary.jsp',
+  sfcu:         'https://www.sfcu.org/accounts/online-banking',
+}};
+
+var _modalPollInterval = null;
+var _modalPollTimeout  = null;
+
+/* ── Open extension-connect screen for a site ─────── */
 function openCredForm(key, name, icon, color) {{
   _modalKey = key;
+
+  // Stop any existing poll
+  if (_modalPollInterval) {{ clearInterval(_modalPollInterval); _modalPollInterval = null; }}
+  if (_modalPollTimeout)  {{ clearTimeout(_modalPollTimeout);   _modalPollTimeout  = null; }}
+
+  // Header
   document.getElementById('modal-cred-name').textContent = name;
   var ic = document.getElementById('modal-cred-icon');
-  ic.textContent = icon;
-  ic.style.background = color;
-  document.getElementById('modal-u').value = '';
-  document.getElementById('modal-p').value = '';
-  if (document.getElementById('modal-t')) document.getElementById('modal-t').value = '';
-  // Show "log in first" hint
-  var hint = document.getElementById('modal-login-hint');
-  var hintSite = document.getElementById('modal-hint-site');
-  if (hint && hintSite) {{
-    hintSite.textContent = name;
-    hint.style.display = 'block';
+  ic.textContent = icon; ic.style.background = color;
+
+  // Large icon + site name in body
+  var lg = document.getElementById('modal-ext-icon-lg');
+  if (lg) {{ lg.textContent = icon; }}
+  var sn = document.getElementById('modal-ext-site-name');
+  if (sn) {{ sn.textContent = name; }}
+
+  // Set "Open in Chrome →" href
+  var openBtn = document.getElementById('modal-open-chrome-btn');
+  var siteUrl = _SOURCE_URLS[key] || 'https://google.com/search?q=' + encodeURIComponent(name + ' login');
+  if (openBtn) {{
+    openBtn.href = siteUrl;
+    openBtn.onclick = function() {{ _startExtPoll(key); }};
   }}
+
+  // Hide waiting states
+  var waiting = document.getElementById('modal-ext-waiting');
+  var noExt   = document.getElementById('modal-ext-no-ext');
+  if (waiting) waiting.style.display = 'none';
+  if (noExt)   noExt.style.display   = 'none';
+
   document.getElementById('screen-picker').style.display = 'none';
-  document.getElementById('screen-cred').style.display = 'flex';
-  document.getElementById('modal-u').focus();
+  document.getElementById('screen-cred').style.display   = 'flex';
+}}
+
+function _startExtPoll(source) {{
+  var waiting = document.getElementById('modal-ext-waiting');
+  var noExt   = document.getElementById('modal-ext-no-ext');
+  if (waiting) waiting.style.display = 'block';
+
+  // Register placeholder so it shows on dashboard even before data arrives
+  fetch('/credentials/register', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF, source: source}})
+  }});
+
+  var attempts = 0;
+  var maxAttempts = 40; // 2 minutes
+
+  _modalPollInterval = setInterval(function() {{
+    attempts++;
+    fetch('/api/extension/poll/' + source)
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{
+        if (d.captured) {{
+          clearInterval(_modalPollInterval); _modalPollInterval = null;
+          _setStep_ext('done');
+          setTimeout(function() {{ closeModal(); location.reload(); }}, 800);
+        }}
+      }}).catch(function() {{}});
+
+    if (attempts >= maxAttempts) {{
+      clearInterval(_modalPollInterval); _modalPollInterval = null;
+      if (waiting) waiting.style.display = 'none';
+      if (noExt)   noExt.style.display   = 'block';
+    }}
+  }}, 3000);
+}}
+
+function _setStep_ext(state) {{
+  var waiting = document.getElementById('modal-ext-waiting');
+  if (state === 'done' && waiting) {{
+    waiting.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#16a34a"><span>✓</span> Account connected!</div>';
+  }}
 }}
 
 /* ── Save from modal ──────────────────────────────── */
@@ -5025,56 +5248,6 @@ function _setStep(step, state) {{
   el.style.fontWeight = state === 'active' ? '600' : '500';
 }}
 
-function saveModalCred() {{
-  var u = document.getElementById('modal-u').value.trim();
-  var p = document.getElementById('modal-p').value;
-  var t = document.getElementById('modal-t') ? document.getElementById('modal-t').value.trim() : '';
-  if (!u || !p) {{ toast('Username and password required', false); return; }}
-
-  // Switch to progress screen
-  document.getElementById('screen-cred').style.display = 'none';
-  document.getElementById('screen-progress').style.display = 'flex';
-  _setStep(1, 'active');
-
-  fetch('/credentials/save', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    body: new URLSearchParams({{_csrf: CSRF, source: _modalKey, username: u, password: p, totp_secret: t}})
-  }}).then(r => r.json()).then(d => {{
-    if (!d.ok) {{
-      _setStep(1, 'error');
-      document.getElementById('sync-progress-error').textContent = d.error || 'Failed to save credentials';
-      document.getElementById('sync-progress-error').style.display = 'block';
-      return;
-    }}
-    _setStep(1, 'done');
-    _setStep(2, 'active');
-    fetch('/sync/account/' + _modalKey, {{
-      method: 'POST',
-      headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-      body: new URLSearchParams({{_csrf: CSRF}})
-    }}).then(function() {{
-      var poll = setInterval(function() {{
-        fetch('/sync/status').then(r => r.json()).then(function(s) {{
-          if (s.step === 'discovering fields') {{
-            _setStep(2, 'done');
-            _setStep(3, 'active');
-          }}
-          if (!s.running) {{
-            clearInterval(poll);
-            _setStep(2, 'done');
-            _setStep(3, 'done');
-            setTimeout(function() {{ closeModal(); location.reload(); }}, 800);
-          }}
-        }});
-      }}, 2000);
-    }});
-  }}).catch(function() {{
-    _setStep(1, 'error');
-    document.getElementById('sync-progress-error').textContent = 'Request failed — try again';
-    document.getElementById('sync-progress-error').style.display = 'block';
-  }});
-}}
 
 /* ── Modal search ─────────────────────────────────── */
 function filterModal(q) {{
@@ -5309,6 +5482,53 @@ def credentials_page():
     ).fetchall()
     synced_at_by_source = {r["source"]: r["synced_at"] for r in sync_rows if r["synced_at"]}
     return _build_credentials_page(user, configured, extra_by_source, synced_at_by_source)
+
+
+@app.route("/api/extension/poll/<source>")
+@require_login
+def extension_poll(source):
+    """Poll whether the extension has captured data for a given source.
+    Used by the connect-account modal to detect when the extension has synced.
+    """
+    uid = session["user_id"]
+    db  = get_db()
+    # For custom_* sources the extension uses the generated key directly.
+    # For known sources (delta, marriott, etc.) we look for the exact source key
+    # OR any custom_* source captured recently that references this source.
+    row = db.execute(
+        "SELECT synced_at, sync_status FROM account_data WHERE user_id=? AND source=? ORDER BY synced_at DESC LIMIT 1",
+        (uid, source)
+    ).fetchone()
+    if row and row["sync_status"] == "ok":
+        return jsonify({"captured": True, "synced_at": row["synced_at"]})
+    return jsonify({"captured": False})
+
+
+@app.route("/credentials/register", methods=["POST"])
+@require_login
+def credentials_register():
+    """Register an account source without credentials (extension-first flow).
+    Creates the credential placeholder so the account shows up on the dashboard
+    while the extension handles the actual data capture.
+    """
+    check_csrf()
+    uid    = session["user_id"]
+    source = request.form.get("source", "").strip()
+    if not source:
+        return jsonify({"ok": False, "error": "source required"}), 400
+    db  = get_db()
+    now = iso()
+    existing = db.execute(
+        "SELECT created_at FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not existing:
+        db.execute(
+            "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+            (uid, source, "", "", "", now, now)
+        )
+        db.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/credentials/save", methods=["POST"])

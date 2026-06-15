@@ -314,6 +314,28 @@ async function _pushCapture(apiKey, name, category, url, rawText) {
   return source;
 }
 
+// ── Extension auto-setup: read API key from /extension-setup page ────────────
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete') return;
+  if (!tab.url) return;
+  if (!tab.url.includes('/extension-setup')) return;
+
+  chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const key = document.querySelector('meta[name="mighty-api-key"]')?.content;
+      if (key) sessionStorage.setItem('mighty_setup_done', '1');
+      return key || null;
+    },
+  }).then(([result]) => {
+    const key = result?.result;
+    if (key) {
+      chrome.storage.local.set({ api_key: key });
+      console.log('[Mighty] API key auto-configured from /extension-setup');
+    }
+  }).catch(() => {});
+});
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
   if (!tab.url || !tab.url.startsWith('http')) return;
