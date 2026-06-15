@@ -1,27 +1,28 @@
 // ── DOM refs ─────────────────────────────────────────────────────────────────
-const statusBox   = document.getElementById('status-box');
-const statusText  = document.getElementById('status-text');
-const spinnerEl   = document.getElementById('spinner');
-const apiKeyEl    = document.getElementById('api-key');
-const saveBtn     = document.getElementById('save-btn');
-const syncBtn     = document.getElementById('sync-btn');
-const captureBtn  = document.getElementById('capture-btn');
-const addPageBtn  = document.getElementById('add-page-btn');
+const statusBox     = document.getElementById('status-box');
+const statusText    = document.getElementById('status-text');
+const spinnerEl     = document.getElementById('spinner');
+const apiKeyEl      = document.getElementById('api-key');
+const saveBtn       = document.getElementById('save-btn');
+const syncBtn       = document.getElementById('sync-btn');
+const captureBtn    = document.getElementById('capture-btn');
+const addPageBtn    = document.getElementById('add-page-btn');
 const captureNameEl = document.getElementById('capture-name');
 const captureCatEl  = document.getElementById('capture-category');
 const capturedList  = document.getElementById('captured-list');
+const toggleKeyBtn  = document.getElementById('toggle-key');
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let currentTab   = null;   // active Chrome tab
-let lastCaptured = null;   // source key of last captured account (for "add another page")
+let currentTab   = null;
+let lastCaptured = null;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function setStatus(msg, { loading = false, error = false, success = false } = {}) {
   statusText.textContent = msg;
   spinnerEl.classList.toggle('hidden', !loading);
-  statusBox.classList.toggle('error',   error);
-  statusBox.classList.toggle('success', success && !error);
-  if (!error && !success) statusBox.classList.remove('error', 'success');
+  statusBox.classList.remove('error', 'success');
+  if (error)   statusBox.classList.add('error');
+  if (success) statusBox.classList.add('success');
 }
 
 function switchTab(name) {
@@ -31,11 +32,10 @@ function switchTab(name) {
   });
 }
 
-function toggleKeyVis() {
-  const isPass = apiKeyEl.type === 'password';
-  apiKeyEl.type = isPass ? 'text' : 'password';
-  document.getElementById('toggle-key').textContent = isPass ? 'Hide' : 'Show';
-}
+// Wire up tab clicks
+['capture', 'accounts', 'settings'].forEach(name => {
+  document.getElementById('tab-' + name).addEventListener('click', () => switchTab(name));
+});
 
 function domainFromUrl(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); }
@@ -43,10 +43,13 @@ function domainFromUrl(url) {
 }
 
 function guessName(tab) {
-  // Strip generic suffixes from page title
-  const title = (tab.title || '').replace(/[-|–—]\s*(log.?in|sign.?in|home|dashboard|account|my account|overview).*/i, '').trim();
+  const title = (tab.title || '')
+    .replace(/[-|–—]\s*(log.?in|sign.?in|home|dashboard|account|my account|overview).*/i, '')
+    .trim();
   if (title && title.length > 2 && title.length < 50) return title;
-  return domainFromUrl(tab.url).split('.')[0].replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return domainFromUrl(tab.url).split('.')[0]
+    .replace(/[-_]/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function guessCategory(url) {
@@ -67,14 +70,19 @@ function renderCapturedList(captured) {
     return;
   }
   capturedList.innerHTML = entries.map(([source, info]) => `
-    <div class="captured-item">
+    <div class="captured-item" data-source="${source}">
       <div style="flex:1;min-width:0">
         <div class="captured-item-name">${info.name}</div>
-        <div class="captured-item-cat">${info.category} · ${info.urls ? info.urls.length : 0} page(s)</div>
+        <div class="captured-item-cat">${info.category} · ${(info.urls || []).length} page(s)</div>
       </div>
-      <button class="captured-item-del" title="Remove" onclick="removeCaptured('${source}')">×</button>
+      <button class="captured-item-del" data-source="${source}" title="Remove">×</button>
     </div>
   `).join('');
+
+  // Event delegation for delete buttons
+  capturedList.querySelectorAll('.captured-item-del').forEach(btn => {
+    btn.addEventListener('click', () => removeCaptured(btn.dataset.source));
+  });
 }
 
 function removeCaptured(source) {
@@ -88,28 +96,32 @@ function removeCaptured(source) {
 // ── Init ─────────────────────────────────────────────────────────────────────
 chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
   currentTab = tab;
-  if (!tab) return;
 
-  // Populate site preview
-  const domain = domainFromUrl(tab.url);
-  document.getElementById('site-domain').textContent = domain;
+  const isWebPage = tab && tab.url && (tab.url.startsWith('http://') || tab.url.startsWith('https://'));
+
+  if (!isWebPage) {
+    document.getElementById('site-favicon').textContent = '⚠️';
+    document.getElementById('site-domain').textContent  = 'Navigate to a web page first';
+    document.getElementById('site-url').textContent     = 'Open an account site in this tab, then click Capture';
+    captureBtn.disabled = true;
+    return;
+  }
+
+  document.getElementById('site-domain').textContent = domainFromUrl(tab.url);
   document.getElementById('site-url').textContent    = tab.url;
-  document.getElementById('site-favicon').textContent = '🌐';
-
-  // Auto-fill name and category
   captureNameEl.value = guessName(tab);
-  const guessedCat    = guessCategory(tab.url);
-  const catOpts       = Array.from(captureCatEl.options);
-  const match         = catOpts.find(o => o.value === guessedCat);
-  if (match) captureCatEl.value = guessedCat;
+
+  const guessedCat = guessCategory(tab.url);
+  Array.from(captureCatEl.options).forEach(o => {
+    if (o.value === guessedCat) captureCatEl.value = guessedCat;
+  });
 });
 
-// Load status + api key + captured accounts
+// Load saved state
 chrome.runtime.sendMessage({ action: 'get_status' }, ({ api_key, sync_status, captured_accounts } = {}) => {
   if (api_key) {
     apiKeyEl.value = api_key;
     setStatus(sync_status || 'Ready');
-    captureBtn.disabled = false;
   } else {
     setStatus('Set your API key in Settings to get started');
     captureBtn.disabled = true;
@@ -119,22 +131,25 @@ chrome.runtime.sendMessage({ action: 'get_status' }, ({ api_key, sync_status, ca
 });
 
 // ── Capture ──────────────────────────────────────────────────────────────────
-captureBtn.addEventListener('click', async () => {
+captureBtn.addEventListener('click', () => {
   const name = captureNameEl.value.trim();
   if (!name) { setStatus('Enter an account name first', { error: true }); return; }
-  if (!currentTab) { setStatus('No active tab found', { error: true }); return; }
+  if (!currentTab || !currentTab.url.startsWith('http')) {
+    setStatus('Navigate to a web page first', { error: true });
+    return;
+  }
 
-  captureBtn.disabled = true;
-  captureBtn.textContent = '⏳ Capturing…';
+  captureBtn.disabled        = true;
+  captureBtn.textContent     = '⏳ Capturing…';
   setStatus('Reading page…', { loading: true });
 
   chrome.runtime.sendMessage({
     action:   'capture_tab',
     tabId:    currentTab.id,
-    name:     name,
+    name,
     category: captureCatEl.value,
   }, (resp) => {
-    captureBtn.disabled  = false;
+    captureBtn.disabled    = false;
     captureBtn.textContent = '📸 Capture this page';
 
     if (resp?.error) {
@@ -143,21 +158,18 @@ captureBtn.addEventListener('click', async () => {
     }
 
     lastCaptured = resp.source;
-    setStatus(`✓ "${name}" captured — AI is extracting fields`, { success: true });
-
-    // Show "add another page" button and refresh captured list
+    setStatus(`✓ "${name}" captured — fields being extracted`, { success: true });
     addPageBtn.style.display = 'block';
+
     chrome.storage.local.get('captured_accounts', ({ captured_accounts = {} }) => {
       renderCapturedList(captured_accounts);
     });
   });
 });
 
-// "Add another page" — navigates to same account, adds current page's URL
 addPageBtn.addEventListener('click', () => {
-  if (!lastCaptured || !currentTab) return;
-  const name = captureNameEl.value.trim();
-  captureBtn.click(); // reuses same name/category, appends new URL
+  if (!currentTab) return;
+  captureBtn.click();
 });
 
 // ── Sync ─────────────────────────────────────────────────────────────────────
@@ -188,3 +200,9 @@ saveBtn.addEventListener('click', () => {
 });
 
 apiKeyEl.addEventListener('keydown', e => { if (e.key === 'Enter') saveBtn.click(); });
+
+toggleKeyBtn.addEventListener('click', () => {
+  const isPass = apiKeyEl.type === 'password';
+  apiKeyEl.type = isPass ? 'text' : 'password';
+  toggleKeyBtn.textContent = isPass ? 'Hide' : 'Show';
+});
