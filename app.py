@@ -406,7 +406,21 @@ Rules:
 - value: exact current value — if empty or a login prompt, skip the field entirely
 - Each concept ONCE, no duplicates
 - Max 15 fields
-- If you find zero fields that pass the hard-exclude test, return an empty array []"""
+- If you find zero fields that pass the hard-exclude test, return an empty array []
+
+ORDERING — sort fields in this exact priority order (most important first):
+1. Account status or tier (Gold, Platinum, Diamond, etc.)
+2. Primary balance, points, or miles total
+3. Secondary balances, credits, or certificates
+4. Progress toward goals or next tier
+5. Expiration dates for points, status, or benefits
+6. Upcoming reservations or bookings
+7. Payment info (balance due, due date, autopay status)
+8. Account metadata (member since, account type)
+9. Personal identifiers (member number, account number, loyalty ID)
+10. Contact and personal info (name, email, phone, address, passport)
+
+The FIRST field in the array becomes the hero display — make it the most meaningful thing about this account."""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
     """Use Gemini Flash to identify all useful data fields in a page."""
