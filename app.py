@@ -1613,6 +1613,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 
 <div class="main-content">
   {onboarding_banner}
+  {reauth_banner}
   <div id="twofa-banner" style="display:none;padding:0 24px 0"></div>
   {welcome_state}
 
@@ -3394,6 +3395,7 @@ def dashboard():
 
     cards_html = ""
     total_expiring = 0
+    login_required_accounts = []
 
     for cat in _cat_order:
         grid_cards = ""
@@ -3455,6 +3457,7 @@ def dashboard():
                     f'</div>'
                 )
                 status_color = "#ef4444"
+                login_required_accounts.append(display_name)
             elif synced_at:
                 # Check discovery_failed flag or time-based stale fallback
                 _disc_info = discovered_by_source.get(src, {})
@@ -3620,6 +3623,25 @@ def dashboard():
         '</div>'
     )
 
+    # Build re-auth banner if any accounts need re-login
+    if login_required_accounts:
+        _n = len(login_required_accounts)
+        _names_html = ", ".join(f"<strong>{he(n)}</strong>" for n in login_required_accounts)
+        _acct_word = "account" if _n == 1 else "accounts"
+        reauth_banner = (
+            f'<div style="margin:12px 24px 0;background:#fef2f2;border:1px solid rgba(239,68,68,0.25);'
+            f'border-radius:10px;padding:11px 14px;display:flex;align-items:center;gap:10px">'
+            f'<span style="font-size:15px">🔐</span>'
+            f'<span style="flex:1;font-size:12.5px;color:#991b1b;line-height:1.45">'
+            f'<strong>{_n} {_acct_word} need re-authentication:</strong> {_names_html} — '
+            f'log in to each site in Chrome, then click ↻ to re-sync.</span>'
+            f'<button onclick="this.closest(\'div\').remove()" style="background:none;border:none;'
+            f'cursor:pointer;color:#ef4444;font-size:16px;line-height:1;padding:0 2px" title="Dismiss">×</button>'
+            f'</div>'
+        )
+    else:
+        reauth_banner = ""
+
     _csrf = get_csrf_token()
     return (DASHBOARD_HTML
             .replace("{_SIDEBAR_}",               _sidebar_html('dashboard', user["email"], _csrf))
@@ -3635,6 +3657,7 @@ def dashboard():
             .replace("{feed_col_hidden}",         feed_col_hidden)
             .replace("{welcome_state}",           welcome_state)
             .replace("{onboarding_banner}",       onboarding_banner)
+            .replace("{reauth_banner}",           reauth_banner)
             .replace("{account_data_html}",       account_data_html)
             .replace("{csrf_token}",              _csrf))
 
@@ -4818,6 +4841,9 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
         <button class="modal-close" style="margin-left:auto" onclick="closeModal()">✕</button>
       </div>
       <div class="modal-cred-body">
+        <div id="modal-login-hint" style="display:none;background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#92400e;line-height:1.5">
+          💡 <strong>Log in first:</strong> Make sure you're signed into <span id="modal-hint-site"></span> in Chrome before saving — the extension uses your active browser session to sync account data.
+        </div>
         <input type="text" id="modal-u" placeholder="Username or email" autocomplete="off">
         <input type="password" id="modal-p" placeholder="Password" autocomplete="new-password">
         <details style="margin-top:10px">
@@ -4827,6 +4853,23 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
         </details>
         <button class="btn-save" style="width:100%;margin-top:16px" onclick="saveModalCred()">Save & Sync</button>
       </div>
+    </div>
+
+    <!-- Screen 3: sync progress -->
+    <div id="screen-progress" style="display:none;flex-direction:column;flex:1;align-items:center;justify-content:center;padding:40px 32px;gap:16px">
+      <div style="font-size:15px;font-weight:700;color:#1c1917;margin-bottom:8px" id="sync-progress-title">Connecting account…</div>
+      <div style="width:100%;max-width:300px;display:flex;flex-direction:column;gap:12px">
+        <div id="sync-step-1" data-label="Saving credentials" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
+          <span style="margin-right:6px">○</span>Saving credentials
+        </div>
+        <div id="sync-step-2" data-label="Syncing account" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
+          <span style="margin-right:6px">○</span>Syncing account
+        </div>
+        <div id="sync-step-3" data-label="Discovering fields" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
+          <span style="margin-right:6px">○</span>Discovering fields
+        </div>
+      </div>
+      <div id="sync-progress-error" style="display:none;margin-top:8px;font-size:12px;color:#ef4444;text-align:center"></div>
     </div>
 
   </div>
@@ -4858,6 +4901,14 @@ function openModal() {{
 }}
 function closeModal() {{
   document.getElementById('modal-overlay').classList.remove('open');
+  // Reset progress screen for next use
+  ['sync-step-1','sync-step-2','sync-step-3'].forEach(function(id) {{
+    var el = document.getElementById(id);
+    if (el) {{ el.innerHTML = '<span style="margin-right:6px">○</span>' + el.dataset.label; el.style.color='#9ca3af'; el.style.fontWeight='500'; }}
+  }});
+  var err = document.getElementById('sync-progress-error');
+  if (err) {{ err.style.display = 'none'; err.textContent = ''; }}
+  document.getElementById('screen-progress').style.display = 'none';
 }}
 function overlayClick(e) {{
   if (e.target === document.getElementById('modal-overlay')) closeModal();
@@ -4889,42 +4940,78 @@ function openCredForm(key, name, icon, color) {{
   document.getElementById('modal-u').value = '';
   document.getElementById('modal-p').value = '';
   if (document.getElementById('modal-t')) document.getElementById('modal-t').value = '';
+  // Show "log in first" hint
+  var hint = document.getElementById('modal-login-hint');
+  var hintSite = document.getElementById('modal-hint-site');
+  if (hint && hintSite) {{
+    hintSite.textContent = name;
+    hint.style.display = 'block';
+  }}
   document.getElementById('screen-picker').style.display = 'none';
   document.getElementById('screen-cred').style.display = 'flex';
   document.getElementById('modal-u').focus();
 }}
 
 /* ── Save from modal ──────────────────────────────── */
+function _setStep(step, state) {{
+  // state: 'active' | 'done' | 'error'
+  var el = document.getElementById('sync-step-' + step);
+  if (!el) return;
+  var icons = {{'active':'<span style="display:inline-block;animation:spin 1s linear infinite">↻</span>','done':'✓','error':'✗'}};
+  var colors = {{'active':'#6366f1','done':'#16a34a','error':'#ef4444'}};
+  el.innerHTML = '<span style="color:' + colors[state] + ';margin-right:6px">' + icons[state] + '</span>' + el.dataset.label;
+  el.style.color = state === 'active' ? '#374151' : (state === 'done' ? '#16a34a' : '#ef4444');
+  el.style.fontWeight = state === 'active' ? '600' : '500';
+}}
+
 function saveModalCred() {{
   var u = document.getElementById('modal-u').value.trim();
   var p = document.getElementById('modal-p').value;
   var t = document.getElementById('modal-t') ? document.getElementById('modal-t').value.trim() : '';
   if (!u || !p) {{ toast('Username and password required', false); return; }}
-  var btn = document.querySelector('#screen-cred .btn-save');
-  btn.textContent = 'Saving & syncing...'; btn.disabled = true;
+
+  // Switch to progress screen
+  document.getElementById('screen-cred').style.display = 'none';
+  document.getElementById('screen-progress').style.display = 'flex';
+  _setStep(1, 'active');
+
   fetch('/credentials/save', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
     body: new URLSearchParams({{_csrf: CSRF, source: _modalKey, username: u, password: p, totp_secret: t}})
   }}).then(r => r.json()).then(d => {{
-    if (d.ok) {{
-      toast('Saved — syncing...');
-      closeModal();
-      fetch('/sync/account/' + _modalKey, {{
-        method: 'POST',
-        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-        body: new URLSearchParams({{_csrf: CSRF}})
-      }}).then(function() {{
-        var poll = setInterval(function() {{
-          fetch('/sync/status').then(r => r.json()).then(function(s) {{
-            if (!s.running) {{ clearInterval(poll); location.reload(); }}
-          }});
-        }}, 3000);
-      }});
-    }} else {{
-      toast(d.error || 'Error', false);
-      btn.textContent = 'Save & Sync'; btn.disabled = false;
+    if (!d.ok) {{
+      _setStep(1, 'error');
+      document.getElementById('sync-progress-error').textContent = d.error || 'Failed to save credentials';
+      document.getElementById('sync-progress-error').style.display = 'block';
+      return;
     }}
+    _setStep(1, 'done');
+    _setStep(2, 'active');
+    fetch('/sync/account/' + _modalKey, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+      body: new URLSearchParams({{_csrf: CSRF}})
+    }}).then(function() {{
+      var poll = setInterval(function() {{
+        fetch('/sync/status').then(r => r.json()).then(function(s) {{
+          if (s.step === 'discovering fields') {{
+            _setStep(2, 'done');
+            _setStep(3, 'active');
+          }}
+          if (!s.running) {{
+            clearInterval(poll);
+            _setStep(2, 'done');
+            _setStep(3, 'done');
+            setTimeout(function() {{ closeModal(); location.reload(); }}, 800);
+          }}
+        }});
+      }}, 2000);
+    }});
+  }}).catch(function() {{
+    _setStep(1, 'error');
+    document.getElementById('sync-progress-error').textContent = 'Request failed — try again';
+    document.getElementById('sync-progress-error').style.display = 'block';
   }});
 }}
 
@@ -5484,21 +5571,34 @@ def api_data_sync():
     icon       = data.get("icon", "?")
     color      = data.get("color", "#f0f0f0")
     raw_text   = data.get("raw_text", "") or body.get("raw_text", "")
+    sync_source = (body.get("sync_source") or data.get("sync_source") or "railway").lower()
+
+    db = get_db()
+    existing_row = db.execute(
+        "SELECT data_enc, synced_at FROM account_data WHERE user_id=? AND source=?",
+        (user["id"], source)
+    ).fetchone()
+    ex_data = decrypt_account_data(user["id"], existing_row["data_enc"] or "") if existing_row else {}
+
+    # Extension-first: if Railway is trying to sync but extension already has fresh good data, skip
+    if sync_source == "railway" and ex_data.get("sync_status") == "ok" \
+            and ex_data.get("sync_source") == "extension" and existing_row:
+        try:
+            import datetime as _dt
+            age_h = (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(
+                existing_row["synced_at"].rstrip("Z"))).total_seconds() / 3600
+            if age_h < 2:
+                print(f"[Mighty] Railway skipping {source} — extension synced {age_h:.1f}h ago", flush=True)
+                return jsonify({"ok": True, "skipped": True, "reason": "extension_synced_recently"})
+        except Exception:
+            pass
 
     # Detect login-page redirects before storing
     if _is_login_page(raw_text):
         # Don't overwrite good existing data with a failed login-page scrape
-        db = get_db()
-        existing = db.execute(
-            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
-            (user["id"], source)
-        ).fetchone()
-        if existing:
-            ex_data = decrypt_account_data(user["id"], existing["data_enc"] or "")
-            if ex_data.get("sync_status") == "ok":
-                print(f"[Mighty] Skipping login-page overwrite for {source} — good data exists", flush=True)
-                return jsonify({"ok": True, "skipped": True,
-                                "reason": "login_page_but_good_data_exists"})
+        if ex_data.get("sync_status") == "ok":
+            print(f"[Mighty] Skipping login-page overwrite for {source} — good data exists", flush=True)
+            return jsonify({"ok": True, "skipped": True, "reason": "login_page_but_good_data_exists"})
         data["sync_status"] = "login_required"
         data["items"] = []
         raw_text = ""
@@ -5507,6 +5607,8 @@ def api_data_sync():
         data["sync_status"] = "no_data"
     else:
         data["sync_status"] = "ok"
+
+    data["sync_source"] = sync_source
 
     data_enc   = encrypt_account_data(user["id"], data)
 

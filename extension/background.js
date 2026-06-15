@@ -321,8 +321,9 @@ async function syncAccount(apiKey, account, urls) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        api_key: apiKey,
-        source: account.source,
+        api_key:     apiKey,
+        source:      account.source,
+        sync_source: 'extension',
         data: {
           name:     account.name,
           icon:     account.icon,
