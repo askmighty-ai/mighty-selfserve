@@ -1528,6 +1528,11 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .btn-sync:hover{border-color:#6366f1;color:#6366f1}
 @keyframes spin-sync{to{transform:rotate(360deg)}}
 .btn-sync.syncing #sync-icon{animation:spin-sync 0.8s linear infinite}
+.btn-sync.rediscovering{border-color:#6366f1;color:#6366f1;background:#f5f3ff}
+.btn-sync.rediscovering #rediscover-icon{animation:spin-sync 0.9s linear infinite}
+#mighty-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(0);background:#1c1917;color:#fff;font-size:13px;font-weight:500;padding:10px 18px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.18);z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.2s,transform 0.2s}
+#mighty-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#mighty-toast.hide{opacity:0;transform:translateX(-50%) translateY(8px)}
 /* Feed tabs */
 .feed-tabs{display:flex;gap:0;background:#e4dfd8;border:0.5px solid #d5cfc8;border-radius:9px;padding:3px;width:fit-content}
 .feed-tab{padding:5px 18px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:600;color:#7d7670;cursor:pointer;transition:all 0.12s;font-family:inherit}
@@ -1653,7 +1658,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       {pending_count} awaiting decision
     </div>
     <button id="rediscover-btn" onclick="rediscoverAll()" class="btn-sync" title="Re-extract fields from existing account data">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <svg id="rediscover-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       <span id="rediscover-label">Re-discover</span>
     </button>
     <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Refresh all account data">
@@ -1661,6 +1666,8 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       <span id="sync-label">Sync All</span>
     </button>
   </div>
+
+  <div id="mighty-toast"></div>
 
   <div class="page-body" {feed_col_hidden}>
     <input type="hidden" name="_csrf" value="{csrf_token}">
@@ -1912,29 +1919,43 @@ function _setSyncLabel(text) {
   var lbl = document.getElementById('sync-label');
   if (lbl) lbl.textContent = text;
 }
+function _showToast(msg, duration) {
+  var t = document.getElementById('mighty-toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.className = 'show';
+  setTimeout(function(){ t.className = 'hide'; }, (duration || 3000) - 200);
+  setTimeout(function(){ t.className = ''; }, duration || 3000);
+}
 function rediscoverAll() {
   var btn = document.getElementById('rediscover-btn');
   var lbl = document.getElementById('rediscover-label');
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   btn.disabled = true;
-  lbl.textContent = 'Working…';
+  btn.classList.add('rediscovering');
+  lbl.textContent = 'Re-discovering…';
   fetch('/api/data/rediscover-all', {method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},
     body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
       document.querySelector('input[name="_csrf"]').value : '')
   }).then(function(r){return r.json();}).then(function(d){
     if (d.ok) {
-      lbl.textContent = 'Running…';
+      _showToast('Re-discovering fields across ' + d.sources + ' account' + (d.sources !== 1 ? 's' : '') + '…', 4000);
       setTimeout(function(){
+        btn.classList.remove('rediscovering');
         lbl.textContent = 'Re-discover';
         btn.disabled = false;
         reloadWithScroll();
       }, 20000);
     } else {
+      _showToast('Re-discover failed — try again', 3000);
+      btn.classList.remove('rediscovering');
       lbl.textContent = 'Re-discover';
       btn.disabled = false;
     }
   }).catch(function(){
+    _showToast('Re-discover failed — try again', 3000);
+    btn.classList.remove('rediscovering');
     lbl.textContent = 'Re-discover';
     btn.disabled = false;
   });
