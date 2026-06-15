@@ -191,28 +191,7 @@ async function captureCurrentTab(tabId, name, category) {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) throw new Error('No API key configured');
 
-  // Push to Mighty backend
-  const resp = await fetch(`${MIGHTY_URL}/api/extension/capture`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': api_key },
-    body: JSON.stringify({ name, category, url, raw_text: rawText, synced_at: new Date().toISOString() }),
-  });
-  if (!resp.ok) throw new Error(`Server error ${resp.status}`);
-  const data = await resp.json();
-  const source = data.source;
-
-  // Save URL in local storage for future auto-syncs
-  const { captured_accounts = {} } = await chrome.storage.local.get('captured_accounts');
-  if (!captured_accounts[source]) {
-    captured_accounts[source] = { name, category, urls: [] };
-  }
-  captured_accounts[source].name     = name;
-  captured_accounts[source].category = category;
-  if (url && !captured_accounts[source].urls.includes(url)) {
-    captured_accounts[source].urls.push(url);
-  }
-  await chrome.storage.local.set({ captured_accounts });
-
+  const source = await _pushCapture(api_key, name, category, url, rawText);
   console.log(`[Mighty] Captured "${name}" (${rawText.length} chars) → ${source}`);
   return { source };
 }
@@ -268,6 +247,148 @@ async function resyncCaptured(apiKey, source, info) {
     }),
   });
   if (!resp.ok) throw new Error(`Server error ${resp.status}`);
+}
+
+// ── Auto-capture: watch tabs as user browses ──────────────────────────────────
+
+// URL path patterns that suggest a logged-in account page
+const _ACCOUNT_PATH_RE = /\/(my[-_]?account|myaccount|account[-_/]|dashboard|my[-_]?profile|profile\/|loyalty|rewards|member[-_/]|membership|portal|billing|overview|summary|wallet|benefits|perks|certificates|ecredits|statement|transactions)/i;
+
+// URL patterns that indicate a login/auth page — skip these
+const _LOGIN_PATH_RE = /\/(login|log[-_]in|signin|sign[-_]in|auth\/|sso\/|oauth|forgot|reset[-_]password|register|signup|sign[-_]up|create[-_]account)/i;
+
+// Domains belonging to known scheduled accounts — don't auto-capture (already synced)
+const _KNOWN_DOMAINS = new Set(
+  Object.values(ACCOUNT_URLS)
+    .flat()
+    .map(u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } })
+    .filter(Boolean)
+);
+
+// In-memory debounce: url → ms timestamp of last auto-capture
+const _autoCaptureRecent = new Map();
+const _AUTO_COOLDOWN_MS  = 60 * 60 * 1000; // 1 hour per URL
+
+function _guessCategory(url) {
+  const u = url.toLowerCase();
+  if (/delta|united|southwest|american.?air|alaska.?air|marriott|hilton|hyatt|ihg|wyndham|hertz|hotel|airline|flight/.test(u)) return 'Travel';
+  if (/amex|chase|wellsfargo|bankofamerica|capitalone|discover|citi|paypal|fidelity|schwab|bank|credit/.test(u)) return 'Banking & Finance';
+  if (/xfinity|att|verizon|t-mobile|tmobile|comcast|spectrum|utility|electric|gas|water/.test(u)) return 'Utilities & Telecom';
+  if (/amazon|target|walmart|costco|shop|store|retail/.test(u)) return 'Shopping';
+  if (/netflix|hulu|spotify|disney|hbo|max|peacock|paramount|ticket/.test(u)) return 'Entertainment';
+  if (/health|hospital|clinic|doctor|pharmacy|cvs|walgreen|kaiser|pamf|mychart/.test(u)) return 'Health';
+  return 'Other';
+}
+
+function _nameFromTab(tab) {
+  const title = (tab.title || '')
+    .replace(/[-|–—]\s*(log.?in|sign.?in|home|dashboard|account|my account|overview).*/i, '')
+    .replace(/\s*[-|]\s*.*$/, '')   // strip "Site Name - Tagline"
+    .trim();
+  if (title && title.length > 1 && title.length < 60) return title;
+  try {
+    return new URL(tab.url).hostname
+      .replace(/^www\./, '').split('.')[0]
+      .replace(/[-_]/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase());
+  } catch { return 'Unknown'; }
+}
+
+async function _pushCapture(apiKey, name, category, url, rawText) {
+  const resp = await fetch(`${MIGHTY_URL}/api/extension/capture`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+    body:    JSON.stringify({ name, category, url, raw_text: rawText, synced_at: new Date().toISOString() }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json();
+
+  // Save URL in local storage for future scheduled re-syncs
+  const { captured_accounts = {} } = await chrome.storage.local.get('captured_accounts');
+  const source = data.source;
+  if (!captured_accounts[source]) captured_accounts[source] = { name, category, urls: [] };
+  captured_accounts[source].name     = name;
+  captured_accounts[source].category = category;
+  if (url && !captured_accounts[source].urls.includes(url)) captured_accounts[source].urls.push(url);
+  await chrome.storage.local.set({ captured_accounts });
+  return source;
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete') return;
+  if (!tab.url || !tab.url.startsWith('http')) return;
+
+  // Must look like an account page
+  if (!_ACCOUNT_PATH_RE.test(tab.url)) return;
+
+  // Must not look like a login page
+  if (_LOGIN_PATH_RE.test(tab.url)) return;
+
+  // Skip known scheduled accounts (delta, marriott, etc.)
+  try {
+    const domain = new URL(tab.url).hostname.replace(/^www\./, '');
+    if (_KNOWN_DOMAINS.has(domain)) return;
+  } catch { return; }
+
+  // Debounce: skip if captured recently
+  const last = _autoCaptureRecent.get(tab.url);
+  if (last && Date.now() - last < _AUTO_COOLDOWN_MS) return;
+
+  // Kick off async capture without blocking the listener
+  _autoCapturePage(tabId, tab).catch(() => {});
+});
+
+async function _autoCapturePage(tabId, tab) {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+
+  // Give SPA a moment to render content
+  await sleep(3_500);
+
+  // Extract text and check for login signals in one injection
+  let extracted;
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const hasPassword  = !!document.querySelector('input[type="password"]');
+        const text         = document.body?.innerText || '';
+        const lower        = text.slice(0, 2000).toLowerCase();
+        const loginSignals = ['sign in', 'log in', 'create account', 'forgot password', 'enter your password']
+          .filter(s => lower.includes(s)).length;
+        return { text, hasPassword, loginSignals };
+      },
+    });
+    extracted = r?.result;
+  } catch { return; }
+
+  if (!extracted) return;
+  const { text, hasPassword, loginSignals } = extracted;
+
+  // Skip login pages
+  if (hasPassword || loginSignals >= 2) return;
+
+  // Skip pages with too little content
+  if (!text || text.length < 400) return;
+
+  // Mark debounce before async work to avoid duplicate triggers
+  _autoCaptureRecent.set(tab.url, Date.now());
+
+  const name     = _nameFromTab(tab);
+  const category = _guessCategory(tab.url);
+
+  try {
+    await _pushCapture(api_key, name, category, tab.url, text);
+    console.log(`[Mighty] Auto-captured: "${name}" (${text.length} chars) from ${tab.url}`);
+
+    // Flash badge briefly so user knows something happened
+    chrome.action.setBadgeText({ text: '●' });
+    chrome.action.setBadgeBackgroundColor({ color: '#059669' });
+    setTimeout(() => chrome.action.setBadgeText({ text: '' }), 4_000);
+  } catch (e) {
+    _autoCaptureRecent.delete(tab.url); // allow retry
+    console.warn(`[Mighty] Auto-capture failed for ${tab.url}:`, e.message);
+  }
 }
 
 // Sites that need a warm-up page visit before the real account URL,
