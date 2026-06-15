@@ -82,10 +82,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     runSync()
       .then(() => sendResponse({ ok: true }))
       .catch(e => sendResponse({ error: e.message }));
-    return true; // keep channel open for async response
+    return true;
   }
   if (msg.action === 'get_status') {
-    chrome.storage.local.get(['last_sync', 'sync_status', 'api_key'], sendResponse);
+    chrome.storage.local.get(['last_sync', 'sync_status', 'api_key', 'captured_accounts'], sendResponse);
+    return true;
+  }
+  if (msg.action === 'capture_tab') {
+    captureCurrentTab(msg.tabId, msg.name, msg.category)
+      .then(r => sendResponse({ ok: true, source: r.source }))
+      .catch(e => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (msg.action === 'remove_captured') {
+    chrome.storage.local.get('captured_accounts', ({ captured_accounts = {} }) => {
+      delete captured_accounts[msg.source];
+      chrome.storage.local.set({ captured_accounts }, () => sendResponse({ ok: true }));
+    });
     return true;
   }
 });
@@ -114,12 +127,16 @@ async function runSync() {
     return;
   }
 
-  if (!accounts.length) {
+  // Also load captured (custom) accounts from local storage
+  const { captured_accounts = {} } = await chrome.storage.local.get('captured_accounts');
+  const capturedList = Object.entries(captured_accounts);
+
+  if (!accounts.length && !capturedList.length) {
     await setStatus('No connected accounts found in dashboard');
     return;
   }
 
-  console.log(`[Mighty] Syncing ${accounts.length} accounts…`);
+  console.log(`[Mighty] Syncing ${accounts.length} accounts + ${capturedList.length} captured…`);
   let ok = 0, failed = 0;
 
   for (const account of accounts) {
@@ -138,11 +155,119 @@ async function runSync() {
     }
   }
 
+  // Re-sync captured accounts by re-visiting their saved URLs
+  for (const [source, info] of capturedList) {
+    if (!info.urls || !info.urls.length) continue;
+    console.log(`[Mighty] Re-syncing captured: ${info.name} (${info.urls.length} URL(s))`);
+    try {
+      await resyncCaptured(api_key, source, info);
+      ok++;
+    } catch (e) {
+      console.error(`[Mighty] Failed captured ${info.name}:`, e.message);
+      failed++;
+    }
+  }
+
   const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const msg = `Synced at ${ts} — ${ok} ok${failed ? `, ${failed} failed` : ''}`;
   await chrome.storage.local.set({ last_sync: new Date().toISOString() });
   await setStatus(msg);
   console.log('[Mighty]', msg);
+}
+
+// ── Capture mode ─────────────────────────────────────────────────────────────
+
+async function captureCurrentTab(tabId, name, category) {
+  const tab = await chrome.tabs.get(tabId);
+  const url = tab.url;
+
+  // Extract page text
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: extractPageText,
+  });
+  const rawText = result?.result || '';
+
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) throw new Error('No API key configured');
+
+  // Push to Mighty backend
+  const resp = await fetch(`${MIGHTY_URL}/api/extension/capture`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': api_key },
+    body: JSON.stringify({ name, category, url, raw_text: rawText, synced_at: new Date().toISOString() }),
+  });
+  if (!resp.ok) throw new Error(`Server error ${resp.status}`);
+  const data = await resp.json();
+  const source = data.source;
+
+  // Save URL in local storage for future auto-syncs
+  const { captured_accounts = {} } = await chrome.storage.local.get('captured_accounts');
+  if (!captured_accounts[source]) {
+    captured_accounts[source] = { name, category, urls: [] };
+  }
+  captured_accounts[source].name     = name;
+  captured_accounts[source].category = category;
+  if (url && !captured_accounts[source].urls.includes(url)) {
+    captured_accounts[source].urls.push(url);
+  }
+  await chrome.storage.local.set({ captured_accounts });
+
+  console.log(`[Mighty] Captured "${name}" (${rawText.length} chars) → ${source}`);
+  return { source };
+}
+
+async function resyncCaptured(apiKey, source, info) {
+  const allTexts = [];
+  const win = await chrome.windows.create({
+    url: info.urls[0],
+    type: 'popup',
+    width: 800,
+    height: 600,
+  });
+  chrome.windows.update(win.id, { state: 'minimized' });
+  const tabId = win.tabs[0].id;
+
+  try {
+    for (let i = 0; i < info.urls.length; i++) {
+      if (i > 0) {
+        await chrome.tabs.update(tabId, { url: info.urls[i] });
+      }
+      await waitForTabLoad(tabId, 20_000);
+      await sleep(SETTLE_MS.default);
+
+      let result;
+      try {
+        [result] = await chrome.scripting.executeScript({ target: { tabId }, func: extractPageText });
+      } catch (_) {
+        await sleep(4_000);
+        try { [result] = await chrome.scripting.executeScript({ target: { tabId }, func: extractPageText }); }
+        catch (_) { result = undefined; }
+      }
+      const text = result?.result || '';
+      if (text.length >= 100) {
+        allTexts.push(`\n\n--- ${info.urls[i]} ---\n${text}`);
+        console.log(`[Mighty] ${info.name} captured page ${i + 1}: ${text.length} chars`);
+      }
+    }
+  } finally {
+    chrome.windows.remove(win.id).catch(() => {});
+  }
+
+  if (!allTexts.length) throw new Error('No page text captured');
+
+  const resp = await fetch(`${MIGHTY_URL}/api/extension/capture`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+    body: JSON.stringify({
+      name:      info.name,
+      category:  info.category,
+      url:       info.urls[0],
+      raw_text:  allTexts.join('\n'),
+      synced_at: new Date().toISOString(),
+    }),
+  });
+  if (!resp.ok) throw new Error(`Server error ${resp.status}`);
 }
 
 // Sites that need a warm-up page visit before the real account URL,

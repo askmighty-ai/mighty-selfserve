@@ -7,7 +7,7 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      width: 300px;
+      width: 320px;
       background: #fff;
       color: #1a1a1a;
     }
@@ -15,31 +15,71 @@
     .header {
       background: #7c3aed;
       color: white;
-      padding: 14px 16px;
+      padding: 13px 16px;
       display: flex;
       align-items: center;
       gap: 10px;
     }
-    .header img { width: 24px; height: 24px; border-radius: 4px; }
-    .header-text h1 { font-size: 15px; font-weight: 600; }
-    .header-text p  { font-size: 11px; opacity: 0.8; margin-top: 1px; }
-
-    .body { padding: 14px 16px; }
+    .header img { width: 22px; height: 22px; border-radius: 4px; }
+    .header-text h1 { font-size: 14px; font-weight: 600; }
+    .header-text p  { font-size: 11px; opacity: 0.75; margin-top: 1px; }
 
     .status-box {
       background: #f5f3ff;
-      border: 1px solid #ede9fe;
-      border-radius: 8px;
-      padding: 10px 12px;
+      border-bottom: 1px solid #ede9fe;
+      padding: 9px 14px;
       font-size: 12px;
       color: #5b21b6;
-      margin-bottom: 14px;
-      min-height: 36px;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
+      min-height: 34px;
     }
     .status-box.error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+    .status-box.success { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .tab {
+      flex: 1;
+      padding: 9px 0;
+      font-size: 12px;
+      font-weight: 500;
+      color: #6b7280;
+      text-align: center;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab.active { color: #7c3aed; border-bottom-color: #7c3aed; }
+
+    /* ── Panels ── */
+    .panel { display: none; padding: 14px; }
+    .panel.active { display: block; }
+
+    /* ── Capture panel ── */
+    .site-preview {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .site-favicon {
+      width: 24px; height: 24px;
+      border-radius: 4px;
+      background: #e5e7eb;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; flex-shrink: 0;
+    }
+    .site-domain { font-size: 12px; color: #374151; font-weight: 500; }
+    .site-url    { font-size: 11px; color: #9ca3af; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
 
     label {
       font-size: 11px;
@@ -48,20 +88,21 @@
       text-transform: uppercase;
       letter-spacing: 0.04em;
       display: block;
-      margin-bottom: 5px;
+      margin-bottom: 4px;
     }
 
-    input[type="password"], input[type="text"] {
+    input[type="text"], select {
       width: 100%;
-      padding: 8px 10px;
+      padding: 7px 10px;
       border: 1px solid #d1d5db;
       border-radius: 6px;
       font-size: 13px;
       outline: none;
       transition: border-color 0.15s;
       margin-bottom: 10px;
+      background: #fff;
     }
-    input:focus { border-color: #7c3aed; box-shadow: 0 0 0 2px #ede9fe; }
+    input:focus, select:focus { border-color: #7c3aed; box-shadow: 0 0 0 2px #ede9fe; }
 
     .btn {
       width: 100%;
@@ -74,26 +115,60 @@
       transition: background 0.15s, opacity 0.15s;
       margin-bottom: 8px;
     }
-    .btn-primary { background: #7c3aed; color: white; }
+    .btn:last-child { margin-bottom: 0; }
+    .btn-primary  { background: #7c3aed; color: white; }
     .btn-primary:hover:not(:disabled) { background: #6d28d9; }
     .btn-secondary { background: #f3f4f6; color: #374151; }
     .btn-secondary:hover:not(:disabled) { background: #e5e7eb; }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-capture  { background: #059669; color: white; }
+    .btn-capture:hover:not(:disabled) { background: #047857; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-    .divider { border: none; border-top: 1px solid #f0f0f0; margin: 12px 0; }
+    /* ── Captured list ── */
+    .captured-list { display: flex; flex-direction: column; gap: 6px; }
+    .captured-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 7px;
+      font-size: 12px;
+    }
+    .captured-item-name { flex: 1; font-weight: 500; color: #111827; }
+    .captured-item-cat  { font-size: 11px; color: #9ca3af; }
+    .captured-item-del  {
+      background: none; border: none; cursor: pointer;
+      color: #d1d5db; font-size: 15px; line-height: 1; padding: 0 2px;
+      transition: color 0.15s;
+    }
+    .captured-item-del:hover { color: #ef4444; }
+
+    .empty-state { text-align: center; padding: 20px 0; color: #9ca3af; font-size: 12px; }
+
+    /* ── Settings panel ── */
+    .settings-row { margin-bottom: 10px; }
+    .api-key-field { position: relative; }
+    .api-key-field input { padding-right: 36px; margin-bottom: 0; }
+    .api-key-toggle {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; cursor: pointer; color: #9ca3af; font-size: 12px;
+    }
 
     .footer {
-      padding: 10px 16px 14px;
+      padding: 10px 14px 12px;
       display: flex;
       gap: 8px;
+      border-top: 1px solid #f0f0f0;
     }
     .footer a {
       flex: 1;
       text-align: center;
-      font-size: 12px;
+      font-size: 11.5px;
       color: #7c3aed;
       text-decoration: none;
-      padding: 7px;
+      padding: 6px;
       border: 1px solid #ede9fe;
       border-radius: 6px;
     }
@@ -101,16 +176,21 @@
 
     .spinner {
       display: inline-block;
-      width: 12px; height: 12px;
+      width: 11px; height: 11px;
       border: 2px solid #c4b5fd;
       border-top-color: #7c3aed;
       border-radius: 50%;
       animation: spin 0.7s linear infinite;
       flex-shrink: 0;
     }
+    .spinner.green { border-color: #bbf7d0; border-top-color: #059669; }
     @keyframes spin { to { transform: rotate(360deg); } }
-
     .hidden { display: none !important; }
+    .section-label {
+      font-size: 11px; font-weight: 600; color: #9ca3af;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
   </style>
 </head>
 <body>
@@ -118,27 +198,79 @@
     <img src="icons/icon48.png" alt="M">
     <div class="header-text">
       <h1>Mighty Sync</h1>
-      <p>Account dashboard syncer</p>
+      <p id="header-sub">Account dashboard syncer</p>
     </div>
   </div>
 
-  <div class="body">
-    <div class="status-box" id="status-box">
-      <span id="spinner" class="spinner hidden"></span>
-      <span id="status-text">Loading…</span>
+  <div class="status-box" id="status-box">
+    <span id="spinner" class="spinner hidden"></span>
+    <span id="status-text">Loading…</span>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" id="tab-capture" onclick="switchTab('capture')">Capture</div>
+    <div class="tab" id="tab-accounts" onclick="switchTab('accounts')">My Accounts</div>
+    <div class="tab" id="tab-settings" onclick="switchTab('settings')">Settings</div>
+  </div>
+
+  <!-- Capture panel -->
+  <div class="panel active" id="panel-capture">
+    <div class="site-preview" id="site-preview">
+      <div class="site-favicon" id="site-favicon">🌐</div>
+      <div style="min-width:0">
+        <div class="site-domain" id="site-domain">Loading…</div>
+        <div class="site-url" id="site-url"></div>
+      </div>
     </div>
 
-    <label>API Key</label>
-    <input type="password" id="api-key" placeholder="mk_…" autocomplete="off">
+    <div class="settings-row">
+      <label>Account name</label>
+      <input type="text" id="capture-name" placeholder="e.g. Chase Sapphire Reserve">
+    </div>
+
+    <div class="settings-row">
+      <label>Category</label>
+      <select id="capture-category">
+        <option>Banking & Finance</option>
+        <option>Travel</option>
+        <option>Utilities & Telecom</option>
+        <option>Shopping</option>
+        <option>Health</option>
+        <option>Entertainment</option>
+        <option selected>Other</option>
+      </select>
+    </div>
+
+    <button class="btn btn-capture" id="capture-btn">📸 Capture this page</button>
+    <button class="btn btn-secondary" id="add-page-btn" style="display:none">+ Add another page for this account</button>
+  </div>
+
+  <!-- Accounts panel -->
+  <div class="panel" id="panel-accounts">
+    <div class="section-label">Captured accounts</div>
+    <div class="captured-list" id="captured-list">
+      <div class="empty-state">No captured accounts yet.<br>Use the Capture tab to add one.</div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn btn-secondary" id="sync-btn">↻ Sync all now</button>
+    </div>
+  </div>
+
+  <!-- Settings panel -->
+  <div class="panel" id="panel-settings">
+    <div class="settings-row">
+      <label>API Key</label>
+      <div class="api-key-field">
+        <input type="password" id="api-key" placeholder="mk_…" autocomplete="off">
+        <button class="api-key-toggle" id="toggle-key" onclick="toggleKeyVis()">Show</button>
+      </div>
+    </div>
     <button class="btn btn-primary" id="save-btn">Save Key</button>
-    <button class="btn btn-secondary" id="sync-btn" disabled>Sync Now</button>
   </div>
-
-  <hr class="divider">
 
   <div class="footer">
-    <a href="https://mighty-selfserve-production.up.railway.app" target="_blank">Open Dashboard</a>
-    <a href="https://mighty-selfserve-production.up.railway.app/credentials" target="_blank">Manage Accounts</a>
+    <a href="https://mighty-selfserve-production.up.railway.app" target="_blank">Dashboard</a>
+    <a href="https://mighty-selfserve-production.up.railway.app/credentials" target="_blank">Accounts</a>
   </div>
 
   <script src="popup.js"></script>

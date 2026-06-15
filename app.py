@@ -3413,6 +3413,27 @@ def dashboard():
             _cat_map[cat] = []
         _cat_map[cat].append((key, name, icon, color))
 
+    # Also render custom (user-captured) accounts
+    _CUSTOM_COLORS = ["#f0f9ff","#f0fdf4","#fdf4ff","#fffbeb","#fef2f2","#f0fdfa"]
+    _ci = 0
+    for cr in cred_rows:
+        src = cr["source"]
+        if not src.startswith("custom_"):
+            continue
+        try:
+            ex = json.loads(decrypt_cred(user["id"], cr["extra_enc"] or "") or "{}")
+        except Exception:
+            ex = {}
+        c_name  = ex.get("display_name") or src.replace("custom_", "").replace("_", " ").title()
+        c_cat   = ex.get("category") or "Other"
+        c_icon  = ex.get("icon") or "📋"
+        c_color = ex.get("color") or _CUSTOM_COLORS[_ci % len(_CUSTOM_COLORS)]
+        _ci += 1
+        if c_cat not in _cat_map:
+            _cat_order.append(c_cat)
+            _cat_map[c_cat] = []
+        _cat_map[c_cat].append((src, c_name, c_icon, c_color))
+
     cards_html = ""
     total_expiring = 0
     login_required_accounts = []
@@ -5732,6 +5753,106 @@ def api_data_sync():
                         )
                         _db.commit()
             threading.Thread(target=_bg_refresh, daemon=True).start()
+
+    return jsonify({"ok": True, "source": source})
+
+
+@app.route("/api/extension/capture", methods=["POST"])
+def api_extension_capture():
+    """Receive a page captured by the extension for a custom (user-defined) account.
+    Creates the account if it doesn't exist, updates page data, triggers AI discovery.
+    Auth: X-Mighty-Key header.
+    """
+    user, _ = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+
+    body = request.get_json(silent=True) or {}
+    name     = (body.get("name") or "").strip()
+    category = (body.get("category") or "Other").strip()
+    url      = (body.get("url") or "").strip()
+    raw_text = body.get("raw_text") or ""
+    synced_at = body.get("synced_at") or iso()
+
+    if not name:
+        return jsonify({"error": "name required"}), 400
+
+    # Stable source key derived from name
+    source = "custom_" + re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")[:30]
+    uid    = user["id"]
+    db     = get_db()
+
+    # Read or create account_credentials row
+    cred_row = db.execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+
+    if cred_row:
+        try:    ex = json.loads(decrypt_cred(uid, cred_row["extra_enc"] or "") or "{}")
+        except: ex = {}
+        urls = ex.get("urls", [])
+        if url and url not in urls:
+            urls.append(url)
+        ex.update({"custom": True, "display_name": name, "category": category, "urls": urls})
+        db.execute(
+            "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
+            (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
+        )
+    else:
+        ex = {"custom": True, "display_name": name, "category": category, "urls": [url] if url else []}
+        db.execute(
+            "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (uid, source, "", "", encrypt_cred(uid, json.dumps(ex)), iso(), iso())
+        )
+
+    # Upsert account_data
+    data_payload = {
+        "sync_status": "ok" if raw_text else "no_data",
+        "sync_source": "extension",
+        "items": [],
+        "raw_text": raw_text,
+    }
+    enc = encrypt_account_data(uid, data_payload)
+    existing = db.execute(
+        "SELECT id FROM account_data WHERE user_id=? AND source=?", (uid, source)
+    ).fetchone()
+    if existing:
+        db.execute(
+            "UPDATE account_data SET data_enc=?, synced_at=? WHERE user_id=? AND source=?",
+            (enc, synced_at, uid, source)
+        )
+    else:
+        db.execute(
+            "INSERT INTO account_data (user_id, source, data_enc, synced_at) VALUES (?,?,?,?)",
+            (uid, source, enc, synced_at)
+        )
+    db.commit()
+
+    # Trigger AI field discovery in background
+    if raw_text and _claude:
+        def _discover():
+            fields = claude_discover_fields(raw_text, name)
+            if fields:
+                _save_discovered_fields(uid, source, fields)
+            else:
+                _cred = db.execute(
+                    "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                    (uid, source)
+                ).fetchone()
+                if _cred:
+                    try:
+                        _ex = json.loads(decrypt_cred(uid, _cred["extra_enc"] or "") or "{}")
+                        _ex["discovery_failed"] = True
+                        db.execute(
+                            "UPDATE account_credentials SET extra_enc=? WHERE user_id=? AND source=?",
+                            (encrypt_cred(uid, json.dumps(_ex)), uid, source)
+                        )
+                        db.commit()
+                    except Exception:
+                        pass
+        threading.Thread(target=_discover, daemon=True).start()
 
     return jsonify({"ok": True, "source": source})
 
