@@ -1075,35 +1075,72 @@ def scrape_hertz(page, c, ctx):
 
 def scrape_marriott(page, c, ctx):
     r = _base("Marriott Bonvoy","🏨","#fce8e6","https://www.marriott.com/loyalty/myAccount/default.mi")
+    log = ctx.get("log", print)
     try:
+        # Try the direct account URL — saved session may already be authenticated
         page.goto("https://www.marriott.com/loyalty/myAccount/default.mi", timeout=NAV_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-        page.wait_for_timeout(2_000)
+        page.wait_for_timeout(3_000)
 
-        # Marriott uses the same URL logged-in and logged-out — check DOM not URL
-        _login_sels = ['#username', 'input[name="username"]', 'input[id*="user"]', 'input[type="email"]']
-        needs_login = any(
-            _safe_visible(page, sel) for sel in _login_sels
-        )
+        # Marriott is a SPA — URL never changes; detect login state via DOM
+        pw_sel = 'input[type="password"]'
+        needs_login = _safe_visible(page, pw_sel, timeout=3_000)
 
         if needs_login:
-            _fill(page, _login_sels, c["username"])
-            _fill(page, ["#password", 'input[name="password"]', 'input[type="password"]'], c["password"])
-            _inbox_mark(ctx)
-            _click(page, ['button[type="submit"]', "#login-form-submit", 'button[id*="login"]', 'input[type="submit"]'])
-            _handle_2fa(page, ctx)
-            # Wait for login form to disappear — URL won't change on this SPA
+            log("Marriott: login form detected, attempting login")
+            # Find and fill username — click first to trigger JS handlers
+            for sel in ['#username', 'input[name="username"]', 'input[id*="user"]',
+                        'input[type="text"]', 'input[type="email"]']:
+                try:
+                    el = page.locator(sel).first
+                    if el.is_visible(timeout=2_000):
+                        el.click()
+                        page.wait_for_timeout(300)
+                        el.type(c["username"], delay=40)
+                        break
+                except Exception:
+                    pass
+
+            # Fill password with click-first
             try:
-                page.wait_for_selector('input[type="password"]', state="hidden", timeout=LOGIN_TIMEOUT)
+                pw = page.locator(pw_sel).first
+                if pw.is_visible(timeout=2_000):
+                    pw.click()
+                    page.wait_for_timeout(300)
+                    pw.type(c["password"], delay=40)
             except Exception:
                 pass
+
+            page.wait_for_timeout(500)
+            _inbox_mark(ctx)
+            _click(page, ['button[type="submit"]', "#login-form-submit",
+                          'button[id*="login"]', 'input[type="submit"]',
+                          'button:has-text("Sign In")', 'button:has-text("Log In")'])
+            _handle_2fa(page, ctx)
+
+            # Wait for password field to vanish (= login succeeded) — 60s max
+            try:
+                page.wait_for_selector(pw_sel, state="hidden", timeout=60_000)
+                log("Marriott: login succeeded")
+            except Exception:
+                # Log current page text to help diagnose failures
+                try:
+                    preview = page.inner_text("body")[:400].replace('\n', ' ')
+                    log(f"Marriott: login form still visible after 60s — page: {preview}")
+                except Exception:
+                    pass
+                r.update({"status": "error", "error": "Marriott login did not complete"})
+                return r
+
             page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
             page.wait_for_timeout(4_000)
+        else:
+            log("Marriott: session active, no login needed")
 
         raw_text = _explore_account_pages(page)
-        r.update({"status":"ok","items":[],"raw_text":raw_text})
+        r.update({"status": "ok", "items": [], "raw_text": raw_text})
     except Exception as e:
-        r.update({"status":"error","error":str(e).split('\n')[0][:120]})
+        r.update({"status": "error", "error": str(e).split('\n')[0][:120]})
     return r
 
 
