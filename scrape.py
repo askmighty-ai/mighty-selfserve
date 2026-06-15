@@ -1082,10 +1082,17 @@ def scrape_marriott(page, c, ctx):
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
         page.wait_for_timeout(3_000)
 
-        # Marriott is a SPA — URL never changes; detect login state via DOM
-        pw_sel = 'input[type="password"]'
-        needs_login = _safe_visible(page, pw_sel, timeout=3_000)
+        # Marriott is a SPA — URL never changes; detect login state via page text
+        try:
+            _pt = page.inner_text("body")[:3000].lower()
+        except Exception:
+            _pt = ""
+        _LOGIN_KW = ["sign in", "log in", "forgot password", "email or member number",
+                     "remember me", "member number", "bonvoy number"]
+        needs_login = sum(1 for kw in _LOGIN_KW if kw in _pt) >= 2
+        log(f"Marriott: needs_login={needs_login} (page snippet: {_pt[:120].strip()!r})")
 
+        pw_sel = 'input[type="password"]'
         if needs_login:
             log("Marriott: login form detected, attempting login")
             # Find and fill username — click first to trigger JS handlers
