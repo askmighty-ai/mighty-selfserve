@@ -8,38 +8,71 @@ const SYNC_INTERVAL = 240; // minutes (every 4 hours)
 // Account page URLs — where to navigate to get each account's data.
 // Values can be a single URL string or an array of URLs (visited in order,
 // text concatenated) to capture sub-pages like vouchers, travel funds, etc.
+// URLs are visited IN ORDER and text concatenated. Put high-value benefit/offer
+// pages FIRST so they are never cut off by the character limit.
 const ACCOUNT_URLS = {
   southwest: [
-    'https://www.southwest.com/loyalty/myaccount/',
-    'https://www.southwest.com/loyalty/rapidrewards/travelFunds.html',
-    'https://www.southwest.com/loyalty/myaccount/upcoming-trips.html',
+    'https://www.southwest.com/loyalty/rapidrewards/travelFunds.html',    // travel funds / LUV vouchers
+    'https://www.southwest.com/loyalty/myaccount/',                        // points, status, companion pass
+    'https://www.southwest.com/loyalty/myaccount/upcoming-trips.html',    // reservations
   ],
   delta: [
-    'https://www.delta.com/myprofile/',
-    'https://www.delta.com/us/en/my-account/wallet',
-    'https://www.delta.com/us/en/my-account/eCredits',
+    'https://www.delta.com/us/en/my-account/wallet',                      // companion certs, upgrades
+    'https://www.delta.com/us/en/my-account/eCredits',                    // eCredits / travel vouchers
+    'https://www.delta.com/myprofile/',                                    // miles, status
   ],
-  united:       'https://www.united.com/en/us/myaccount/mileageplus',
+  united: [
+    'https://www.united.com/en/us/myaccount/awards',                      // credits, PlusPoints, certs
+    'https://www.united.com/en/us/myaccount/mileageplus',                 // miles, status
+  ],
   american_air: [
-    'https://www.aa.com/aadvantage-program/overview',
-    'https://www.aa.com/loyalty/home.do',
+    'https://www.aa.com/aadvantage-program/overview',                      // miles, status
+    'https://www.aa.com/loyalty/home.do',                                  // dashboard
+    'https://www.aa.com/aadvantage-program/my-account/trip-credit',       // trip credits
   ],
-  alaska_air:   'https://www.alaskaair.com/account/dashboard',
+  alaska_air: [
+    'https://www.alaskaair.com/account/wallet',                            // companion fare, credits
+    'https://www.alaskaair.com/account/dashboard',                         // miles, status
+  ],
   sfcu:         'https://www.sfcu.org/accounts/online-banking',
-  amex:         'https://www.americanexpress.com/en-us/account/',
-  chase:        'https://secure.chase.com/web/auth/dashboard',
+  amex: [
+    'https://www.americanexpress.com/en-us/benefits/overview/',           // card benefits, credits
+    'https://www.americanexpress.com/en-us/account/offers/eligible/',     // personalized offers
+    'https://www.americanexpress.com/en-us/account/',                      // balance, points
+  ],
+  chase: [
+    'https://secure.chase.com/web/auth/#/dashboard;dp/rewards/dashboard', // rewards / offers
+    'https://secure.chase.com/web/auth/dashboard',                         // accounts overview
+  ],
   wells_fargo:  'https://connect.secure.wellsfargo.com/auth/login/present',
   bofa:         'https://www.bankofamerica.com/myaccounts/brain/render.go',
-  capital_one:  'https://myaccounts.capitalone.com/accountSummary',
+  capital_one: [
+    'https://myaccounts.capitalone.com/accountSummary',
+    'https://www.capitalone.com/credit-cards/rewards/',                    // rewards balance
+  ],
   discover:     'https://portal.discover.com/customer/en/portal/account-home',
   citi:         'https://online.citi.com/US/login.do',
   paypal:       'https://www.paypal.com/myaccount/summary',
   fidelity:     'https://digital.fidelity.com/ftgw/digital/portfolio/summary',
   schwab:       'https://client.schwab.com/app/accounts/#/',
-  marriott:     'https://www.marriott.com/loyalty/myAccount/default.mi',
-  hilton:       'https://www.hilton.com/en/hilton-honors/guest/my-account/',
-  hyatt:        'https://www.hyatt.com/en-US/my-account/home',
-  ihg:          'https://www.ihg.com/rewardsclub/content/us/en/member-home',
+  marriott: [
+    'https://www.marriott.com/loyalty/myAccount/certificates.mi',          // free night certs, upgrades
+    'https://www.marriott.com/loyalty/myAccount/benefits.mi',              // elite benefits
+    'https://www.marriott.com/loyalty/myAccount/default.mi',               // points, status
+  ],
+  hilton: [
+    'https://www.hilton.com/en/hilton-honors/profile/awards/',             // free night awards
+    'https://www.hilton.com/en/hilton-honors/profile/benefits/',           // elite benefits
+    'https://www.hilton.com/en/hilton-honors/guest/my-account/',           // points, status
+  ],
+  hyatt: [
+    'https://www.hyatt.com/en-US/my-account/awards',                       // awards, certs
+    'https://www.hyatt.com/en-US/my-account/home',                         // points, status
+  ],
+  ihg: [
+    'https://www.ihg.com/rewardsclub/content/us/en/member-home',
+    'https://www.ihg.com/rewardsclub/content/us/en/redeem/hotel-rewards', // reward nights
+  ],
   wyndham:      'https://www.wyndhamhotels.com/registry',
   amazon:       'https://www.amazon.com/gp/css/order-history',
   target:       'https://www.target.com/account',
@@ -52,15 +85,28 @@ const ACCOUNT_URLS = {
   hulu:         'https://secure.hulu.com/account',
   spotify:      'https://www.spotify.com/us/account/overview/',
   disney_plus:  'https://www.disneyplus.com/identity/account',
-  att:          'https://www.att.com/my/#/',
+  att: [
+    'https://www.att.com/buy/broadband/rewards.html',                      // reward cards
+    'https://www.att.com/my/#/',
+  ],
   att_wireless: 'https://myatt.att.com/exp/myconsumerdashboard/',
-  verizon:      'https://www.verizon.com/myverizon/',
-  tmobile:      'https://account.t-mobile.com/overview',
+  verizon: [
+    'https://www.verizon.com/home/mybenefits/',                            // perks
+    'https://www.verizon.com/myverizon/',
+  ],
+  tmobile: [
+    'https://account.t-mobile.com/overview',
+    'https://account.t-mobile.com/offers',                                 // offers
+  ],
   xfinity: [
     'https://customer.xfinity.com/#/billing',
     'https://customer.xfinity.com/#/internet',
+    'https://customer.xfinity.com/#/rewards',                              // xFi rewards
   ],
-  hertz:        'https://www.hertz.com/rentacar/member/profile/myprofile',
+  hertz: [
+    'https://www.hertz.com/rentacar/member/profile/myprofile',
+    'https://www.hertz.com/rentacar/member/profile/promotions',            // promotions
+  ],
   cvs:          'https://www.cvs.com/account/login.jsp',
   walgreens:    'https://www.walgreens.com/myaccount/mywalgreenssummary.jsp',
 };

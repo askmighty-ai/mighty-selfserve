@@ -1652,6 +1652,10 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
+    <button id="rediscover-btn" onclick="rediscoverAll()" class="btn-sync" title="Re-extract fields from existing account data">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <span id="rediscover-label">Re-discover</span>
+    </button>
     <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Refresh all account data">
       <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
       <span id="sync-label">Sync All</span>
@@ -1907,6 +1911,33 @@ fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
 function _setSyncLabel(text) {
   var lbl = document.getElementById('sync-label');
   if (lbl) lbl.textContent = text;
+}
+function rediscoverAll() {
+  var btn = document.getElementById('rediscover-btn');
+  var lbl = document.getElementById('rediscover-label');
+  if (!btn) return;
+  btn.disabled = true;
+  lbl.textContent = 'Working…';
+  fetch('/api/data/rediscover-all', {method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
+      document.querySelector('input[name="_csrf"]').value : '')
+  }).then(function(r){return r.json();}).then(function(d){
+    if (d.ok) {
+      lbl.textContent = 'Running…';
+      setTimeout(function(){
+        lbl.textContent = 'Re-discover';
+        btn.disabled = false;
+        reloadWithScroll();
+      }, 20000);
+    } else {
+      lbl.textContent = 'Re-discover';
+      btn.disabled = false;
+    }
+  }).catch(function(){
+    lbl.textContent = 'Re-discover';
+    btn.disabled = false;
+  });
 }
 function cloudSync() {
   var btn = document.getElementById('cloud-sync-btn');
@@ -5758,6 +5789,64 @@ def api_force_discover(source):
         return _credentials_discover_impl(source)
     except Exception as e:
         return jsonify({"ok": False, "error": f"Server error: {str(e)[:100]}"}), 500
+
+
+@app.route("/api/data/rediscover-all", methods=["POST"])
+@require_login
+def api_rediscover_all():
+    """Re-run field discovery on ALL accounts' existing raw_text in a background thread."""
+    check_csrf()
+    uid = session["user_id"]
+    db  = get_db()
+    rows = db.execute(
+        "SELECT source, data_enc, raw_text_enc FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+
+    def _run_all():
+        for row in rows:
+            src = row["source"]
+            try:
+                raw = decrypt_account_data(uid, row["data_enc"] or "").get("raw_text") or ""
+                if not raw and row.get("raw_text_enc"):
+                    raw = decrypt_account_data(uid, row["raw_text_enc"] or "").get("raw_text") or ""
+                if not raw:
+                    continue
+                # Get display name for site_name
+                cred = db.execute(
+                    "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                    (uid, src)
+                ).fetchone()
+                site_name = src.replace("_", " ").title()
+                if cred and cred["extra_enc"]:
+                    try:
+                        ex = json.loads(decrypt_cred(uid, cred["extra_enc"]))
+                        site_name = ex.get("display_name") or site_name
+                    except Exception:
+                        pass
+                fields = claude_discover_fields(raw, site_name)
+                if fields:
+                    existing = db.execute(
+                        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                        (uid, src)
+                    ).fetchone()
+                    existing_data = {}
+                    if existing and existing["data_enc"]:
+                        try:
+                            existing_data = json.loads(decrypt_account_data(uid, existing["data_enc"]) or "{}")
+                        except Exception:
+                            pass
+                    existing_data["discovered_fields"] = fields
+                    db.execute(
+                        "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                        (encrypt_account_data(uid, json.dumps(existing_data)), uid, src)
+                    )
+                    db.commit()
+                    print(f"[Rediscover] {src}: {len(fields)} fields", flush=True)
+            except Exception as ex:
+                print(f"[Rediscover] {src}: error {ex}", flush=True)
+
+    threading.Thread(target=_run_all, daemon=True).start()
+    return jsonify({"ok": True, "sources": len(rows)})
 
 
 @app.route("/credentials/fields/load")

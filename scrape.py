@@ -520,6 +520,7 @@ def _make_scraper(cfg: dict):
     s_sels    = cfg.get("s_sels",   ['button[type="submit"]', 'input[type="submit"]'])
     ok_url         = cfg.get("ok_url")
     post_url       = cfg.get("post_url")         # navigate here after login to get the right page
+    benefit_pages  = cfg.get("benefit_pages", []) # explicit benefit/offer sub-pages to visit first
     wait_for_not   = cfg.get("wait_for_not")     # wait until this text disappears (dynamic content)
     wait_for_login = cfg.get("wait_for_login")   # wait until this text APPEARS (confirms login done)
     wait_ms        = cfg.get("wait_ms",  3_000)
@@ -565,9 +566,21 @@ def _make_scraper(cfg: dict):
                 page.goto(post_url, timeout=NAV_TIMEOUT)
                 page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
             page.wait_for_timeout(wait_ms)
+            # Visit explicit benefit/certificate/offer pages FIRST so they lead the text
+            benefit_texts = []
+            for bp in benefit_pages:
+                try:
+                    page.goto(bp, timeout=NAV_TIMEOUT)
+                    page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+                    page.wait_for_timeout(2_500)
+                    benefit_texts.append(f"\n\n=== {bp} ===\n{page.inner_text('body')[:4000]}")
+                except Exception:
+                    pass
             # Auto-explore account pages — finds loyalty/account pages regardless of URL structure
             raw_text = _explore_account_pages(page)
-            r.update({"status": "ok", "items": [], "raw_text": raw_text})
+            if benefit_texts:
+                raw_text = "\n".join(benefit_texts) + "\n\n" + raw_text
+            r.update({"status": "ok", "items": [], "raw_text": raw_text[:12_000]})
         except Exception as e:
             r.update({"status": "error", "error": str(e).split('\n')[0][:120]})
         return r
@@ -645,26 +658,30 @@ _SITE_CFGS = {
         "u_sels":['input[name="accountNumber"]','input[type="text"]'],
         "p_sels":['input[type="password"]'],
         "s_sels":['button[type="submit"]'],
-        "ok_url":"**aa.com/aadvantage**"},
+        "ok_url":"**aa.com/aadvantage**",
+        "benefit_pages":["https://www.aa.com/aadvantage-program/my-account/trip-credit"]},
     "alaska_air":    {"name":"Alaska Airlines",  "icon":"✈️","color":"#ecfdf5",
         "login_url":"https://www.alaskaair.com/account",
         "u_sels":['input[type="email"]','input[type="text"]'],
         "p_sels":['input[type="password"]'],
         "s_sels":['button[type="submit"]'],
-        "ok_url":"**alaskaair.com/account**"},
+        "ok_url":"**alaskaair.com/account**",
+        "benefit_pages":["https://www.alaskaair.com/account/wallet"]},
     # Hotels
     "hyatt":         {"name":"Hyatt",            "icon":"🏨","color":"#f5f3ff",
         "login_url":"https://www.hyatt.com/en-US/my-account",
         "u_sels":['input[type="email"]','input[type="text"]'],
         "p_sels":['input[type="password"]'],
         "s_sels":['button[type="submit"]'],
-        "ok_url":"**hyatt.com/en-US/my-account**"},
+        "ok_url":"**hyatt.com/en-US/my-account**",
+        "benefit_pages":["https://www.hyatt.com/en-US/my-account/awards"]},
     "ihg":           {"name":"IHG / Holiday Inn","icon":"🏨","color":"#fff7ed",
         "login_url":"https://www.ihg.com/rewardsclub/content/us/en/member-home",
         "u_sels":['input[type="email"]','input[type="text"]'],
         "p_sels":['input[type="password"]'],
         "s_sels":['button[type="submit"]'],
-        "ok_url":"**ihg.com/**"},
+        "ok_url":"**ihg.com/**",
+        "benefit_pages":["https://www.ihg.com/rewardsclub/content/us/en/redeem/hotel-rewards"]},
     "wyndham":       {"name":"Wyndham Rewards",  "icon":"🏨","color":"#fce7f3",
         "login_url":"https://www.wyndhamhotels.com/registry",
         "u_sels":['input[type="email"]','input[type="text"]'],
@@ -913,10 +930,24 @@ def scrape_amex(page, c, ctx):
         _click(page, ["#loginSubmit",'button[type="submit"]'])
         _handle_2fa(page, ctx)
         page.wait_for_url("**americanexpress.com/en-us/account/**", timeout=LOGIN_TIMEOUT)
-        page.goto("https://www.americanexpress.com/en-us/account/pay/summary", timeout=NAV_TIMEOUT)
-        page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+        # Visit high-value pages first so they lead the raw_text
+        _benefit_pages = [
+            "https://www.americanexpress.com/en-us/benefits/overview/",
+            "https://www.americanexpress.com/en-us/account/offers/eligible/",
+            "https://www.americanexpress.com/en-us/account/pay/summary",
+        ]
+        benefit_texts = []
+        for bp in _benefit_pages:
+            try:
+                page.goto(bp, timeout=NAV_TIMEOUT)
+                page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+                page.wait_for_timeout(2_500)
+                benefit_texts.append(f"\n\n=== {bp} ===\n{page.inner_text('body')[:4000]}")
+            except Exception:
+                pass
         raw_text = _explore_account_pages(page)
-        r.update({"status":"ok","items":[],"raw_text":raw_text})
+        raw_text = "\n".join(benefit_texts) + "\n\n" + raw_text
+        r.update({"status":"ok","items":[],"raw_text":raw_text[:12_000]})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
@@ -937,8 +968,22 @@ def scrape_chase(page, c, ctx):
         _handle_2fa(page, ctx)
         page.wait_for_url("**chase.com/**", timeout=LOGIN_TIMEOUT)
         page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+        # Visit rewards/offers page first
+        _benefit_pages = [
+            "https://secure.chase.com/web/auth/#/dashboard;dp/rewards/dashboard",
+        ]
+        benefit_texts = []
+        for bp in _benefit_pages:
+            try:
+                page.goto(bp, timeout=NAV_TIMEOUT)
+                page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+                page.wait_for_timeout(2_500)
+                benefit_texts.append(f"\n\n=== {bp} ===\n{page.inner_text('body')[:4000]}")
+            except Exception:
+                pass
         raw_text = _explore_account_pages(page)
-        r.update({"status":"ok","items":[],"raw_text":raw_text})
+        raw_text = "\n".join(benefit_texts) + "\n\n" + raw_text
+        r.update({"status":"ok","items":[],"raw_text":raw_text[:12_000]})
     except Exception as e:
         r.update({"status":"error","error":str(e).split('\n')[0][:120]})
     return r
