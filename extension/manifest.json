@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Mighty Sync",
   "description": "Automatically sync your account data to your Mighty dashboard — no login needed.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "permissions": [
     "tabs",
     "windows",
@@ -30,6 +30,14 @@
     "128": "icons/icon128.png"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://mighty-selfserve-production.up.railway.app/*"
+      ],
+      "js": ["content_scripts/dashboard_relay.js"],
+      "world": "ISOLATED",
+      "run_at": "document_end"
+    },
     {
       "matches": [
         "*://*.delta.com/*",

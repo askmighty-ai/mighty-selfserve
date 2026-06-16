@@ -2038,14 +2038,52 @@ function rediscoverAll() {
     btn.disabled = false;
   });
 }
+var _extPresent = false;
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === '__mighty_ext_present__') _extPresent = true;
+  if (e.data && e.data.type === '__mighty_dashboard_reply__' && e.data.action === 'sync_now') {
+    // Extension sync started — poll for completion via storage last_sync change
+    var _syncStart = Date.now();
+    var _syncPoll = setInterval(function() {
+      window.postMessage({type:'__mighty_dashboard__', action:'get_status'}, '*');
+    }, 4000);
+    // Stop polling after 10 min and reload
+    setTimeout(function() {
+      clearInterval(_syncPoll);
+      _finishSync();
+    }, 600000);
+  }
+  if (e.data && e.data.type === '__mighty_dashboard_reply__' && e.data.action === 'get_status') {
+    var s = e.data.resp || {};
+    var lastSync = s.last ? new Date(s.last) : null;
+    var minsAgo = lastSync ? (Date.now() - lastSync.getTime()) / 60000 : Infinity;
+    if (minsAgo < 1) { _finishSync(); }
+  }
+});
+
+function _finishSync() {
+  var btn = document.getElementById('cloud-sync-btn');
+  document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
+  if (btn) { btn.classList.remove('syncing'); btn.disabled = false; }
+  _setSyncLabel('Sync All');
+  reloadWithScroll();
+}
+
 function cloudSync() {
   var btn = document.getElementById('cloud-sync-btn');
   if (!btn) return;
   btn.classList.add('syncing');
   _setSyncLabel('Syncing…');
   btn.disabled = true;
-  // Pulse all cards to show sync is in progress
   document.querySelectorAll('.acct-card').forEach(function(c) { c.classList.add('is-syncing'); });
+
+  if (_extPresent) {
+    // Trigger extension sync — faster and more reliable than Railway
+    window.postMessage({type:'__mighty_dashboard__', action:'sync_now'}, '*');
+    return;
+  }
+
+  // Fallback: Railway cloud sync (for users without the extension)
   fetch('/sync/now', {method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},
     body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
@@ -2054,28 +2092,11 @@ function cloudSync() {
     if (d.ok) {
       var poll = setInterval(function(){
         fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
-          if (!s.running) {
-            clearInterval(poll);
-            document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
-            btn.classList.remove('syncing');
-            _setSyncLabel('Sync All');
-            btn.disabled = false;
-            reloadWithScroll();
-          }
+          if (!s.running) { clearInterval(poll); _finishSync(); }
         });
       }, 3000);
-    } else {
-      document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
-      btn.classList.remove('syncing');
-      _setSyncLabel('Sync All');
-      btn.disabled = false;
-    }
-  }).catch(function(){
-    document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
-    btn.classList.remove('syncing');
-    _setSyncLabel('Sync All');
-    btn.disabled = false;
-  });
+    } else { _finishSync(); }
+  }).catch(_finishSync);
 }
 
 function resetFields(source) {
@@ -6066,19 +6087,26 @@ def api_data_sync():
     ex_data = decrypt_account_data(user["id"], existing_row["data_enc"] or "") if existing_row else {}
 
     # Extension-first: if Railway is trying to sync but extension already has fresh good data, skip.
-    # Bypass if caller explicitly sets force=True (e.g. manual "Sync All" button).
+    # force=True (manual "Sync All") bypasses the recency check but still applies a quality gate:
+    # never let a short/poor Railway scrape overwrite richer extension data.
     force = body.get("force", False)
-    if not force and sync_source == "railway" and ex_data.get("sync_status") == "ok" \
-            and ex_data.get("sync_source") == "extension" and existing_row:
-        try:
-            import datetime as _dt
-            age_h = (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(
-                existing_row["synced_at"].rstrip("Z"))).total_seconds() / 3600
-            if age_h < 2:
-                print(f"[Mighty] Railway skipping {source} — extension synced {age_h:.1f}h ago", flush=True)
-                return jsonify({"ok": True, "skipped": True, "reason": "extension_synced_recently"})
-        except Exception:
-            pass
+    if sync_source == "railway" and ex_data.get("sync_source") == "extension" and existing_row:
+        existing_raw_len = len(ex_data.get("raw_text", ""))
+        new_raw_len      = len(raw_text)
+        # Quality gate: new data must be at least 60% as long as existing to overwrite
+        if existing_raw_len > 500 and new_raw_len < existing_raw_len * 0.6:
+            print(f"[Mighty] Railway quality gate blocked {source} — new {new_raw_len} chars < 60% of existing {existing_raw_len}", flush=True)
+            return jsonify({"ok": True, "skipped": True, "reason": "quality_gate"})
+        if not force:
+            try:
+                import datetime as _dt
+                age_h = (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(
+                    existing_row["synced_at"].rstrip("Z"))).total_seconds() / 3600
+                if age_h < 2:
+                    print(f"[Mighty] Railway skipping {source} — extension synced {age_h:.1f}h ago", flush=True)
+                    return jsonify({"ok": True, "skipped": True, "reason": "extension_synced_recently"})
+            except Exception:
+                pass
 
     # Detect login-page redirects before storing
     if _is_login_page(raw_text):
