@@ -6092,6 +6092,65 @@ def api_data_sync():
     return jsonify({"ok": True, "source": source})
 
 
+@app.route("/api/extension/intercept", methods=["POST"])
+def api_extension_intercept():
+    """Receive a JSON API response intercepted from the user's real browser session.
+    Prepends the structured data to the account's raw_text and re-runs field discovery.
+    Auth: X-Mighty-Key header.
+    """
+    user, _ = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+
+    body      = request.get_json(silent=True) or {}
+    source    = (body.get("source") or "").strip()
+    url       = (body.get("url") or "").strip()
+    json_data = body.get("json_data") or ""
+    synced_at = body.get("synced_at") or iso()
+
+    if not source or not json_data:
+        return jsonify({"error": "source and json_data required"}), 400
+
+    uid = user["id"]
+    db  = get_db()
+
+    existing = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not existing:
+        return jsonify({"ok": False, "error": "Account not connected"}), 404
+
+    ad      = decrypt_account_data(uid, existing["data_enc"] or "")
+    old_raw = ad.get("raw_text", "")
+
+    # Prepend the intercepted JSON so it leads the raw_text window
+    intercept_block = f"\n\n=== API RESPONSE: {url} ===\n{json_data}\n"
+    combined = (intercept_block + old_raw)[:40_000]
+    ad["raw_text"] = combined
+
+    db.execute(
+        "UPDATE account_data SET data_enc=?, synced_at=? WHERE user_id=? AND source=?",
+        (encrypt_account_data(uid, ad), synced_at, uid, source)
+    )
+    db.commit()
+    print(f"[Intercept] {source}: {len(json_data)} chars from {url[:80]}", flush=True)
+
+    # Re-run field discovery in background
+    if _claude:
+        site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == source),
+                         source.replace("_", " ").title())
+        def _bg():
+            with app.app_context():
+                fields = claude_discover_fields(combined[:10_000], site_name)
+                if fields:
+                    _save_discovered_fields(uid, source, fields)
+                    print(f"[Intercept] {source}: {len(fields)} fields discovered", flush=True)
+        threading.Thread(target=_bg, daemon=True).start()
+
+    return jsonify({"ok": True, "source": source, "chars": len(json_data)})
+
+
 @app.route("/api/extension/supplement", methods=["POST"])
 def api_extension_supplement():
     """Append page text from user's real browser to an existing account's raw_text and re-run discovery."""

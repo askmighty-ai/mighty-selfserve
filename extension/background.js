@@ -122,6 +122,70 @@ const SUPPLEMENT_WATCH = [
   { source: 'alaska_air', domain: 'alaskaair.com', paths: ['/account/wallet'] },
 ];
 
+// Domain → source mapping for API interception
+const INTERCEPT_DOMAIN_MAP = {
+  'delta.com':            'delta',
+  'marriott.com':         'marriott',
+  'hilton.com':           'hilton',
+  'hyatt.com':            'hyatt',
+  'united.com':           'united',
+  'southwest.com':        'southwest',
+  'aa.com':               'american_air',
+  'alaskaair.com':        'alaska_air',
+  'americanexpress.com':  'amex',
+  'chase.com':            'chase',
+};
+
+// In-memory dedup: url → timestamp, cleared after 10 minutes
+const _interceptSeen = new Map();
+const _INTERCEPT_COOLDOWN = 10 * 60 * 1000;
+
+async function handleInterceptedApi(url, data) {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+
+  // Map URL to source
+  let source = null;
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, '');
+    for (const [domain, src] of Object.entries(INTERCEPT_DOMAIN_MAP)) {
+      if (hostname.endsWith(domain)) { source = src; break; }
+    }
+  } catch { return; }
+  if (!source) return;
+
+  // Dedup: skip if we already sent this URL recently
+  const now = Date.now();
+  const last = _interceptSeen.get(url);
+  if (last && now - last < _INTERCEPT_COOLDOWN) return;
+  _interceptSeen.set(url, now);
+  // Prune old entries
+  for (const [k, t] of _interceptSeen) {
+    if (now - t > _INTERCEPT_COOLDOWN) _interceptSeen.delete(k);
+  }
+
+  console.log(`[Mighty] Intercepted API for ${source}: ${url} (${data.length} chars)`);
+
+  const resp = await fetch(`${MIGHTY_URL}/api/extension/intercept`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': api_key },
+    body:    JSON.stringify({
+      source,
+      url,
+      json_data:  data,
+      synced_at:  new Date().toISOString(),
+    }),
+  });
+
+  if (resp.ok) {
+    console.log(`[Mighty] Intercept accepted for ${source}`);
+    // Purple flash to confirm interception
+    chrome.action.setBadgeText({ text: '●' });
+    chrome.action.setBadgeBackgroundColor({ color: '#8b5cf6' });
+    setTimeout(() => chrome.action.setBadgeText({ text: '' }), 2_000);
+  }
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -150,6 +214,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then(r => sendResponse({ ok: true, source: r.source }))
       .catch(e => sendResponse({ error: e.message }));
     return true;
+  }
+  if (msg.action === 'intercepted_api') {
+    handleInterceptedApi(msg.url, msg.data).catch(() => {});
+    return false; // no sendResponse needed
   }
   if (msg.action === 'remove_captured') {
     chrome.storage.local.get('captured_accounts', ({ captured_accounts = {} }) => {

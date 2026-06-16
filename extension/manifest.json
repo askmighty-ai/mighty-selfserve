@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Mighty Sync",
   "description": "Automatically sync your account data to your Mighty dashboard — no login needed.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "permissions": [
     "tabs",
     "windows",
@@ -28,5 +28,41 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.delta.com/*",
+        "*://*.marriott.com/*",
+        "*://*.hilton.com/*",
+        "*://*.hyatt.com/*",
+        "*://*.united.com/*",
+        "*://*.southwest.com/*",
+        "*://*.aa.com/*",
+        "*://*.alaskaair.com/*",
+        "*://*.americanexpress.com/*",
+        "*://*.chase.com/*"
+      ],
+      "js": ["content_scripts/api_interceptor.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.delta.com/*",
+        "*://*.marriott.com/*",
+        "*://*.hilton.com/*",
+        "*://*.hyatt.com/*",
+        "*://*.united.com/*",
+        "*://*.southwest.com/*",
+        "*://*.aa.com/*",
+        "*://*.alaskaair.com/*",
+        "*://*.americanexpress.com/*",
+        "*://*.chase.com/*"
+      ],
+      "js": ["content_scripts/api_relay.js"],
+      "world": "ISOLATED",
+      "run_at": "document_start"
+    }
+  ]
 }
