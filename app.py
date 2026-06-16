@@ -383,6 +383,7 @@ except ImportError:
 
 DISCOVER_PROMPT = """You are analyzing one or more pages from a user's {site} account.
 Pages may be separated by === URL === markers.
+Today's date: {today}.
 
 Page text:
 {text}
@@ -390,47 +391,49 @@ Page text:
 Extract ONLY data that is SPECIFIC TO THIS USER's account — personalized numbers, statuses, dates, and benefits.
 
 INCLUDE:
-- Loyalty/rewards balances and point totals
-- Tier or status level (Gold, Platinum, A-List, etc.)
-- Progress toward goals (e.g. "4 of 20 flights to A-List")
-- Expiration dates for points, credits, status, or benefits
-- Confirmed upcoming reservations or bookings (with real dates/details)
-- Account credits, vouchers, certificates, or free nights with quantities or values
-- Personalized perks or benefits assigned to THIS user's account (e.g. "2 suite upgrade awards", "Priority Pass membership", "Free checked bag on next flight")
-- Payment info (balance due, autopay status, next payment date, last payment received date and amount)
-- Special offers or promotions that show a personalized deadline, qualifying requirement, or individual reward (e.g. "Earn 5,000 bonus points if you stay by Aug 31")
+- Loyalty/rewards points, miles, or cash-back balance totals
+- Tier or status level (Gold, Platinum, Diamond, A-List, etc.) — only meaningful named tiers, not generic labels like "Cardmember" or "Member"
+- Progress toward next tier or status goal (e.g. "4 of 20 flights to A-List")
+- Benefits the user CAN USE RIGHT NOW: certificates, upgrade awards, free nights, companion passes, lounge visits, travel credits, fee waivers — include the count or value and the expiry date if shown
+- Expiration dates for points, status, or any benefit (even if the benefit itself is listed above)
+- UPCOMING reservations or bookings — ONLY those with a future date (after today). If the trip date is in the past, REJECT it.
+- Payment info: current balance owed, minimum payment due, payment due date, whether autopay is active, last payment received (date + amount), any past-due or overdue amount
+- Personalized special offers with a specific deadline date AND a specific reward amount (e.g. "Earn 5,000 bonus points if you stay by Aug 31")
 
 HARD EXCLUDE — never include these even if they appear on the page:
 - Any value containing "log in", "sign in", "login to view", "sign in to see"
-- Search form fields (departure city, destination, travel dates, passenger count)
-- Site-wide availability notices (e.g. "Book travel through [date]")
+- Search or booking form fields (departure city, destination, travel dates, passenger count, cabin class)
+- Site-wide availability windows (e.g. "Book travel through [date]", "Reservations Through: March 2027")
 - "No match found", "None", "N/A", "–", empty values, or zero values ("0", "$0", "$0.00")
-- Navigation items, links, or menu text
-- Generic marketing copy available to all users with no personalized quantity, deadline, or condition
-- Generic labels with no user-specific data behind them
-- Contact and personal info: email addresses, phone numbers, mailing addresses, passport numbers, passport expiration dates — these are never useful on a dashboard
-- Promotional offers with no specific personalized deadline or personalized reward quantity (e.g. "Earn X points with partner Y" with no end date → REJECT)
+- Navigation labels, menu items, links, tab names, page headings with no data value
+- Generic account-type labels that carry no meaningful tier information: "Cardmember", "Member", "Basic", "Standard", "Registered" — these tell the user nothing they don't already know
+- PAST reservations, trips, or flights whose date has already occurred (before today) — these are history, not upcoming
+- Generic marketing copy available to ALL users with no personalized quantity, deadline, or condition
+- Contact and personal info: email addresses, phone numbers, mailing addresses, passport numbers — never useful on a dashboard
+- Promotional offers with no specific personalized deadline AND no specific personalized reward quantity (if both are missing, REJECT)
 
 CONCRETE REJECT EXAMPLES:
 - "Points Balance Alert: Log in to view points balance" → REJECT (login wall)
-- "Reservations Through: March 10, 2027" → REJECT (site-wide booking window)
+- "Reservations Through: March 10, 2027" → REJECT (site-wide booking window, not a user reservation)
 - "Depart Date: Fri, Jun 12, 2026" from a search widget → REJECT (search form)
-- "Depart Airport Status: No match found" → REJECT (search form state)
+- "Upcoming Flight: Jul 22, 2024" → REJECT (date is in the past)
+- "Cardmember Status: Cardmember" → REJECT (generic label, tells the user nothing)
+- "Membership Level: Member" → REJECT (redundant, not a meaningful tier)
 - "Upcoming Trips: None" → REJECT (empty value)
-- "Earn more points with our partners" → REJECT (generic marketing, no personalized amount)
-- "Gift Cards Balance: 0" → REJECT (zero value, not useful)
+- "Earn more points with our partners" → REJECT (generic marketing, no personalized amount or deadline)
+- "Gift Cards Balance: 0" → REJECT (zero value)
 - "Nights This Year: 0" → REJECT (zero value)
 - "Primary Email Address: user@example.com" → REJECT (contact info)
-- "Phone Number: +1 650 555 1234" → REJECT (contact info)
-- "Passport Number: ****0970" → REJECT (contact info / PII)
-- "Mailing Address: 123 Main St" → REJECT (contact info)
-- "Earn Up to 700 Points with Hertz" → REJECT (generic partner promotion, no personalized deadline)
+- "Earn Up to 700 Points with Hertz" → REJECT (generic partner promotion, no personalized deadline or quantity)
 - "Earn 2,000 Bonus Points Every Night" → REJECT (generic promotion, not a personalized offer)
 
 CONCRETE INCLUDE EXAMPLES:
+- "Gold Medallion" status → INCLUDE as {{"key":"elite_status","label":"Elite Status","value":"Gold Medallion"}}
 - "24,617 Rapid Rewards points" → INCLUDE as {{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}
-- "0 of 20 flights" in A-List section → INCLUDE as {{"key":"alist_flights","label":"A-List Flights Progress","value":"0 of 20"}}
+- "0 of 20 flights" in A-List section → INCLUDE as {{"key":"alist_progress","label":"A-List Flights Progress","value":"0 of 20"}}
 - "$2,472.20 Total Payment Due" → INCLUDE as {{"key":"balance_due","label":"Balance Due","value":"$2,472.20"}}
+- "Minimum Payment Due: $35 by Jul 12, 2026" → INCLUDE as {{"key":"min_payment_due","label":"Minimum Payment Due","value":"$35 by Jul 12, 2026"}}
+- "Past Due Amount: $150" → INCLUDE as {{"key":"past_due_amount","label":"Past Due Amount","value":"$150"}}
 - "Last payment: $2,472.20 received Jun 11, 2026" → INCLUDE as {{"key":"last_payment","label":"Last Payment Received","value":"$2,472.20 on Jun 11, 2026"}}
 - "AutoPay: Enrolled" → INCLUDE as {{"key":"autopay_status","label":"Auto Pay Status","value":"Enrolled"}}
 - "Free Night Award — expires Dec 31, 2026" → INCLUDE as {{"key":"free_night_award","label":"Free Night Award Expiry","value":"Dec 31, 2026"}}
@@ -438,10 +441,13 @@ CONCRETE INCLUDE EXAMPLES:
 - "Annual travel credit: $187 remaining" → INCLUDE as {{"key":"travel_credit_remaining","label":"Travel Credit Remaining","value":"$187"}}
 - "Earn 5,000 bonus miles — book by Jul 15" → INCLUDE as {{"key":"bonus_miles_offer","label":"Bonus Miles Offer Deadline","value":"Jul 15, 2026"}}
 - "Global Upgrade Certificate — 1 available, expires Dec 31, 2026" → INCLUDE as {{"key":"upgrade_certificates","label":"Global Upgrade Certificates","value":"1 (exp Dec 31, 2026)"}}
-- "Companion Certificate — valid through Jan 15, 2027" → INCLUDE as {{"key":"companion_certificate","label":"Companion Certificate Expiry","value":"Jan 15, 2027"}}
+- "Companion Certificate — valid through Jan 15, 2027" → INCLUDE as {{"key":"companion_certificate","label":"Companion Certificate","value":"Valid through Jan 15, 2027"}}
 - "Regional Upgrade Certificates: 4 available" → INCLUDE as {{"key":"regional_upgrade_certs","label":"Regional Upgrade Certificates","value":"4 available"}}
+- "Priority Pass membership — unlimited lounge visits" → INCLUDE as {{"key":"priority_pass","label":"Priority Pass Lounge Access","value":"Unlimited visits"}}
+- "Free checked bag on all Delta flights" → INCLUDE as {{"key":"free_checked_bag","label":"Free Checked Bag Benefit","value":"All Delta flights"}}
+- "Upcoming flight: SFO → JFK, Aug 14, 2026" → INCLUDE as {{"key":"upcoming_flight","label":"Upcoming Flight","value":"SFO → JFK, Aug 14, 2026"}}
 
-LABELING: write labels that make sense without knowing the site (no abbreviations, no page jargon).
+LABELING: write labels that make sense without knowing the site (no abbreviations, no page jargon). Labels should say what the value IS, not repeat the site name.
 
 Return ONLY a JSON array, no other text:
 [{{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}]
@@ -449,24 +455,25 @@ Return ONLY a JSON array, no other text:
 Rules:
 - key: snake_case, 1-4 words
 - label: 2-5 words, self-explanatory out of context
-- value: exact current value — if empty or a login prompt, skip the field entirely
+- value: exact current value — if empty, zero, or a login prompt, skip the field entirely
 - Each concept ONCE, no duplicates
 - Max 15 fields
 - If you find zero fields that pass the hard-exclude test, return an empty array []
 
 ORDERING — sort fields in this exact priority order (most important first):
-1. Account status or tier (Gold, Platinum, Diamond, etc.)
+1. Account status or tier (Gold, Platinum, Diamond, A-List — only meaningful named tiers)
 2. Primary balance, points, or miles total
-3. Secondary balances, credits, or certificates
-4. Progress toward goals or next tier
-5. Expiration dates for points, status, or benefits
-6. Upcoming reservations or bookings
-7. Payment info (balance due, due date, autopay status)
-8. Account metadata (member since, account type, loyalty ID/member number)
+3. Available benefits (certificates, credits, awards with quantities)
+4. Expiration dates for benefits, points, or status
+5. Progress toward next tier goal
+6. Upcoming reservations or bookings (future dates only)
+7. Payment info (balance due, due date, past-due amount, autopay status)
+8. Account metadata (member since, loyalty ID/member number — these go LAST)
 
-The FIRST field in the array becomes the hero display — make it the most meaningful thing about this account.
+The FIRST field in the array becomes the hero display — make it the single most meaningful thing about this account.
 CRITICAL: Member numbers, account IDs, and loyalty IDs must NEVER be first. Status tier or primary balance must always lead.
-CRITICAL: Never include email, phone, mailing address, or passport info — these belong in a separate profile section, not on a dashboard."""
+CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included — only include named tiers with real meaning.
+CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
     """Use Gemini Flash to identify all useful data fields in a page."""
@@ -474,7 +481,9 @@ def claude_discover_fields(raw_text: str, site_name: str) -> list:
         return []
     try:
         print(f"[Mighty] Discovering fields for {site_name} ({len(raw_text)} chars). Preview: {raw_text[:500]!r}", flush=True)
-        prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:10000])
+        from datetime import datetime as _dtm
+        _today_str = _dtm.utcnow().strftime("%B %d, %Y")
+        prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:10000], today=_today_str)
         # Try models in order until one works
         _models = [
             "gemini-2.5-flash",
@@ -3648,14 +3657,14 @@ def dashboard():
                 and any(ev in i.get("value", "").lower() for ev in _AUTOPAY_ENROLLED)
                 for i in items
             )
-            _PAYMENT_DUE_LABELS = ("payment due", "due date", "bill due", "amount due")
+            _PAYMENT_DUE_LABELS = ("payment due", "due date", "bill due", "amount due", "minimum payment", "past due")
 
             for i in items:
                 lbl = i.get("label", "")
                 val = i.get("value", "")
-                # Suppress payment due alerts when autopay is confirmed enrolled
+                # Suppress payment due date alerts when autopay is confirmed enrolled
+                # (the amount still shows, just not as an amber/red alert)
                 if _autopay_on and any(p in lbl.lower() for p in _PAYMENT_DUE_LABELS):
-                    secondary_items.append(i) if hero_item else None
                     if not hero_item:
                         hero_item = i
                     else:
