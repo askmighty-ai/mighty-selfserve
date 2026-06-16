@@ -2038,15 +2038,10 @@ function rediscoverAll() {
     btn.disabled = false;
   });
 }
+// Extension presence detection — dashboard_relay.js sends this on load
 var _extPresent = false;
 window.addEventListener('message', function(e) {
   if (e.data && e.data.type === '__mighty_ext_present__') _extPresent = true;
-  if (e.data && e.data.type === '__mighty_dashboard_reply__' && e.data.action === 'get_status') {
-    var s = e.data.resp || {};
-    var lastSync = s.last_sync ? new Date(s.last_sync) : null;
-    var secsAgo = lastSync ? (Date.now() - lastSync.getTime()) / 1000 : Infinity;
-    if (secsAgo < 30) { clearInterval(window._syncPoll); _finishSync(); }
-  }
 });
 
 function _finishSync() {
@@ -2057,6 +2052,30 @@ function _finishSync() {
   reloadWithScroll();
 }
 
+// Server-side polling: fetch /api/latest-sync every 8s; when the timestamp changes
+// to within the last 60s we know a fresh sync just landed and can reload.
+function _startSyncPoller(baseline) {
+  if (window._syncPoll) clearInterval(window._syncPoll);
+  // Safety timeout: give up after 12 minutes and reload anyway
+  var giveUp = setTimeout(function() {
+    clearInterval(window._syncPoll);
+    _finishSync();
+  }, 720000);
+  window._syncPoll = setInterval(function() {
+    fetch('/api/latest-sync').then(function(r){ return r.json(); }).then(function(d) {
+      if (!d.latest) return;
+      var ts = new Date(d.latest);
+      var secsAgo = (Date.now() - ts.getTime()) / 1000;
+      // New sync landed if the timestamp is different from what we had before AND recent
+      if (d.latest !== baseline && secsAgo < 120) {
+        clearInterval(window._syncPoll);
+        clearTimeout(giveUp);
+        _finishSync();
+      }
+    }).catch(function() {});
+  }, 8000);
+}
+
 function cloudSync() {
   var btn = document.getElementById('cloud-sync-btn');
   if (!btn) return;
@@ -2065,31 +2084,32 @@ function cloudSync() {
   btn.disabled = true;
   document.querySelectorAll('.acct-card').forEach(function(c) { c.classList.add('is-syncing'); });
 
-  if (_extPresent) {
-    // Trigger extension sync and immediately start polling for completion
-    window.postMessage({type:'__mighty_dashboard__', action:'sync_now'}, '*');
-    if (window._syncPoll) clearInterval(window._syncPoll);
-    window._syncPoll = setInterval(function() {
-      window.postMessage({type:'__mighty_dashboard__', action:'get_status'}, '*');
-    }, 5000);
-    setTimeout(function() { clearInterval(window._syncPoll); _finishSync(); }, 660000);
-    return;
-  }
-
-  // Fallback: Railway cloud sync (for users without the extension)
-  fetch('/sync/now', {method:'POST',
-    headers:{'Content-Type':'application/x-www-form-urlencoded'},
-    body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
-      document.querySelector('input[name="_csrf"]').value : '')
-  }).then(function(r){return r.json();}).then(function(d){
-    if (d.ok) {
-      var poll = setInterval(function(){
-        fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
-          if (!s.running) { clearInterval(poll); _finishSync(); }
-        });
-      }, 3000);
+  // Fetch current latest-sync baseline before triggering, so we can detect the change
+  fetch('/api/latest-sync').then(function(r){ return r.json(); }).then(function(d) {
+    var baseline = d.latest || null;
+    if (_extPresent) {
+      // Ask the extension to run sync, then poll the server for completion
+      window.postMessage({type:'__mighty_dashboard__', action:'sync_now'}, '*');
+      _startSyncPoller(baseline);
+    } else {
+      // Fallback: Railway cloud sync (for users without the extension)
+      fetch('/sync/now', {method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
+          document.querySelector('input[name="_csrf"]').value : '')
+      }).then(function(r){return r.json();}).then(function(d2){
+        if (d2.ok) {
+          _startSyncPoller(baseline);
+        } else { _finishSync(); }
+      }).catch(_finishSync);
+    }
+  }).catch(function() {
+    // If we can't even get baseline, fall back to extension trigger with blind polling
+    if (_extPresent) {
+      window.postMessage({type:'__mighty_dashboard__', action:'sync_now'}, '*');
+      _startSyncPoller(null);
     } else { _finishSync(); }
-  }).catch(_finishSync);
+  });
 }
 
 function resetFields(source) {
@@ -6350,6 +6370,23 @@ def registry_paths():
         LIMIT 20
     ''', (site,)).fetchall()
     return jsonify({"paths": [r["path"] for r in rows]})
+
+
+@app.route("/api/latest-sync")
+@require_login
+def api_latest_sync():
+    """Return the most recent synced_at timestamp across all the user's accounts.
+
+    The dashboard polls this to detect when a sync finishes — much more reliable
+    than the fragile postMessage relay approach.
+    """
+    uid = session["user_id"]
+    db  = get_db()
+    row = db.execute(
+        "SELECT MAX(synced_at) AS ts FROM account_data WHERE user_id=?",
+        (uid,)
+    ).fetchone()
+    return jsonify({"latest": row["ts"] if row else None})
 
 
 @app.route("/api/extension/capture", methods=["POST"])

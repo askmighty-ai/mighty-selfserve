@@ -277,6 +277,10 @@ async function runSync() {
     return;
   }
 
+  // Record session start time — all accounts in this sync use the same timestamp
+  // so the dashboard shows consistent "Synced X" labels across all cards.
+  const syncSessionTime = new Date().toISOString();
+
   await setStatus('Syncing…');
 
   // Fetch the accounts connected in the Mighty dashboard
@@ -310,27 +314,11 @@ async function runSync() {
       console.log(`[Mighty] No URL mapping for ${account.source} — skipping`);
       continue;
     }
-    const baseUrls = Array.isArray(urlEntry) ? urlEntry : [urlEntry];
-    // Merge in registry-learned paths — exclude duplicates and API endpoints
-    const regPaths = await fetchRegistryPaths(account.source);
-    const origin   = new URL(baseUrls[0]).origin;
-    // Normalize pathnames (strip trailing slash) for reliable dedup
-    const _norm = u => { try { return new URL(u).pathname.replace(/\/$/, ''); } catch { return u; } };
-    const basePathSet = new Set(baseUrls.map(_norm));
-    const regUrls  = regPaths
-      .map(p => `${origin}${p.replace(/\/$/, '')}`)
-      .filter(u => {
-        const pn = _norm(u);
-        if (basePathSet.has(pn)) return false;          // already in base list
-        if (/\/api\/|\/v\d+\/|\/graphql/i.test(pn)) return false;  // API endpoint, not a page
-        return true;
-      });
-    if (regUrls.length) {
-      console.log(`[Mighty] Registry added ${regUrls.length} path(s) for ${account.source}:`, regUrls);
-    }
-    const urls = [...baseUrls, ...regUrls];
+    const urls = Array.isArray(urlEntry) ? urlEntry : [urlEntry];
+    // Registry path merging is kept for future use — disabled here until
+    // path quality is validated to avoid extra/wrong pages in sync.
     try {
-      await syncAccount(api_key, account, urls);
+      await syncAccount(api_key, account, urls, syncSessionTime);
       ok++;
     } catch (e) {
       console.error(`[Mighty] Failed: ${account.name}:`, e.message);
@@ -343,7 +331,7 @@ async function runSync() {
     if (!info.urls || !info.urls.length) continue;
     console.log(`[Mighty] Re-syncing captured: ${info.name} (${info.urls.length} URL(s))`);
     try {
-      await resyncCaptured(api_key, source, info);
+      await resyncCaptured(api_key, source, info, syncSessionTime);
       ok++;
     } catch (e) {
       console.error(`[Mighty] Failed captured ${info.name}:`, e.message);
@@ -351,9 +339,9 @@ async function runSync() {
     }
   }
 
-  const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const ts = new Date(syncSessionTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const msg = `Synced at ${ts} — ${ok} ok${failed ? `, ${failed} failed` : ''}`;
-  await chrome.storage.local.set({ last_sync: new Date().toISOString() });
+  await chrome.storage.local.set({ last_sync: syncSessionTime });
   await setStatus(msg);
   console.log('[Mighty]', msg);
 }
@@ -379,7 +367,7 @@ async function captureCurrentTab(tabId, name, category) {
   return { source };
 }
 
-async function resyncCaptured(apiKey, source, info) {
+async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date().toISOString()) {
   const allTexts = [];
   const win = await chrome.windows.create({
     url: info.urls[0],
@@ -426,7 +414,7 @@ async function resyncCaptured(apiKey, source, info) {
       category:  info.category,
       url:       info.urls[0],
       raw_text:  allTexts.join('\n'),
-      synced_at: new Date().toISOString(),
+      synced_at: syncSessionTime,
     }),
   });
   if (!resp.ok) throw new Error(`Server error ${resp.status}`);
@@ -719,7 +707,7 @@ const BOT_DETECTION_PHRASES = [
 
 // ── Per-account sync ─────────────────────────────────────────────────────────
 
-async function syncAccount(apiKey, account, urls) {
+async function syncAccount(apiKey, account, urls, syncSessionTime = new Date().toISOString()) {
   console.log(`[Mighty] → ${account.name} (${urls.length} page${urls.length > 1 ? 's' : ''})`);
 
   const warmup = WARMUP_URLS[account.source];
@@ -918,7 +906,7 @@ async function syncAccount(apiKey, account, urls) {
           items:    [],
           raw_text: rawText,
         },
-        synced_at: new Date().toISOString(),
+        synced_at: syncSessionTime,
       }),
     });
 
