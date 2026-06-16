@@ -17,7 +17,7 @@ const ACCOUNT_URLS = {
     'https://www.southwest.com/loyalty/myaccount/upcoming-trips.html',    // reservations
   ],
   delta: [
-    'https://www.delta.com/us/en/my-account/wallet',                      // companion certs, upgrades
+    'https://www.delta.com/my-profile/certificates',                      // upgrade certs, companion cert — CORRECT URL
     'https://www.delta.com/us/en/my-account/eCredits',                    // eCredits / travel vouchers
     'https://www.delta.com/myprofile/',                                    // miles, status
   ],
@@ -114,7 +114,7 @@ const ACCOUNT_URLS = {
 // Supplement watch: specific benefit sub-pages to capture from user's real browser.
 // These pages are bot-detected in popup windows but work fine in normal browsing.
 const SUPPLEMENT_WATCH = [
-  { source: 'delta',    domain: 'delta.com',    paths: ['/us/en/my-account/wallet', '/us/en/my-account/eCredits'] },
+  { source: 'delta',    domain: 'delta.com',    paths: ['/my-profile/certificates', '/us/en/my-account/wallet', '/us/en/my-account/eCredits'] },
   { source: 'marriott', domain: 'marriott.com', paths: ['/loyalty/myAccount/certificates', '/loyalty/myAccount/benefits'] },
   { source: 'hilton',   domain: 'hilton.com',   paths: ['/en/hilton-honors/profile/awards', '/en/hilton-honors/profile/benefits'] },
   { source: 'hyatt',    domain: 'hyatt.com',    paths: ['/en-US/my-account/awards'] },
