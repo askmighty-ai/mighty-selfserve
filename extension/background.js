@@ -141,6 +141,10 @@ const ACCOUNT_URLS = {
     'https://customer.xfinity.com/#/internet',
     'https://customer.xfinity.com/#/rewards',                              // xFi rewards
   ],
+  pa_utilities: [
+    'https://utilities.cityofpaloalto.org/MyAccount',                      // account overview, balance
+    'https://utilities.cityofpaloalto.org/Billing',                        // billing history
+  ],
   hertz: [
     'https://www.hertz.com/rentacar/member/profile/myprofile',
     'https://www.hertz.com/rentacar/member/profile/promotions',            // promotions
@@ -152,12 +156,15 @@ const ACCOUNT_URLS = {
 // Supplement watch: specific benefit sub-pages to capture from user's real browser.
 // These pages are bot-detected in popup windows but work fine in normal browsing.
 const SUPPLEMENT_WATCH = [
-  { source: 'delta',    domain: 'delta.com',    paths: ['/my-profile/certificates', '/us/en/my-account/wallet', '/us/en/my-account/eCredits'] },
-  { source: 'marriott', domain: 'marriott.com', paths: ['/loyalty/myAccount/certificates', '/loyalty/myAccount/benefits'] },
-  { source: 'hilton',   domain: 'hilton.com',   paths: ['/en/hilton-honors/profile/awards', '/en/hilton-honors/profile/benefits'] },
-  { source: 'hyatt',    domain: 'hyatt.com',    paths: ['/en-US/my-account/awards'] },
-  { source: 'united',   domain: 'united.com',   paths: ['/en/us/myaccount/awards'] },
-  { source: 'alaska_air', domain: 'alaskaair.com', paths: ['/account/wallet'] },
+  { source: 'delta',       domain: 'delta.com',                paths: ['/my-profile/certificates', '/us/en/my-account/wallet', '/us/en/my-account/eCredits'] },
+  { source: 'marriott',    domain: 'marriott.com',             paths: ['/loyalty/myAccount/certificates', '/loyalty/myAccount/benefits'] },
+  { source: 'hilton',      domain: 'hilton.com',               paths: ['/en/hilton-honors/profile/awards', '/en/hilton-honors/profile/benefits'] },
+  { source: 'hyatt',       domain: 'hyatt.com',                paths: ['/en-US/my-account/awards'] },
+  { source: 'united',      domain: 'united.com',               paths: ['/en/us/myaccount/awards'] },
+  { source: 'alaska_air',  domain: 'alaskaair.com',            paths: ['/account/wallet'] },
+  // Sites that always fail in popup windows — capture on natural browser visits instead
+  { source: 'xfinity',     domain: 'customer.xfinity.com',     paths: ['/'] },   // match any page — Akamai blocks popups
+  { source: 'pa_utilities',domain: 'utilities.cityofpaloalto.org', paths: ['/'] }, // capture any account page
 ];
 
 // Domain → source mapping for API interception
