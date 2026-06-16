@@ -585,17 +585,38 @@ async function syncAccount(apiKey, account, urls) {
       let pageText = result?.result || '';
 
       // Check for bot-detection
-      const lower = pageText.toLowerCase();
-      const blocked = BOT_DETECTION_PHRASES.find(p => lower.includes(p));
+      let lower = pageText.toLowerCase();
+      let blocked = BOT_DETECTION_PHRASES.find(p => lower.includes(p));
       if (blocked) {
-        console.warn(`[Mighty] ${account.name} page ${i + 1}: bot detection ("${blocked}") — skipping page`);
-        continue;
+        console.warn(`[Mighty] ${account.name} page ${i + 1}: bot detection ("${blocked}")`);
+        // For delta wallet: navigate away and back to reset the bot challenge, then retry once
+        if (urls[i] && urls[i].includes('delta.com/us/en/my-account')) {
+          console.log(`[Mighty] ${account.name}: navigating away then back to reset bot challenge…`);
+          await chrome.tabs.update(tab.id, { url: 'https://www.delta.com/' });
+          await waitForTabLoad(tab.id, 20_000);
+          await sleep(8_000);
+          await chrome.tabs.update(tab.id, { url: urls[i] });
+          await waitForTabLoad(tab.id, 20_000);
+          await sleep(20_000); // longer settle after reset
+          try {
+            const [r2] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageText });
+            pageText = r2?.result || '';
+            lower = pageText.toLowerCase();
+            blocked = BOT_DETECTION_PHRASES.find(p => lower.includes(p));
+          } catch (_) {}
+          if (blocked) {
+            console.warn(`[Mighty] ${account.name} page ${i + 1}: still bot-detected after retry — skipping`);
+            continue;
+          }
+        } else {
+          continue;
+        }
       }
 
       // For Delta wallet/eCredits: retry once if content looks thin (certificates render late)
       if (pageText.length < 2000 && urls[i] && urls[i].includes('delta.com/us/en/my-account')) {
-        console.log(`[Mighty] ${account.name} page ${i + 1}: thin content (${pageText.length} chars), waiting 12s for React render…`);
-        await sleep(12_000);
+        console.log(`[Mighty] ${account.name} page ${i + 1}: thin content (${pageText.length} chars), waiting 15s for React render…`);
+        await sleep(15_000);
         try {
           const [r2] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageText });
           if ((r2?.result || '').length > pageText.length) pageText = r2.result;

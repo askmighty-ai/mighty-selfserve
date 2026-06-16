@@ -396,6 +396,9 @@ CONCRETE INCLUDE EXAMPLES:
 - "2 Suite Night Awards available" → INCLUDE as {{"key":"suite_night_awards","label":"Suite Night Awards","value":"2 available"}}
 - "Annual travel credit: $187 remaining" → INCLUDE as {{"key":"travel_credit_remaining","label":"Travel Credit Remaining","value":"$187"}}
 - "Earn 5,000 bonus miles — book by Jul 15" → INCLUDE as {{"key":"bonus_miles_offer","label":"Bonus Miles Offer Deadline","value":"Jul 15, 2026"}}
+- "Global Upgrade Certificate — 1 available, expires Dec 31, 2026" → INCLUDE as {{"key":"upgrade_certificates","label":"Global Upgrade Certificates","value":"1 (exp Dec 31, 2026)"}}
+- "Companion Certificate — valid through Jan 15, 2027" → INCLUDE as {{"key":"companion_certificate","label":"Companion Certificate Expiry","value":"Jan 15, 2027"}}
+- "Regional Upgrade Certificates: 4 available" → INCLUDE as {{"key":"regional_upgrade_certs","label":"Regional Upgrade Certificates","value":"4 available"}}
 
 LABELING: write labels that make sense without knowing the site (no abbreviations, no page jargon).
 
@@ -422,7 +425,8 @@ ORDERING — sort fields in this exact priority order (most important first):
 9. Personal identifiers (member number, account number, loyalty ID)
 10. Contact and personal info (name, email, phone, address, passport)
 
-The FIRST field in the array becomes the hero display — make it the most meaningful thing about this account."""
+The FIRST field in the array becomes the hero display — make it the most meaningful thing about this account.
+CRITICAL: Member numbers, account IDs, loyalty IDs, and contact info (email, phone, address, passport) must NEVER be first. Status tier or primary balance must always lead."""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
     """Use Gemini Flash to identify all useful data fields in a page."""
