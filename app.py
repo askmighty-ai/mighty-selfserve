@@ -3491,8 +3491,14 @@ def dashboard():
 
     import re as _re
     from datetime import date as _date, datetime as _datetime
-    _TIME_LABELS = ("due", "expir", "ends", "end date", "valid until", "promo", "offer end", "deadline", "renewal", "renew", "cancel")
-    _URGENT_LABELS = ("payment due", "bill due", "past due", "amount due")
+    # Label keywords that suggest an expiry/deadline — only matched against the LABEL, not the value,
+    # to avoid false positives like "No Amount Due at this time" triggering on "due" in value text.
+    # "promo" removed (too broad — matches "Promotion Status") — only "promo end/expir" would be valid.
+    # "due" removed — too broad; covered by _URGENT_LABELS below.
+    _TIME_LABELS = ("expir", "ends", "end date", "valid until", "offer end", "deadline", "renewal", "renew", "cancel")
+    _URGENT_LABELS = ("payment due", "bill due", "past due", "amount due", "minimum payment due")
+    # Labels that contain a date but should NEVER trigger an alert (they're informational, not action items)
+    _SUPPRESS_ALERT_LABELS = ("autopay scheduled", "auto pay scheduled", "autopay date", "last payment", "member since", "account opened")
     _MONTHS = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"
 
     def _parse_date_from_value(value: str):
@@ -3534,10 +3540,13 @@ def dashboard():
     def _classify_alert(label: str, value: str):
         """Return 'red', 'amber', or None.
         Date-aware: only flags if the date is within 60 days (amber) or past/≤7 days (red).
-        Falls back to label heuristics when no date is parseable."""
+        Falls back to label-only heuristics when no date is parseable.
+        Never alerts on informational date fields (autopay schedule, last payment, etc.)."""
         lbl_low = label.lower()
-        val_low = value.lower()
-        combined = lbl_low + " " + val_low
+
+        # Suppress alerts entirely for informational labels — dates here are FYI, not action items
+        if any(s in lbl_low for s in _SUPPRESS_ALERT_LABELS):
+            return None
 
         today = _date.today()
         parsed = _parse_date_from_value(value)
@@ -3549,10 +3558,11 @@ def dashboard():
             if delta <= 60:  return "amber"   # within 2 months
             return None                        # too far out — no alert
 
-        # No parseable date — fall back to label keywords
+        # No parseable date — fall back to label-only keywords (NOT value text, to avoid false positives
+        # like "No Amount Due at this time" triggering "due" match from value)
         if any(t in lbl_low for t in _URGENT_LABELS):
             return "red"
-        if any(t in combined for t in _TIME_LABELS):
+        if any(t in lbl_low for t in _TIME_LABELS):
             return "amber"
         return None
 
