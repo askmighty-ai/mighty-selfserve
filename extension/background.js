@@ -5,6 +5,44 @@ const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
 const SYNC_INTERVAL = 240; // minutes (every 4 hours)
 
+// ── Path registry helpers ─────────────────────────────────────────────────────
+
+/** Strip personal ID segments from a URL path before reporting to the registry. */
+function normalizePath(path) {
+  return path
+    .split('?')[0].split('#')[0]
+    .replace(/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '/*')
+    .replace(/\/\d{5,}/g, '/*')
+    .replace(/\/[a-zA-Z0-9]{20,}/g, '/*')
+    .replace(/\/$/, '') || '/';
+}
+
+/** Report a fruitful path to the shared registry. Fire-and-forget. */
+function reportPathToRegistry(site, url) {
+  try {
+    const path = normalizePath(new URL(url).pathname);
+    if (!path || path === '/') return;
+    fetch(`${MIGHTY_URL}/api/registry/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site, path }),
+    }).catch(() => {});
+  } catch (_) {}
+}
+
+/** Fetch trusted paths for a site from the shared registry.
+ *  Returns an array of path strings (e.g. ["/my-profile/certificates"]). */
+async function fetchRegistryPaths(site) {
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/registry/paths?site=${encodeURIComponent(site)}`);
+    if (!resp.ok) return [];
+    const { paths = [] } = await resp.json();
+    return paths;
+  } catch {
+    return [];
+  }
+}
+
 // Account page URLs — where to navigate to get each account's data.
 // Values can be a single URL string or an array of URLs (visited in order,
 // text concatenated) to capture sub-pages like vouchers, travel funds, etc.
@@ -179,6 +217,7 @@ async function handleInterceptedApi(url, data) {
 
   if (resp.ok) {
     console.log(`[Mighty] Intercept accepted for ${source}`);
+    reportPathToRegistry(source, url);
     // Purple flash to confirm interception
     chrome.action.setBadgeText({ text: '●' });
     chrome.action.setBadgeBackgroundColor({ color: '#8b5cf6' });
@@ -270,7 +309,17 @@ async function runSync() {
       console.log(`[Mighty] No URL mapping for ${account.source} — skipping`);
       continue;
     }
-    const urls = Array.isArray(urlEntry) ? urlEntry : [urlEntry];
+    const baseUrls = Array.isArray(urlEntry) ? urlEntry : [urlEntry];
+    // Merge in any registry-learned paths (skip ones already in baseUrls)
+    const regPaths = await fetchRegistryPaths(account.source);
+    const origin   = new URL(baseUrls[0]).origin;
+    const regUrls  = regPaths
+      .map(p => `${origin}${p}`)
+      .filter(u => !baseUrls.includes(u));
+    if (regUrls.length) {
+      console.log(`[Mighty] Registry added ${regUrls.length} path(s) for ${account.source}:`, regUrls);
+    }
+    const urls = [...baseUrls, ...regUrls];
     try {
       await syncAccount(api_key, account, urls);
       ok++;
@@ -596,6 +645,7 @@ async function _supplementCapturePage(tabId, tab, source) {
     });
     if (resp.ok) {
       console.log(`[Mighty] Supplemented ${source} from ${tab.url} (${extracted.text.length} chars)`);
+      reportPathToRegistry(source, tab.url);
       chrome.action.setBadgeText({ text: '●' });
       chrome.action.setBadgeBackgroundColor({ color: '#6366f1' });
       setTimeout(() => chrome.action.setBadgeText({ text: '' }), 3_000);

@@ -178,7 +178,38 @@ def init_db():
                 PRIMARY KEY (user_id, source),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
+            CREATE TABLE IF NOT EXISTS site_paths (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                site           TEXT NOT NULL,
+                path           TEXT NOT NULL,
+                reporter_count INTEGER DEFAULT 1,
+                last_seen      TEXT NOT NULL,
+                quality_score  REAL DEFAULT 1.0,
+                UNIQUE(site, path)
+            );
         """)
+        # Pre-seed with known-good paths (quality_score=5 → treated as trusted immediately)
+        _KNOWN_PATHS = [
+            ('delta',      '/my-profile/certificates'),
+            ('delta',      '/us/en/my-account/eCredits'),
+            ('delta',      '/myprofile'),
+            ('marriott',   '/loyalty/myAccount/certificates'),
+            ('marriott',   '/loyalty/myAccount/benefits'),
+            ('hilton',     '/en/hilton-honors/profile/awards'),
+            ('hilton',     '/en/hilton-honors/profile/benefits'),
+            ('hyatt',      '/en-US/my-account/awards'),
+            ('united',     '/en/us/myaccount/awards'),
+            ('alaska_air', '/account/wallet'),
+        ]
+        for _site, _path in _KNOWN_PATHS:
+            try:
+                db.execute(
+                    "INSERT OR IGNORE INTO site_paths (site, path, reporter_count, last_seen, quality_score) "
+                    "VALUES (?, ?, 5, datetime('now'), 5.0)",
+                    (_site, _path)
+                )
+            except Exception:
+                pass
         try:
             db.execute("ALTER TABLE actions ADD COLUMN consequence_level TEXT DEFAULT 'routine'")
         except Exception:
@@ -527,6 +558,40 @@ def decrypt_account_data(user_id: str, stored: str) -> dict:
 
 def iso():
     return utcnow().isoformat()
+
+def normalize_path(path: str) -> str:
+    """Strip query strings, fragments, and personal ID segments from a URL path
+    before storing in the shared site_paths registry."""
+    path = path.split('?')[0].split('#')[0]
+    # Strip UUIDs
+    path = re.sub(r'/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '/*', path, flags=re.I)
+    # Strip long numeric IDs (≥5 digits)
+    path = re.sub(r'/\d{5,}', '/*', path)
+    # Strip long alphanumeric tokens (≥20 chars)
+    path = re.sub(r'/[a-zA-Z0-9]{20,}', '/*', path)
+    return path.rstrip('/') or '/'
+
+def _registry_report_path(source: str, url: str):
+    """Report a URL path to the shared site_paths registry. No-op on error."""
+    if not source or not url:
+        return
+    try:
+        from urllib.parse import urlparse
+        path = normalize_path(urlparse(url).path)
+        if not path or path == '/':
+            return
+        db = get_db()
+        db.execute('''
+            INSERT INTO site_paths (site, path, reporter_count, last_seen, quality_score)
+            VALUES (?, ?, 1, datetime('now'), 1.0)
+            ON CONFLICT(site, path) DO UPDATE SET
+                reporter_count = reporter_count + 1,
+                last_seen      = datetime('now'),
+                quality_score  = MIN(10.0, quality_score + 0.5)
+        ''', (source, path))
+        db.commit()
+    except Exception:
+        pass
 
 def base_url():
     b = os.environ.get("BASE_URL", "").rstrip("/")
@@ -6157,6 +6222,7 @@ def api_extension_intercept():
                     print(f"[Intercept] {source}: {len(fields)} fields discovered", flush=True)
         threading.Thread(target=_bg, daemon=True).start()
 
+    _registry_report_path(source, url)
     return jsonify({"ok": True, "source": source, "chars": len(json_data)})
 
 
@@ -6212,7 +6278,54 @@ def api_extension_supplement():
                     print(f"[Supplement] {source}: {len(fields)} fields", flush=True)
         threading.Thread(target=_bg, daemon=True).start()
 
+    _registry_report_path(source, url)
     return jsonify({"ok": True, "source": source, "chars_added": len(new_text)})
+
+
+@app.route("/api/registry/report", methods=["POST"])
+def registry_report():
+    """Accept a {site, path} report and upsert into site_paths. No auth — paths aren't personal data."""
+    body  = request.get_json(silent=True) or {}
+    site  = (body.get("site") or "").strip().lower()
+    path  = normalize_path((body.get("path") or "").strip())
+    if not site or not path or path == '/':
+        return jsonify({"ok": False}), 400
+    db = get_db()
+    db.execute('''
+        INSERT INTO site_paths (site, path, reporter_count, last_seen, quality_score)
+        VALUES (?, ?, 1, datetime('now'), 1.0)
+        ON CONFLICT(site, path) DO UPDATE SET
+            reporter_count = reporter_count + 1,
+            last_seen      = datetime('now'),
+            quality_score  = MIN(10.0, quality_score + 0.5)
+    ''', (site, path))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/registry/paths", methods=["GET"])
+def registry_paths():
+    """Return trusted paths for a site, sorted by quality. Decays paths not seen in 30+ days."""
+    site = request.args.get("site", "").strip().lower()
+    if not site:
+        return jsonify({"paths": []})
+    db = get_db()
+    # Decay stale entries (not seen in 30 days → lose 1 quality point)
+    db.execute('''
+        UPDATE site_paths
+        SET quality_score = MAX(0.0, quality_score - 1.0)
+        WHERE site = ?
+          AND julianday('now') - julianday(last_seen) > 30
+          AND quality_score > 0
+    ''', (site,))
+    db.commit()
+    rows = db.execute('''
+        SELECT path FROM site_paths
+        WHERE site = ? AND quality_score > 0
+        ORDER BY quality_score DESC, reporter_count DESC
+        LIMIT 20
+    ''', (site,)).fetchall()
+    return jsonify({"paths": [r["path"] for r in rows]})
 
 
 @app.route("/api/extension/capture", methods=["POST"])
