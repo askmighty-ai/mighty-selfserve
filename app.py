@@ -2041,18 +2041,8 @@ function rediscoverAll() {
 var _extPresent = false;
 window.addEventListener('message', function(e) {
   if (e.data && e.data.type === '__mighty_ext_present__') _extPresent = true;
-  if (e.data && e.data.type === '__mighty_dashboard_reply__' && e.data.action === 'sync_now') {
-    // Extension acknowledged — start polling for completion
-    if (window._syncPoll) clearInterval(window._syncPoll);
-    window._syncPoll = setInterval(function() {
-      window.postMessage({type:'__mighty_dashboard__', action:'get_status'}, '*');
-    }, 4000);
-    // Hard timeout at 10 min
-    setTimeout(function() { clearInterval(window._syncPoll); _finishSync(); }, 600000);
-  }
   if (e.data && e.data.type === '__mighty_dashboard_reply__' && e.data.action === 'get_status') {
     var s = e.data.resp || {};
-    // last_sync is set by background.js when runSync() completes
     var lastSync = s.last_sync ? new Date(s.last_sync) : null;
     var secsAgo = lastSync ? (Date.now() - lastSync.getTime()) / 1000 : Infinity;
     if (secsAgo < 30) { clearInterval(window._syncPoll); _finishSync(); }
@@ -2076,8 +2066,13 @@ function cloudSync() {
   document.querySelectorAll('.acct-card').forEach(function(c) { c.classList.add('is-syncing'); });
 
   if (_extPresent) {
-    // Trigger extension sync — faster and more reliable than Railway
+    // Trigger extension sync and immediately start polling for completion
     window.postMessage({type:'__mighty_dashboard__', action:'sync_now'}, '*');
+    if (window._syncPoll) clearInterval(window._syncPoll);
+    window._syncPoll = setInterval(function() {
+      window.postMessage({type:'__mighty_dashboard__', action:'get_status'}, '*');
+    }, 5000);
+    setTimeout(function() { clearInterval(window._syncPoll); _finishSync(); }, 660000);
     return;
   }
 

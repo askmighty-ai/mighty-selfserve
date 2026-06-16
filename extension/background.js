@@ -217,7 +217,8 @@ async function handleInterceptedApi(url, data) {
 
   if (resp.ok) {
     console.log(`[Mighty] Intercept accepted for ${source}`);
-    reportPathToRegistry(source, url);
+    // Note: do NOT report API intercept URLs to the registry — they are API endpoints,
+    // not browsable pages, and would pollute the sync visit list.
     // Purple flash to confirm interception
     chrome.action.setBadgeText({ text: '●' });
     chrome.action.setBadgeBackgroundColor({ color: '#8b5cf6' });
@@ -239,10 +240,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // Messages from popup
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'sync_now') {
-    runSync()
-      .then(() => sendResponse({ ok: true }))
-      .catch(e => sendResponse({ error: e.message }));
-    return true;
+    // Respond immediately so the message channel doesn't time out during a long sync
+    sendResponse({ ok: true });
+    runSync().catch(console.error);
+    return false;
   }
   if (msg.action === 'get_status') {
     chrome.storage.local.get(['last_sync', 'sync_status', 'api_key', 'captured_accounts'], sendResponse);
@@ -310,13 +311,20 @@ async function runSync() {
       continue;
     }
     const baseUrls = Array.isArray(urlEntry) ? urlEntry : [urlEntry];
-    // Merge in any registry-learned paths (deduplicate by pathname to avoid near-duplicates)
+    // Merge in registry-learned paths — exclude duplicates and API endpoints
     const regPaths = await fetchRegistryPaths(account.source);
     const origin   = new URL(baseUrls[0]).origin;
-    const basePathSet = new Set(baseUrls.map(u => { try { return new URL(u).pathname; } catch { return u; } }));
+    // Normalize pathnames (strip trailing slash) for reliable dedup
+    const _norm = u => { try { return new URL(u).pathname.replace(/\/$/, ''); } catch { return u; } };
+    const basePathSet = new Set(baseUrls.map(_norm));
     const regUrls  = regPaths
-      .map(p => `${origin}${p}`)
-      .filter(u => { try { return !basePathSet.has(new URL(u).pathname); } catch { return true; } });
+      .map(p => `${origin}${p.replace(/\/$/, '')}`)
+      .filter(u => {
+        const pn = _norm(u);
+        if (basePathSet.has(pn)) return false;          // already in base list
+        if (/\/api\/|\/v\d+\/|\/graphql/i.test(pn)) return false;  // API endpoint, not a page
+        return true;
+      });
     if (regUrls.length) {
       console.log(`[Mighty] Registry added ${regUrls.length} path(s) for ${account.source}:`, regUrls);
     }
