@@ -373,10 +373,12 @@ HARD EXCLUDE — never include these even if they appear on the page:
 - Any value containing "log in", "sign in", "login to view", "sign in to see"
 - Search form fields (departure city, destination, travel dates, passenger count)
 - Site-wide availability notices (e.g. "Book travel through [date]")
-- "No match found", "None", "N/A", "–", or empty values
+- "No match found", "None", "N/A", "–", empty values, or zero values ("0", "$0", "$0.00")
 - Navigation items, links, or menu text
 - Generic marketing copy available to all users with no personalized quantity, deadline, or condition
 - Generic labels with no user-specific data behind them
+- Contact and personal info: email addresses, phone numbers, mailing addresses, passport numbers, passport expiration dates — these are never useful on a dashboard
+- Promotional offers with no specific personalized deadline or personalized reward quantity (e.g. "Earn X points with partner Y" with no end date → REJECT)
 
 CONCRETE REJECT EXAMPLES:
 - "Points Balance Alert: Log in to view points balance" → REJECT (login wall)
@@ -385,6 +387,14 @@ CONCRETE REJECT EXAMPLES:
 - "Depart Airport Status: No match found" → REJECT (search form state)
 - "Upcoming Trips: None" → REJECT (empty value)
 - "Earn more points with our partners" → REJECT (generic marketing, no personalized amount)
+- "Gift Cards Balance: 0" → REJECT (zero value, not useful)
+- "Nights This Year: 0" → REJECT (zero value)
+- "Primary Email Address: user@example.com" → REJECT (contact info)
+- "Phone Number: +1 650 555 1234" → REJECT (contact info)
+- "Passport Number: ****0970" → REJECT (contact info / PII)
+- "Mailing Address: 123 Main St" → REJECT (contact info)
+- "Earn Up to 700 Points with Hertz" → REJECT (generic partner promotion, no personalized deadline)
+- "Earn 2,000 Bonus Points Every Night" → REJECT (generic promotion, not a personalized offer)
 
 CONCRETE INCLUDE EXAMPLES:
 - "24,617 Rapid Rewards points" → INCLUDE as {{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}
@@ -421,12 +431,11 @@ ORDERING — sort fields in this exact priority order (most important first):
 5. Expiration dates for points, status, or benefits
 6. Upcoming reservations or bookings
 7. Payment info (balance due, due date, autopay status)
-8. Account metadata (member since, account type)
-9. Personal identifiers (member number, account number, loyalty ID)
-10. Contact and personal info (name, email, phone, address, passport)
+8. Account metadata (member since, account type, loyalty ID/member number)
 
 The FIRST field in the array becomes the hero display — make it the most meaningful thing about this account.
-CRITICAL: Member numbers, account IDs, loyalty IDs, and contact info (email, phone, address, passport) must NEVER be first. Status tier or primary balance must always lead."""
+CRITICAL: Member numbers, account IDs, and loyalty IDs must NEVER be first. Status tier or primary balance must always lead.
+CRITICAL: Never include email, phone, mailing address, or passport info — these belong in a separate profile section, not on a dashboard."""
 
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
     """Use Gemini Flash to identify all useful data fields in a page."""
