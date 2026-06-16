@@ -3501,9 +3501,10 @@ def dashboard():
 
         if parsed is not None:
             delta = (parsed - today).days
-            if delta <= 7:   return "red"    # past-due or imminent
-            if delta <= 60:  return "amber"  # within 2 months
-            return None                       # too far out — no alert
+            if delta < -7:   return None      # more than a week past — stale, no alert
+            if delta <= 7:   return "red"     # past-due or imminent
+            if delta <= 60:  return "amber"   # within 2 months
+            return None                        # too far out — no alert
 
         # No parseable date — fall back to label keywords
         if any(t in lbl_low for t in _URGENT_LABELS):
