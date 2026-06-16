@@ -2042,22 +2042,20 @@ var _extPresent = false;
 window.addEventListener('message', function(e) {
   if (e.data && e.data.type === '__mighty_ext_present__') _extPresent = true;
   if (e.data && e.data.type === '__mighty_dashboard_reply__' && e.data.action === 'sync_now') {
-    // Extension sync started — poll for completion via storage last_sync change
-    var _syncStart = Date.now();
-    var _syncPoll = setInterval(function() {
+    // Extension acknowledged — start polling for completion
+    if (window._syncPoll) clearInterval(window._syncPoll);
+    window._syncPoll = setInterval(function() {
       window.postMessage({type:'__mighty_dashboard__', action:'get_status'}, '*');
     }, 4000);
-    // Stop polling after 10 min and reload
-    setTimeout(function() {
-      clearInterval(_syncPoll);
-      _finishSync();
-    }, 600000);
+    // Hard timeout at 10 min
+    setTimeout(function() { clearInterval(window._syncPoll); _finishSync(); }, 600000);
   }
   if (e.data && e.data.type === '__mighty_dashboard_reply__' && e.data.action === 'get_status') {
     var s = e.data.resp || {};
-    var lastSync = s.last ? new Date(s.last) : null;
-    var minsAgo = lastSync ? (Date.now() - lastSync.getTime()) / 60000 : Infinity;
-    if (minsAgo < 1) { _finishSync(); }
+    // last_sync is set by background.js when runSync() completes
+    var lastSync = s.last_sync ? new Date(s.last_sync) : null;
+    var secsAgo = lastSync ? (Date.now() - lastSync.getTime()) / 1000 : Infinity;
+    if (secsAgo < 30) { clearInterval(window._syncPoll); _finishSync(); }
   }
 });
 

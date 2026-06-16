@@ -310,12 +310,13 @@ async function runSync() {
       continue;
     }
     const baseUrls = Array.isArray(urlEntry) ? urlEntry : [urlEntry];
-    // Merge in any registry-learned paths (skip ones already in baseUrls)
+    // Merge in any registry-learned paths (deduplicate by pathname to avoid near-duplicates)
     const regPaths = await fetchRegistryPaths(account.source);
     const origin   = new URL(baseUrls[0]).origin;
+    const basePathSet = new Set(baseUrls.map(u => { try { return new URL(u).pathname; } catch { return u; } }));
     const regUrls  = regPaths
       .map(p => `${origin}${p}`)
-      .filter(u => !baseUrls.includes(u));
+      .filter(u => { try { return !basePathSet.has(new URL(u).pathname); } catch { return true; } });
     if (regUrls.length) {
       console.log(`[Mighty] Registry added ${regUrls.length} path(s) for ${account.source}:`, regUrls);
     }
@@ -513,9 +514,18 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }).catch(() => {});
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
   if (!tab.url || !tab.url.startsWith('http')) return;
+
+  // Skip the Mighty dashboard itself
+  if (tab.url.includes('mighty-selfserve-production.up.railway.app')) return;
+
+  // Skip popup windows used by the scheduled sync (avoid double-capturing)
+  try {
+    const winInfo = await chrome.windows.get(tab.windowId);
+    if (winInfo.type === 'popup') return;
+  } catch { return; }
 
   // Must look like an account page
   if (!_ACCOUNT_PATH_RE.test(tab.url)) return;
