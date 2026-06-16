@@ -4746,10 +4746,15 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             if key not in existing_keys:
                 truly_new_keys.append(key)
 
+    # Re-order: Gemini's latest response ordering takes precedence (fixes hero field)
+    gemini_keys = [f["key"] for f in fields]
+    reordered = [ex_by_key[k] for k in gemini_keys if k in ex_by_key]
+    reordered += [f for k, f in ex_by_key.items() if k not in set(gemini_keys)]
+
     # Dedup by label similarity
     def _n(s): return re.sub(r'[^a-z0-9]', '', s.lower())
     seen_labels: set = set(); seen_vals: dict = {}; deduped = []
-    for f in ex_by_key.values():
+    for f in reordered:
         val = str(f.get("value", "")).strip(); lbl = _n(f.get("label", ""))
         if any(lbl in sl or sl in lbl for sl in seen_labels): ex_enabled.discard(f["key"]); continue
         if val and val not in ("0", "") and val in seen_vals: ex_enabled.discard(f["key"]); continue
@@ -6085,6 +6090,61 @@ def api_data_sync():
             threading.Thread(target=_bg_refresh, daemon=True).start()
 
     return jsonify({"ok": True, "source": source})
+
+
+@app.route("/api/extension/supplement", methods=["POST"])
+def api_extension_supplement():
+    """Append page text from user's real browser to an existing account's raw_text and re-run discovery."""
+    user, _ = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+
+    body = request.get_json(silent=True) or {}
+    source    = (body.get("source") or "").strip()
+    url       = (body.get("url") or "").strip()
+    new_text  = body.get("raw_text") or ""
+    synced_at = body.get("synced_at") or iso()
+
+    if not source or not new_text:
+        return jsonify({"error": "source and raw_text required"}), 400
+
+    uid = user["id"]
+    db  = get_db()
+
+    existing = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not existing:
+        return jsonify({"ok": False, "error": "Account not found"}), 404
+
+    ad = decrypt_account_data(uid, existing["data_enc"] or "")
+    old_raw = ad.get("raw_text", "")
+
+    # Prepend new page text so benefit data is prioritised in the 40k char window
+    combined = f"\n\n--- {url} ---\n{new_text}\n\n" + old_raw
+    combined = combined[:40_000]
+    ad["raw_text"] = combined
+
+    db.execute(
+        "UPDATE account_data SET data_enc=?, synced_at=? WHERE user_id=? AND source=?",
+        (encrypt_account_data(uid, ad), synced_at, uid, source)
+    )
+    db.commit()
+    print(f"[Supplement] {source}: appended {len(new_text)} chars from {url}", flush=True)
+
+    if _claude:
+        site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == source),
+                         source.replace("_", " ").title())
+        def _bg():
+            with app.app_context():
+                fields = claude_discover_fields(combined[:10_000], site_name)
+                if fields:
+                    _save_discovered_fields(uid, source, fields)
+                    print(f"[Supplement] {source}: {len(fields)} fields", flush=True)
+        threading.Thread(target=_bg, daemon=True).start()
+
+    return jsonify({"ok": True, "source": source, "chars_added": len(new_text)})
 
 
 @app.route("/api/extension/capture", methods=["POST"])

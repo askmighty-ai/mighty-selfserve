@@ -111,6 +111,17 @@ const ACCOUNT_URLS = {
   walgreens:    'https://www.walgreens.com/myaccount/mywalgreenssummary.jsp',
 };
 
+// Supplement watch: specific benefit sub-pages to capture from user's real browser.
+// These pages are bot-detected in popup windows but work fine in normal browsing.
+const SUPPLEMENT_WATCH = [
+  { source: 'delta',    domain: 'delta.com',    paths: ['/us/en/my-account/wallet', '/us/en/my-account/eCredits'] },
+  { source: 'marriott', domain: 'marriott.com', paths: ['/loyalty/myAccount/certificates', '/loyalty/myAccount/benefits'] },
+  { source: 'hilton',   domain: 'hilton.com',   paths: ['/en/hilton-honors/profile/awards', '/en/hilton-honors/profile/benefits'] },
+  { source: 'hyatt',    domain: 'hyatt.com',    paths: ['/en-US/my-account/awards'] },
+  { source: 'united',   domain: 'united.com',   paths: ['/en/us/myaccount/awards'] },
+  { source: 'alaska_air', domain: 'alaskaair.com', paths: ['/account/wallet'] },
+];
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -395,10 +406,19 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   // Must not look like a login page
   if (_LOGIN_PATH_RE.test(tab.url)) return;
 
-  // Skip known scheduled accounts (delta, marriott, etc.)
+  // Check supplement watch BEFORE the known-domain skip
   try {
-    const domain = new URL(tab.url).hostname.replace(/^www\./, '');
-    if (_KNOWN_DOMAINS.has(domain)) return;
+    const tabDomain = new URL(tab.url).hostname.replace(/^www\./, '');
+    const tabPath   = new URL(tab.url).pathname;
+    const supp = SUPPLEMENT_WATCH.find(w =>
+      tabDomain.endsWith(w.domain) && w.paths.some(p => tabPath.startsWith(p))
+    );
+    if (supp) {
+      _supplementCapturePage(tabId, tab, supp.source).catch(() => {});
+      return;
+    }
+    // Skip other known scheduled accounts (already synced by popup)
+    if (_KNOWN_DOMAINS.has(tabDomain)) return;
   } catch { return; }
 
   // Debounce: skip if captured recently
@@ -459,6 +479,62 @@ async function _autoCapturePage(tabId, tab) {
   } catch (e) {
     _autoCaptureRecent.delete(tab.url); // allow retry
     console.warn(`[Mighty] Auto-capture failed for ${tab.url}:`, e.message);
+  }
+}
+
+async function _supplementCapturePage(tabId, tab, source) {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+
+  // Debounce: skip if we supplemented this URL recently
+  const last = _autoCaptureRecent.get(tab.url);
+  if (last && Date.now() - last < _AUTO_COOLDOWN_MS) return;
+  _autoCaptureRecent.set(tab.url, Date.now());
+
+  await sleep(6_000); // give SPA time to render
+
+  let extracted;
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const hasPassword  = !!document.querySelector('input[type="password"]');
+        const text         = document.body?.innerText || '';
+        const lower        = text.slice(0, 2000).toLowerCase();
+        const loginSignals = ['sign in', 'log in', 'create account', 'forgot password']
+          .filter(s => lower.includes(s)).length;
+        return { text, hasPassword, loginSignals };
+      },
+    });
+    extracted = r?.result;
+  } catch { _autoCaptureRecent.delete(tab.url); return; }
+
+  if (!extracted || extracted.hasPassword || extracted.loginSignals >= 2) return;
+  if (!extracted.text || extracted.text.length < 200) return;
+
+  const lower = extracted.text.toLowerCase();
+  if (['gate change', 'access denied', 'checking your browser'].some(p => lower.includes(p))) return;
+
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/supplement`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': api_key },
+      body:    JSON.stringify({
+        source,
+        url:       tab.url,
+        raw_text:  extracted.text.slice(0, 12_000),
+        synced_at: new Date().toISOString(),
+      }),
+    });
+    if (resp.ok) {
+      console.log(`[Mighty] Supplemented ${source} from ${tab.url} (${extracted.text.length} chars)`);
+      chrome.action.setBadgeText({ text: '●' });
+      chrome.action.setBadgeBackgroundColor({ color: '#6366f1' });
+      setTimeout(() => chrome.action.setBadgeText({ text: '' }), 3_000);
+    }
+  } catch (e) {
+    _autoCaptureRecent.delete(tab.url);
+    console.warn(`[Mighty] Supplement failed for ${source}:`, e.message);
   }
 }
 
