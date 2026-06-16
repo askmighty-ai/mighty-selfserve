@@ -120,12 +120,15 @@ def fetch_credentials() -> tuple[dict, dict | None]:
     return data.get("credentials", {}), data.get("email")
 
 # ── Cloud sync ────────────────────────────────────────────────────────────────
+_FORCE_SYNC = False  # set to True by run_sync(force=True) to bypass extension-skip
+
 def push_to_cloud(key: str, result: dict, synced_at: str) -> bool:
     payload = json.dumps({
         "api_key":   MIGHTY_API_KEY,
         "source":    key,
         "data":      result,
         "synced_at": synced_at,
+        "force":     _FORCE_SYNC,
     }).encode()
     req = urllib.request.Request(
         MIGHTY_URL.rstrip("/") + "/api/data/sync",
@@ -1671,16 +1674,18 @@ def main() -> None:
 
 # ── Programmatic entry point (used by MightySync.app) ─────────────────────────
 def run_sync(api_key: str, mighty_url: str = MIGHTY_URL,
-             log: callable = print, only_source: str | None = None) -> dict:
+             log: callable = print, only_source: str | None = None,
+             force: bool = False) -> dict:
     """Run a full sync and return a summary dict.
     Designed to be called from the MightySync menu bar app (no CLI needed).
 
     Returns:
         {"ok": bool, "synced": int, "errors": int, "results": dict}
     """
-    global MIGHTY_API_KEY, MIGHTY_URL
+    global MIGHTY_API_KEY, MIGHTY_URL, _FORCE_SYNC
     MIGHTY_API_KEY = api_key
     MIGHTY_URL     = mighty_url
+    _FORCE_SYNC    = force
 
     log("Fetching credentials...")
     try:

@@ -6065,8 +6065,10 @@ def api_data_sync():
     ).fetchone()
     ex_data = decrypt_account_data(user["id"], existing_row["data_enc"] or "") if existing_row else {}
 
-    # Extension-first: if Railway is trying to sync but extension already has fresh good data, skip
-    if sync_source == "railway" and ex_data.get("sync_status") == "ok" \
+    # Extension-first: if Railway is trying to sync but extension already has fresh good data, skip.
+    # Bypass if caller explicitly sets force=True (e.g. manual "Sync All" button).
+    force = body.get("force", False)
+    if not force and sync_source == "railway" and ex_data.get("sync_status") == "ok" \
             and ex_data.get("sync_source") == "extension" and existing_row:
         try:
             import datetime as _dt
@@ -6672,7 +6674,7 @@ def _send_2fa_email(to_email: str, account_name: str, challenge_type: str,
 
 _sync_status: dict = {}   # user_id → {"running": bool, "last": iso, "result": dict}
 
-def _cloud_sync_user(user_id: str, api_key: str, mighty_url: str) -> dict:
+def _cloud_sync_user(user_id: str, api_key: str, mighty_url: str, force: bool = False) -> dict:
     """Run scrapers for one user server-side and return result."""
     try:
         import scrape as _scrape
@@ -6680,6 +6682,7 @@ def _cloud_sync_user(user_id: str, api_key: str, mighty_url: str) -> dict:
             api_key=api_key,
             mighty_url=mighty_url,
             log=lambda m: print(f"[CloudSync:{user_id[:6]}] {m}", flush=True),
+            force=force,
         )
         _sync_status[user_id] = {
             "running": False, "last": iso(),
@@ -6833,7 +6836,7 @@ def sync_now_cloud():
 
     def _do():
         try:
-            _cloud_sync_user(uid, user["api_key"], url)
+            _cloud_sync_user(uid, user["api_key"], url, force=True)
             _auto_discover_missing(uid)  # discover fields for any account that needs it
         except Exception as e:
             print(f"[SyncNow] {e}", flush=True)
