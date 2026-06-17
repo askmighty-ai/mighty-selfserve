@@ -1,0 +1,11 @@
+=== https://robinhood.com/account/overview ===
+
+Robinhood Portfolio
+Portfolio Value: $24,832.17
+Today's Change: +$142.33 (+0.58%)
+Buying Power: $1,200.00
+Gold Membership: Active ($5/month)
+Gold Renewal: July 1, 2026
+Margin Used: $0.00
+Margin Available: $2,000.00
+Instant Deposit Limit: $1,000.00

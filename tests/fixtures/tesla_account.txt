@@ -1,0 +1,11 @@
+=== https://www.tesla.com/en_US/account ===
+
+Tesla Account
+Vehicle: Model 3 Long Range (2023)
+VIN: 5YJ3E1EB4PF000001
+Full Self-Driving: Subscribed ($99/month)
+FSD Subscription Renewal: July 1, 2026
+Premium Connectivity: Active ($9.99/month)
+Odometer: 18,432 miles
+Warranty Expiry: May 2027 (Basic) / May 2031 (Battery)
+Supercharger Credits: $15.00 remaining

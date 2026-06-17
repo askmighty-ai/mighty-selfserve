@@ -1,0 +1,11 @@
+{
+  "description": "Tesla vehicle and subscription account",
+  "required_fields": ["vehicle", "full_self_driving", "supercharger_credits", "warranty_expiry"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "supercharger_credits": "15.00",
+    "full_self_driving": "Subscribed"
+  },
+  "min_fields": 4,
+  "max_fields": 9
+}

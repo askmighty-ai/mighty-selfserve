@@ -1,0 +1,11 @@
+{
+  "description": "Equinox gym membership account",
+  "required_fields": ["plan", "monthly_rate", "next_billing", "guest_passes"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "monthly_rate": "220",
+    "guest_passes": "3"
+  },
+  "min_fields": 4,
+  "max_fields": 9
+}

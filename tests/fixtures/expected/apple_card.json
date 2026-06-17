@@ -1,0 +1,11 @@
+{
+  "description": "Apple Card credit card summary",
+  "required_fields": ["current_balance", "payment_due_date", "daily_cash_balance", "credit_limit"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "current_balance": "1847.23",
+    "payment_due_date": "July 22"
+  },
+  "min_fields": 4,
+  "max_fields": 10
+}

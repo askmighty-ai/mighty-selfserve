@@ -1,0 +1,11 @@
+{
+  "description": "JetBlue TrueBlue Mosaic status account",
+  "required_fields": ["points_balance", "mosaic_status", "status_through"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "points_balance": "28450",
+    "mosaic_status": "Mosaic"
+  },
+  "min_fields": 3,
+  "max_fields": 9
+}

@@ -1,0 +1,11 @@
+{
+  "description": "United MileagePlus Premier Gold account",
+  "required_fields": ["miles_balance", "status", "status_through", "gpus_available"],
+  "forbidden_values": ["null"],
+  "expected_values": {
+    "miles_balance": "43780",
+    "status": "Premier Gold"
+  },
+  "min_fields": 4,
+  "max_fields": 10
+}

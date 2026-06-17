@@ -1,0 +1,11 @@
+{
+  "description": "LinkedIn Premium Career subscription",
+  "required_fields": ["plan", "monthly_rate", "next_billing", "inmail_credits"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "monthly_rate": "39.99",
+    "inmail_credits": "5"
+  },
+  "min_fields": 4,
+  "max_fields": 9
+}

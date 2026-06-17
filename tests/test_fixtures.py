@@ -79,7 +79,12 @@ def simulate_extraction(raw_text: str, site: str = "test.com") -> list:
     return fields
 
 
-@pytest.fixture(params=["delta_certificate", "amex_credit", "marriott_night", "chase_statement", "xfinity_bill"])
+@pytest.fixture(params=[
+    "delta_certificate", "amex_credit", "marriott_night", "chase_statement", "xfinity_bill",
+    "jetblue_mosaic", "southwest_companion", "united_mileageplus", "hilton_honors", "apple_card",
+    "progressive_insurance", "tesla_account", "sofi_banking", "robinhood_account", "costco_membership",
+    "amazon_prime", "uber_eats_account", "gym_membership", "ezpass_account", "linkedin_premium",
+])
 def fixture_name(request):
     return request.param
 

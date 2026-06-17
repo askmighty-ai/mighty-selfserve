@@ -1,0 +1,11 @@
+{
+  "description": "SoFi checking and savings account",
+  "required_fields": ["checking_balance", "savings_balance", "apy_savings"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "checking_balance": "3,241.80",
+    "savings_balance": "18,447.52"
+  },
+  "min_fields": 4,
+  "max_fields": 10
+}

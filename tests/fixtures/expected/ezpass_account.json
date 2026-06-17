@@ -1,0 +1,11 @@
+{
+  "description": "E-ZPass toll account",
+  "required_fields": ["account_balance", "auto_replenish", "last_toll"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "account_balance": "24.75",
+    "replenish_amount": "30"
+  },
+  "min_fields": 4,
+  "max_fields": 9
+}

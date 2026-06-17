@@ -1,0 +1,11 @@
+{
+  "description": "Costco Executive membership account",
+  "required_fields": ["membership_type", "renewal_date", "annual_fee", "reward_expiry"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "membership_type": "Executive",
+    "annual_fee": "130"
+  },
+  "min_fields": 4,
+  "max_fields": 9
+}

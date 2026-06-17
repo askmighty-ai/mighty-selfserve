@@ -1,0 +1,11 @@
+{
+  "description": "Robinhood brokerage portfolio account",
+  "required_fields": ["portfolio_value", "buying_power", "gold_membership"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "gold_membership": "Active",
+    "gold_renewal": "July 1"
+  },
+  "min_fields": 4,
+  "max_fields": 9
+}

@@ -1,0 +1,11 @@
+{
+  "description": "Uber Eats account with Uber One membership",
+  "required_fields": ["uber_one_membership", "membership_renewal", "uber_cash_balance"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "uber_cash_balance": "12.50",
+    "monthly_fee": "9.99"
+  },
+  "min_fields": 4,
+  "max_fields": 10
+}
