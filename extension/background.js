@@ -327,14 +327,15 @@ async function runSync() {
       continue;
     }
     const urls = Array.isArray(urlEntry) ? urlEntry : [urlEntry];
-    // Registry path merging is kept for future use — disabled here until
-    // path quality is validated to avoid extra/wrong pages in sync.
+    const ACCOUNT_TIMEOUT_MS = 90_000; // hard cap: no single account takes more than 90s
     try {
-      if (TAB_SYNC_SOURCES.has(account.source)) {
-        await syncAccountViaTab(api_key, account, urls, syncSessionTime);
-      } else {
-        await syncAccount(api_key, account, urls, syncSessionTime);
-      }
+      const syncFn = TAB_SYNC_SOURCES.has(account.source)
+        ? syncAccountViaTab(api_key, account, urls, syncSessionTime)
+        : syncAccount(api_key, account, urls, syncSessionTime);
+      await Promise.race([
+        syncFn,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ACCOUNT_TIMEOUT_MS)),
+      ]);
       ok++;
     } catch (e) {
       console.error(`[Mighty] Failed: ${account.name}:`, e.message);
@@ -704,12 +705,12 @@ const WARMUP_URLS = {
 // Per-site settle time (ms) after page load before extracting text.
 // Override for SPAs that need longer to fully render.
 const SETTLE_MS = {
-  xfinity:            20_000,
-  xfinity_subsequent: 20_000,  // Xfinity SPA redirects between hash routes; needs full settle
-  delta:              18_000,  // Delta wallet renders certificates late via React hydration
-  delta_subsequent:   15_000,  // eCredits also dynamic
-  default:             8_000,
-  subsequent:          8_000,
+  xfinity:            12_000,
+  xfinity_subsequent: 12_000,
+  delta:               8_000,
+  delta_subsequent:    8_000,
+  default:             5_000,
+  subsequent:          5_000,
 };
 
 // SPA sub-sections to extract via in-page navigation (clicking links).
@@ -884,11 +885,11 @@ async function syncAccount(apiKey, account, urls, syncSessionTime = new Date().t
         if (urls[i] && urls[i].includes('delta.com/us/en/my-account')) {
           console.log(`[Mighty] ${account.name}: navigating away then back to reset bot challenge…`);
           await chrome.tabs.update(tab.id, { url: 'https://www.delta.com/' });
-          await waitForTabLoad(tab.id, 20_000);
-          await sleep(8_000);
+          await waitForTabLoad(tab.id, 15_000);
+          await sleep(4_000);
           await chrome.tabs.update(tab.id, { url: urls[i] });
-          await waitForTabLoad(tab.id, 20_000);
-          await sleep(20_000); // longer settle after reset
+          await waitForTabLoad(tab.id, 15_000);
+          await sleep(8_000); // settle after reset
           try {
             const [r2] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageText });
             pageText = r2?.result || '';
@@ -906,8 +907,8 @@ async function syncAccount(apiKey, account, urls, syncSessionTime = new Date().t
 
       // For Delta wallet/eCredits: retry once if content looks thin (certificates render late)
       if (pageText.length < 2000 && urls[i] && urls[i].includes('delta.com/us/en/my-account')) {
-        console.log(`[Mighty] ${account.name} page ${i + 1}: thin content (${pageText.length} chars), waiting 15s for React render…`);
-        await sleep(15_000);
+        console.log(`[Mighty] ${account.name} page ${i + 1}: thin content (${pageText.length} chars), waiting 8s for React render…`);
+        await sleep(8_000);
         try {
           const [r2] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageText });
           if ((r2?.result || '').length > pageText.length) pageText = r2.result;
