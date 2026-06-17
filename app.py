@@ -4971,7 +4971,11 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
         if val and val not in ("0", ""): seen_vals[val] = f["key"]
         deduped.append(f)
 
-    ex["enabled_fields"]    = list(ex_enabled | {f["key"] for f in fields})
+    # Only keep enabled keys that still exist in the (post-filtered) discovered set.
+    # This ensures filtered-out fields (past flights, ticket numbers, long IDs) are
+    # not kept enabled just because they were enabled in a previous discovery run.
+    valid_keys = {f["key"] for f in deduped}
+    ex["enabled_fields"]    = list((ex_enabled | {f["key"] for f in fields}) & valid_keys)
     ex["discovered_fields"] = deduped
     ex["discovered_at"]     = iso()
     # Accumulate genuinely new field keys so UI can highlight them
