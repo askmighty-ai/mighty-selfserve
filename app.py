@@ -849,7 +849,7 @@ CRITICAL: Member numbers, account IDs, and loyalty IDs must NEVER be first. Stat
 CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included — only include named tiers with real meaning.
 CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
-def _post_filter_fields(fields: list) -> list:
+def _post_filter_fields(fields: list, source: str = "") -> list:
     """Remove fields that are clearly noise regardless of what the AI returned.
 
     Applied after Gemini responds so prompt language alone can't be gamed.
@@ -978,6 +978,27 @@ def _post_filter_fields(fields: list) -> list:
         # Drop generic tier labels that tell the user nothing meaningful
         if val_low in _GENERIC_TIER_VALUES:
             continue
+
+        # Drop loyalty-program hallucinations on utility/telecom sources
+        _UTILITY_SOURCES = {
+            "xfinity", "comcast", "spectrum", "cox", "centurylink", "att_internet",
+            "pge", "sdge", "palo_alto_utilities", "verizon", "tmobile",
+        }
+        _LOYALTY_LABELS = {
+            "elite status", "elite_status", "member status", "tier status", "medallion",
+            "elite member", "diamond member", "platinum member", "gold member", "silver member",
+            "loyalty tier", "membership tier", "reward tier", "status level",
+        }
+        _LOYALTY_VALUES = {
+            "diamond member", "gold member", "platinum member", "silver member",
+            "diamond", "platinum elite", "gold elite", "silver elite",
+            "mosaic", "executive platinum", "1k", "global services",
+        }
+        if source in _UTILITY_SOURCES:
+            if any(lbl in lbl_low or lbl in (f.get("key") or "").lower() for lbl in _LOYALTY_LABELS):
+                continue
+            if val_low in _LOYALTY_VALUES:
+                continue
 
         # Drop labels that match known noise patterns
         if any(n in lbl_low for n in _LABEL_NOISE):
@@ -2602,7 +2623,16 @@ function updateSyncTimes() {
     var ts = el.dataset.synced;
     if (!ts) return;
     var rel = fmtRelative(ts);
-    if (rel) el.textContent = 'Synced ' + rel;
+    if (rel) {
+      var color = '#22c55e', icon = '✓';
+      var secs2 = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+      var hrs2 = secs2 / 3600;
+      if (hrs2 >= 168) { color = '#ef4444'; icon = '!'; }
+      else if (hrs2 >= 48) { color = '#f59e0b'; icon = '~'; }
+      else if (hrs2 >= 24) { color = '#f59e0b'; icon = '~'; }
+      else if (hrs2 >= 2) { color = '#6b7280'; icon = '✓'; }
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:500">' + icon + ' Synced ' + rel + '</span>';
+    }
     try {
       var d = new Date(ts);
       el.title = d.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'})
@@ -4648,7 +4678,7 @@ def dashboard():
                         "value": f.get("value", "–"),
                         "source_snippet": f.get("source_snippet", ""),
                     }
-                    for f in _post_filter_fields(disc["fields"])
+                    for f in _post_filter_fields(disc["fields"], source=src)
                     if f.get("key") in disc["enabled"]
                 ]
             else:
@@ -4657,6 +4687,20 @@ def dashboard():
             synced_at   = row["synced_at"] if row else ""
             sync_status = data.get("sync_status", "ok") if row else ""
             status_color = "#30d158"
+
+            # For utility/telecom sources, promote billing fields to the front
+            _UTILITY_SOURCES_CARD = {
+                "xfinity", "comcast", "spectrum", "cox", "centurylink", "att_internet",
+                "pge", "sdge", "palo_alto_utilities", "verizon", "tmobile",
+            }
+            _UTILITY_HERO_KEYS = {
+                "amount_due", "balance_due", "current_balance", "next_payment",
+                "monthly_rate", "bill_amount", "account_balance", "auto_pay", "due_date",
+            }
+            if src in _UTILITY_SOURCES_CARD:
+                preferred = [it for it in items if it.get("key") in _UTILITY_HERO_KEYS]
+                rest = [it for it in items if it.get("key") not in _UTILITY_HERO_KEYS]
+                items = preferred + rest
 
             # Separate hero stat from secondary stats, and find alerts
             hero_item = None
@@ -7077,7 +7121,16 @@ function updateSyncTimes() {{
     var ts = el.dataset.synced;
     if (!ts) return;
     var rel = fmtRelative(ts);
-    if (rel) el.textContent = 'Synced ' + rel;
+    if (rel) {{
+      var color = '#22c55e', icon = '✓';
+      var secs2 = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+      var hrs2 = secs2 / 3600;
+      if (hrs2 >= 168) {{ color = '#ef4444'; icon = '!'; }}
+      else if (hrs2 >= 48) {{ color = '#f59e0b'; icon = '~'; }}
+      else if (hrs2 >= 24) {{ color = '#f59e0b'; icon = '~'; }}
+      else if (hrs2 >= 2) {{ color = '#6b7280'; icon = '✓'; }}
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:500">' + icon + ' Synced ' + rel + '</span>';
+    }}
   }});
 }}
 updateSyncTimes();
