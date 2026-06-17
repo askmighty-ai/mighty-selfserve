@@ -7327,25 +7327,29 @@ def api_extension_capture():
     # Trigger AI field discovery in background
     if raw_text and _claude:
         def _discover():
-            fields = claude_discover_fields(raw_text, name, source=source)
-            if fields:
-                _save_discovered_fields(uid, source, fields)
-            else:
-                _cred = db.execute(
-                    "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
-                    (uid, source)
-                ).fetchone()
-                if _cred:
-                    try:
-                        _ex = json.loads(decrypt_cred(uid, _cred["extra_enc"] or "") or "{}")
-                        _ex["discovery_failed"] = True
-                        db.execute(
-                            "UPDATE account_credentials SET extra_enc=? WHERE user_id=? AND source=?",
-                            (encrypt_cred(uid, json.dumps(_ex)), uid, source)
-                        )
-                        db.commit()
-                    except Exception:
-                        pass
+            # Run entirely inside app context — get_db() and hint-phrase loading
+            # both require it; do NOT capture db from the outer request scope.
+            with app.app_context():
+                _db_d = get_db()
+                fields = claude_discover_fields(raw_text, name, source=source)
+                if fields:
+                    _save_discovered_fields(uid, source, fields)
+                else:
+                    _cred = _db_d.execute(
+                        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                        (uid, source)
+                    ).fetchone()
+                    if _cred:
+                        try:
+                            _ex = json.loads(decrypt_cred(uid, _cred["extra_enc"] or "") or "{}")
+                            _ex["discovery_failed"] = True
+                            _db_d.execute(
+                                "UPDATE account_credentials SET extra_enc=? WHERE user_id=? AND source=?",
+                                (encrypt_cred(uid, json.dumps(_ex)), uid, source)
+                            )
+                            _db_d.commit()
+                        except Exception:
+                            pass
         threading.Thread(target=_discover, daemon=True).start()
 
     return jsonify({"ok": True, "source": source})
@@ -7618,90 +7622,90 @@ def _cloud_sync_user(user_id: str, api_key: str, mighty_url: str, force: bool = 
 
 def _auto_discover_missing(uid: str) -> None:
     """Run field discovery for any connected account that has raw_text.
-    Skips accounts whose raw_text hasn't changed since last discovery (hash check)."""
+    Skips accounts whose raw_text hasn't changed since last discovery (hash check).
+    Always establishes its own app context so it is safe to call from any thread."""
     if not _claude:
         return
-    try:
-        import hashlib
-        cred_rows = get_db().execute(
-            "SELECT source, extra_enc FROM account_credentials WHERE user_id=?", (uid,)
-        ).fetchall()
+    with app.app_context():
+        try:
+            import hashlib
+            cred_rows = get_db().execute(
+                "SELECT source, extra_enc FROM account_credentials WHERE user_id=?", (uid,)
+            ).fetchall()
 
-        def _discover_one(cr):
-            try:
-                src = cr["source"]
-                if src.startswith("_"):
-                    return
-                ex: dict = {}
-                if cr["extra_enc"]:
-                    try: ex = json.loads(decrypt_cred(uid, cr["extra_enc"]))
-                    except Exception: pass
-                try:
-                    ad = get_db().execute(
-                        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
-                        (uid, src)
-                    ).fetchone()
-                except Exception:
-                    return
-                if not ad:
-                    return
-                raw_text = decrypt_account_data(uid, ad["data_enc"] or "").get("raw_text", "")
-                if not raw_text:
-                    return
-                # Skip if raw_text is identical to the last discovery run —
-                # UNLESS existing fields contain login-wall values (means last sync failed to log in)
-                _BAD_VALUES = ("log in", "sign in", "login to", "sign in to", "no match found")
-                existing_fields = ex.get("discovered_fields", [])
-                has_bad_fields = any(
-                    any(bad in str(f.get("value", "")).lower() for bad in _BAD_VALUES)
-                    for f in existing_fields
-                )
-                raw_hash = hashlib.md5(raw_text.encode()).hexdigest()
-                if ex.get("last_raw_hash") == raw_hash and existing_fields and not has_bad_fields:
-                    return
-                if has_bad_fields:
-                    print(f"[AutoDiscover] {src}: forcing re-discovery (stale login-wall fields)", flush=True)
-                site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == src), src)
-                print(f"[AutoDiscover] {src} for user {uid[:6]} (hash {raw_hash[:8]})", flush=True)
-                merged: dict = {}
-                for _ in range(1):
-                    for f in claude_discover_fields(raw_text, site_name, source=src):
-                        k = f.get("key", "")
-                        if k and k not in merged: merged[k] = f
-                        elif k: merged[k]["value"] = f.get("value", "")
-                if merged:
-                    _save_discovered_fields(uid, src, list(merged.values()))
-                    # Store hash so we don't re-discover unchanged pages
+            def _discover_one(cr):
+                # Each thread pool thread needs its own app context.
+                with app.app_context():
                     try:
-                        cred_row2 = get_db().execute(
-                            "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
-                            (uid, src)
-                        ).fetchone()
-                        if cred_row2 and cred_row2["extra_enc"]:
+                        src = cr["source"]
+                        if src.startswith("_"):
+                            return
+                        ex: dict = {}
+                        if cr["extra_enc"]:
+                            try: ex = json.loads(decrypt_cred(uid, cr["extra_enc"]))
+                            except Exception: pass
+                        try:
+                            ad = get_db().execute(
+                                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                                (uid, src)
+                            ).fetchone()
+                        except Exception:
+                            return
+                        if not ad:
+                            return
+                        raw_text = decrypt_account_data(uid, ad["data_enc"] or "").get("raw_text", "")
+                        if not raw_text:
+                            return
+                        # Skip if raw_text is identical to last discovery run —
+                        # UNLESS existing fields contain login-wall values
+                        _BAD_VALUES = ("log in", "sign in", "login to", "sign in to", "no match found")
+                        existing_fields = ex.get("discovered_fields", [])
+                        has_bad_fields = any(
+                            any(bad in str(f.get("value", "")).lower() for bad in _BAD_VALUES)
+                            for f in existing_fields
+                        )
+                        raw_hash = hashlib.md5(raw_text.encode()).hexdigest()
+                        if ex.get("last_raw_hash") == raw_hash and existing_fields and not has_bad_fields:
+                            return
+                        if has_bad_fields:
+                            print(f"[AutoDiscover] {src}: forcing re-discovery (stale login-wall fields)", flush=True)
+                        site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == src), src)
+                        print(f"[AutoDiscover] {src} for user {uid[:6]} (hash {raw_hash[:8]})", flush=True)
+                        merged: dict = {}
+                        for f in claude_discover_fields(raw_text, site_name, source=src):
+                            k = f.get("key", "")
+                            if k and k not in merged: merged[k] = f
+                            elif k: merged[k]["value"] = f.get("value", "")
+                        if merged:
+                            _save_discovered_fields(uid, src, list(merged.values()))
+                            # Store hash so we don't re-discover unchanged pages
                             try:
-                                ex2 = json.loads(decrypt_cred(uid, cred_row2["extra_enc"]))
-                                ex2["last_raw_hash"] = raw_hash
-                                get_db().execute(
-                                    "UPDATE account_credentials SET extra_enc=? WHERE user_id=? AND source=?",
-                                    (encrypt_cred(uid, json.dumps(ex2)), uid, src)
-                                )
-                                get_db().commit()
+                                cred_row2 = get_db().execute(
+                                    "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                                    (uid, src)
+                                ).fetchone()
+                                if cred_row2 and cred_row2["extra_enc"]:
+                                    ex2 = json.loads(decrypt_cred(uid, cred_row2["extra_enc"]))
+                                    ex2["last_raw_hash"] = raw_hash
+                                    get_db().execute(
+                                        "UPDATE account_credentials SET extra_enc=? WHERE user_id=? AND source=?",
+                                        (encrypt_cred(uid, json.dumps(ex2)), uid, src)
+                                    )
+                                    get_db().commit()
                             except Exception:
                                 pass
-                    except Exception:
-                        pass
-            except Exception as e:
-                print(f"[AutoDiscover] Error in {cr.get('source', '?')}: {e}", flush=True)
+                    except Exception as e:
+                        print(f"[AutoDiscover] Error in {cr.get('source', '?')}: {e}", flush=True)
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [executor.submit(_discover_one, cr) for cr in cred_rows]
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"[AutoDiscover] Thread error: {e}", flush=True)
-    except Exception as e:
-        print(f"[AutoDiscover] Error: {e}", flush=True)
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [executor.submit(_discover_one, cr) for cr in cred_rows]
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"[AutoDiscover] Thread error: {e}", flush=True)
+        except Exception as e:
+            print(f"[AutoDiscover] Error: {e}", flush=True)
 
 
 def _cloud_sync_all():
