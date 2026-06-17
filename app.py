@@ -6742,40 +6742,21 @@ def api_data_sync():
         uid       = user["id"]
 
         if not has_prefs:
-            # First-time: discover fields
+            # First-time: discover fields.
+            # Everything runs inside app.app_context() so get_db() works throughout,
+            # including the hint-phrase query inside claude_discover_fields.
             def _bg_discover():
-                fields = claude_discover_fields(raw_text, site_name, source=source)
-                ex2 = {}
-                if cred_row and cred_row["extra_enc"]:
-                    try: ex2 = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
-                    except Exception: pass
-                if fields:
-                    enabled = [f["key"] for f in fields]
-                    ex2["enabled_fields"]    = enabled
-                    ex2["discovered_fields"] = fields
-                    ex2["discovered_at"]     = iso()
-                    ex2.pop("discovery_failed", None)
-                else:
-                    # Discovery ran but found nothing (e.g. got a login page)
-                    ex2["discovery_failed"]  = True
-                    ex2.setdefault("enabled_fields",    [])
-                    ex2.setdefault("discovered_fields", [])
-                new_enc = encrypt_cred(uid, json.dumps(ex2))
                 with app.app_context():
+                    fields = claude_discover_fields(raw_text, site_name, source=source)
                     _db = get_db()
-                    _db.execute(
-                        "UPDATE account_credentials SET extra_enc=?, updated_at=? "
-                        "WHERE user_id=? AND source=?",
-                        (new_enc, iso(), uid, source)
-                    )
-                    _db.commit()
-                    # Self-improving coverage: boost quality scores for the specific
-                    # paths that contributed to a successful extraction.
                     if fields:
+                        # Route through _save_discovered_fields so hint population,
+                        # confidence-based auto-selection, and failure tracking all apply.
+                        _save_discovered_fields(uid, source, fields)
+                        # Path-specific quality score boost
                         try:
                             _paths = _paths_from_raw(raw_text)
                             if _paths:
-                                # Boost each contributing path specifically
                                 for _p in _paths:
                                     _db.execute(
                                         "UPDATE site_paths SET quality_score = MIN(quality_score + 0.5, 10.0), "
@@ -6783,8 +6764,6 @@ def api_data_sync():
                                         (iso(), source, _p)
                                     )
                             else:
-                                # No URL markers — modest boost for user-discovered paths only
-                                # (quality < 5 means not a pre-seeded path)
                                 _db.execute(
                                     "UPDATE site_paths SET quality_score = MIN(quality_score + 0.2, 8.0), "
                                     "last_seen = ? WHERE site = ? AND quality_score < 5.0",
@@ -6793,6 +6772,22 @@ def api_data_sync():
                             _db.commit()
                         except Exception:
                             pass
+                    else:
+                        # Discovery ran but LLM returned nothing — set discovery_failed
+                        # flag so the dashboard can show "couldn't read this account".
+                        ex2 = {}
+                        if cred_row and cred_row["extra_enc"]:
+                            try: ex2 = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
+                            except Exception: pass
+                        ex2["discovery_failed"] = True
+                        ex2.setdefault("enabled_fields",    [])
+                        ex2.setdefault("discovered_fields", [])
+                        _db.execute(
+                            "UPDATE account_credentials SET extra_enc=?, updated_at=? "
+                            "WHERE user_id=? AND source=?",
+                            (encrypt_cred(uid, json.dumps(ex2)), iso(), uid, source)
+                        )
+                        _db.commit()
             threading.Thread(target=_bg_discover, daemon=True).start()
         else:
             # Existing prefs: re-run full discovery so new fields (credits, offers, certs)
