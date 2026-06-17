@@ -1,0 +1,10 @@
+{
+  "description": "Xfinity bill summary",
+  "required_fields": ["amount_due", "due_date"],
+  "forbidden_values": ["null", "undefined"],
+  "expected_values": {
+    "amount_due": "157.43"
+  },
+  "min_fields": 2,
+  "max_fields": 22
+}

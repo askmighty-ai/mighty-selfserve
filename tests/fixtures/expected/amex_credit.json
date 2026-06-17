@@ -1,0 +1,11 @@
+{
+  "description": "Amex Platinum benefits",
+  "required_fields": ["airline_fee_credit", "points_balance", "annual_fee"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "points_balance": "124350",
+    "annual_fee": "695"
+  },
+  "min_fields": 4,
+  "max_fields": 12
+}

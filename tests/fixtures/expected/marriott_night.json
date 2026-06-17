@@ -1,0 +1,11 @@
+{
+  "description": "Marriott Bonvoy free night certificate",
+  "required_fields": ["points_balance", "elite_status", "free_night_expiration"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "points_balance": "48230",
+    "elite_status": "Platinum"
+  },
+  "min_fields": 3,
+  "max_fields": 10
+}

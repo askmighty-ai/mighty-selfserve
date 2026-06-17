@@ -1,0 +1,12 @@
+{
+  "description": "Delta SkyMiles Companion Certificate",
+  "required_fields": ["certificate_number", "certificate_value", "valid_through", "status"],
+  "forbidden_values": ["null", "undefined"],
+  "expected_values": {
+    "certificate_number": "7892341",
+    "certificate_value": "299",
+    "status": "available"
+  },
+  "min_fields": 3,
+  "max_fields": 10
+}

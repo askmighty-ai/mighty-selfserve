@@ -1,0 +1,11 @@
+{
+  "description": "Chase Sapphire Reserve statement",
+  "required_fields": ["current_balance", "payment_due_date", "ultimate_rewards_points"],
+  "forbidden_values": ["None", "null"],
+  "expected_values": {
+    "current_balance": "2341.87",
+    "payment_due_date": "July 15"
+  },
+  "min_fields": 4,
+  "max_fields": 10
+}

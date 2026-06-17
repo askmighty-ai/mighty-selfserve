@@ -185,6 +185,7 @@ def init_db():
                 reporter_count INTEGER DEFAULT 1,
                 last_seen      TEXT NOT NULL,
                 quality_score  REAL DEFAULT 1.0,
+                failure_count  INTEGER DEFAULT 0,
                 UNIQUE(site, path)
             );
             CREATE TABLE IF NOT EXISTS extraction_hints (
@@ -296,6 +297,10 @@ def init_db():
             db.execute("ALTER TABLE users ADD COLUMN delete_raw_after_extract INTEGER DEFAULT 0")
         except Exception:
             pass  # may already exist
+        try:
+            db.execute("ALTER TABLE site_paths ADD COLUMN failure_count INTEGER DEFAULT 0")
+        except Exception:
+            pass
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -705,6 +710,26 @@ def _paths_from_raw(raw_text: str) -> list[str]:
         except Exception:
             pass
     return paths
+
+
+def _record_path_failures(site: str, raw_text: str, succeeded: bool) -> None:
+    """Increment failure_count for paths that produced no extraction, decay quality_score."""
+    paths = _paths_from_raw(raw_text or "")
+    if not paths or succeeded:
+        return
+    try:
+        db = get_db()
+        for path in paths[:10]:
+            db.execute("""
+                INSERT INTO site_paths (site, path, reporter_count, last_seen, quality_score, failure_count)
+                VALUES (?, ?, 0, ?, 0.0, 1)
+                ON CONFLICT(site, path) DO UPDATE SET
+                    failure_count = failure_count + 1,
+                    quality_score = MAX(0.0, quality_score - 0.3 * (1.0 + failure_count * 0.1))
+            """, (site, path, iso()))
+        db.commit()
+    except Exception:
+        pass
 
 
 def _get_category_schema(source: str) -> dict | None:
@@ -2343,12 +2368,22 @@ body{display:flex;flex-direction:row;background:#eee9e2}
           count.textContent = items.length;
           var colors  = {urgent:'#fef2f2', soon:'#fffbeb', info:'#f0f9ff'};
           var borders = {urgent:'#fca5a5', soon:'#fcd34d', info:'#7dd3fc'};
-          var icons   = {urgent:'🚨', soon:'⏰', info:'💡'};
+          var urgency_icons = {urgent:'🚨', soon:'⏰', info:'💡'};
+          var TYPE_ICONS = {
+            'value_drop': '📉',
+            'bill_increase': '📈',
+            'credit_added': '💰',
+            'expiry': '📅',
+            'payment_due': '💳',
+            'unused_credit': '💡'
+          };
           items.forEach(function(r){
             var el = document.createElement('div');
             el.style.cssText = 'background:'+colors[r.urgency]+';border:1px solid '+borders[r.urgency]+';border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;font-size:13px';
-            var days = r.days_left !== null ? (r.days_left === 0 ? ' — today' : ' — '+r.days_left+'d') : '';
-            el.innerHTML = '<span style="font-size:16px">'+icons[r.urgency]+'</span><div><strong style="color:#111">'+r.account_name+'</strong><span style="color:#6b7280;margin:0 4px">·</span><span style="color:#374151">'+r.message+'</span>'+(days ? '<span style="color:#9ca3af;font-size:12px">'+days+'</span>' : '')+'</div>';
+            var icon = TYPE_ICONS[r.type] || urgency_icons[r.urgency] || '🔔';
+            var days = r.days_left !== null && r.days_left !== undefined ? (r.days_left === 0 ? ' — today' : ' — '+r.days_left+'d') : '';
+            var name = r.account_name || r.source || '';
+            el.innerHTML = '<span style="font-size:16px">'+icon+'</span><div><strong style="color:#111">'+name+'</strong><span style="color:#6b7280;margin:0 4px">·</span><span style="color:#374151">'+r.message+'</span>'+(days ? '<span style="color:#9ca3af;font-size:12px">'+days+'</span>' : '')+'</div>';
             list.appendChild(el);
           });
         }).catch(function(){});
@@ -4162,6 +4197,84 @@ def _get_reminders(uid: str) -> list:
     return reminders
 
 
+def _get_change_alerts(uid: str) -> list[dict]:
+    """Generate smart alerts from field_history: value drops, balance changes, new credits."""
+    alerts = []
+    try:
+        db = get_db()
+        # Get recent changes in the last 30 days
+        rows = db.execute(
+            "SELECT source, field_label, old_value, new_value, changed_at "
+            "FROM field_history WHERE user_id=? AND changed_at >= datetime('now','-30 days') "
+            "ORDER BY changed_at DESC LIMIT 100",
+            (uid,)
+        ).fetchall()
+
+        for r in rows:
+            old_v = r["old_value"] or ""
+            new_v = r["new_value"] or ""
+            label = r["field_label"]
+            source = r["source"]
+            changed_at = r["changed_at"]
+
+            # Try to detect numeric changes (dollars, points)
+            import re as _re
+            def _extract_number(s):
+                s = s.replace(",", "")
+                m = _re.search(r'[\$£€]?\s*([\d]+(?:\.\d+)?)', s)
+                return float(m.group(1)) if m else None
+
+            old_n = _extract_number(old_v)
+            new_n = _extract_number(new_v)
+
+            if old_n is not None and new_n is not None and old_n != new_n:
+                diff = new_n - old_n
+                pct = abs(diff / old_n * 100) if old_n else 0
+
+                if diff < 0 and pct >= 5:
+                    # Significant decrease
+                    urgency = "urgent" if pct >= 20 else "info"
+                    alerts.append({
+                        "type": "value_drop",
+                        "urgency": urgency,
+                        "source": source,
+                        "label": label,
+                        "message": f"{label} dropped from {old_v} to {new_v}",
+                        "detail": f"{abs(diff):.0f} decrease ({pct:.0f}%)",
+                        "changed_at": changed_at,
+                    })
+                elif diff > 0 and pct >= 5:
+                    # Significant increase — positive for credits/points, negative for bills
+                    credit_keywords = ["credit", "point", "mile", "reward", "cashback", "bonus"]
+                    bill_keywords = ["bill", "due", "charge", "amount due", "balance due"]
+
+                    label_lower = label.lower()
+                    if any(k in label_lower for k in bill_keywords):
+                        urgency = "soon" if pct >= 15 else "info"
+                        alerts.append({
+                            "type": "bill_increase",
+                            "urgency": urgency,
+                            "source": source,
+                            "label": label,
+                            "message": f"{label} increased from {old_v} to {new_v}",
+                            "detail": f"{diff:.0f} increase ({pct:.0f}%)",
+                            "changed_at": changed_at,
+                        })
+                    elif any(k in label_lower for k in credit_keywords):
+                        alerts.append({
+                            "type": "credit_added",
+                            "urgency": "info",
+                            "source": source,
+                            "label": label,
+                            "message": f"{label} increased from {old_v} to {new_v}",
+                            "detail": f"+{diff:.0f} ({pct:.0f}% increase)",
+                            "changed_at": changed_at,
+                        })
+    except Exception:
+        pass
+    return alerts
+
+
 def _source_category(source: str) -> str:
     """Return display category for a source key."""
     for cat_key, schema in _CATEGORY_SCHEMAS.items():
@@ -5232,11 +5345,24 @@ def update_privacy():
 @require_login
 def privacy_audit_log():
     uid = session["user_id"]
-    rows = get_db().execute(
+    db  = get_db()
+    rows = db.execute(
         "SELECT event_type, source, domain, detail, created_at FROM privacy_audit_log "
         "WHERE user_id=? ORDER BY created_at DESC LIMIT 200",
         (uid,)
     ).fetchall()
+    # Compute stats
+    domain_count = db.execute(
+        "SELECT COUNT(DISTINCT source) FROM account_data WHERE user_id=?", (uid,)
+    ).fetchone()[0] or 0
+    pages_this_month = db.execute(
+        "SELECT COUNT(*) FROM privacy_audit_log WHERE user_id=? AND created_at >= datetime('now','-30 days')",
+        (uid,)
+    ).fetchone()[0] or 0
+    total_events = db.execute(
+        "SELECT COUNT(*) FROM privacy_audit_log WHERE user_id=?", (uid,)
+    ).fetchone()[0] or 0
+
     rows_html = ""
     for r in rows:
         rows_html += (
@@ -5248,6 +5374,38 @@ def privacy_audit_log():
     if not rows_html:
         rows_html = '<tr><td colspan="4" style="padding:20px;text-align:center;color:#9ca3af;font-size:13px">No events recorded yet</td></tr>'
 
+    stats_bar = f"""
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+  <div style="background:#fff;border-radius:8px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.06)">
+    <div style="font-size:22px;font-weight:700;color:#111">{domain_count}</div>
+    <div style="font-size:12px;color:#6b7280;margin-top:2px">Connected accounts</div>
+  </div>
+  <div style="background:#fff;border-radius:8px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.06)">
+    <div style="font-size:22px;font-weight:700;color:#111">{pages_this_month}</div>
+    <div style="font-size:12px;color:#6b7280;margin-top:2px">Sync events this month</div>
+  </div>
+  <div style="background:#fff;border-radius:8px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.06)">
+    <div style="font-size:22px;font-weight:700;color:#111">{total_events}</div>
+    <div style="font-size:12px;color:#6b7280;margin-top:2px">Total events logged</div>
+  </div>
+</div>"""
+
+    delete_btn = """
+<div style="margin-bottom:20px;display:flex;gap:10px;align-items:center">
+  <button onclick="deleteAllRaw()" style="padding:8px 14px;background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;border-radius:6px;font-size:13px;cursor:pointer;font-weight:500">
+    🗑 Delete all raw captures
+  </button>
+  <span style="font-size:12px;color:#9ca3af">Removes raw page text from all synced accounts. Extracted fields are preserved.</span>
+</div>
+<script>
+async function deleteAllRaw() {
+  if (!confirm('Delete all stored raw page text? Extracted fields will not be affected.')) return;
+  const r = await fetch('/api/privacy/delete-raw-captures', {method:'POST'});
+  const d = await r.json();
+  alert(d.deleted + ' raw captures deleted.');
+}
+</script>"""
+
     return render_template_string("""<!DOCTYPE html><html><head><title>Audit Log — Mighty</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>body{font-family:-apple-system,sans-serif;margin:0;background:#f9fafb}
@@ -5256,6 +5414,7 @@ def privacy_audit_log():
     <div style="margin-bottom:20px"><a href="/settings" style="color:#6b7280;text-decoration:none;font-size:13px">← Settings</a></div>
     <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 4px">Privacy Audit Log</h2>
     <p style="font-size:13px;color:#6b7280;margin:0 0 20px">All data capture and sync events for your account.</p>
+    """ + stats_bar + delete_btn + """
     <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)">
     <thead><tr style="background:#f3f4f6">
     <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600">Time</th>
@@ -5264,6 +5423,32 @@ def privacy_audit_log():
     <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600">Detail</th>
     </tr></thead><tbody>""" + rows_html + """</tbody></table>
     </div></body></html>""")
+
+
+@app.route("/api/privacy/delete-raw-captures", methods=["POST"])
+@require_login
+def api_delete_raw_captures():
+    uid = session["user_id"]
+    db = get_db()
+    rows = db.execute(
+        "SELECT source, data_enc FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+    deleted = 0
+    for row in rows:
+        try:
+            d = decrypt_account_data(uid, row["data_enc"] or "")
+            if d.get("raw_text"):
+                d["raw_text"] = ""
+                db.execute(
+                    "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                    (encrypt_account_data(uid, d), uid, row["source"])
+                )
+                deleted += 1
+        except Exception:
+            pass
+    db.commit()
+    _log_privacy_event(uid, "delete_all_raw", detail=f"{deleted} accounts cleared")
+    return jsonify({"ok": True, "deleted": deleted})
 
 
 @app.route("/privacy/domains")
@@ -5891,6 +6076,57 @@ SUPPORTED_SITES = [
 ]
 
 
+def _system_confidence(
+    llm_confidence: float,
+    source_type: str,           # "api", "dom", "llm"
+    field_key: str,
+    source: str,
+    uid: str,
+) -> float:
+    """
+    Compute a system-level confidence score combining:
+      - LLM confidence (base)
+      - Source type bonus (api > dom > llm)
+      - Field persistence (seen in N prior syncs)
+      - Hint success rate for this field
+    Returns 0.0-1.0.
+    """
+    score = float(llm_confidence or 0.5)
+
+    # Source type bonus
+    src_bonus = {"api": 0.10, "dom": 0.05, "llm": 0.0}.get(source_type, 0.0)
+    score = min(1.0, score + src_bonus)
+
+    try:
+        db = get_db()
+        # Field persistence: how many times has this field appeared historically?
+        history_count = db.execute(
+            "SELECT COUNT(*) FROM field_history WHERE user_id=? AND source=? AND field_key=?",
+            (uid, source, field_key)
+        ).fetchone()[0] or 0
+        # Each prior sync adds up to 0.05 confidence (caps at 0.15)
+        persistence_bonus = min(0.15, history_count * 0.05)
+        score = min(1.0, score + persistence_bonus)
+
+        # Hint success rate for this field
+        hint_row = db.execute(
+            "SELECT confidence, success_count FROM extraction_hints "
+            "WHERE site=? AND field_key=? ORDER BY success_count DESC LIMIT 1",
+            (source, field_key)
+        ).fetchone()
+        if hint_row:
+            hint_conf = hint_row["confidence"] or 0.0
+            hint_success = hint_row["success_count"] or 0
+            # Weighted blend: 70% current score, 30% hint confidence (if proven)
+            if hint_success >= 3:
+                score = 0.7 * score + 0.3 * hint_conf
+                score = min(1.0, score)
+    except Exception:
+        pass
+
+    return round(score, 3)
+
+
 def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
     """Save AI-discovered fields and update account_data items. Shared by auto and manual discovery."""
     db = get_db()
@@ -5931,12 +6167,23 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
         if val and val not in ("0", ""): seen_vals[val] = f["key"]
         deduped.append(f)
 
+    # Compute system_confidence for each field (calibrated blend of LLM + source + history + hints)
+    for f in deduped:
+        f["system_confidence"] = _system_confidence(
+            llm_confidence=f.get("confidence", 0.5),
+            source_type="api" if f.get("from_api") else "llm",
+            field_key=f.get("key", ""),
+            source=source,
+            uid=uid,
+        )
+
     # Confidence-based auto-selection:
     # >=0.85 -> auto-enable; <0.85 -> store but mark review_required
+    # Uses system_confidence (calibrated) if available, else raw confidence
     auto_enabled = []
     review_required = []
     for f in deduped:
-        conf = f.get("confidence")
+        conf = f.get("system_confidence") or f.get("confidence")
         if isinstance(conf, (int, float)) and conf < 0.85:
             review_required.append(f["key"])
         else:
@@ -7383,6 +7630,7 @@ def api_data_sync():
                             _db.commit()
                         except Exception:
                             pass
+                        _record_path_failures(source, raw_text, succeeded=True)
                     else:
                         # Discovery ran but LLM returned nothing — set discovery_failed
                         # flag so the dashboard can show "couldn't read this account".
@@ -7399,6 +7647,7 @@ def api_data_sync():
                             (encrypt_cred(uid, json.dumps(ex2)), iso(), uid, source)
                         )
                         _db.commit()
+                        _record_path_failures(source, raw_text, succeeded=False)
             threading.Thread(target=_bg_discover, daemon=True).start()
         else:
             # Existing prefs: re-run full discovery so new fields (credits, offers, certs)
@@ -7455,7 +7704,9 @@ def api_data_sync():
                     # ── Run discovery ──────────────────────────────────────────
                     new_fields = claude_discover_fields(raw_text, site_name, source=source)
                     if not new_fields:
+                        _record_path_failures(source, raw_text, succeeded=False)
                         return
+                    _record_path_failures(source, raw_text, succeeded=True)
                     _save_discovered_fields(uid, source, new_fields)
 
                     # Persist the new hash so the next sync can skip if unchanged
@@ -7796,7 +8047,13 @@ def api_field_history(source):
 def api_reminders():
     """Return actionable reminders for all accounts."""
     uid = session["user_id"]
-    return jsonify({"reminders": _get_reminders(uid)})
+    reminders = _get_reminders(uid)
+    change_alerts = _get_change_alerts(uid)
+    all_reminders = reminders + change_alerts
+    # sort: urgent first, then soon, then info
+    priority = {"urgent": 0, "soon": 1, "info": 2}
+    all_reminders.sort(key=lambda x: priority.get(x.get("urgency", "info"), 2))
+    return jsonify({"reminders": all_reminders})
 
 
 @app.route("/api/sync-health/<source>")
@@ -7840,6 +8097,9 @@ def api_sync_health(source):
         "sources":          sources_breakdown,
         "coverage":         coverage,
         "recent_changes":   [dict(r) for r in recent_changes],
+        "path_failures":    db.execute(
+            "SELECT SUM(failure_count) FROM site_paths WHERE site=?", (source,)
+        ).fetchone()[0] or 0,
     })
 
 
