@@ -200,6 +200,35 @@ def init_db():
                 last_seen      TEXT NOT NULL,
                 UNIQUE(site, trigger_phrase, field_key)
             );
+            CREATE TABLE IF NOT EXISTS field_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                source      TEXT NOT NULL,
+                field_key   TEXT NOT NULL,
+                field_label TEXT NOT NULL,
+                old_value   TEXT,
+                new_value   TEXT NOT NULL,
+                changed_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_fh_user ON field_history(user_id, source, changed_at);
+            CREATE TABLE IF NOT EXISTS approved_domains (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                domain      TEXT NOT NULL,
+                approved    INTEGER NOT NULL DEFAULT 1,
+                added_at    TEXT NOT NULL,
+                UNIQUE(user_id, domain)
+            );
+            CREATE TABLE IF NOT EXISTS privacy_audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                event_type  TEXT NOT NULL,
+                source      TEXT,
+                domain      TEXT,
+                detail      TEXT,
+                created_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_pal_user ON privacy_audit_log(user_id, created_at);
         """)
         # Pre-seed with known-good paths (quality_score=5 → treated as trusted immediately)
         _KNOWN_PATHS = [
@@ -263,6 +292,10 @@ def init_db():
             db.execute("ALTER TABLE account_credentials ADD COLUMN review_required_fields TEXT DEFAULT '[]'")
         except Exception:
             pass
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN delete_raw_after_extract INTEGER DEFAULT 0")
+        except Exception:
+            pass  # may already exist
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -343,6 +376,43 @@ def _fmt_sync(ts):
         return f"{days} day{'s' if days != 1 else ''} ago"
     except Exception:
         return ts[:10] if ts else "—"
+
+def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
+    """Return a freshness label, CSS color, and icon for display on cards."""
+    if sync_status == "login_required":
+        return ("Login required", "#ef4444", "⚠")
+    if sync_status == "no_data" or not synced_at:
+        return ("No data", "#9ca3af", "—")
+    try:
+        import datetime as _dt
+        age_h = (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(
+            synced_at.rstrip("Z"))).total_seconds() / 3600
+        if age_h < 1:
+            return ("Just now", "#22c55e", "✓")
+        elif age_h < 2:
+            return (f"{int(age_h*60)}m ago", "#22c55e", "✓")
+        elif age_h < 24:
+            return (f"{int(age_h)}h ago", "#6b7280", "✓")
+        elif age_h < 48:
+            return ("Yesterday", "#f59e0b", "~")
+        elif age_h < 168:
+            return (f"{int(age_h/24)}d ago", "#f59e0b", "~")
+        else:
+            return ("Stale", "#ef4444", "!")
+    except Exception:
+        return ("Unknown", "#9ca3af", "?")
+
+def _log_privacy_event(uid: str, event_type: str, source: str = None, domain: str = None, detail: str = None):
+    """Log a privacy-relevant event for the user's audit log."""
+    try:
+        get_db().execute(
+            "INSERT INTO privacy_audit_log (user_id, event_type, source, domain, detail, created_at) VALUES (?,?,?,?,?,?)",
+            (uid, event_type, source, domain, detail, iso())
+        )
+        get_db().commit()
+    except Exception:
+        pass
+
 
 def _sidebar_html(active: str, email: str, csrf: str) -> str:
     """Generate the shared left sidebar HTML — icon-only, 48px."""
@@ -2254,6 +2324,36 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     </div>
 
     <div id="fview-accounts">
+      <div id="reminders-panel" style="margin-bottom:20px;display:none">
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+          <span>🔔</span> Reminders
+          <span id="reminders-count" style="font-size:11px;background:#fee2e2;color:#dc2626;padding:1px 6px;border-radius:10px;font-weight:600"></span>
+        </div>
+        <div id="reminders-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      </div>
+      <script>
+      (function() {
+        fetch('/api/reminders').then(r=>r.json()).then(d=>{
+          var items = d.reminders || [];
+          if (!items.length) return;
+          var panel = document.getElementById('reminders-panel');
+          var list  = document.getElementById('reminders-list');
+          var count = document.getElementById('reminders-count');
+          panel.style.display = 'block';
+          count.textContent = items.length;
+          var colors  = {urgent:'#fef2f2', soon:'#fffbeb', info:'#f0f9ff'};
+          var borders = {urgent:'#fca5a5', soon:'#fcd34d', info:'#7dd3fc'};
+          var icons   = {urgent:'🚨', soon:'⏰', info:'💡'};
+          items.forEach(function(r){
+            var el = document.createElement('div');
+            el.style.cssText = 'background:'+colors[r.urgency]+';border:1px solid '+borders[r.urgency]+';border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;font-size:13px';
+            var days = r.days_left !== null ? (r.days_left === 0 ? ' — today' : ' — '+r.days_left+'d') : '';
+            el.innerHTML = '<span style="font-size:16px">'+icons[r.urgency]+'</span><div><strong style="color:#111">'+r.account_name+'</strong><span style="color:#6b7280;margin:0 4px">·</span><span style="color:#374151">'+r.message+'</span>'+(days ? '<span style="color:#9ca3af;font-size:12px">'+days+'</span>' : '')+'</div>';
+            list.appendChild(el);
+          });
+        }).catch(function(){});
+      })();
+      </script>
       {account_data_html}
     </div>
 
@@ -2767,7 +2867,41 @@ document.addEventListener('visibilitychange', function() {
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js');
 }
+
+function toggleHealth(btn, source) {
+  var detail = btn.nextElementSibling;
+  var chevron = btn.querySelector('.health-chevron');
+  if (detail.style.display === 'none') {
+    detail.style.display = 'block';
+    chevron.textContent = '▾';
+    if (!detail.dataset.loaded) {
+      detail.dataset.loaded = '1';
+      detail.innerHTML = '<span style="color:#d1d5db">Loading…</span>';
+      fetch('/api/sync-health/' + source).then(function(r){return r.json();}).then(function(h){
+        var fa = h.failure_reason ? '<span style="color:#ef4444">✗ '+h.failure_reason+'</span>' : '<span style="color:#22c55e">✓ ok</span>';
+        var conf = h.confidence_avg ? Math.round(h.confidence_avg*100)+'% avg confidence' : 'no confidence data';
+        var cov  = h.coverage ? h.coverage.message+' ('+h.coverage.score+'/100)' : '';
+        var hint = h.coverage && h.coverage.hint ? '<div style="color:#f59e0b;margin-top:2px">⚠ '+h.coverage.hint+'</div>' : '';
+        var api  = h.sources && h.sources.api > 0 ? ' · '+h.sources.api+' from API' : '';
+        var changes = '';
+        if (h.recent_changes && h.recent_changes.length) {
+          changes = '<div style="margin-top:4px;color:#6b7280">Recent changes: '+h.recent_changes.slice(0,2).map(function(c){return c.field_label+': '+c.old_value+'→'+c.new_value;}).join(' · ')+'</div>';
+        }
+        detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+hint+changes;
+      }).catch(function(){ detail.innerHTML = 'Could not load health data'; });
+    }
+  } else {
+    detail.style.display = 'none';
+    chevron.textContent = '▶';
+  }
+}
+function toggleSnippet(el) {
+  var reveal = el.nextElementSibling;
+  reveal.style.display = reveal.style.display === 'none' ? 'block' : 'none';
+  el.textContent = reveal.style.display === 'none' ? 'Why?' : 'Hide';
+}
 </script>
+{onboarding_modal}
 </body>
 </html>"""
 
@@ -3008,6 +3142,24 @@ body{display:flex;flex-direction:row}
         <span id="privacy-ind" style="display:none;font-size:12px;color:#34d399;margin-top:4px">Saved</span>
       </div>
     </div>
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f5f2ed">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-bottom:12px">
+        <input type="checkbox" id="delete-raw-after-extract" {delete_raw_checked} onchange="saveDeleteRaw()" style="margin-top:2px">
+        <div>
+          <div style="font-size:13px;font-weight:500;color:#374151">Delete raw page text after extraction</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:1px">Raw page text is discarded immediately after fields are extracted. Saves storage and reduces exposure.</div>
+        </div>
+      </label>
+      <div style="margin-top:12px">
+        <a href="/privacy/audit-log" style="font-size:13px;color:#3b82f6;text-decoration:none">
+          View audit log &rarr;
+        </a>
+        <span style="color:#d1d5db;margin:0 8px">|</span>
+        <a href="/privacy/domains" style="font-size:13px;color:#3b82f6;text-decoration:none">
+          Manage captured domains &rarr;
+        </a>
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -3118,6 +3270,19 @@ function savePrivacy() {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({minimal_logging: document.getElementById('minimal-logging').checked})
+  }).then(function() {
+    var ind = document.getElementById('privacy-ind');
+    if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
+  }).catch(function() {});
+}
+function saveDeleteRaw() {
+  fetch('/settings/privacy', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      minimal_logging: document.getElementById('minimal-logging').checked,
+      delete_raw_after_extract: document.getElementById('delete-raw-after-extract').checked
+    })
   }).then(function() {
     var ind = document.getElementById('privacy-ind');
     if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
@@ -3853,6 +4018,213 @@ def action_card_html(a, base, show_buttons):
       {btns}
     </div>'''
 
+# ── Module-level date regex (mirrors the one in _post_filter_fields) ─────────
+import re as _re_mod
+_MOD_DATE_RE = _re_mod.compile(
+    r'\b(\d{4}-\d{2}-\d{2}'
+    r'|\d{1,2}/\d{1,2}/\d{4}'
+    r'|\d{1,2}[A-Za-z]{3}\d{4}'
+    r'|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}'
+    r')\b',
+    _re_mod.IGNORECASE,
+)
+
+def _mod_normalise_date_str(s: str) -> str:
+    _month_map = {
+        "january": "Jan", "february": "Feb", "march": "Mar", "april": "Apr",
+        "may": "May", "june": "Jun", "july": "Jul", "august": "Aug",
+        "september": "Sep", "sept": "Sep", "october": "Oct",
+        "november": "Nov", "december": "Dec",
+    }
+    norm = s.strip()
+    for long, short in _month_map.items():
+        norm = _re_mod.sub(long, short, norm, flags=_re_mod.IGNORECASE)
+    return norm
+
+
+def _parse_date_for_reminder(s: str):
+    """Parse a date string for reminder computation. Returns date or None."""
+    from datetime import datetime as _dt3
+    s = _mod_normalise_date_str(s.strip())
+    fmts = [
+        "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y",
+        "%b %d, %Y", "%b %d %Y", "%B %d, %Y", "%B %d %Y",
+        "%d%b%Y",
+    ]
+    for fmt in fmts:
+        for variant in (s, s.upper()):
+            try:
+                return _dt3.strptime(variant, fmt).date()
+            except ValueError:
+                pass
+    return None
+
+
+# ── Reminder urgency tiers ────────────────────────────────────────────────────
+_REMINDER_URGENT_DAYS = 7
+_REMINDER_SOON_DAYS   = 30
+
+def _get_reminders(uid: str) -> list:
+    """Scan all account fields for actionable reminders.
+    Returns list of dicts: {source, account_name, label, value, message, urgency, days_left}
+    urgency: 'urgent' (≤7d) | 'soon' (≤30d) | 'info'
+    """
+    from datetime import datetime as _dt2
+    reminders = []
+    today = _dt2.utcnow().date()
+
+    rows = get_db().execute(
+        "SELECT source, display_name, data_enc FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+
+    for row in rows:
+        source = row["source"]
+        name   = row["display_name"]
+        try:
+            data  = decrypt_account_data(uid, row["data_enc"] or "")
+            items = data.get("items", [])
+        except Exception:
+            continue
+
+        for item in items:
+            label = item.get("label", "")
+            value = str(item.get("value", ""))
+            lbl_l = label.lower()
+            val_l = value.lower()
+
+            # ── Expiry / valid-through dates ──────────────────────────────
+            _EXPIRY_LABELS = ("expir", "valid through", "valid until", "expires", "book by", "fly by", "use by", "exp ")
+            if any(e in lbl_l or e in val_l for e in _EXPIRY_LABELS):
+                date_m = _MOD_DATE_RE.search(value + " " + label)
+                if date_m:
+                    try:
+                        d = _parse_date_for_reminder(date_m.group(0))
+                        if d and d >= today:
+                            days = (d - today).days
+                            urgency = "urgent" if days <= _REMINDER_URGENT_DAYS else ("soon" if days <= _REMINDER_SOON_DAYS else None)
+                            if urgency:
+                                reminders.append({
+                                    "source": source, "account_name": name,
+                                    "label": label, "value": value,
+                                    "message": f"{label}: {value}",
+                                    "urgency": urgency, "days_left": days,
+                                    "expires_on": d.isoformat(),
+                                })
+                    except Exception:
+                        pass
+
+            # ── Payment / bill due dates ──────────────────────────────────
+            _DUE_LABELS = ("due", "payment due", "bill due", "amount due", "minimum payment")
+            if any(dl in lbl_l for dl in _DUE_LABELS):
+                date_m = _MOD_DATE_RE.search(value + " " + label)
+                if date_m:
+                    try:
+                        d = _parse_date_for_reminder(date_m.group(0))
+                        if d and d >= today:
+                            days = (d - today).days
+                            if days <= 14:
+                                urgency = "urgent" if days <= 3 else "soon"
+                                reminders.append({
+                                    "source": source, "account_name": name,
+                                    "label": label, "value": value,
+                                    "message": f"{label}: {value}",
+                                    "urgency": urgency, "days_left": days,
+                                    "expires_on": d.isoformat(),
+                                })
+                    except Exception:
+                        pass
+
+            # ── Unused credits above threshold ────────────────────────────
+            _CREDIT_LABELS = ("credit remaining", "remaining credit", "travel credit", "dining credit",
+                               "statement credit", "ecredit", "e-credit", "cashback", "cash back")
+            if any(c in lbl_l for c in _CREDIT_LABELS):
+                amount_m = re.search(r'\$\s*(\d+(?:\.\d{1,2})?)', value)
+                if amount_m:
+                    try:
+                        amount = float(amount_m.group(1))
+                        if amount >= 10:
+                            reminders.append({
+                                "source": source, "account_name": name,
+                                "label": label, "value": value,
+                                "message": f"{label}: {value}",
+                                "urgency": "info", "days_left": None,
+                                "expires_on": None,
+                            })
+                    except Exception:
+                        pass
+
+    # Sort: urgent first, then soon, then info; within tier sort by days_left
+    def _sort_key(r):
+        tier = {"urgent": 0, "soon": 1, "info": 2}.get(r["urgency"], 3)
+        return (tier, r["days_left"] if r["days_left"] is not None else 999)
+
+    reminders.sort(key=_sort_key)
+    return reminders
+
+
+def _source_category(source: str) -> str:
+    """Return display category for a source key."""
+    for cat_key, schema in _CATEGORY_SCHEMAS.items():
+        if source in schema["sources"]:
+            cat_map = {
+                "travel_loyalty": "Travel",
+                "credit_card":    "Finance",
+                "utilities":      "Utilities",
+                "subscription":   "Subscriptions",
+                "banking":        "Finance",
+                "health":         "Health",
+                "shopping":       "Shopping",
+                "insurance":      "Insurance",
+                "automotive":     "Automotive",
+            }
+            return cat_map.get(cat_key, "Other")
+    if source.startswith("custom_"):
+        return "Custom"
+    return "Other"
+
+
+def _coverage_score(source: str, field_count: int) -> dict:
+    """Return a coverage score and human-readable message for an account.
+    Score 0-100. Based on field count and known-good path coverage.
+    """
+    db = get_db()
+    # Count known paths for this site and how many have high quality scores
+    path_rows = db.execute(
+        "SELECT path, quality_score FROM site_paths WHERE site=? ORDER BY quality_score DESC",
+        (source,)
+    ).fetchall()
+    total_paths    = len(path_rows)
+    high_q_paths   = sum(1 for r in path_rows if r["quality_score"] >= 3.0)
+
+    # Score from fields found (0 fields = 0, 5+ fields = 60 base points)
+    field_score = min(field_count * 12, 60)
+    # Score from path coverage (up to 40 points)
+    path_score  = min(int((high_q_paths / max(total_paths, 1)) * 40), 40) if total_paths > 0 else 0
+    score = field_score + path_score
+
+    if score == 0:
+        message = "No data found yet"
+    elif field_count == 0:
+        message = "Pages visited, but no fields extracted"
+    elif score < 40:
+        message = "Basic info found"
+    elif score < 70:
+        message = "Good coverage"
+    else:
+        message = "Full coverage"
+
+    # Hint about missing high-value paths
+    schema = _get_category_schema(source)
+    hint = ""
+    if schema and field_count < 3:
+        if "certificate" in schema.get("priority_fields", []):
+            hint = "Certificates or awards page may not have been visited yet"
+        elif "credit" in schema.get("priority_fields", []):
+            hint = "Benefits or credits page may not have been visited yet"
+
+    return {"score": score, "message": message, "hint": hint, "field_count": field_count, "paths_visited": total_paths}
+
+
 @app.route("/dashboard")
 @require_login
 def dashboard():
@@ -4074,10 +4446,18 @@ def dashboard():
                 ex = json.loads(decrypt_cred(user["id"], cr["extra_enc"]))
                 discovered = ex.get("discovered_fields", [])
                 enabled    = set(ex.get("enabled_fields", []))
+                review_req = set(ex.get("review_required_fields", []))
                 if discovered and enabled:
-                    discovered_by_source[cr["source"]] = {"fields": discovered, "enabled": enabled}
+                    discovered_by_source[cr["source"]] = {
+                        "fields": discovered,
+                        "enabled": enabled,
+                        "review_required": review_req,
+                    }
                 elif ex.get("discovery_failed"):
-                    discovered_by_source[cr["source"]] = {"fields": [], "enabled": set(), "failed": True}
+                    discovered_by_source[cr["source"]] = {
+                        "fields": [], "enabled": set(),
+                        "review_required": set(), "failed": True,
+                    }
             except Exception:
                 pass
 
@@ -4133,10 +4513,17 @@ def dashboard():
             data  = decrypt_account_data(user["id"], row["data_enc"] or "") if row else {}
 
             # Determine items to display
+            review_required_keys: set = set()
             if src in discovered_by_source:
                 disc  = discovered_by_source[src]
+                review_required_keys = disc.get("review_required", set())
                 items = [
-                    {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
+                    {
+                        "key": f["key"],
+                        "label": f["label"],
+                        "value": f.get("value", "–"),
+                        "source_snippet": f.get("source_snippet", ""),
+                    }
                     for f in _post_filter_fields(disc["fields"])
                     if f.get("key") in disc["enabled"]
                 ]
@@ -4242,14 +4629,30 @@ def dashboard():
             # Build secondary stats (up to 2 visible)
             sec_html = ""
             if secondary_items:
-                rows = "".join(
-                    f'<div class="sec-row">'
-                    f'<span class="sec-lbl">{he(i["label"])}</span>'
-                    f'<span class="sec-val" title="{he(i["value"])}">{he(i["value"])}</span>'
-                    f'</div>'
-                    for i in secondary_items[:2]
-                )
-                sec_html = f'<div class="acct-secondary">{rows}</div>'
+                sec_row_parts = []
+                for i in secondary_items[:2]:
+                    review_badge = (
+                        '<span style="font-size:10px;color:#f59e0b;margin-left:4px;cursor:help" '
+                        'title="Lower confidence — may need verification">⚠ review</span>'
+                        if i.get("key") in review_required_keys else ""
+                    )
+                    snip = i.get("source_snippet", "")
+                    why_html = (
+                        f'<span class="why-link" onclick="toggleSnippet(this)" '
+                        f'style="font-size:10px;color:#93c5fd;cursor:pointer;margin-left:6px;user-select:none" '
+                        f'title="Show source text">Why?</span>'
+                        f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#9ca3af;'
+                        f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
+                        f'margin-top:4px;font-style:italic;line-height:1.4">'
+                        f'{he(snip[:200])}</div>'
+                    ) if snip else ""
+                    sec_row_parts.append(
+                        f'<div class="sec-row">'
+                        f'<span class="sec-lbl">{he(i["label"])}{review_badge}</span>'
+                        f'<span class="sec-val" title="{he(i["value"])}">{he(i["value"])}{why_html}</span>'
+                        f'</div>'
+                    )
+                sec_html = f'<div class="acct-secondary">{"".join(sec_row_parts)}</div>'
 
             # Build expanded fields (all items not already shown)
             shown_keys = set()
@@ -4262,14 +4665,30 @@ def dashboard():
             extra_items = [i for i in items if i.get("key") not in shown_keys]
             expanded_html = ""
             if extra_items:
-                exp_rows = "".join(
-                    f'<div class="exp-row">'
-                    f'<span class="exp-lbl" title="{he(i["label"])}">{he(i["label"])}</span>'
-                    f'<span class="exp-val" title="{he(i["value"])}">{he(i["value"])}</span>'
-                    f'</div>'
-                    for i in extra_items
-                )
-                expanded_html = f'<div class="acct-expanded">{exp_rows}</div>'
+                exp_row_parts = []
+                for i in extra_items:
+                    review_badge = (
+                        '<span style="font-size:10px;color:#f59e0b;margin-left:4px;cursor:help" '
+                        'title="Lower confidence — may need verification">⚠ review</span>'
+                        if i.get("key") in review_required_keys else ""
+                    )
+                    snip = i.get("source_snippet", "")
+                    why_html = (
+                        f'<span class="why-link" onclick="toggleSnippet(this)" '
+                        f'style="font-size:10px;color:#93c5fd;cursor:pointer;margin-left:6px;user-select:none" '
+                        f'title="Show source text">Why?</span>'
+                        f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#9ca3af;'
+                        f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
+                        f'margin-top:4px;font-style:italic;line-height:1.4">'
+                        f'{he(snip[:200])}</div>'
+                    ) if snip else ""
+                    exp_row_parts.append(
+                        f'<div class="exp-row">'
+                        f'<span class="exp-lbl" title="{he(i["label"])}">{he(i["label"])}{review_badge}</span>'
+                        f'<span class="exp-val" title="{he(i["value"])}">{he(i["value"])}{why_html}</span>'
+                        f'</div>'
+                    )
+                expanded_html = f'<div class="acct-expanded">{"".join(exp_row_parts)}</div>'
 
             # Build alert row
             alert_html = ""
@@ -4303,6 +4722,8 @@ def dashboard():
             synced_title = "Synced recently" if status_color == "#30d158" else "Not yet synced"
             stale_cls = " is-stale" if not synced_at else ""
             expiring_cls = " is-expiring" if alert_item else ""
+            _flabel, _fcolor, _ficon = _freshness_label(synced_at, sync_status)
+            freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:500">{_ficon} {_flabel}</span>'
 
             # Footer: expand toggle only if there are extra items
             if extra_items:
@@ -4323,12 +4744,21 @@ def dashboard():
                 f'</div>'
             )
 
+            health_footer = (
+                f'<div class="card-health-footer" style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:6px;padding:6px 14px 8px">'
+                f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;padding:0;display:flex;align-items:center;gap:3px">'
+                f'<span class="health-chevron">&#9656;</span> Sync health'
+                f'</button>'
+                f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}"></div>'
+                f'</div>'
+            )
+
             grid_cards += (
                 f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}">'
                 f'<div class="acct-card-header">'
                 f'<div style="flex:1;min-width:0">'
                 f'<div class="acct-name">{he(display_name)}</div>'
-                f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{sync_label}</div>'
+                f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{freshness_html}</div>'
                 f'</div>'
                 f'<div class="acct-controls">'
                 f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;cursor:help" title="{synced_title}"></div>'
@@ -4340,6 +4770,7 @@ def dashboard():
                 f'{sec_html}'
                 f'{alert_html}'
                 f'{expanded_html}'
+                f'{health_footer}'
                 f'{card_footer}'
                 f'</div>'
             )
@@ -4444,6 +4875,36 @@ def dashboard():
     else:
         new_accounts_banner = ""
 
+    onboarding_modal = ""
+    if not user.get("onboarded"):
+        onboarding_modal = """
+<div id="onboarding-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+    <div style="font-size:28px;text-align:center;margin-bottom:12px">&#128272;</div>
+    <h2 style="font-size:20px;font-weight:700;text-align:center;color:#111;margin:0 0 8px">How Mighty works</h2>
+    <p style="font-size:14px;color:#4b5563;text-align:center;margin:0 0 20px;line-height:1.6">
+      Mighty reads your connected account pages and extracts only the facts you care about &mdash; balances, expiry dates, due dates, and credits.
+      <strong>Raw page text is never shared</strong> and is discarded after extraction.
+    </p>
+    <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;margin-bottom:20px">
+      <div style="font-size:13px;color:#374151;display:flex;flex-direction:column;gap:8px">
+        <div>&#9989; <strong>What we extract:</strong> Account balances, expiry dates, payment due dates, credits</div>
+        <div>&#128683; <strong>What we don&#39;t store:</strong> Full browsing history, passwords, or raw page content (unless you disable deletion)</div>
+        <div>&#128274; <strong>Your data:</strong> Encrypted at rest, never sold or shared</div>
+      </div>
+    </div>
+    <button onclick="dismissOnboarding()" style="width:100%;padding:12px;background:#111;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">
+      Got it &mdash; take me to my dashboard
+    </button>
+  </div>
+</div>
+<script>
+function dismissOnboarding() {
+  document.getElementById('onboarding-overlay').style.display = 'none';
+  fetch('/api/onboarding/complete', {method:'POST'}).catch(function(){});
+}
+</script>"""
+
     _csrf = get_csrf_token()
     return (DASHBOARD_HTML
             .replace("{_SIDEBAR_}",               _sidebar_html('dashboard', user["email"], _csrf))
@@ -4462,6 +4923,7 @@ def dashboard():
             .replace("{reauth_banner}",           reauth_banner)
             .replace("{new_accounts_banner}",     new_accounts_banner)
             .replace("{account_data_html}",       account_data_html)
+            .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{csrf_token}",              _csrf))
 
 @app.route("/settings")
@@ -4491,6 +4953,7 @@ def settings():
             .replace("{ntfy_checked}",            "checked" if user["notify_ntfy"]    else "")
             .replace("{email_checked}",           "checked" if user["notify_email"]   else "")
             .replace("{minimal_logging_checked}", "checked" if user["minimal_logging"] else "")
+            .replace("{delete_raw_checked}",      "checked" if user.get("delete_raw_after_extract") else "")
             .replace("{postmark_warn}",           postmark_warn)
             .replace("{postmark_js}",             "true" if postmark_ok else "false")
             .replace("{csrf_token}",              _csrf))
@@ -4752,11 +5215,90 @@ def update_privacy():
     check_csrf()
     data = request.get_json(force=True)
     get_db().execute(
-        "UPDATE users SET minimal_logging=? WHERE id=?",
-        (1 if data.get("minimal_logging") else 0, session["user_id"])
+        "UPDATE users SET minimal_logging=?, delete_raw_after_extract=? WHERE id=?",
+        (
+            1 if data.get("minimal_logging") else 0,
+            1 if data.get("delete_raw_after_extract") else 0,
+            session["user_id"],
+        )
     )
     get_db().commit()
     return jsonify({"ok": True})
+
+
+# ── Privacy pages ─────────────────────────────────────────────────────────────
+
+@app.route("/privacy/audit-log")
+@require_login
+def privacy_audit_log():
+    uid = session["user_id"]
+    rows = get_db().execute(
+        "SELECT event_type, source, domain, detail, created_at FROM privacy_audit_log "
+        "WHERE user_id=? ORDER BY created_at DESC LIMIT 200",
+        (uid,)
+    ).fetchall()
+    rows_html = ""
+    for r in rows:
+        rows_html += (
+            f'<tr><td style="padding:8px 12px;color:#6b7280;font-size:12px">{r["created_at"][:19]}</td>'
+            f'<td style="padding:8px 12px;font-size:13px">{he(r["event_type"])}</td>'
+            f'<td style="padding:8px 12px;font-size:13px;color:#374151">{he(r["source"] or "")}</td>'
+            f'<td style="padding:8px 12px;font-size:12px;color:#9ca3af">{he(r["detail"] or "")}</td></tr>'
+        )
+    if not rows_html:
+        rows_html = '<tr><td colspan="4" style="padding:20px;text-align:center;color:#9ca3af;font-size:13px">No events recorded yet</td></tr>'
+
+    return render_template_string("""<!DOCTYPE html><html><head><title>Audit Log — Mighty</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{font-family:-apple-system,sans-serif;margin:0;background:#f9fafb}
+    .container{max-width:900px;margin:0 auto;padding:24px}</style></head>
+    <body><div class="container">
+    <div style="margin-bottom:20px"><a href="/settings" style="color:#6b7280;text-decoration:none;font-size:13px">← Settings</a></div>
+    <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 4px">Privacy Audit Log</h2>
+    <p style="font-size:13px;color:#6b7280;margin:0 0 20px">All data capture and sync events for your account.</p>
+    <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)">
+    <thead><tr style="background:#f3f4f6">
+    <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600">Time</th>
+    <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600">Event</th>
+    <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600">Account</th>
+    <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600">Detail</th>
+    </tr></thead><tbody>""" + rows_html + """</tbody></table>
+    </div></body></html>""")
+
+
+@app.route("/privacy/domains")
+@require_login
+def privacy_domains():
+    uid = session["user_id"]
+    rows = get_db().execute(
+        "SELECT DISTINCT source, display_name FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+    approved = {r["domain"] for r in get_db().execute(
+        "SELECT domain FROM approved_domains WHERE user_id=? AND approved=1", (uid,)
+    ).fetchall()}
+
+    items_html = ""
+    for r in rows:
+        items_html += (
+            f'<div style="display:flex;align-items:center;justify-content:space-between;'
+            f'padding:10px 0;border-bottom:1px solid #f3f4f6">'
+            f'<div><div style="font-size:13px;font-weight:500;color:#111">{he(r["display_name"])}</div>'
+            f'<div style="font-size:12px;color:#9ca3af">{he(r["source"])}</div></div>'
+            f'<span style="font-size:12px;color:#22c55e;font-weight:500">✓ Approved</span></div>'
+        )
+    if not items_html:
+        items_html = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:13px">No captured accounts yet</div>'
+
+    return render_template_string("""<!DOCTYPE html><html><head><title>Domains — Mighty</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{font-family:-apple-system,sans-serif;margin:0;background:#f9fafb}
+    .container{max-width:700px;margin:0 auto;padding:24px}</style></head>
+    <body><div class="container">
+    <div style="margin-bottom:20px"><a href="/settings" style="color:#6b7280;text-decoration:none;font-size:13px">← Settings</a></div>
+    <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 4px">Captured Domains</h2>
+    <p style="font-size:13px;color:#6b7280;margin:0 0 20px">Accounts whose data has been captured. Unknown domains are restricted to 500-character snippets only.</p>
+    <div style="background:#fff;border-radius:10px;padding:0 16px;box-shadow:0 1px 3px rgba(0,0,0,.08)">""" + items_html + """</div>
+    </div></body></html>""")
 
 
 # ── Onboarding wizard ────────────────────────────────────────────────────────
@@ -4779,6 +5321,13 @@ def onboarding():
 @app.route("/onboarding/complete", methods=["POST"])
 @require_login
 def onboarding_complete():
+    get_db().execute("UPDATE users SET onboarded=1 WHERE id=?", (session["user_id"],))
+    get_db().commit()
+    return jsonify({"ok": True})
+
+@app.route("/api/onboarding/complete", methods=["POST"])
+@require_login
+def api_onboarding_complete():
     get_db().execute("UPDATE users SET onboarded=1 WHERE id=?", (session["user_id"],))
     get_db().commit()
     return jsonify({"ok": True})
@@ -5429,6 +5978,23 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
             (encrypt_account_data(uid, ad_data), uid, source)
         )
+
+    # Record field value changes in history
+    existing_ad = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
+    ).fetchone()
+    if existing_ad:
+        existing_items = decrypt_account_data(uid, existing_ad["data_enc"] or "").get("items", [])
+        existing_by_key = {i["key"]: i["value"] for i in existing_items}
+        for item in ai_items:
+            old_val = existing_by_key.get(item["key"])
+            new_val = item["value"]
+            if old_val is not None and old_val != new_val and old_val not in ("–", "") and new_val not in ("–", ""):
+                db.execute(
+                    "INSERT INTO field_history (user_id, source, field_key, field_label, old_value, new_value, changed_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (uid, source, item["key"], item["label"], old_val, new_val, iso())
+                )
     db.commit()
 
     # Propagate failure reason to account_data if all fields were dropped
@@ -5463,6 +6029,27 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             except Exception:
                 pass
     db.commit()
+
+    # Honour "delete raw capture after extraction" user preference
+    try:
+        user_pref = get_db().execute(
+            "SELECT delete_raw_after_extract FROM users WHERE id=?", (uid,)
+        ).fetchone()
+        if user_pref and user_pref["delete_raw_after_extract"]:
+            ad_row2 = get_db().execute(
+                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
+            ).fetchone()
+            if ad_row2:
+                ad2 = decrypt_account_data(uid, ad_row2["data_enc"] or "")
+                if ad2.get("raw_text"):
+                    ad2["raw_text"] = ""
+                    get_db().execute(
+                        "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                        (encrypt_account_data(uid, ad2), uid, source)
+                    )
+                    get_db().commit()
+    except Exception:
+        pass
 
 
 def _field_config_html(source: str, configured: set, extra_data: dict = None) -> str:
@@ -6722,6 +7309,7 @@ def api_data_sync():
          data.get("sync_failure_reason")),
     )
     db.commit()
+    _log_privacy_event(user["id"], "data_synced", source=source, detail=f"{len(raw_text)} chars")
 
     # Auto-trigger field discovery if no field prefs exist yet for this source
     cred_row = db.execute(
@@ -6953,6 +7541,7 @@ def api_extension_intercept():
         (encrypt_account_data(uid, ad), synced_at, uid, source)
     )
     db.commit()
+    _log_privacy_event(uid, "api_intercepted", source=source, domain=url[:80])
     print(f"[Intercept] {source}: {len(json_data)} chars from {url[:80]}", flush=True)
 
     # Re-run field discovery in background
@@ -7186,6 +7775,71 @@ def api_debug_provenance(source):
         "total": len(provenance),
         "low_confidence_count": sum(1 for p in provenance if p["low_confidence"]),
         "fields": provenance,
+    })
+
+
+@app.route("/api/field-history/<source>")
+@require_login
+def api_field_history(source):
+    """Return recent field value changes for an account (last 30 days)."""
+    uid = session["user_id"]
+    rows = get_db().execute(
+        "SELECT field_label, old_value, new_value, changed_at FROM field_history "
+        "WHERE user_id=? AND source=? ORDER BY changed_at DESC LIMIT 50",
+        (uid, source)
+    ).fetchall()
+    return jsonify({"source": source, "changes": [dict(r) for r in rows]})
+
+
+@app.route("/api/reminders")
+@require_login
+def api_reminders():
+    """Return actionable reminders for all accounts."""
+    uid = session["user_id"]
+    return jsonify({"reminders": _get_reminders(uid)})
+
+
+@app.route("/api/sync-health/<source>")
+@require_login
+def api_sync_health(source):
+    """Return sync health metadata for one account."""
+    uid = session["user_id"]
+    db  = get_db()
+
+    ad_row = db.execute(
+        "SELECT data_enc, synced_at, sync_failure_reason FROM account_data WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not ad_row:
+        return jsonify({"error": "not found"}), 404
+
+    data   = decrypt_account_data(uid, ad_row["data_enc"] or "")
+    items  = data.get("items", [])
+    confidences = [i["confidence"] for i in items if isinstance(i.get("confidence"), (int, float))]
+    sources_breakdown = {
+        "api":   sum(1 for i in items if i.get("from_api")),
+        "dom":   sum(1 for i in items if not i.get("from_api")),
+    }
+    coverage = _coverage_score(source, len(items))
+
+    # Recent changes
+    recent_changes = db.execute(
+        "SELECT field_label, old_value, new_value, changed_at FROM field_history "
+        "WHERE user_id=? AND source=? ORDER BY changed_at DESC LIMIT 5",
+        (uid, source)
+    ).fetchall()
+
+    return jsonify({
+        "source":           source,
+        "synced_at":        ad_row["synced_at"],
+        "sync_status":      data.get("sync_status", "ok"),
+        "failure_reason":   ad_row["sync_failure_reason"],
+        "field_count":      len(items),
+        "confidence_avg":   round(sum(confidences) / len(confidences), 2) if confidences else None,
+        "confidence_min":   round(min(confidences), 2) if confidences else None,
+        "sources":          sources_breakdown,
+        "coverage":         coverage,
+        "recent_changes":   [dict(r) for r in recent_changes],
     })
 
 
