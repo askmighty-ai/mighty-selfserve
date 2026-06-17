@@ -458,15 +458,18 @@ def _extract_candidate_snippets(
     raw_text: str,
     context_lines: int = 8,
     max_blocks: int = 25,
+    hint_phrases: list[str] | None = None,
 ) -> str:
     """Extract and score line-based blocks around trigger words.
 
     Algorithm:
       1. Split text into lines; find lines containing any SNIPPET_TRIGGER.
+         If hint_phrases are provided (from extraction_hints for this site),
+         those lines are force-included and receive a scorer bonus.
       2. Expand each hit line into a ±context_lines block.
       3. Merge blocks that are close together (avoids tiny isolated fragments).
       4. Score each block: trigger-word density + value-pattern count, penalise
-         long-line marketing copy.
+         long-line marketing copy. Known hint phrases add +5.0 per match.
       5. Keep the top max_blocks blocks by score; re-sort by original position
          so the returned text reads in document order.
       6. Join with '···' separators and cap at 20k chars.
@@ -480,11 +483,19 @@ def _extract_candidate_snippets(
     lower_lines = [ln.lower() for ln in lines]
     n = len(lines)
 
-    # Step 1 — find hit line indices
+    # Step 1 — find hit line indices from general triggers
     hit_set: set[int] = set()
     for trigger in SNIPPET_TRIGGERS:
         for i, ll in enumerate(lower_lines):
             if trigger in ll:
+                hit_set.add(i)
+
+    # Force-include lines matching known extraction hints for this site.
+    # These are previously successful trigger phrases stored in extraction_hints.
+    _hint_lower: list[str] = [p.lower() for p in (hint_phrases or [])]
+    if _hint_lower:
+        for i, ll in enumerate(lower_lines):
+            if any(h in ll for h in _hint_lower):
                 hit_set.add(i)
 
     if not hit_set:
@@ -520,7 +531,9 @@ def _extract_candidate_snippets(
         # Penalise dense marketing prose (very long average line = wall of text)
         avg_len = sum(len(ln) for ln in block_lines) / max(len(block_lines), 1)
         prose_penalty = max(0.0, (avg_len - 100) / 150)
-        return high_count * 4.0 + generic_count * 2.0 + val_count * 1.5 - prose_penalty
+        # Bonus for blocks matching known extraction hints (previously successful phrases)
+        hint_bonus = 5.0 * sum(1 for h in _hint_lower if h in block_lower)
+        return high_count * 4.0 + generic_count * 2.0 + val_count * 1.5 - prose_penalty + hint_bonus
 
     scored = sorted(merged, key=lambda r: _score(*r), reverse=True)
     top = sorted(scored[:max_blocks])  # re-sort by position for coherent output
@@ -604,6 +617,25 @@ _CATEGORY_SCHEMAS: dict = {
         ),
     },
 }
+
+_URL_MARKER_RE = re.compile(r'===\s*(https?://[^\s=]+)\s*===', re.IGNORECASE)
+
+def _paths_from_raw(raw_text: str) -> list[str]:
+    """Extract URL paths from === https://... === markers embedded in a raw_text blob.
+    Used for path-specific quality_score boosting after successful field extraction.
+    Returns a list of path strings (e.g. ['/my-account/wallet', '/loyalty/myAccount/benefits']).
+    """
+    from urllib.parse import urlparse as _up
+    paths = []
+    for m in _URL_MARKER_RE.finditer(raw_text or ""):
+        try:
+            p = _up(m.group(1)).path
+            if p and p != '/':
+                paths.append(p)
+        except Exception:
+            pass
+    return paths
+
 
 def _get_category_schema(source: str) -> dict | None:
     """Return the category schema for a source, or None if unknown."""
@@ -885,10 +917,26 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
     if not _claude or not raw_text:
         return []
     try:
+        # ── Extraction hints — load known trigger phrases for this site ─────────
+        # extraction_hints records phrases that previously yielded high-confidence
+        # fields. We pass them to _extract_candidate_snippets so those blocks are
+        # force-included and boosted in the scorer, even if they lack generic triggers.
+        _hint_phrases: list[str] = []
+        if source:
+            try:
+                _hint_rows = get_db().execute(
+                    "SELECT trigger_phrase FROM extraction_hints WHERE site=? "
+                    "ORDER BY success_count DESC, confidence DESC LIMIT 50",
+                    (source,)
+                ).fetchall()
+                _hint_phrases = [r["trigger_phrase"] for r in _hint_rows]
+            except Exception:
+                pass
+
         # ── Candidate snippet extraction ───────────────────────────────────────
         # Replace the raw page blob with focused windows around trigger words.
         # Falls back to raw_text[:8000] if no triggers match.
-        snippets = _extract_candidate_snippets(raw_text)
+        snippets = _extract_candidate_snippets(raw_text, hint_phrases=_hint_phrases)
         print(
             f"[Mighty] Discovering fields for {site_name} (raw={len(raw_text)} chars, "
             f"snippets={len(snippets)} chars). Preview: {raw_text[:300]!r}",
@@ -6721,14 +6769,27 @@ def api_data_sync():
                         (new_enc, iso(), uid, source)
                     )
                     _db.commit()
-                    # Self-improving coverage: boost quality scores for paths that yielded fields
+                    # Self-improving coverage: boost quality scores for the specific
+                    # paths that contributed to a successful extraction.
                     if fields:
                         try:
-                            _db.execute(
-                                "UPDATE site_paths SET quality_score = MIN(quality_score + 0.5, 10.0), "
-                                "last_seen = ? WHERE site = ?",
-                                (iso(), source)
-                            )
+                            _paths = _paths_from_raw(raw_text)
+                            if _paths:
+                                # Boost each contributing path specifically
+                                for _p in _paths:
+                                    _db.execute(
+                                        "UPDATE site_paths SET quality_score = MIN(quality_score + 0.5, 10.0), "
+                                        "last_seen = ? WHERE site = ? AND path = ?",
+                                        (iso(), source, _p)
+                                    )
+                            else:
+                                # No URL markers — modest boost for user-discovered paths only
+                                # (quality < 5 means not a pre-seeded path)
+                                _db.execute(
+                                    "UPDATE site_paths SET quality_score = MIN(quality_score + 0.2, 8.0), "
+                                    "last_seen = ? WHERE site = ? AND quality_score < 5.0",
+                                    (iso(), source)
+                                )
                             _db.commit()
                         except Exception:
                             pass
@@ -6742,14 +6803,23 @@ def api_data_sync():
                     return
                 with app.app_context():
                     _save_discovered_fields(uid, source, new_fields)
-                    # Self-improving coverage: boost quality score
+                    # Self-improving coverage: boost specific paths that contributed
                     try:
                         _db2 = get_db()
-                        _db2.execute(
-                            "UPDATE site_paths SET quality_score = MIN(quality_score + 0.3, 10.0), "
-                            "last_seen = ? WHERE site = ?",
-                            (iso(), source)
-                        )
+                        _paths2 = _paths_from_raw(raw_text)
+                        if _paths2:
+                            for _p2 in _paths2:
+                                _db2.execute(
+                                    "UPDATE site_paths SET quality_score = MIN(quality_score + 0.3, 10.0), "
+                                    "last_seen = ? WHERE site = ? AND path = ?",
+                                    (iso(), source, _p2)
+                                )
+                        else:
+                            _db2.execute(
+                                "UPDATE site_paths SET quality_score = MIN(quality_score + 0.1, 8.0), "
+                                "last_seen = ? WHERE site = ? AND quality_score < 5.0",
+                                (iso(), source)
+                            )
                         _db2.commit()
                     except Exception:
                         pass
