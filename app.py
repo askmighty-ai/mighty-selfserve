@@ -497,13 +497,30 @@ def _post_filter_fields(fields: list) -> list:
     def _is_past_date(value: str) -> bool:
         """Return True if value is a date string that is in the past."""
         for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y",
-                    "%d %b %Y", "%d %B %Y", "%Y/%m/%d"):
+                    "%d %b %Y", "%d %B %Y", "%Y/%m/%d",
+                    "%d%b%Y", "%d%B%Y"):  # compact forms like "22JUL2024"
             try:
-                d = _dt.datetime.strptime(value.strip(), fmt).date()
+                d = _dt.datetime.strptime(value.strip().upper(), fmt.upper()).date()
                 return d < _today
             except ValueError:
                 pass
         return False
+
+    # Labels that always mean "upcoming booking" — drop regardless of date format
+    _UPCOMING_BOOKING_LABELS = (
+        "upcoming flight", "upcoming reservation", "upcoming trip",
+        "upcoming stay", "upcoming booking", "upcoming itinerary",
+        "upcoming travel",
+    )
+
+    _BOOKING_TERMS = ("flight", "reservation", "booking", "trip",
+                      "check-in", "check-out", "arrival", "departure",
+                      "stay", "itinerary", "travel")
+
+    # Regex to extract dates — standard formats and compact (22JUL2024)
+    _DATE_RE = _re.compile(
+        r'\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}[A-Za-z]{3}\d{4})\b'
+    )
 
     out = []
     for f in fields:
@@ -524,15 +541,15 @@ def _post_filter_fields(fields: list) -> list:
         if _re.search(r'\b\d{8,}\b', label):
             continue
 
-        # Drop upcoming-flight/reservation fields where the embedded date is past
-        _date_match = _re.search(
-            r'\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})\b', value + " " + label
-        )
+        # Drop any field explicitly labeled as an "upcoming" booking — these are
+        # always stale reservations (they become past events and never get cleared)
+        if any(u in lbl_low for u in _UPCOMING_BOOKING_LABELS):
+            continue
+
+        # Drop booking/travel fields where the embedded date is in the past
+        # Supports standard formats AND compact forms like "22JUL2024"
+        _date_match = _DATE_RE.search(value + " " + label)
         if _date_match and _is_past_date(_date_match.group(0)):
-            # Only drop if the label suggests it's a booking/reservation/flight
-            _BOOKING_TERMS = ("flight", "reservation", "booking", "trip",
-                              "check-in", "check-out", "arrival", "departure",
-                              "stay", "itinerary", "travel")
             if any(t in lbl_low for t in _BOOKING_TERMS):
                 continue
 
