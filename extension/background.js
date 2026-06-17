@@ -351,6 +351,18 @@ async function runSync() {
   await chrome.storage.local.set({ last_sync: syncSessionTime });
   await setStatus(msg);
   console.log('[Mighty]', msg);
+
+  // Normalize all recently-synced accounts to the same session timestamp so
+  // the dashboard shows a consistent "Synced X ago" across every card.
+  try {
+    await fetch(`${MIGHTY_URL}/api/sync/finalize`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': api_key },
+      body:    JSON.stringify({ session_ts: syncSessionTime }),
+    });
+  } catch (e) {
+    console.warn('[Mighty] finalize failed (non-critical):', e.message);
+  }
 }
 
 // ── Capture mode ─────────────────────────────────────────────────────────────

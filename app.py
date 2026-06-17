@@ -6439,6 +6439,34 @@ def api_latest_sync():
     return jsonify({"latest": row["ts"] if row else None})
 
 
+@app.route("/api/sync/finalize", methods=["POST"])
+def api_sync_finalize():
+    """Called by the extension when a full sync session completes.
+    Sets synced_at to the session timestamp for all accounts synced in the last 30 minutes,
+    so every card shows the same 'Synced X ago' time on the dashboard.
+    Auth: X-Mighty-Key header.
+    """
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+
+    session_ts = (body or {}).get("session_ts") or iso()
+    db = get_db()
+    # Only touch accounts that were actually synced in this session window (last 30 min),
+    # not accounts that haven't been synced in days.
+    cutoff = (
+        __import__("datetime").datetime.utcnow()
+        - __import__("datetime").timedelta(minutes=30)
+    ).isoformat()
+    result = db.execute(
+        "UPDATE account_data SET synced_at=? WHERE user_id=? AND synced_at >= ?",
+        (session_ts, user["id"], cutoff)
+    )
+    db.commit()
+    print(f"[Finalize] Unified {result.rowcount} accounts to session_ts={session_ts[:19]}", flush=True)
+    return jsonify({"ok": True, "updated": result.rowcount})
+
+
 @app.route("/api/extension/capture", methods=["POST"])
 def api_extension_capture():
     """Receive a page captured by the extension for a custom (user-defined) account.
