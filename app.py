@@ -1805,7 +1805,9 @@ function filterCards(q) {
   q = q.toLowerCase();
   document.querySelectorAll('.acct-card').forEach(function(card) {
     var name = (card.dataset.name || '').toLowerCase();
-    card.style.display = (!q || name.includes(q)) ? '' : 'none';
+    // Also search field labels + values (the visible text inside the card)
+    var content = card.textContent.toLowerCase();
+    card.style.display = (!q || name.includes(q) || content.includes(q)) ? '' : 'none';
   });
   // Hide/show category groups if all cards in them are hidden
   document.querySelectorAll('.cat-group').forEach(function(g) {
@@ -1827,6 +1829,13 @@ function switchFeedTab(name, btn) {
   // Hide expiring banner on activity log — it only applies to account cards
   var banner = document.getElementById('expiring-banner');
   if (banner) banner.style.display = name === 'activity' ? 'none' : (banner.dataset.baseDisplay || 'none');
+  // Reset status filter chips when leaving/entering activity tab
+  if (name === 'accounts') {
+    _activeStatusFilter = 'all';
+    document.querySelectorAll('.status-chip').forEach(function(c) { c.classList.remove('active'); });
+    var allChip = document.querySelector('.status-chip');
+    if (allChip) allChip.classList.add('active');
+  }
   sessionStorage.setItem('mighty-feed-tab', name);
 }
 // Always open on Account Data — don't persist activity log tab across page loads
@@ -1843,11 +1852,6 @@ function copyPrompt(btn) {
   navigator.clipboard.writeText(document.getElementById('promptBox').value);
   btn.textContent = 'Copied!';
   setTimeout(() => btn.textContent = 'Copy system prompt', 1800);
-}
-function copyKey(btn) {
-  navigator.clipboard.writeText(document.getElementById('apiKeyVal').textContent.trim());
-  btn.textContent = 'Copied!';
-  setTimeout(() => btn.textContent = 'Copy', 1800);
 }
 function decide(actionId, decision) {
   var card = document.getElementById("action-" + actionId);
@@ -2205,9 +2209,10 @@ function syncAccount(source, btn) {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
     body: new URLSearchParams({_csrf: csrf})
-  }).then(function() {
+  }).then(function(r) {
+    if (!r.ok) { btn.innerHTML = orig; btn.disabled = false; return; }
     var poll = setInterval(function() {
-      fetch('/sync/status').then(function(r){ return r.json(); }).then(function(s) {
+      fetch('/sync/status').then(function(r2){ return r2.json(); }).then(function(s) {
         if (!s.running) {
           clearInterval(poll);
           reloadWithScroll();
@@ -2532,7 +2537,7 @@ body{display:flex;flex-direction:row}
     <div class="section-title">Connection</div>
     <div style="font-size:12px;color:#8892a4;margin-bottom:8px">Your API key — used to connect your agent to Mighty. Keep it secret.</div>
     <div class="api-key-wrap">
-      <div class="api-key-val" id="apiKeyVal" data-real="{api_key}">{api_key_masked}</div>
+      <div class="api-key-val" id="apiKeyVal">{api_key_masked}</div>
       <button class="btn-sm" id="reveal-key-btn" onclick="toggleRevealKey(this)">Reveal</button>
       <button class="btn-sm" onclick="copyKey(this)">Copy</button>
     </div>
@@ -2686,24 +2691,35 @@ function enablePush() {
     });
   });
 }
+var _fullApiKey = null;
+function _fetchApiKey(cb) {
+  if (_fullApiKey) { cb(_fullApiKey); return; }
+  fetch('/api/my-key').then(function(r){ return r.json(); }).then(function(d){
+    _fullApiKey = d.key || '';
+    cb(_fullApiKey);
+  }).catch(function(){ cb(''); });
+}
 function copyKey(btn) {
-  var el = document.getElementById('apiKeyVal');
-  var val = el.dataset.real || el.textContent.trim();
-  navigator.clipboard.writeText(val);
-  btn.textContent = 'Copied!';
-  setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
+  _fetchApiKey(function(val) {
+    navigator.clipboard.writeText(val);
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = 'Copy'; }, 1800);
+  });
 }
 var _keyRevealed = false;
 function toggleRevealKey(btn) {
   var el = document.getElementById('apiKeyVal');
   _keyRevealed = !_keyRevealed;
   if (_keyRevealed) {
-    el.textContent = el.dataset.real;
+    _fetchApiKey(function(val) { el.textContent = val; });
     btn.textContent = 'Hide';
     btn.title = 'Hide API key';
   } else {
-    var real = el.dataset.real || '';
-    el.textContent = real.slice(0,3) + '•'.repeat(Math.max(0, real.length - 3));
+    // Re-mask using the cached key length if available
+    var masked = _fullApiKey
+      ? (_fullApiKey.slice(0,3) + '•'.repeat(Math.max(0, _fullApiKey.length - 3)))
+      : el.textContent; // already masked from server render
+    el.textContent = masked;
     btn.textContent = 'Reveal';
     btn.title = 'Show API key';
   }
@@ -3713,17 +3729,11 @@ def dashboard():
                 status_color = "#ef4444"
                 login_required_accounts.append(display_name)
             elif synced_at:
-                # Check discovery_failed flag or time-based stale fallback
+                # Show "No account data" only when discovery explicitly failed or
+                # sync returned no_data — never based on age alone (age-based
+                # check was too aggressive and hid valid cards after 5 min).
                 _disc_info = discovered_by_source.get(src, {})
                 _no_data = _disc_info.get("failed", False) or sync_status == "no_data"
-                if not _no_data:
-                    try:
-                        import datetime as _dt
-                        _age = (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(synced_at.rstrip("Z"))).total_seconds()
-                        if _age > 300:
-                            _no_data = True
-                    except Exception:
-                        pass
                 if _no_data:
                     hero_html = (
                         f'<div class="acct-divider"></div>'
@@ -4113,6 +4123,7 @@ def export_csv():
 @app.route("/settings/delete-activity", methods=["POST"])
 @require_login
 def delete_activity():
+    check_csrf()
     db = get_db()
     db.execute("DELETE FROM actions WHERE user_id=?", (session["user_id"],))
     db.commit()
@@ -4137,6 +4148,7 @@ def change_password():
 @app.route("/settings/change-email", methods=["POST"])
 @require_login
 def change_email():
+    check_csrf()
     data     = request.get_json(force=True, silent=True) or {}
     new_email = data.get("email", "").strip().lower()
     password  = data.get("password", "")
@@ -4166,6 +4178,8 @@ def delete_account():
     db.execute("DELETE FROM push_subscriptions WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM actions WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM password_resets WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM account_credentials WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM account_data WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM users WHERE id=?", (user_id,))
     db.commit()
     session.clear()
@@ -4240,6 +4254,7 @@ def has_pending():
 @app.route("/dashboard/notifications", methods=["POST"])
 @require_login
 def update_notifications():
+    check_csrf()
     data = request.get_json(force=True)
     db = get_db()
     db.execute(
@@ -4256,6 +4271,7 @@ def update_notifications():
 @app.route("/settings/privacy", methods=["POST"])
 @require_login
 def update_privacy():
+    check_csrf()
     data = request.get_json(force=True)
     get_db().execute(
         "UPDATE users SET minimal_logging=? WHERE id=?",
@@ -5547,8 +5563,11 @@ function resetFields(source) {{
   }}).catch(function() {{ toast('Reset failed — try again', false); }});
 }}
 
-function saveFields(source) {{
-  var boxes = document.querySelectorAll('[data-source="' + source + '"]');
+function saveFields(source, container) {{
+  // When called from the modal, scope to modal body to avoid reading the hidden
+  // page panel as well (duplicate IDs / double-count bug).
+  var root = container || document;
+  var boxes = root.querySelectorAll('[data-source="' + source + '"]');
   var enabled = Array.from(boxes).filter(b => b.checked).map(b => b.dataset.key);
   fetch('/credentials/fields', {{
     method: 'POST',
@@ -5563,7 +5582,8 @@ function saveFields(source) {{
 }}
 
 function saveFieldsModal(source) {{
-  saveFields(source);
+  var modalBody = document.getElementById('field-modal-body');
+  saveFields(source, modalBody);
 }}
 
 /* ── Field edit modal ─────────────────────────────── */
@@ -5577,7 +5597,9 @@ function openFieldModal(source) {{
   var nameEl = card ? card.querySelector('div[style*="font-weight:600"]') : null;
   title.textContent = (nameEl ? nameEl.textContent : source) + ' — Edit fields';
   if (panel) {{
-    body.innerHTML = panel.innerHTML;
+    // Strip id attributes from the copy to avoid duplicate IDs in the DOM
+    // (the original panel stays hidden with its ids intact).
+    body.innerHTML = panel.innerHTML.replace(/ id="field-[^"]*"/g, '');
   }} else {{
     body.innerHTML = '<p style="font-size:13px;color:#9ca3af">No fields available yet. Sync this account first.</p>';
   }}
@@ -6391,6 +6413,15 @@ def registry_paths():
     return jsonify({"paths": [r["path"] for r in rows]})
 
 
+@app.route("/api/my-key")
+@require_login
+def api_my_key():
+    """Return the current user's API key — used by the Settings page Reveal/Copy buttons.
+    Kept behind session auth so the key never lives in a DOM attribute."""
+    user = get_db().execute("SELECT api_key FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    return jsonify({"key": user["api_key"] if user else ""})
+
+
 @app.route("/api/latest-sync")
 @require_login
 def api_latest_sync():
@@ -6634,9 +6665,11 @@ def api_2fa_request():
     )
     get_db().commit()
 
-    # Notify user by email
-    _send_2fa_email(user["email"], account_name, challenge_type, message,
-                    f"{base_url()}/dashboard#2fa-{challenge_id}")
+    # Notify user by email — fire in background so the scraper gets its
+    # response immediately rather than waiting up to 10 s on Postmark.
+    _email_args = (user["email"], account_name, challenge_type, message,
+                   f"{base_url()}/dashboard#2fa-{challenge_id}")
+    threading.Thread(target=_send_2fa_email, args=_email_args, daemon=True).start()
 
     return jsonify({"ok": True, "challenge_id": challenge_id})
 
@@ -6864,16 +6897,15 @@ def _cloud_sync_all():
     with app.app_context():
         try:
             url = os.environ.get("BASE_URL", "https://mighty-selfserve-production.up.railway.app")
-            rows = get_db().execute("SELECT id, api_key FROM users").fetchall()
+            # Single query: only users that have at least one credential row.
+            # Avoids an N+1 COUNT query per user.
+            rows = get_db().execute(
+                "SELECT DISTINCT u.id, u.api_key FROM users u "
+                "WHERE EXISTS (SELECT 1 FROM account_credentials ac WHERE ac.user_id = u.id)"
+            ).fetchall()
             for row in rows:
                 uid = row["id"]
                 if _sync_status.get(uid, {}).get("running"):
-                    continue
-                n = get_db().execute(
-                    "SELECT COUNT(*) as n FROM account_credentials WHERE user_id=?",
-                    (uid,)
-                ).fetchone()["n"]
-                if n == 0:
                     continue
                 _sync_status[uid] = {"running": True}
                 try:
@@ -6910,10 +6942,13 @@ def sync_now_cloud():
     user = get_db().execute("SELECT api_key FROM users WHERE id=?", (uid,)).fetchone()
     url  = os.environ.get("BASE_URL", "https://mighty-selfserve-production.up.railway.app")
     _sync_status[uid] = {"running": True}
+    # Snapshot the api_key string so the thread doesn't hold a sqlite3.Row
+    # reference across a potential db connection teardown.
+    _api_key = user["api_key"]
 
     def _do():
         try:
-            _cloud_sync_user(uid, user["api_key"], url, force=True)
+            _cloud_sync_user(uid, _api_key, url, force=True)
             _auto_discover_missing(uid)  # discover fields for any account that needs it
         except Exception as e:
             print(f"[SyncNow] {e}", flush=True)
@@ -6932,12 +6967,13 @@ def sync_account_cloud(source):
     user = get_db().execute("SELECT api_key FROM users WHERE id=?", (uid,)).fetchone()
     url  = os.environ.get("BASE_URL", "https://mighty-selfserve-production.up.railway.app")
     _sync_status[uid] = {"running": True}
+    _api_key = user["api_key"]  # snapshot before thread to avoid stale sqlite3.Row
 
     def _do():
         try:
             import scrape as _scrape
             result = _scrape.run_sync(
-                api_key=user["api_key"],
+                api_key=_api_key,
                 mighty_url=url,
                 log=lambda m: print(f"[SyncAccount:{source}] {m}", flush=True),
                 only_source=source,
