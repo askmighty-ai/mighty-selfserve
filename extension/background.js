@@ -82,7 +82,7 @@ const ACCOUNT_ENTRY = {
   att:          'https://www.att.com/my/#/',
   att_wireless: 'https://myatt.att.com/exp/myconsumerdashboard/',
   xfinity:      'https://customer.xfinity.com/#/billing',
-  pa_utilities: 'https://myaccount.cityofpaloalto.org/',
+  pa_utilities: 'https://utilities.cityofpaloalto.org/',
 };
 
 /** Normalize a URL for deduplication: strip query + fragment, lowercase, no trailing slash. */
@@ -146,6 +146,13 @@ function _scoreLink(href, text, baseDomain) {
   return score;
 }
 
+// Accounts that span multiple subdomains — the crawler uses the parent domain so
+// links across subdomains (e.g. myaccount.cityofpaloalto.org → utilities.cityofpaloalto.org)
+// are not treated as off-site and scored/visited normally.
+const ACCOUNT_BASE_DOMAIN_OVERRIDE = {
+  pa_utilities: 'cityofpaloalto.org',
+};
+
 // Domain → source for passive supplement capture when user naturally browses.
 // Any account-looking path on these domains gets captured — no hardcoded path list needed.
 const SUPPLEMENT_DOMAINS = {
@@ -160,7 +167,7 @@ const SUPPLEMENT_DOMAINS = {
   'americanexpress.com':          'amex',
   'chase.com':                    'chase',
   'customer.xfinity.com':         'xfinity',
-  'utilities.cityofpaloalto.org': 'pa_utilities',
+  'cityofpaloalto.org':           'pa_utilities',  // covers utilities. and myaccount. subdomains
   'ihg.com':                      'ihg',
   'wyndhamhotels.com':            'wyndham',
 };
@@ -613,8 +620,21 @@ async function _autoCapturePage(tabId, tab) {
   const name     = _nameFromTab(tab);
   const category = _guessCategory(tab.url);
 
+  // Privacy mode: for unapproved domains, only send first 500 chars of raw text
+  let rawText = text;
+  const baseDomain = (() => { try { return new URL(tab.url).hostname.replace(/^www./, ''); } catch(e) { return ''; } })();
+  const isApprovedDomain = Object.keys(SUPPLEMENT_DOMAINS || {}).some(d => baseDomain.includes(d)) ||
+    Object.keys(ACCOUNT_ENTRY || {}).some(k => {
+      try { return new URL(ACCOUNT_ENTRY[k]).hostname.replace(/^www./, '') === baseDomain; } catch(e) { return false; }
+    });
+  const payload = {};
+  if (!isApprovedDomain && rawText) {
+    rawText = rawText.slice(0, 500);
+    payload.privacy_mode = true;
+  }
+
   try {
-    await _pushCapture(api_key, name, category, tab.url, text);
+    await _pushCapture(api_key, name, category, tab.url, rawText);
     console.log(`[Mighty] Auto-captured: "${name}" (${text.length} chars) from ${tab.url}`);
 
     // Flash badge briefly so user knows something happened
@@ -794,7 +814,10 @@ async function crawlAccount(apiKey, account, syncSessionTime) {
   const warmup = WARMUP_URLS[account.source];
   let baseDomain;
   try {
-    baseDomain = new URL(entry).hostname.replace(/^www\./, '');
+    // Use override if the account spans multiple subdomains (e.g. pa_utilities spans
+    // myaccount.cityofpaloalto.org and utilities.cityofpaloalto.org).
+    baseDomain = ACCOUNT_BASE_DOMAIN_OVERRIDE[account.source]
+               || new URL(entry).hostname.replace(/^www\./, '');
   } catch {
     console.error(`[Mighty] Invalid entry URL for ${account.source}: ${entry}`);
     return;

@@ -187,6 +187,19 @@ def init_db():
                 quality_score  REAL DEFAULT 1.0,
                 UNIQUE(site, path)
             );
+            CREATE TABLE IF NOT EXISTS extraction_hints (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                site           TEXT NOT NULL,
+                path           TEXT,
+                trigger_phrase TEXT NOT NULL,
+                field_key      TEXT NOT NULL,
+                field_label    TEXT NOT NULL,
+                neighborhood   TEXT,
+                confidence     REAL DEFAULT 0.0,
+                success_count  INTEGER DEFAULT 1,
+                last_seen      TEXT NOT NULL,
+                UNIQUE(site, trigger_phrase, field_key)
+            );
         """)
         # Pre-seed with known-good paths (quality_score=5 → treated as trusted immediately)
         _KNOWN_PATHS = [
@@ -200,8 +213,14 @@ def init_db():
             ('hilton',     '/en/hilton-honors/profile/awards'),
             ('hilton',     '/en/hilton-honors/profile/benefits'),
             ('hyatt',      '/en-US/my-account/awards'),
-            ('united',     '/en/us/myaccount/awards'),
-            ('alaska_air', '/account/wallet'),
+            ('united',        '/en/us/myaccount/awards'),
+            ('alaska_air',    '/account/wallet'),
+            # PA Utilities (utilities.cityofpaloalto.org)
+            ('pa_utilities',  '/Account/'),
+            ('pa_utilities',  '/Account/Overview'),
+            ('pa_utilities',  '/Billing/'),
+            ('pa_utilities',  '/Billing/Overview'),
+            ('pa_utilities',  '/Usage/'),
         ]
         for _site, _path in _KNOWN_PATHS:
             try:
@@ -234,6 +253,14 @@ def init_db():
             pass
         try:
             db.execute("ALTER TABLE users ADD COLUMN minimal_logging INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            db.execute("ALTER TABLE account_data ADD COLUMN sync_failure_reason TEXT")
+        except Exception:
+            pass
+        try:
+            db.execute("ALTER TABLE account_credentials ADD COLUMN review_required_fields TEXT DEFAULT '[]'")
         except Exception:
             pass
 
@@ -510,6 +537,8 @@ _CATEGORY_SCHEMAS: dict = {
         "sources": {
             "delta", "southwest", "united", "american_air", "alaska_air",
             "marriott", "hilton", "hyatt", "ihg", "wyndham",
+            "british_airways", "air_france", "jetblue", "frontier", "spirit",
+            "accor", "choice_hotels", "best_western",
         },
         "name": "travel loyalty program",
         "priority_fields": (
@@ -523,7 +552,7 @@ _CATEGORY_SCHEMAS: dict = {
         ),
     },
     "credit_card": {
-        "sources": {"amex", "chase", "capital_one", "discover", "citi", "bofa", "wells_fargo"},
+        "sources": {"amex", "chase", "capital_one", "discover", "citi", "bofa", "wells_fargo", "barclays", "synchrony", "apple_card", "usaa"},
         "name": "credit card",
         "priority_fields": (
             "current balance and available credit • "
@@ -534,7 +563,7 @@ _CATEGORY_SCHEMAS: dict = {
         ),
     },
     "utilities": {
-        "sources": {"xfinity", "pa_utilities", "att", "att_wireless"},
+        "sources": {"xfinity", "pa_utilities", "att", "att_wireless", "pge", "sdge", "verizon", "tmobile", "comcast", "spectrum"},
         "name": "utility or telecom account",
         "priority_fields": "amount due and due date • autopay status • current plan • data usage and remaining",
     },
@@ -544,7 +573,7 @@ _CATEGORY_SCHEMAS: dict = {
         "priority_fields": "current plan name • next renewal date and price • payment method",
     },
     "banking": {
-        "sources": {"fidelity", "schwab", "paypal", "sfcu"},
+        "sources": {"fidelity", "schwab", "paypal", "sfcu", "chase_bank", "bofa_bank", "ally", "sofi", "robinhood"},
         "name": "financial account",
         "priority_fields": "account balance • available balance • portfolio value",
     },
@@ -554,9 +583,25 @@ _CATEGORY_SCHEMAS: dict = {
         "priority_fields": "upcoming appointments • active prescriptions",
     },
     "shopping": {
-        "sources": {"amazon", "target", "costco", "starbucks", "ticketmaster"},
+        "sources": {"amazon", "target", "costco", "starbucks", "ticketmaster", "walmart", "bestbuy", "doordash", "instacart", "uber_eats"},
         "name": "retail or rewards account",
         "priority_fields": "rewards balance • membership status and renewal date",
+    },
+    "insurance": {
+        "sources": {"geico", "progressive", "statefarm", "allstate", "aaa", "anthem", "bluecross", "cigna", "aetna", "kaiser"},
+        "name": "insurance account",
+        "priority_fields": (
+            "policy number and status • premium amount and due date • "
+            "coverage details • deductible remaining • next renewal date"
+        ),
+    },
+    "automotive": {
+        "sources": {"tesla", "ford", "gm", "bmw", "honda", "toyota", "ez_pass", "fastrak", "sunpass"},
+        "name": "automotive or transportation account",
+        "priority_fields": (
+            "account balance • auto-replenish threshold • "
+            "vehicle registration expiry • next service due"
+        ),
     },
 }
 
@@ -5265,8 +5310,21 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
     # Apply filter first to strip noise (past flights, ticket IDs, etc.)
     fresh = _post_filter_fields(fields)
 
+    # Classify why discovery yielded nothing (for failure tracking)
+    _failure_reason: str | None = None
+    if not fields:
+        _failure_reason = "llm_empty"
+    elif not fresh:
+        confidences = [f.get("confidence", 0) for f in fields if isinstance(f.get("confidence"), (int, float))]
+        if confidences and max(confidences) < 0.70:
+            _failure_reason = "low_confidence_only"
+        else:
+            _failure_reason = "stale_date_only"
+
     # Dedup by label similarity
     def _n(s): return re.sub(r'[^a-z0-9]', '', s.lower())
+    # API-intercepted fields take priority in dedup
+    fresh.sort(key=lambda x: 0 if x.get("from_api") else 1)
     seen_labels: set = set(); seen_vals: dict = {}; deduped = []
     for f in fresh:
         val = str(f.get("value", "")).strip(); lbl = _n(f.get("label", ""))
@@ -5276,10 +5334,24 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
         if val and val not in ("0", ""): seen_vals[val] = f["key"]
         deduped.append(f)
 
-    valid_keys = {f["key"] for f in deduped}
-    ex["enabled_fields"]    = list(valid_keys)  # enable all fresh fields by default
-    ex["discovered_fields"] = deduped
-    ex["discovered_at"]     = iso()
+    # Confidence-based auto-selection:
+    # >=0.85 -> auto-enable; <0.85 -> store but mark review_required
+    auto_enabled = []
+    review_required = []
+    for f in deduped:
+        conf = f.get("confidence")
+        if isinstance(conf, (int, float)) and conf < 0.85:
+            review_required.append(f["key"])
+        else:
+            auto_enabled.append(f["key"])
+    # If no field has confidence metadata (old-style), enable all
+    if not auto_enabled and not review_required:
+        auto_enabled = [f["key"] for f in deduped]
+
+    ex["enabled_fields"]         = auto_enabled
+    ex["review_required_fields"] = review_required
+    ex["discovered_fields"]      = deduped
+    ex["discovered_at"]          = iso()
     db.execute(
         "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
         (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
@@ -5296,6 +5368,8 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             item["confidence"] = f["confidence"]
         if "source_snippet" in f:
             item["source_snippet"] = f["source_snippet"]
+        if f.get("from_api"):
+            item["from_api"] = True
         ai_items.append(item)
     ad = db.execute(
         "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
@@ -5307,6 +5381,39 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
             (encrypt_account_data(uid, ad_data), uid, source)
         )
+    db.commit()
+
+    # Propagate failure reason to account_data if all fields were dropped
+    if _failure_reason:
+        _ad_row = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
+        ).fetchone()
+        if _ad_row:
+            _ad_payload = decrypt_account_data(uid, _ad_row["data_enc"] or "")
+            _ad_payload["sync_failure_reason"] = _failure_reason
+            db.execute(
+                "UPDATE account_data SET data_enc=?, sync_failure_reason=? WHERE user_id=? AND source=?",
+                (encrypt_account_data(uid, _ad_payload), _failure_reason, uid, source)
+            )
+            db.commit()
+
+    # Populate extraction_hints for high-confidence fields
+    for _hf in deduped:
+        _conf = _hf.get("confidence")
+        _snip = _hf.get("source_snippet", "")
+        if isinstance(_conf, (int, float)) and _conf >= 0.85 and _snip:
+            _trigger = _snip[:60].strip()
+            try:
+                db.execute(
+                    "INSERT INTO extraction_hints "
+                    "(site, trigger_phrase, field_key, field_label, neighborhood, confidence, success_count, last_seen) "
+                    "VALUES (?,?,?,?,?,?,1,?) "
+                    "ON CONFLICT(site, trigger_phrase, field_key) DO UPDATE SET "
+                    "success_count = success_count + 1, confidence = excluded.confidence, last_seen = excluded.last_seen",
+                    (source, _trigger, _hf["key"], _hf.get("label",""), _snip, _conf, iso())
+                )
+            except Exception:
+                pass
     db.commit()
 
 
@@ -6543,13 +6650,16 @@ def api_data_sync():
             print(f"[Mighty] Skipping login-page overwrite for {source} — good data exists", flush=True)
             return jsonify({"ok": True, "skipped": True, "reason": "login_page_but_good_data_exists"})
         data["sync_status"] = "login_required"
+        data["sync_failure_reason"] = "login_wall"
         data["items"] = []
         raw_text = ""
         data["raw_text"] = ""
     elif not data.get("items") and not raw_text:
         data["sync_status"] = "no_data"
+        data["sync_failure_reason"] = "no_data"
     else:
         data["sync_status"] = "ok"
+        data.pop("sync_failure_reason", None)
 
     data["sync_source"] = sync_source
 
@@ -6558,9 +6668,10 @@ def api_data_sync():
     db = get_db()
     db.execute(
         "INSERT OR REPLACE INTO account_data "
-        "(user_id, source, display_name, icon, color, data_enc, synced_at) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (user["id"], source, display, icon, color, data_enc, synced_at),
+        "(user_id, source, display_name, icon, color, data_enc, synced_at, sync_failure_reason) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (user["id"], source, display, icon, color, data_enc, synced_at,
+         data.get("sync_failure_reason")),
     )
     db.commit()
 
@@ -6610,6 +6721,17 @@ def api_data_sync():
                         (new_enc, iso(), uid, source)
                     )
                     _db.commit()
+                    # Self-improving coverage: boost quality scores for paths that yielded fields
+                    if fields:
+                        try:
+                            _db.execute(
+                                "UPDATE site_paths SET quality_score = MIN(quality_score + 0.5, 10.0), "
+                                "last_seen = ? WHERE site = ?",
+                                (iso(), source)
+                            )
+                            _db.commit()
+                        except Exception:
+                            pass
             threading.Thread(target=_bg_discover, daemon=True).start()
         else:
             # Existing prefs: re-run full discovery so new fields (credits, offers, certs)
@@ -6620,6 +6742,17 @@ def api_data_sync():
                     return
                 with app.app_context():
                     _save_discovered_fields(uid, source, new_fields)
+                    # Self-improving coverage: boost quality score
+                    try:
+                        _db2 = get_db()
+                        _db2.execute(
+                            "UPDATE site_paths SET quality_score = MIN(quality_score + 0.3, 10.0), "
+                            "last_seen = ? WHERE site = ?",
+                            (iso(), source)
+                        )
+                        _db2.commit()
+                    except Exception:
+                        pass
             threading.Thread(target=_bg_refresh, daemon=True).start()
 
     return jsonify({"ok": True, "source": source})
@@ -6677,8 +6810,11 @@ def api_extension_intercept():
             with app.app_context():
                 fields = claude_discover_fields(combined, site_name, source=source)
                 if fields:
+                    # Tag API-intercepted fields — higher fidelity than DOM scrapes
+                    for _f in fields:
+                        _f["from_api"] = True
                     _save_discovered_fields(uid, source, fields)
-                    print(f"[Intercept] {source}: {len(fields)} fields discovered", flush=True)
+                    print(f"[Intercept] {source}: {len(fields)} fields discovered (API-priority)", flush=True)
         threading.Thread(target=_bg, daemon=True).start()
 
     _registry_report_path(source, url)

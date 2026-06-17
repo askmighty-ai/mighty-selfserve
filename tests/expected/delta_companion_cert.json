@@ -1,0 +1,11 @@
+{
+  "source": "delta",
+  "min_fields": 4,
+  "required_keys": ["elite_status", "companion_certificate"],
+  "required_value_fragments": {
+    "elite_status": ["diamond"],
+    "companion_certificate": ["2026"]
+  },
+  "must_contain_values": ["45,320"],
+  "forbidden_values": ["log in", "sign in", "N/A"]
+}

@@ -1,0 +1,8 @@
+{
+  "source": "delta",
+  "max_fields": 1,
+  "required_keys": [],
+  "required_value_fragments": {},
+  "must_contain_values": [],
+  "forbidden_values": []
+}

@@ -1,0 +1,8 @@
+{
+  "source": "chase",
+  "min_fields": 2,
+  "required_keys": [],
+  "required_value_fragments": {},
+  "must_contain_values": ["2,472", "35"],
+  "forbidden_values": ["log in", "N/A"]
+}
