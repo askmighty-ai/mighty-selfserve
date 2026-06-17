@@ -19,10 +19,16 @@
     if (seen.has(url)) return;
     seen.add(url);
 
-    chrome.runtime.sendMessage({
-      action:  'intercepted_api',
-      url,
-      data:    event.data.data,
-    }).catch(() => {/* background may not be ready */});
+    // Wrap in try/catch: sendMessage throws synchronously when the extension
+    // context is invalidated (e.g. after a reload), before .catch() can fire.
+    try {
+      chrome.runtime.sendMessage({
+        action:  'intercepted_api',
+        url,
+        data:    event.data.data,
+      }).catch(() => {/* background may not be ready */});
+    } catch (_e) {
+      // Context invalidated — content script will be replaced on next navigation.
+    }
   });
 })();
