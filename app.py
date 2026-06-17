@@ -4960,6 +4960,14 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
     reordered = [ex_by_key[k] for k in gemini_keys if k in ex_by_key]
     reordered += [f for k, f in ex_by_key.items() if k not in set(gemini_keys)]
 
+    # Apply post-filter to the merged list so previously stored bad fields
+    # (past flights, ticket IDs, long numeric IDs) are stripped out even if
+    # they pre-date the filter being added.
+    reordered = _post_filter_fields(reordered)
+    # Remove from enabled set any keys that were just filtered out
+    filtered_keys = {f["key"] for f in reordered}
+    ex_enabled &= filtered_keys
+
     # Dedup by label similarity
     def _n(s): return re.sub(r'[^a-z0-9]', '', s.lower())
     seen_labels: set = set(); seen_vals: dict = {}; deduped = []
