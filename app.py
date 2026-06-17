@@ -4959,55 +4959,25 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
         try: ex = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
         except Exception: pass
 
-    existing  = ex.get("discovered_fields", [])
-    existing_keys = {f["key"] for f in existing}
-    ex_by_key = {f["key"]: f for f in existing}
-    ex_enabled = set(ex.get("enabled_fields", []))
-    truly_new_keys: list = []
-    for f in fields:
-        key = f["key"]
-        if key in ex_by_key: ex_by_key[key]["value"] = f.get("value", "")
-        else:
-            ex_by_key[key] = f
-            ex_enabled.add(key)
-            if key not in existing_keys:
-                truly_new_keys.append(key)
-
-    # Re-order: Gemini's latest response ordering takes precedence (fixes hero field)
-    gemini_keys = [f["key"] for f in fields]
-    reordered = [ex_by_key[k] for k in gemini_keys if k in ex_by_key]
-    reordered += [f for k, f in ex_by_key.items() if k not in set(gemini_keys)]
-
-    # Apply post-filter to the merged list so previously stored bad fields
-    # (past flights, ticket IDs, long numeric IDs) are stripped out even if
-    # they pre-date the filter being added.
-    reordered = _post_filter_fields(reordered)
-    # Remove from enabled set any keys that were just filtered out
-    filtered_keys = {f["key"] for f in reordered}
-    ex_enabled &= filtered_keys
+    # Re-discover REPLACES fields entirely — no merging with stale data.
+    # Apply filter first to strip noise (past flights, ticket IDs, etc.)
+    fresh = _post_filter_fields(fields)
 
     # Dedup by label similarity
     def _n(s): return re.sub(r'[^a-z0-9]', '', s.lower())
     seen_labels: set = set(); seen_vals: dict = {}; deduped = []
-    for f in reordered:
+    for f in fresh:
         val = str(f.get("value", "")).strip(); lbl = _n(f.get("label", ""))
-        if any(lbl in sl or sl in lbl for sl in seen_labels): ex_enabled.discard(f["key"]); continue
-        if val and val not in ("0", "") and val in seen_vals: ex_enabled.discard(f["key"]); continue
+        if any(lbl in sl or sl in lbl for sl in seen_labels): continue
+        if val and val not in ("0", "") and val in seen_vals: continue
         seen_labels.add(lbl)
         if val and val not in ("0", ""): seen_vals[val] = f["key"]
         deduped.append(f)
 
-    # Only keep enabled keys that still exist in the (post-filtered) discovered set.
-    # This ensures filtered-out fields (past flights, ticket numbers, long IDs) are
-    # not kept enabled just because they were enabled in a previous discovery run.
     valid_keys = {f["key"] for f in deduped}
-    ex["enabled_fields"]    = list((ex_enabled | {f["key"] for f in fields}) & valid_keys)
+    ex["enabled_fields"]    = list(valid_keys)  # enable all fresh fields by default
     ex["discovered_fields"] = deduped
     ex["discovered_at"]     = iso()
-    # Accumulate genuinely new field keys so UI can highlight them
-    if truly_new_keys and existing_keys:  # only notify when there were already fields (not first discovery)
-        prev_new = ex.get("new_fields", [])
-        ex["new_fields"] = list({*prev_new, *truly_new_keys})
     db.execute(
         "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
         (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
