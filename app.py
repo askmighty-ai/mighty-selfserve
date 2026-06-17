@@ -6451,6 +6451,7 @@ def api_sync_finalize():
         return jsonify({"error": "unauthorized"}), 401
 
     session_ts = (body or {}).get("session_ts") or iso()
+    sources    = (body or {}).get("sources")  # optional list to restrict which accounts
     db = get_db()
     # Only touch accounts that were actually synced in this session window (last 30 min),
     # not accounts that haven't been synced in days.
@@ -6458,10 +6459,17 @@ def api_sync_finalize():
         __import__("datetime").datetime.utcnow()
         - __import__("datetime").timedelta(minutes=30)
     ).isoformat()
-    result = db.execute(
-        "UPDATE account_data SET synced_at=? WHERE user_id=? AND synced_at >= ?",
-        (session_ts, user["id"], cutoff)
-    )
+    if sources and isinstance(sources, list):
+        placeholders = ",".join("?" * len(sources))
+        result = db.execute(
+            f"UPDATE account_data SET synced_at=? WHERE user_id=? AND source IN ({placeholders})",
+            [session_ts, user["id"]] + sources
+        )
+    else:
+        result = db.execute(
+            "UPDATE account_data SET synced_at=? WHERE user_id=? AND synced_at >= ?",
+            (session_ts, user["id"], cutoff)
+        )
     db.commit()
     print(f"[Finalize] Unified {result.rowcount} accounts to session_ts={session_ts[:19]}", flush=True)
     return jsonify({"ok": True, "updated": result.rowcount})

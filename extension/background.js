@@ -162,10 +162,15 @@ const SUPPLEMENT_WATCH = [
   { source: 'hyatt',       domain: 'hyatt.com',                paths: ['/en-US/my-account/awards'] },
   { source: 'united',      domain: 'united.com',               paths: ['/en/us/myaccount/awards'] },
   { source: 'alaska_air',  domain: 'alaskaair.com',            paths: ['/account/wallet'] },
-  // Sites that always fail in popup windows — capture on natural browser visits instead
-  { source: 'xfinity',     domain: 'customer.xfinity.com',     paths: ['/'] },   // match any page — Akamai blocks popups
-  { source: 'pa_utilities',domain: 'utilities.cityofpaloalto.org', paths: ['/'] }, // capture any account page
+  // Sites that always fail in popup windows — synced via regular background tab instead
+  { source: 'xfinity',     domain: 'customer.xfinity.com',     paths: ['/'] },
+  { source: 'pa_utilities',domain: 'utilities.cityofpaloalto.org', paths: ['/'] },
 ];
+
+// Sources that must be synced via a regular tab (not a popup window).
+// Akamai and similar bot-detection layers block popup windows; a regular tab
+// using the user's existing session passes through cleanly.
+const TAB_SYNC_SOURCES = new Set(['xfinity', 'pa_utilities']);
 
 // Domain → source mapping for API interception
 const INTERCEPT_DOMAIN_MAP = {
@@ -325,7 +330,11 @@ async function runSync() {
     // Registry path merging is kept for future use — disabled here until
     // path quality is validated to avoid extra/wrong pages in sync.
     try {
-      await syncAccount(api_key, account, urls, syncSessionTime);
+      if (TAB_SYNC_SOURCES.has(account.source)) {
+        await syncAccountViaTab(api_key, account, urls, syncSessionTime);
+      } else {
+        await syncAccount(api_key, account, urls, syncSessionTime);
+      }
       ok++;
     } catch (e) {
       console.error(`[Mighty] Failed: ${account.name}:`, e.message);
@@ -725,6 +734,69 @@ const BOT_DETECTION_PHRASES = [
 ];
 
 // ── Per-account sync ─────────────────────────────────────────────────────────
+
+/**
+ * Sync a bot-detection site by opening a regular foreground-invisible tab.
+ * A regular tab uses the user's full browser session and avoids popup-window
+ * fingerprinting that Akamai and similar systems block.
+ * The SUPPLEMENT_WATCH onUpdated listener captures the page automatically.
+ */
+async function syncAccountViaTab(apiKey, account, urls, syncSessionTime) {
+  const source = account.source;
+  const url = urls[0];
+  console.log(`[Mighty] Tab-sync ${source}: opening tab → ${url}`);
+
+  // Remember the synced_at before we open the tab so we can detect a fresh capture.
+  const before = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
+    headers: { 'X-Mighty-Key': apiKey }
+  }).then(r => r.json()).then(list => {
+    const acct = list.find(a => a.source === source);
+    return acct ? acct.synced_at : null;
+  }).catch(() => null);
+
+  // Open a real tab (not a popup) — SUPPLEMENT_WATCH fires on load.
+  const tab = await chrome.tabs.create({ url, active: false });
+  const tabId = tab.id;
+
+  // Wait up to 25 s for the page to load and be captured.
+  const WAIT_MS = 25_000;
+  const CHECK_EVERY = 2_000;
+  let elapsed = 0;
+  await new Promise(resolve => {
+    const interval = setInterval(async () => {
+      elapsed += CHECK_EVERY;
+      // Check if the account's synced_at has updated (meaning SUPPLEMENT_WATCH fired).
+      try {
+        const list = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
+          headers: { 'X-Mighty-Key': apiKey }
+        }).then(r => r.json());
+        const acct = list.find(a => a.source === source);
+        if (acct && acct.synced_at && acct.synced_at !== before) {
+          // Captured — normalize timestamp to session time
+          clearInterval(interval);
+          resolve();
+          return;
+        }
+      } catch {}
+      if (elapsed >= WAIT_MS) { clearInterval(interval); resolve(); }
+    }, CHECK_EVERY);
+  });
+
+  // Close the tab we opened
+  try { await chrome.tabs.remove(tabId); } catch {}
+
+  // Align the stored timestamp with the session time so the dashboard shows
+  // a consistent "Synced X ago" alongside other accounts.
+  try {
+    await fetch(`${MIGHTY_URL}/api/sync/finalize`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body:    JSON.stringify({ session_ts: syncSessionTime, sources: [source] }),
+    });
+  } catch {}
+
+  console.log(`[Mighty] Tab-sync ${source}: complete`);
+}
 
 async function syncAccount(apiKey, account, urls, syncSessionTime = new Date().toISOString()) {
   console.log(`[Mighty] → ${account.name} (${urls.length} page${urls.length > 1 ? 's' : ''})`);
