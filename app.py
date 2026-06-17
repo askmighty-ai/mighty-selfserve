@@ -3725,7 +3725,8 @@ def dashboard():
                 disc  = discovered_by_source[src]
                 items = [
                     {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
-                    for f in disc["fields"] if f.get("key") in disc["enabled"]
+                    for f in _post_filter_fields(disc["fields"])
+                    if f.get("key") in disc["enabled"]
                 ]
             else:
                 items = data.get("items", [])
@@ -6488,6 +6489,42 @@ def registry_paths():
         LIMIT 20
     ''', (site,)).fetchall()
     return jsonify({"paths": [r["path"] for r in rows]})
+
+
+@app.route("/api/debug/scrub-fields", methods=["POST"])
+@require_login
+def api_debug_scrub_fields():
+    """Apply _post_filter_fields to all stored discovered fields directly in the DB,
+    without needing to call Gemini. Useful when the filter was added after initial discovery."""
+    uid = session["user_id"]
+    db = get_db()
+    rows = db.execute(
+        "SELECT source, extra_enc FROM account_credentials WHERE user_id=?", (uid,)
+    ).fetchall()
+    updated = []
+    for row in rows:
+        if not row["extra_enc"]:
+            continue
+        try:
+            ex = json.loads(decrypt_cred(uid, row["extra_enc"]))
+        except Exception:
+            continue
+        fields = ex.get("discovered_fields", [])
+        if not fields:
+            continue
+        filtered = _post_filter_fields(fields)
+        removed_keys = {f["key"] for f in fields} - {f["key"] for f in filtered}
+        if not removed_keys:
+            continue
+        ex["discovered_fields"] = filtered
+        ex["enabled_fields"] = [k for k in ex.get("enabled_fields", []) if k not in removed_keys]
+        db.execute(
+            "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
+            (encrypt_cred(uid, json.dumps(ex)), iso(), uid, row["source"])
+        )
+        updated.append({"source": row["source"], "removed": list(removed_keys)})
+    db.commit()
+    return jsonify({"ok": True, "updated": updated})
 
 
 @app.route("/api/debug/fields/<source>")
