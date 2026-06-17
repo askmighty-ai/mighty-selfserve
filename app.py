@@ -192,6 +192,8 @@ def init_db():
         _KNOWN_PATHS = [
             ('delta',      '/my-profile/certificates'),
             ('delta',      '/us/en/my-account/eCredits'),
+            ('delta',      '/us/en/my-account/wallet'),
+            ('delta',      '/us/en/my-account/companion-certificate'),
             ('delta',      '/myprofile'),
             ('marriott',   '/loyalty/myAccount/certificates'),
             ('marriott',   '/loyalty/myAccount/benefits'),
