@@ -383,10 +383,197 @@ try:
 except ImportError:
     _claude = None
 
+# ── Candidate snippet extraction ─────────────────────────────────────────────
+# Trigger words indicating nearby text likely contains an account fact.
+# We extract windows around each hit before calling Gemini, replacing raw page
+# blobs with focused excerpts. Improves precision and cuts token cost.
+SNIPPET_TRIGGERS = [
+    "expires", "expiration", "expiry", "valid through", "valid until",
+    "valid thru", "use by", "book by", "fly by", "book and fly by",
+    "certificate", "voucher", "e-credit", "ecredit", "travel fund",
+    "award", "benefit", "companion", "upgrade", "free night",
+    "points", "miles", "balance", "rewards", "cash back",
+    "due", "due date", "payment due", "autopay", "auto pay",
+    "available", "remaining", "redeemable",
+    "status", "tier", "medallion", "elite",
+    "offer", "promotion", "bonus", "anniversary",
+    "plan", "renewal", "billing", "subscription",
+    "amount due", "total due", "minimum payment",
+    "credit limit", "available credit",
+]
+
+# High-value triggers: category-specific terms that strongly predict account facts
+# rather than navigation copy. Scored 4× vs generic triggers (2×) in the block scorer.
+_HIGH_VALUE_TRIGGERS: frozenset = frozenset([
+    "companion", "certificate", "valid through", "valid until", "valid thru",
+    "ecredit", "e-credit", "travel fund", "travel credit",
+    "minimum payment", "amount due", "total due", "payment due",
+    "upgrade", "global upgrade", "regional upgrade", "suite night",
+    "free night", "lounge", "priority pass",
+    "medallion", "elite", "autopay", "auto pay",
+    "cash back", "annual fee", "statement credit",
+    "book by", "fly by", "expires", "expiry", "expiration",
+])
+
+# Matches values likely to appear in account pages: dollar amounts, numbers with
+# commas/decimals, compact dates (22JUL2024), ISO dates, and written month-name
+# dates like "Jan 15, 2027" or "August 31 2026".
+_SNIPPET_VALUE_RE = re.compile(
+    r'[$€£]\s*\d[\d,\.]*'           # currency: $187, €50
+    r'|\b\d[\d,\.]*\b'              # plain numbers: 45,320 / 157.43
+    r'|\b\d{1,2}[A-Za-z]{3}\d{4}\b' # compact date: 22JUL2024
+    r'|\b\d{4}-\d{2}-\d{2}\b'       # ISO date: 2026-07-15
+    r'|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}'  # Aug 14, 2026
+    , re.IGNORECASE
+)
+
+def _extract_candidate_snippets(
+    raw_text: str,
+    context_lines: int = 8,
+    max_blocks: int = 25,
+) -> str:
+    """Extract and score line-based blocks around trigger words.
+
+    Algorithm:
+      1. Split text into lines; find lines containing any SNIPPET_TRIGGER.
+      2. Expand each hit line into a ±context_lines block.
+      3. Merge blocks that are close together (avoids tiny isolated fragments).
+      4. Score each block: trigger-word density + value-pattern count, penalise
+         long-line marketing copy.
+      5. Keep the top max_blocks blocks by score; re-sort by original position
+         so the returned text reads in document order.
+      6. Join with '···' separators and cap at 20k chars.
+
+    Falls back to the first 8 k chars if no triggers match.
+    """
+    if not raw_text:
+        return ""
+
+    lines = raw_text.splitlines()
+    lower_lines = [ln.lower() for ln in lines]
+    n = len(lines)
+
+    # Step 1 — find hit line indices
+    hit_set: set[int] = set()
+    for trigger in SNIPPET_TRIGGERS:
+        for i, ll in enumerate(lower_lines):
+            if trigger in ll:
+                hit_set.add(i)
+
+    if not hit_set:
+        return raw_text[:8_000]
+
+    # Step 2 — expand hits into (start, end) index ranges
+    ranges: list[tuple[int, int]] = [
+        (max(0, i - context_lines), min(n, i + context_lines + 1))
+        for i in sorted(hit_set)
+    ]
+
+    # Step 3 — merge overlapping / adjacent ranges (gap ≤ 3 lines)
+    merged: list[tuple[int, int]] = []
+    cs, ce = ranges[0]
+    for s, e in ranges[1:]:
+        if s <= ce + 3:
+            ce = max(ce, e)
+        else:
+            merged.append((cs, ce))
+            cs, ce = s, e
+    merged.append((cs, ce))
+
+    # Step 4 — score each block
+    def _score(s: int, e: int) -> float:
+        block_lines = lines[s:e]
+        block_lower = "\n".join(block_lines).lower()
+        # High-value category-specific triggers (companion, certificate, etc.) → 4×
+        high_count = sum(1 for t in _HIGH_VALUE_TRIGGERS if t in block_lower)
+        # Generic trigger words → 2×
+        generic_count = sum(1 for t in SNIPPET_TRIGGERS if t in block_lower)
+        # Value-like patterns (numbers, dates, currency) → 1.5×
+        val_count = len(_SNIPPET_VALUE_RE.findall(block_lower))
+        # Penalise dense marketing prose (very long average line = wall of text)
+        avg_len = sum(len(ln) for ln in block_lines) / max(len(block_lines), 1)
+        prose_penalty = max(0.0, (avg_len - 100) / 150)
+        return high_count * 4.0 + generic_count * 2.0 + val_count * 1.5 - prose_penalty
+
+    scored = sorted(merged, key=lambda r: _score(*r), reverse=True)
+    top = sorted(scored[:max_blocks])  # re-sort by position for coherent output
+
+    return "\n\n···\n\n".join("\n".join(lines[s:e]) for s, e in top)[:20_000]
+
+
+# ── Category schemas ──────────────────────────────────────────────────────────
+# Maps each account source to a category with priority field hints.
+# Injected into the Gemini prompt so it knows what to look for, not just what
+# to exclude — avoids blind extraction and aligns output to meaningful schemas.
+_CATEGORY_SCHEMAS: dict = {
+    "travel_loyalty": {
+        "sources": {
+            "delta", "southwest", "united", "american_air", "alaska_air",
+            "marriott", "hilton", "hyatt", "ihg", "wyndham",
+        },
+        "name": "travel loyalty program",
+        "priority_fields": (
+            "elite status tier name • points/miles balance • "
+            "companion certificate or pass (with expiry) • "
+            "upgrade certificates (count + expiry) • "
+            "free night certificates (count + expiry) • "
+            "travel credits or eCredits (amount + expiry) • "
+            "progress toward next status tier • "
+            "upcoming trips (future dates only)"
+        ),
+    },
+    "credit_card": {
+        "sources": {"amex", "chase", "capital_one", "discover", "citi", "bofa", "wells_fargo"},
+        "name": "credit card",
+        "priority_fields": (
+            "current balance and available credit • "
+            "minimum payment due and due date • autopay status • "
+            "rewards/points balance • "
+            "annual credits (dining, travel, streaming) — remaining amount and reset/expiry date • "
+            "personalized offers with specific deadline and reward amount"
+        ),
+    },
+    "utilities": {
+        "sources": {"xfinity", "pa_utilities", "att", "att_wireless"},
+        "name": "utility or telecom account",
+        "priority_fields": "amount due and due date • autopay status • current plan • data usage and remaining",
+    },
+    "subscription": {
+        "sources": {"netflix", "hulu", "spotify", "disney_plus"},
+        "name": "subscription service",
+        "priority_fields": "current plan name • next renewal date and price • payment method",
+    },
+    "banking": {
+        "sources": {"fidelity", "schwab", "paypal", "sfcu"},
+        "name": "financial account",
+        "priority_fields": "account balance • available balance • portfolio value",
+    },
+    "health": {
+        "sources": {"pamf"},
+        "name": "healthcare account",
+        "priority_fields": "upcoming appointments • active prescriptions",
+    },
+    "shopping": {
+        "sources": {"amazon", "target", "costco", "starbucks", "ticketmaster"},
+        "name": "retail or rewards account",
+        "priority_fields": "rewards balance • membership status and renewal date",
+    },
+}
+
+def _get_category_schema(source: str) -> dict | None:
+    """Return the category schema for a source, or None if unknown."""
+    if not source:
+        return None
+    for schema in _CATEGORY_SCHEMAS.values():
+        if source in schema["sources"]:
+            return schema
+    return None
+
+
 DISCOVER_PROMPT = """You are analyzing one or more pages from a user's {site} account.
 Pages may be separated by === URL === markers.
 Today's date: {today}.
-
+{category_hint}
 Page text:
 {text}
 
@@ -430,34 +617,36 @@ CONCRETE REJECT EXAMPLES:
 - "Earn 2,000 Bonus Points Every Night" → REJECT (generic promotion, not a personalized offer)
 
 CONCRETE INCLUDE EXAMPLES:
-- "Gold Medallion" status → INCLUDE as {{"key":"elite_status","label":"Elite Status","value":"Gold Medallion"}}
-- "24,617 Rapid Rewards points" → INCLUDE as {{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}
-- "0 of 20 flights" in A-List section → INCLUDE as {{"key":"alist_progress","label":"A-List Flights Progress","value":"0 of 20"}}
-- "$2,472.20 Total Payment Due" → INCLUDE as {{"key":"balance_due","label":"Balance Due","value":"$2,472.20"}}
-- "Minimum Payment Due: $35 by Jul 12, 2026" → INCLUDE as {{"key":"min_payment_due","label":"Minimum Payment Due","value":"$35 by Jul 12, 2026"}}
-- "Past Due Amount: $150" → INCLUDE as {{"key":"past_due_amount","label":"Past Due Amount","value":"$150"}}
-- "Last payment: $2,472.20 received Jun 11, 2026" → INCLUDE as {{"key":"last_payment","label":"Last Payment Received","value":"$2,472.20 on Jun 11, 2026"}}
-- "AutoPay: Enrolled" → INCLUDE as {{"key":"autopay_status","label":"Auto Pay Status","value":"Enrolled"}}
-- "Free Night Award — expires Dec 31, 2026" → INCLUDE as {{"key":"free_night_award","label":"Free Night Award Expiry","value":"Dec 31, 2026"}}
-- "2 Suite Night Awards available" → INCLUDE as {{"key":"suite_night_awards","label":"Suite Night Awards","value":"2 available"}}
-- "Annual travel credit: $187 remaining" → INCLUDE as {{"key":"travel_credit_remaining","label":"Travel Credit Remaining","value":"$187"}}
-- "Earn 5,000 bonus miles — book by Jul 15" → INCLUDE as {{"key":"bonus_miles_offer","label":"Bonus Miles Offer Deadline","value":"Jul 15, 2026"}}
-- "Global Upgrade Certificate — 1 available, expires Dec 31, 2026" → INCLUDE as {{"key":"upgrade_certificates","label":"Global Upgrade Certificates","value":"1 (exp Dec 31, 2026)"}}
-- "Companion Certificate — valid through Jan 15, 2027" → INCLUDE as {{"key":"companion_certificate","label":"Companion Certificate","value":"Valid through Jan 15, 2027"}}
-- "Regional Upgrade Certificates: 4 available" → INCLUDE as {{"key":"regional_upgrade_certs","label":"Regional Upgrade Certificates","value":"4 available"}}
-- "Priority Pass membership — unlimited lounge visits" → INCLUDE as {{"key":"priority_pass","label":"Priority Pass Lounge Access","value":"Unlimited visits"}}
-- "Free checked bag on all Delta flights" → INCLUDE as {{"key":"free_checked_bag","label":"Free Checked Bag Benefit","value":"All Delta flights"}}
-- "Upcoming flight: SFO → JFK, Aug 14, 2026" → INCLUDE as {{"key":"upcoming_flight","label":"Upcoming Flight","value":"SFO → JFK, Aug 14, 2026"}}
+- "Gold Medallion" status → INCLUDE as {{"key":"elite_status","label":"Elite Status","value":"Gold Medallion","confidence":0.99,"source_snippet":"SkyMiles Gold Medallion status"}}
+- "24,617 Rapid Rewards points" → INCLUDE as {{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617","confidence":0.97,"source_snippet":"Rapid Rewards Points Balance 24,617"}}
+- "0 of 20 flights" in A-List section → INCLUDE as {{"key":"alist_progress","label":"A-List Flights Progress","value":"0 of 20","confidence":0.93,"source_snippet":"A-List status 0 of 20 qualifying flights"}}
+- "$2,472.20 Total Payment Due" → INCLUDE as {{"key":"balance_due","label":"Balance Due","value":"$2,472.20","confidence":0.99,"source_snippet":"Total Payment Due $2,472.20"}}
+- "Minimum Payment Due: $35 by Jul 12, 2026" → INCLUDE as {{"key":"min_payment_due","label":"Minimum Payment Due","value":"$35 by Jul 12, 2026","confidence":0.98,"source_snippet":"Minimum Payment Due $35 by Jul 12, 2026"}}
+- "Past Due Amount: $150" → INCLUDE as {{"key":"past_due_amount","label":"Past Due Amount","value":"$150","confidence":0.99,"source_snippet":"Past Due Amount $150"}}
+- "Last payment: $2,472.20 received Jun 11, 2026" → INCLUDE as {{"key":"last_payment","label":"Last Payment Received","value":"$2,472.20 on Jun 11, 2026","confidence":0.97,"source_snippet":"last payment $2,472.20 received Jun 11"}}
+- "AutoPay: Enrolled" → INCLUDE as {{"key":"autopay_status","label":"Auto Pay Status","value":"Enrolled","confidence":0.98,"source_snippet":"AutoPay Enrolled"}}
+- "Free Night Award — expires Dec 31, 2026" → INCLUDE as {{"key":"free_night_award","label":"Free Night Award Expiry","value":"Dec 31, 2026","confidence":0.96,"source_snippet":"Free Night Award expires Dec 31, 2026"}}
+- "2 Suite Night Awards available" → INCLUDE as {{"key":"suite_night_awards","label":"Suite Night Awards","value":"2 available","confidence":0.95,"source_snippet":"2 Suite Night Awards available"}}
+- "Annual travel credit: $187 remaining" → INCLUDE as {{"key":"travel_credit_remaining","label":"Travel Credit Remaining","value":"$187","confidence":0.94,"source_snippet":"Annual travel credit $187 remaining"}}
+- "Earn 5,000 bonus miles — book by Jul 15" → INCLUDE as {{"key":"bonus_miles_offer","label":"Bonus Miles Offer Deadline","value":"Jul 15, 2026","confidence":0.92,"source_snippet":"Earn 5,000 bonus miles book by Jul 15"}}
+- "Global Upgrade Certificate — 1 available, expires Dec 31, 2026" → INCLUDE as {{"key":"upgrade_certificates","label":"Global Upgrade Certificates","value":"1 (exp Dec 31, 2026)","confidence":0.97,"source_snippet":"Global Upgrade Certificate 1 available expires Dec 31"}}
+- "Companion Certificate — valid through Jan 15, 2027" → INCLUDE as {{"key":"companion_certificate","label":"Companion Certificate","value":"Valid through Jan 15, 2027","confidence":0.98,"source_snippet":"Companion Certificate valid through Jan 15, 2027"}}
+- "Regional Upgrade Certificates: 4 available" → INCLUDE as {{"key":"regional_upgrade_certs","label":"Regional Upgrade Certificates","value":"4 available","confidence":0.97,"source_snippet":"Regional Upgrade Certificates 4 available"}}
+- "Priority Pass membership — unlimited lounge visits" → INCLUDE as {{"key":"priority_pass","label":"Priority Pass Lounge Access","value":"Unlimited visits","confidence":0.90,"source_snippet":"Priority Pass membership unlimited lounge visits"}}
+- "Free checked bag on all Delta flights" → INCLUDE as {{"key":"free_checked_bag","label":"Free Checked Bag Benefit","value":"All Delta flights","confidence":0.89,"source_snippet":"Free checked bag on all Delta flights"}}
+- "Upcoming flight: SFO → JFK, Aug 14, 2026" → INCLUDE as {{"key":"upcoming_flight","label":"Upcoming Flight","value":"SFO → JFK, Aug 14, 2026","confidence":0.98,"source_snippet":"Upcoming flight SFO to JFK Aug 14 2026"}}
 
 LABELING: write labels that make sense without knowing the site (no abbreviations, no page jargon). Labels should say what the value IS, not repeat the site name.
 
 Return ONLY a JSON array, no other text:
-[{{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617"}}]
+[{{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617","confidence":0.97,"source_snippet":"Rapid Rewards Points Balance 24,617"}}]
 
 Rules:
 - key: snake_case, 1-4 words
 - label: 2-5 words, self-explanatory out of context
 - value: exact current value — if empty, zero, or a login prompt, skip the field entirely
+- confidence: float 0.0–1.0 — how certain you are this is a real personalized user fact (not generic copy). Aim for >0.85 on solid data; below 0.70 means you are guessing.
+- source_snippet: verbatim excerpt (≤15 words) from the page text that most directly supports this value
 - Each concept ONCE, no duplicates
 - Max 15 fields
 - If you find zero fields that pass the hard-exclude test, return an empty array []
@@ -497,15 +686,31 @@ def _post_filter_fields(fields: list) -> list:
     _LONG_NUM_RE = _re.compile(r'^\d{12,}$')
 
     def _is_past_date(value: str) -> bool:
-        """Return True if value is a date string that is in the past."""
-        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y",
-                    "%d %b %Y", "%d %B %Y", "%Y/%m/%d",
-                    "%d%b%Y", "%d%B%Y"):  # compact forms like "22JUL2024"
-            try:
-                d = _dt.datetime.strptime(value.strip().upper(), fmt.upper()).date()
-                return d < _today
-            except ValueError:
-                pass
+        """Return True if value is a date string that is in the past.
+
+        Normalises month spellings (Sept → Sep, August → Aug) before parsing
+        so strptime's %b can match written-out forms from Gemini's output.
+        """
+        norm = _normalise_date_str(value)
+        for fmt in (
+            "%Y-%m-%d",           # 2026-08-14
+            "%m/%d/%Y",           # 08/14/2026
+            "%b %d, %Y",          # Aug 14, 2026
+            "%b %d %Y",           # Aug 14 2026  (no comma)
+            "%B %d, %Y",          # August 14, 2026
+            "%B %d %Y",           # August 14 2026
+            "%d %b %Y",           # 14 Aug 2026
+            "%d %B %Y",           # 14 August 2026
+            "%Y/%m/%d",           # 2026/08/14
+            "%d%b%Y",             # 22JUL2024
+            "%d%B%Y",             # 22JULY2024
+        ):
+            for candidate in (norm, norm.upper()):
+                try:
+                    d = _dt.datetime.strptime(candidate.strip(), fmt).date()
+                    return d < _today
+                except ValueError:
+                    pass
         return False
 
     # Labels that always mean "upcoming booking" — drop regardless of date format
@@ -519,16 +724,77 @@ def _post_filter_fields(fields: list) -> list:
                       "check-in", "check-out", "arrival", "departure",
                       "stay", "itinerary", "travel")
 
-    # Regex to extract dates — standard formats and compact (22JUL2024)
+    # Regex to extract dates — ISO, slash, compact (22JUL2024), and written-out
+    # month-name forms like "Aug 14, 2026" or "September 5 2026".
     _DATE_RE = _re.compile(
-        r'\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}[A-Za-z]{3}\d{4})\b'
+        r'\b(\d{4}-\d{2}-\d{2}'                                   # 2026-08-14
+        r'|\d{1,2}/\d{1,2}/\d{4}'                                 # 08/14/2026
+        r'|\d{1,2}[A-Za-z]{3}\d{4}'                               # 22JUL2024
+        r'|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}'  # Aug 14, 2026
+        r')\b',
+        _re.IGNORECASE,
     )
+
+    def _normalise_date_str(s: str) -> str:
+        """Normalise written-out month abbreviations before strptime.
+        Handles 'Sept' → 'Sep', 'June' → 'Jun', etc. so %b can parse them."""
+        _month_map = {
+            "january": "Jan", "february": "Feb", "march": "Mar", "april": "Apr",
+            "may": "May", "june": "Jun", "july": "Jul", "august": "Aug",
+            "september": "Sep", "sept": "Sep", "october": "Oct",
+            "november": "Nov", "december": "Dec",
+        }
+        norm = s.strip()
+        for long, short in _month_map.items():
+            norm = _re.sub(long, short, norm, flags=_re.IGNORECASE)
+        return norm
+
+    # Values that are pure noise regardless of label
+    _EMPTY_VALUES = frozenset({
+        "", "0", "-", "–", "—", "n/a", "none", "na", "n.a.",
+        "$0", "$0.0", "$0.00", "0.00", "no", "not available",
+        "no match found", "tbd",
+    })
+    # "Pending" is noise only when it's a placeholder for a missing number/date,
+    # not when the label describes a real status (claim, application, auth, etc.)
+    _PENDING_STATUS_LABELS = (
+        "status", "claim", "application", "approval", "auth", "verification",
+        "request", "dispute", "refund", "transfer",
+    )
+    # Generic tier labels that carry no meaningful information
+    _GENERIC_TIER_VALUES = frozenset({
+        "cardmember", "member", "basic", "standard", "registered",
+        "classic", "general", "associate",
+    })
+    # Login-wall substrings
+    _LOGIN_WALL = ("log in", "sign in", "login to view", "sign in to see",
+                   "login to see", "sign in to view", "please log in",
+                   "please sign in")
 
     out = []
     for f in fields:
         label = (f.get("label") or "").strip()
         value = str(f.get("value") or "").strip()
         lbl_low = label.lower()
+        val_low = value.lower()
+
+        # Drop empty or explicitly null/zero values
+        if val_low in _EMPTY_VALUES:
+            continue
+
+        # "Pending" is noise as a placeholder value (e.g. "Points Balance: Pending")
+        # but not when the label describes a real status field.
+        if val_low == "pending":
+            if not any(sl in lbl_low for sl in _PENDING_STATUS_LABELS):
+                continue
+
+        # Drop login-wall values
+        if any(lw in val_low for lw in _LOGIN_WALL):
+            continue
+
+        # Drop generic tier labels that tell the user nothing meaningful
+        if val_low in _GENERIC_TIER_VALUES:
+            continue
 
         # Drop labels that match known noise patterns
         if any(n in lbl_low for n in _LABEL_NOISE):
@@ -543,10 +809,13 @@ def _post_filter_fields(fields: list) -> list:
         if _re.search(r'\b\d{8,}\b', label):
             continue
 
-        # Drop any field explicitly labeled as an "upcoming" booking — these are
-        # always stale reservations (they become past events and never get cleared)
+        # Drop "upcoming X" labeled fields only if date is past or absent.
+        # Future-dated trips are genuine upcoming events and must survive.
         if any(u in lbl_low for u in _UPCOMING_BOOKING_LABELS):
-            continue
+            _date_m = _DATE_RE.search(value + " " + label)
+            if not _date_m or _is_past_date(_date_m.group(0)):
+                continue
+            # Future date — fall through and keep the field
 
         # Drop booking/travel fields where the embedded date is in the past
         # Supports standard formats AND compact forms like "22JUL2024"
@@ -559,15 +828,46 @@ def _post_filter_fields(fields: list) -> list:
     return out
 
 
-def claude_discover_fields(raw_text: str, site_name: str) -> list:
-    """Use Gemini Flash to identify all useful data fields in a page."""
+def claude_discover_fields(raw_text: str, site_name: str, source: str | None = None) -> list:
+    """Use Gemini Flash to identify all useful data fields in a page.
+
+    Args:
+        raw_text:  Full page text (or multi-page blob separated by === URL === markers).
+        site_name: Human-readable site label (e.g. "Delta Air Lines").
+        source:    Account source key (e.g. "delta") used to look up the category schema.
+                   If provided, the prompt gets a focused hint on which field types to prioritise.
+    """
     if not _claude or not raw_text:
         return []
     try:
-        print(f"[Mighty] Discovering fields for {site_name} ({len(raw_text)} chars). Preview: {raw_text[:500]!r}", flush=True)
+        # ── Candidate snippet extraction ───────────────────────────────────────
+        # Replace the raw page blob with focused windows around trigger words.
+        # Falls back to raw_text[:8000] if no triggers match.
+        snippets = _extract_candidate_snippets(raw_text)
+        print(
+            f"[Mighty] Discovering fields for {site_name} (raw={len(raw_text)} chars, "
+            f"snippets={len(snippets)} chars). Preview: {raw_text[:300]!r}",
+            flush=True,
+        )
+
+        # ── Category hint ──────────────────────────────────────────────────────
+        schema = _get_category_schema(source or "")
+        if schema:
+            category_hint = (
+                f"\nThis is a {schema['name']}. "
+                f"Prioritise these field types:\n  {schema['priority_fields']}\n"
+            )
+        else:
+            category_hint = ""
+
         from datetime import datetime as _dtm
         _today_str = _dtm.utcnow().strftime("%B %d, %Y")
-        prompt = DISCOVER_PROMPT.format(site=site_name, text=raw_text[:10000], today=_today_str)
+        prompt = DISCOVER_PROMPT.format(
+            site=site_name,
+            text=snippets,
+            today=_today_str,
+            category_hint=category_hint,
+        )
         # Try models in order until one works
         _models = [
             "gemini-2.5-flash",
@@ -4986,10 +5286,17 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
     )
     # Update account_data items
     enabled_set = set(ex["enabled_fields"])
-    ai_items = [
-        {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
-        for f in deduped if f.get("key") in enabled_set
-    ]
+    ai_items = []
+    for f in deduped:
+        if f.get("key") not in enabled_set:
+            continue
+        item: dict = {"key": f["key"], "label": f["label"], "value": f.get("value", "–")}
+        # Preserve provenance fields when Gemini returned them
+        if "confidence" in f:
+            item["confidence"] = f["confidence"]
+        if "source_snippet" in f:
+            item["source_snippet"] = f["source_snippet"]
+        ai_items.append(item)
     ad = db.execute(
         "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
     ).fetchone()
@@ -5984,7 +6291,7 @@ def _credentials_discover_impl(source):
     try:
         merged: dict = {}
         for _run in range(3):
-            run_fields = claude_discover_fields(raw_text, site_name)
+            run_fields = claude_discover_fields(raw_text, site_name, source=source)
             for f in run_fields:
                 k = f.get("key", "")
                 if k and k not in merged:
@@ -6065,7 +6372,7 @@ def api_rediscover_all():
                             continue
                         site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == src),
                                          src.replace("_", " ").title())
-                        fields = claude_discover_fields(raw, site_name)
+                        fields = claude_discover_fields(raw, site_name, source=src)
                         if fields:
                             _save_discovered_fields(uid, src, fields)
                             print(f"[Rediscover] {src}: {len(fields)} fields", flush=True)
@@ -6278,7 +6585,7 @@ def api_data_sync():
         if not has_prefs:
             # First-time: discover fields
             def _bg_discover():
-                fields = claude_discover_fields(raw_text, site_name)
+                fields = claude_discover_fields(raw_text, site_name, source=source)
                 ex2 = {}
                 if cred_row and cred_row["extra_enc"]:
                     try: ex2 = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
@@ -6308,7 +6615,7 @@ def api_data_sync():
             # Existing prefs: re-run full discovery so new fields (credits, offers, certs)
             # from freshly-scraped benefit pages are picked up and merged in.
             def _bg_refresh():
-                new_fields = claude_discover_fields(raw_text, site_name)
+                new_fields = claude_discover_fields(raw_text, site_name, source=source)
                 if not new_fields:
                     return
                 with app.app_context():
@@ -6368,7 +6675,7 @@ def api_extension_intercept():
                          source.replace("_", " ").title())
         def _bg():
             with app.app_context():
-                fields = claude_discover_fields(combined[:10_000], site_name)
+                fields = claude_discover_fields(combined, site_name, source=source)
                 if fields:
                     _save_discovered_fields(uid, source, fields)
                     print(f"[Intercept] {source}: {len(fields)} fields discovered", flush=True)
@@ -6424,7 +6731,7 @@ def api_extension_supplement():
                          source.replace("_", " ").title())
         def _bg():
             with app.app_context():
-                fields = claude_discover_fields(combined[:10_000], site_name)
+                fields = claude_discover_fields(combined, site_name, source=source)
                 if fields:
                     _save_discovered_fields(uid, source, fields)
                     print(f"[Supplement] {source}: {len(fields)} fields", flush=True)
@@ -6538,6 +6845,58 @@ def api_debug_fields(source):
         "enabled_count": len(enabled),
         "enabled_keys": enabled,
         "fields": [{"key": f.get("key"), "label": f.get("label"), "value": f.get("value")} for f in fields]
+    })
+
+
+@app.route("/api/debug/provenance/<source>")
+@require_login
+def api_debug_provenance(source):
+    """Internal debug view: return discovered fields with confidence and source_snippet.
+    Useful for evaluating extraction quality without touching the main UI.
+
+    Example: GET /api/debug/provenance/delta
+    Returns each field with key, label, value, confidence (0-1), and the verbatim
+    source_snippet from the page text that Gemini cited as evidence.
+    Fields are sorted by confidence descending so low-confidence extractions are easy to spot.
+    """
+    uid = session["user_id"]
+    row = get_db().execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    try:
+        ex = json.loads(decrypt_cred(uid, row["extra_enc"]))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    fields = ex.get("discovered_fields", [])
+    enabled_set = set(ex.get("enabled_fields", []))
+
+    provenance = []
+    for f in fields:
+        confidence = f.get("confidence")
+        provenance.append({
+            "key":           f.get("key"),
+            "label":         f.get("label"),
+            "value":         f.get("value"),
+            "enabled":       f.get("key") in enabled_set,
+            "confidence":    confidence,
+            "source_snippet": f.get("source_snippet"),
+            # Flag anything below 0.80 — likely noise or hallucination
+            "low_confidence": isinstance(confidence, (int, float)) and confidence < 0.80,
+        })
+
+    # Sort by confidence descending (None / missing goes to the bottom)
+    provenance.sort(key=lambda x: x["confidence"] if isinstance(x["confidence"], (int, float)) else -1, reverse=True)
+
+    return jsonify({
+        "source": source,
+        "discovered_at": ex.get("discovered_at"),
+        "total": len(provenance),
+        "low_confidence_count": sum(1 for p in provenance if p["low_confidence"]),
+        "fields": provenance,
     })
 
 
@@ -6679,7 +7038,7 @@ def api_extension_capture():
     # Trigger AI field discovery in background
     if raw_text and _claude:
         def _discover():
-            fields = claude_discover_fields(raw_text, name)
+            fields = claude_discover_fields(raw_text, name, source=source)
             if fields:
                 _save_discovered_fields(uid, source, fields)
             else:
@@ -7017,7 +7376,7 @@ def _auto_discover_missing(uid: str) -> None:
                 print(f"[AutoDiscover] {src} for user {uid[:6]} (hash {raw_hash[:8]})", flush=True)
                 merged: dict = {}
                 for _ in range(1):
-                    for f in claude_discover_fields(raw_text, site_name):
+                    for f in claude_discover_fields(raw_text, site_name, source=src):
                         k = f.get("key", "")
                         if k and k not in merged: merged[k] = f
                         elif k: merged[k]["value"] = f.get("value", "")
@@ -7160,7 +7519,7 @@ def sync_account_cloud(source):
                             # Run 3x discovery and merge (same as manual discover)
                             merged: dict = {}
                             for _run in range(3):
-                                for f in claude_discover_fields(raw_text, site_name):
+                                for f in claude_discover_fields(raw_text, site_name, source=source):
                                     k = f.get("key", "")
                                     if k and k not in merged: merged[k] = f
                                     elif k: merged[k]["value"] = f.get("value", "")

@@ -1,0 +1,56 @@
+=== URL: https://customer.xfinity.com/billing ===
+
+Xfinity | My Account | Billing
+
+Navigation: Overview | Internet | TV | Voice | Mobile | Account | Billing
+
+---
+
+Billing Summary
+
+Account Number: 8499-200-1234567
+Service Address: [ADDRESS REDACTED]
+
+Amount Due: $157.43
+Due Date: Jul 3, 2026
+AutoPay: On — payment will be automatically deducted from your bank account on Jul 3, 2026
+
+Last Payment: $157.43 received Jun 3, 2026
+
+Paperless Billing: Enrolled
+
+---
+
+Current Statement
+Period: Jun 3, 2026 – Jul 2, 2026
+
+Xfinity Internet – Gigabit Extra: $85.00
+Xfinity TV – Choice TV + Sports & News: $69.99
+Broadcast TV Fee: $21.50
+Regional Sports Network Fee: $14.95
+Taxes & Fees: -$34.01
+Promotional Discount (Loyalty offer, ends Aug 2026): -$34.00
+Total: $157.43
+
+---
+
+=== URL: https://customer.xfinity.com/internet ===
+
+Internet Usage
+Billing Period: Jun 3 – Jul 2, 2026
+Data Used: 847 GB
+Data Plan: 1.2 TB (1,200 GB)
+Remaining: 353 GB
+Overage: None — you are within your plan limit.
+
+Current Plan: Gigabit Extra
+Download speed: Up to 1,200 Mbps
+Upload speed: Up to 35 Mbps
+
+Equipment
+xFi Gateway (owned): Active
+
+---
+
+Footer: Privacy Policy | Terms of Service | Accessibility Statement
+© 2026 Comcast. All rights reserved.

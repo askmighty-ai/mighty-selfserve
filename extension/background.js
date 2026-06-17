@@ -43,74 +43,30 @@ async function fetchRegistryPaths(site) {
   }
 }
 
-// Account page URLs — where to navigate to get each account's data.
-// Values can be a single URL string or an array of URLs (visited in order,
-// text concatenated) to capture sub-pages like vouchers, travel funds, etc.
-// URLs are visited IN ORDER and text concatenated. Put high-value benefit/offer
-// pages FIRST so they are never cut off by the character limit.
-const ACCOUNT_URLS = {
-  southwest: [
-    'https://www.southwest.com/loyalty/rapidrewards/travelFunds.html',    // travel funds / LUV vouchers
-    'https://www.southwest.com/loyalty/myaccount/',                        // points, status, companion pass
-    'https://www.southwest.com/loyalty/myaccount/upcoming-trips.html',    // reservations
-  ],
-  delta: [
-    'https://www.delta.com/my-profile/certificates',                      // upgrade certs, companion cert — CORRECT URL
-    'https://www.delta.com/us/en/my-account/eCredits',                    // eCredits / travel vouchers
-    'https://www.delta.com/myprofile/',                                    // miles, status
-  ],
-  united: [
-    'https://www.united.com/en/us/myaccount/awards',                      // credits, PlusPoints, certs
-    'https://www.united.com/en/us/myaccount/mileageplus',                 // miles, status
-  ],
-  american_air: [
-    'https://www.aa.com/aadvantage-program/overview',                      // miles, status
-    'https://www.aa.com/loyalty/home.do',                                  // dashboard
-    'https://www.aa.com/aadvantage-program/my-account/trip-credit',       // trip credits
-  ],
-  alaska_air: [
-    'https://www.alaskaair.com/account/wallet',                            // companion fare, credits
-    'https://www.alaskaair.com/account/dashboard',                         // miles, status
-  ],
+// Single entry URL per account — the crawler discovers all subpages from here.
+// No need to hardcode sub-pages like wallet, certificates, offers —
+// the link scorer finds them automatically using the user's live session.
+const ACCOUNT_ENTRY = {
+  southwest:    'https://www.southwest.com/loyalty/myaccount/',
+  delta:        'https://www.delta.com/myprofile/',
+  united:       'https://www.united.com/en/us/myaccount/mileageplus',
+  american_air: 'https://www.aa.com/loyalty/home.do',
+  alaska_air:   'https://www.alaskaair.com/account/dashboard',
   sfcu:         'https://www.sfcu.org/accounts/online-banking',
-  amex: [
-    'https://www.americanexpress.com/en-us/benefits/overview/',           // card benefits, credits
-    'https://www.americanexpress.com/en-us/account/offers/eligible/',     // personalized offers
-    'https://www.americanexpress.com/en-us/account/',                      // balance, points
-  ],
-  chase: [
-    'https://secure.chase.com/web/auth/#/dashboard;dp/rewards/dashboard', // rewards / offers
-    'https://secure.chase.com/web/auth/dashboard',                         // accounts overview
-  ],
+  amex:         'https://www.americanexpress.com/en-us/account/',
+  chase:        'https://secure.chase.com/web/auth/dashboard',
   wells_fargo:  'https://connect.secure.wellsfargo.com/auth/login/present',
   bofa:         'https://www.bankofamerica.com/myaccounts/brain/render.go',
-  capital_one: [
-    'https://myaccounts.capitalone.com/accountSummary',
-    'https://www.capitalone.com/credit-cards/rewards/',                    // rewards balance
-  ],
+  capital_one:  'https://myaccounts.capitalone.com/accountSummary',
   discover:     'https://portal.discover.com/customer/en/portal/account-home',
   citi:         'https://online.citi.com/US/login.do',
   paypal:       'https://www.paypal.com/myaccount/summary',
   fidelity:     'https://digital.fidelity.com/ftgw/digital/portfolio/summary',
   schwab:       'https://client.schwab.com/app/accounts/#/',
-  marriott: [
-    'https://www.marriott.com/loyalty/myAccount/certificates.mi',          // free night certs, upgrades
-    'https://www.marriott.com/loyalty/myAccount/benefits.mi',              // elite benefits
-    'https://www.marriott.com/loyalty/myAccount/default.mi',               // points, status
-  ],
-  hilton: [
-    'https://www.hilton.com/en/hilton-honors/profile/awards/',             // free night awards
-    'https://www.hilton.com/en/hilton-honors/profile/benefits/',           // elite benefits
-    'https://www.hilton.com/en/hilton-honors/guest/my-account/',           // points, status
-  ],
-  hyatt: [
-    'https://www.hyatt.com/en-US/my-account/awards',                       // awards, certs
-    'https://www.hyatt.com/en-US/my-account/home',                         // points, status
-  ],
-  ihg: [
-    'https://www.ihg.com/rewardsclub/content/us/en/member-home',
-    'https://www.ihg.com/rewardsclub/content/us/en/redeem/hotel-rewards', // reward nights
-  ],
+  marriott:     'https://www.marriott.com/loyalty/myAccount/default.mi',
+  hilton:       'https://www.hilton.com/en/hilton-honors/guest/my-account/',
+  hyatt:        'https://www.hyatt.com/en-US/my-account/home',
+  ihg:          'https://www.ihg.com/rewardsclub/content/us/en/member-home',
   wyndham:      'https://www.wyndhamhotels.com/registry',
   amazon:       'https://www.amazon.com/gp/css/order-history',
   target:       'https://www.target.com/account',
@@ -123,49 +79,91 @@ const ACCOUNT_URLS = {
   hulu:         'https://secure.hulu.com/account',
   spotify:      'https://www.spotify.com/us/account/overview/',
   disney_plus:  'https://www.disneyplus.com/identity/account',
-  att: [
-    'https://www.att.com/buy/broadband/rewards.html',                      // reward cards
-    'https://www.att.com/my/#/',
-  ],
+  att:          'https://www.att.com/my/#/',
   att_wireless: 'https://myatt.att.com/exp/myconsumerdashboard/',
-  verizon: [
-    'https://www.verizon.com/home/mybenefits/',                            // perks
-    'https://www.verizon.com/myverizon/',
-  ],
-  tmobile: [
-    'https://account.t-mobile.com/overview',
-    'https://account.t-mobile.com/offers',                                 // offers
-  ],
-  xfinity: [
-    'https://customer.xfinity.com/#/billing',
-    'https://customer.xfinity.com/#/internet',
-    'https://customer.xfinity.com/#/rewards',                              // xFi rewards
-  ],
-  pa_utilities: [
-    'https://utilities.cityofpaloalto.org/MyAccount',                      // account overview, balance
-    'https://utilities.cityofpaloalto.org/Billing',                        // billing history
-  ],
-  hertz: [
-    'https://www.hertz.com/rentacar/member/profile/myprofile',
-    'https://www.hertz.com/rentacar/member/profile/promotions',            // promotions
-  ],
-  cvs:          'https://www.cvs.com/account/login.jsp',
-  walgreens:    'https://www.walgreens.com/myaccount/mywalgreenssummary.jsp',
+  xfinity:      'https://customer.xfinity.com/#/billing',
+  pa_utilities: 'https://myaccount.cityofpaloalto.org/',
 };
 
-// Supplement watch: specific benefit sub-pages to capture from user's real browser.
-// These pages are bot-detected in popup windows but work fine in normal browsing.
-const SUPPLEMENT_WATCH = [
-  { source: 'delta',       domain: 'delta.com',                paths: ['/my-profile/certificates', '/us/en/my-account/wallet', '/us/en/my-account/eCredits', '/us/en/my-account/companion-certificate'] },
-  { source: 'marriott',    domain: 'marriott.com',             paths: ['/loyalty/myAccount/certificates', '/loyalty/myAccount/benefits'] },
-  { source: 'hilton',      domain: 'hilton.com',               paths: ['/en/hilton-honors/profile/awards', '/en/hilton-honors/profile/benefits'] },
-  { source: 'hyatt',       domain: 'hyatt.com',                paths: ['/en-US/my-account/awards'] },
-  { source: 'united',      domain: 'united.com',               paths: ['/en/us/myaccount/awards'] },
-  { source: 'alaska_air',  domain: 'alaskaair.com',            paths: ['/account/wallet'] },
-  // Sites that always fail in popup windows — synced via regular background tab instead
-  { source: 'xfinity',     domain: 'customer.xfinity.com',     paths: ['/'] },
-  { source: 'pa_utilities',domain: 'utilities.cityofpaloalto.org', paths: ['/'] },
+/** Normalize a URL for deduplication: strip query + fragment, lowercase, no trailing slash. */
+function _normUrl(href) {
+  try {
+    const u = new URL(href);
+    return (u.hostname + u.pathname).replace(/\/$/, '').toLowerCase();
+  } catch {
+    return href.toLowerCase();
+  }
+}
+
+// Terms whose presence in a link URL or text strongly suggests account benefit data
+const _LINK_HIGH_VALUE = [
+  'certificate', 'voucher', 'wallet', 'ecredit', 'e-credit', 'travelfund', 'travel-fund',
+  'travel_fund', 'companion', 'upgrade', 'offer', 'benefit', 'reward', 'redeem',
+  'anniversary', 'promotion', 'expir', 'free-night', 'free_night', 'award',
+  'perks', 'perk', 'privilege', 'credit', 'bonus', 'gift', 'status',
 ];
+
+// Lower-priority terms suggesting a useful account page
+const _LINK_ACCOUNT = [
+  'account', 'profile', 'loyalty', 'membership', 'my-account', 'myaccount',
+  'dashboard', 'payment', 'billing', 'history', 'trip', 'reservation', 'order',
+  'subscription', 'plan', 'tier', 'points', 'miles', 'earn',
+  'overview', 'summary', 'manage', 'statement', 'transaction',
+];
+
+// Terms indicating links we should never follow
+const _LINK_SKIP = [
+  'logout', 'log-out', 'log_out', 'signout', 'sign-out', 'sign_out',
+  'sign-up', 'signup', 'register', 'create-account', 'create_account',
+  'help', 'faq', 'support', 'contact', 'careers', 'about', 'press', 'legal',
+  'terms', 'privacy', 'cookie', 'sitemap', 'accessibility', 'advertise',
+  'shop', 'book', 'buy', 'cart', 'purchase', 'search', 'find-flights',
+  'flight-status', 'check-in', 'baggage', 'travel-info', 'destinations',
+  'deals', 'cars', 'vacations', 'gift-card', 'partner', 'sponsor',
+  'jobs', 'newsroom', 'investor', 'media', 'javascript:', 'mailto:', 'tel:',
+];
+
+/**
+ * Score a link for how likely it is to contain useful account data.
+ * Returns -1 to skip; 0 if neutral (also skipped); positive to visit (higher = sooner).
+ */
+function _scoreLink(href, text, baseDomain) {
+  let url;
+  try {
+    url = new URL(href);
+    if (!url.protocol.startsWith('http')) return -1;
+  } catch {
+    return -1;
+  }
+  const hostname = url.hostname.replace(/^www\./, '');
+  if (!hostname.endsWith(baseDomain)) return -1;
+  if (!url.pathname || url.pathname === '/') return -1;
+  const combined = (href + ' ' + text).toLowerCase();
+  if (_LINK_SKIP.some(t => combined.includes(t))) return -1;
+  let score = 0;
+  if (_LINK_HIGH_VALUE.some(t => combined.includes(t))) score += 10;
+  if (_LINK_ACCOUNT.some(t => combined.includes(t))) score += 3;
+  return score;
+}
+
+// Domain → source for passive supplement capture when user naturally browses.
+// Any account-looking path on these domains gets captured — no hardcoded path list needed.
+const SUPPLEMENT_DOMAINS = {
+  'delta.com':                    'delta',
+  'marriott.com':                 'marriott',
+  'hilton.com':                   'hilton',
+  'hyatt.com':                    'hyatt',
+  'united.com':                   'united',
+  'southwest.com':                'southwest',
+  'aa.com':                       'american_air',
+  'alaskaair.com':                'alaska_air',
+  'americanexpress.com':          'amex',
+  'chase.com':                    'chase',
+  'customer.xfinity.com':         'xfinity',
+  'utilities.cityofpaloalto.org': 'pa_utilities',
+  'ihg.com':                      'ihg',
+  'wyndhamhotels.com':            'wyndham',
+};
 
 // Sources that must be synced via a regular tab (not a popup window).
 // Akamai and similar bot-detection layers block popup windows; a regular tab
@@ -320,18 +318,20 @@ async function runSync() {
   console.log(`[Mighty] Syncing ${accounts.length} accounts + ${capturedList.length} captured…`);
   let ok = 0, failed = 0;
 
+  const ACCOUNT_TIMEOUT_MS = 90_000; // hard cap per account
   for (const account of accounts) {
-    const urlEntry = ACCOUNT_URLS[account.source];
-    if (!urlEntry) {
-      console.log(`[Mighty] No URL mapping for ${account.source} — skipping`);
+    if (!ACCOUNT_ENTRY[account.source]) {
+      console.log(`[Mighty] No entry URL for ${account.source} — skipping`);
       continue;
     }
-    const urls = Array.isArray(urlEntry) ? urlEntry : [urlEntry];
-    const ACCOUNT_TIMEOUT_MS = 90_000; // hard cap: no single account takes more than 90s
     try {
-      const syncFn = TAB_SYNC_SOURCES.has(account.source)
-        ? syncAccountViaTab(api_key, account, urls, syncSessionTime)
-        : syncAccount(api_key, account, urls, syncSessionTime);
+      let syncFn;
+      if (TAB_SYNC_SOURCES.has(account.source)) {
+        // Xfinity / PA Utilities: use a real tab to bypass Akamai popup-window detection
+        syncFn = syncAccountViaTab(api_key, account, [ACCOUNT_ENTRY[account.source]], syncSessionTime);
+      } else {
+        syncFn = crawlAccount(api_key, account, syncSessionTime);
+      }
       await Promise.race([
         syncFn,
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ACCOUNT_TIMEOUT_MS)),
@@ -459,8 +459,7 @@ const _LOGIN_PATH_RE = /\/(login|log[-_]in|signin|sign[-_]in|auth\/|sso\/|oauth|
 
 // Domains belonging to known scheduled accounts — don't auto-capture (already synced)
 const _KNOWN_DOMAINS = new Set(
-  Object.values(ACCOUNT_URLS)
-    .flat()
+  Object.values(ACCOUNT_ENTRY)
     .map(u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } })
     .filter(Boolean)
 );
@@ -542,42 +541,36 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
   if (!tab.url || !tab.url.startsWith('http')) return;
-
-  // Skip the Mighty dashboard itself
   if (tab.url.includes('mighty-selfserve-production.up.railway.app')) return;
 
-  // Skip popup windows used by the scheduled sync (avoid double-capturing)
+  // Skip popup windows used by the scheduled sync
   try {
     const winInfo = await chrome.windows.get(tab.windowId);
     if (winInfo.type === 'popup') return;
   } catch { return; }
 
-  // Must look like an account page
-  if (!_ACCOUNT_PATH_RE.test(tab.url)) return;
-
-  // Must not look like a login page
+  // Skip login pages
   if (_LOGIN_PATH_RE.test(tab.url)) return;
 
-  // Check supplement watch BEFORE the known-domain skip
-  try {
-    const tabDomain = new URL(tab.url).hostname.replace(/^www\./, '');
-    const tabPath   = new URL(tab.url).pathname;
-    const supp = SUPPLEMENT_WATCH.find(w =>
-      tabDomain.endsWith(w.domain) && w.paths.some(p => tabPath.startsWith(p))
-    );
-    if (supp) {
-      _supplementCapturePage(tabId, tab, supp.source).catch(() => {});
+  let tabDomain;
+  try { tabDomain = new URL(tab.url).hostname.replace(/^www\./, ''); }
+  catch { return; }
+
+  // Known account domain: supplement-capture if path looks like account data.
+  // No hardcoded paths — _ACCOUNT_PATH_RE decides what's worth capturing.
+  for (const [domain, source] of Object.entries(SUPPLEMENT_DOMAINS)) {
+    if (tabDomain.endsWith(domain)) {
+      if (_ACCOUNT_PATH_RE.test(tab.url)) {
+        _supplementCapturePage(tabId, tab, source).catch(() => {});
+      }
       return;
     }
-    // Skip other known scheduled accounts (already synced by popup)
-    if (_KNOWN_DOMAINS.has(tabDomain)) return;
-  } catch { return; }
+  }
 
-  // Debounce: skip if captured recently
+  // Unknown domain: auto-capture if path looks like an account page
+  if (!_ACCOUNT_PATH_RE.test(tab.url)) return;
   const last = _autoCaptureRecent.get(tab.url);
   if (last && Date.now() - last < _AUTO_COOLDOWN_MS) return;
-
-  // Kick off async capture without blocking the listener
   _autoCapturePage(tabId, tab).catch(() => {});
 });
 
@@ -702,24 +695,11 @@ const WARMUP_URLS = {
   xfinity: 'https://customer.xfinity.com/',
 };
 
-// Per-site settle time (ms) after page load before extracting text.
-// Override for SPAs that need longer to fully render.
+// Settle time used by resyncCaptured for custom accounts. crawlAccount uses inline values.
 const SETTLE_MS = {
-  xfinity:            12_000,
-  xfinity_subsequent: 12_000,
-  delta:               8_000,
-  delta_subsequent:    8_000,
-  default:             5_000,
-  subsequent:          5_000,
+  default:    5_000,
+  subsequent: 3_000,
 };
-
-// SPA sub-sections to extract via in-page navigation (clicking links).
-// Used for sites like Delta where direct URL changes trigger bot detection.
-// Each entry: { label, terms[] } — finds an <a> whose href OR text matches any term.
-// SPA_NAV_URLS: in-page link clicking for sites where direct URL changes
-// trigger bot detection. Delta's certificate/wallet pages are behind identity
-// verification gates and don't render via this approach — left empty for now.
-const SPA_NAV_URLS = {};
 
 // Phrases that indicate a bot-detection or access-denied page.
 const BOT_DETECTION_PHRASES = [
@@ -799,194 +779,175 @@ async function syncAccountViaTab(apiKey, account, urls, syncSessionTime) {
   console.log(`[Mighty] Tab-sync ${source}: complete`);
 }
 
-async function syncAccount(apiKey, account, urls, syncSessionTime = new Date().toISOString()) {
-  console.log(`[Mighty] → ${account.name} (${urls.length} page${urls.length > 1 ? 's' : ''})`);
+/**
+ * Smart crawler: lands on the account's entry page, scores all discovered links,
+ * visits the most account-relevant ones, and sends accumulated text to the server.
+ * No hardcoded sub-paths — the crawler finds benefit/certificate/wallet pages automatically.
+ */
+async function crawlAccount(apiKey, account, syncSessionTime) {
+  const entry = ACCOUNT_ENTRY[account.source];
+  if (!entry) {
+    console.log(`[Mighty] No entry URL for ${account.source} — skipping`);
+    return;
+  }
 
   const warmup = WARMUP_URLS[account.source];
-  const allText = [];
+  let baseDomain;
+  try {
+    baseDomain = new URL(entry).hostname.replace(/^www\./, '');
+  } catch {
+    console.error(`[Mighty] Invalid entry URL for ${account.source}: ${entry}`);
+    return;
+  }
 
-  // Open a minimized popup window so sync tabs never steal focus
-  const startUrl = warmup || urls[0];
+  const MAX_SUBPAGES   = 5;
+  const ENTRY_SETTLE   = 5_000;
+  const SUBPAGE_SETTLE = 3_000;
+  const allText        = [];
+  const visitedNorm    = new Set();
+
   const win = await chrome.windows.create({
-    url: startUrl,
+    url: warmup || entry,
     type: 'popup',
     width: 800,
     height: 600,
   });
   chrome.windows.update(win.id, { state: 'minimized' });
-  const tab = { id: win.tabs[0].id };
+  const tabId = win.tabs[0].id;
 
   try {
-    await waitForTabLoad(tab.id, 20_000);
+    await waitForTabLoad(tabId, 15_000);
 
     if (warmup) {
-      // Give Akamai/bot-detection time to set its domain cookies before navigating away
-      const warmupWait = SETTLE_MS[account.source] ? 6_000 : 3_000;
-      await sleep(warmupWait);
-      // Navigate to first real URL after warm-up
-      await chrome.tabs.update(tab.id, { url: urls[0] });
-      await waitForTabLoad(tab.id, 20_000);
+      await sleep(3_000);
+      await chrome.tabs.update(tabId, { url: entry });
+      await waitForTabLoad(tabId, 15_000);
     }
 
-    for (let i = 0; i < urls.length; i++) {
-      // Already on urls[0] from above; navigate for subsequent pages
-      if (i > 0) {
-        await chrome.tabs.update(tab.id, { url: urls[i] });
-        await waitForTabLoad(tab.id, 20_000);
+    // Abort if redirected to login
+    try {
+      const currentTab = await chrome.tabs.get(tabId);
+      if (currentTab.url && _LOGIN_PATH_RE.test(new URL(currentTab.url).pathname)) {
+        console.log(`[Mighty] ${account.name}: redirected to login — not logged in, skipping`);
+        return;
       }
+    } catch (_) {}
 
-      const settleMs = i === 0
-        ? (SETTLE_MS[account.source] || SETTLE_MS.default)
-        : (SETTLE_MS[`${account.source}_subsequent`] || SETTLE_MS.subsequent);
-      await sleep(settleMs);
+    await sleep(ENTRY_SETTLE);
 
-      // Dismiss any session-timeout / "stay logged in?" modal before extracting
-      try {
-        const [dismissed] = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: dismissSessionTimeouts,
-        });
-        if (dismissed?.result) {
-          console.log(`[Mighty] ${account.name} page ${i + 1}: dismissed session timeout dialog`);
-          await sleep(8_000); // SPA needs time to re-render real content after session refresh
-        }
-      } catch (_) { /* frame may have briefly navigated — proceed */ }
+    // Dismiss session-timeout modals
+    try {
+      const [d] = await chrome.scripting.executeScript({ target: { tabId }, func: dismissSessionTimeouts });
+      if (d?.result) { console.log(`[Mighty] ${account.name}: dismissed session modal`); await sleep(3_000); }
+    } catch (_) {}
 
-      // Extract text with one retry if the frame was momentarily removed
-      let result;
-      try {
-        [result] = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: extractPageText,
-        });
-      } catch (frameErr) {
-        if (frameErr.message && frameErr.message.includes('Frame with ID')) {
-          console.log(`[Mighty] ${account.name} page ${i + 1}: frame removed, retrying in 5s…`);
-          await sleep(5_000);
-          try {
-            [result] = await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              func: extractPageText,
-            });
-          } catch (_) { result = undefined; }
-        } else {
-          throw frameErr;
+    // Extract entry page text
+    let entryText = '';
+    try {
+      const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: extractPageText });
+      entryText = r?.result || '';
+    } catch (_) {}
+
+    if (BOT_DETECTION_PHRASES.some(p => entryText.toLowerCase().includes(p))) {
+      console.warn(`[Mighty] ${account.name}: bot detection on entry page — skipping`);
+      return;
+    }
+
+    if (entryText.length >= 100) {
+      allText.push(`\n\n--- ${entry} ---\n${entryText}`);
+      visitedNorm.add(_normUrl(entry));
+    }
+
+    // ── Discover subpages ───────────────────────────────────────────────────────
+    let rawLinks = [];
+    try {
+      const [lr] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => Array.from(document.querySelectorAll('a[href]')).map(a => ({
+          href: a.href || '',
+          text: (a.textContent || a.getAttribute('aria-label') || '')
+            .replace(/\s+/g, ' ').trim().slice(0, 100),
+        })),
+      });
+      rawLinks = lr?.result || [];
+    } catch (_) {}
+
+    const scored = rawLinks
+      .map(l => ({ ...l, score: _scoreLink(l.href, l.text, baseDomain) }))
+      .filter(l => l.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    const toVisit = [];
+    for (const link of scored) {
+      if (toVisit.length >= MAX_SUBPAGES) break;
+      const norm = _normUrl(link.href);
+      if (visitedNorm.has(norm)) continue;
+      visitedNorm.add(norm);
+      toVisit.push(link);
+    }
+
+    // Supplement with registry-known paths not already discovered
+    try {
+      const regPaths = await fetchRegistryPaths(account.source);
+      const entryOrigin = new URL(entry).origin;
+      for (const path of regPaths) {
+        if (toVisit.length >= MAX_SUBPAGES) break;
+        const regUrl = entryOrigin + path;
+        const norm   = _normUrl(regUrl);
+        if (!visitedNorm.has(norm)) {
+          visitedNorm.add(norm);
+          toVisit.push({ href: regUrl, text: '', score: 5, fromRegistry: true });
         }
       }
+    } catch (_) {}
 
-      let pageText = result?.result || '';
+    console.log(`[Mighty] ${account.name}: ${scored.length} candidates → visiting top ${toVisit.length}`);
 
-      // Check for bot-detection
-      let lower = pageText.toLowerCase();
-      let blocked = BOT_DETECTION_PHRASES.find(p => lower.includes(p));
-      if (blocked) {
-        console.warn(`[Mighty] ${account.name} page ${i + 1}: bot detection ("${blocked}")`);
-        // For delta wallet: navigate away and back to reset the bot challenge, then retry once
-        if (urls[i] && urls[i].includes('delta.com/us/en/my-account')) {
-          console.log(`[Mighty] ${account.name}: navigating away then back to reset bot challenge…`);
-          await chrome.tabs.update(tab.id, { url: 'https://www.delta.com/' });
-          await waitForTabLoad(tab.id, 15_000);
-          await sleep(4_000);
-          await chrome.tabs.update(tab.id, { url: urls[i] });
-          await waitForTabLoad(tab.id, 15_000);
-          await sleep(8_000); // settle after reset
-          try {
-            const [r2] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageText });
-            pageText = r2?.result || '';
-            lower = pageText.toLowerCase();
-            blocked = BOT_DETECTION_PHRASES.find(p => lower.includes(p));
-          } catch (_) {}
-          if (blocked) {
-            console.warn(`[Mighty] ${account.name} page ${i + 1}: still bot-detected after retry — skipping`);
-            continue;
-          }
-        } else {
+    // ── Visit subpages ──────────────────────────────────────────────────────────
+    for (const link of toVisit) {
+      try {
+        await chrome.tabs.update(tabId, { url: link.href });
+        await waitForTabLoad(tabId, 15_000);
+        await sleep(SUBPAGE_SETTLE);
+
+        try {
+          const [d] = await chrome.scripting.executeScript({ target: { tabId }, func: dismissSessionTimeouts });
+          if (d?.result) await sleep(2_000);
+        } catch (_) {}
+
+        const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: extractPageText });
+        const text = r?.result || '';
+
+        if (BOT_DETECTION_PHRASES.some(p => text.toLowerCase().includes(p))) {
+          console.warn(`[Mighty] ${account.name} → ${link.href}: bot detected — skipping`);
           continue;
         }
-      }
-
-      // For Delta wallet/eCredits: retry once if content looks thin (certificates render late)
-      if (pageText.length < 2000 && urls[i] && urls[i].includes('delta.com/us/en/my-account')) {
-        console.log(`[Mighty] ${account.name} page ${i + 1}: thin content (${pageText.length} chars), waiting 8s for React render…`);
-        await sleep(8_000);
-        try {
-          const [r2] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageText });
-          if ((r2?.result || '').length > pageText.length) pageText = r2.result;
-        } catch (_) {}
-      }
-
-      if (pageText.length >= 100) {
-        console.log(`[Mighty] ${account.name} page ${i + 1}: ${pageText.length} chars`);
-        allText.push(`\n\n--- ${urls[i]} ---\n${pageText}`);
-      } else {
-        console.warn(`[Mighty] ${account.name} page ${i + 1}: too short (${pageText.length} chars) — skipping`);
-      }
-    }
-
-    // SPA in-page navigation for sites where direct URL changes trigger bot detection
-    const spaNav = SPA_NAV_URLS[account.source];
-    if (spaNav && allText.length > 0) {
-      for (const nav of spaNav) {
-        try {
-          // Click the matching link within the current page (stays in same origin session)
-          const [clicked] = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: (terms) => {
-              const links = Array.from(document.querySelectorAll('a[href]'));
-              const match = links.find(a => {
-                const href = (a.href || '').toLowerCase();
-                const text = (a.textContent || '').toLowerCase().trim();
-                return terms.some(t => href.includes(t.toLowerCase()) || text.includes(t.toLowerCase()));
-              });
-              if (match) { match.click(); return match.href || true; }
-              return false;
-            },
-            args: [nav.terms],
-          });
-          if (!clicked?.result) {
-            // Dump all links on the page to help diagnose
-            const [linkDump] = await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              func: () => Array.from(document.querySelectorAll('a[href]'))
-                .map(a => a.href)
-                .filter(h => h && !h.startsWith('javascript') && h.length < 120)
-                .slice(0, 40),
-            });
-            console.warn(`[Mighty] ${account.name}: no link found for "${nav.label}". Page links:`, linkDump?.result);
-            continue;
-          }
-          console.log(`[Mighty] ${account.name}: clicked "${nav.label}" → ${clicked.result}`);
-          await sleep(6_000); // wait for SPA to render new section
-          const [res] = await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: extractPageText,
-          });
-          const pageText = res?.result || '';
-          const lower = pageText.toLowerCase();
-          const blocked = BOT_DETECTION_PHRASES.find(p => lower.includes(p));
-          if (blocked) {
-            console.warn(`[Mighty] ${account.name} SPA "${nav.label}": bot detection — skipping`);
-          } else if (pageText.length >= 100) {
-            console.log(`[Mighty] ${account.name} SPA "${nav.label}": ${pageText.length} chars`);
-            allText.push(`\n\n--- ${nav.label} ---\n${pageText}`);
-          }
-        } catch(e) {
-          console.warn(`[Mighty] ${account.name} SPA "${nav.label}" error:`, e.message);
+        if (text.length < 100) {
+          console.warn(`[Mighty] ${account.name} → ${link.href}: too short (${text.length} chars) — skipping`);
+          continue;
         }
+
+        console.log(`[Mighty] ${account.name} → ${link.href}: ${text.length} chars`);
+        allText.push(`\n\n--- ${link.href} ---\n${text}`);
+        reportPathToRegistry(account.source, link.href);
+
+      } catch (e) {
+        console.warn(`[Mighty] ${account.name} → ${link.href}: ${e.message}`);
       }
     }
 
+    // ── Push to server ──────────────────────────────────────────────────────────
     if (allText.length === 0) {
-      throw new Error('All pages returned too little content — possibly not logged in');
+      throw new Error('No usable content captured — possibly not logged in');
     }
 
-    const rawText = allText.join('').slice(0, 40_000); // cap at 40k chars
-    console.log(`[Mighty] ${account.name}: total ${rawText.length} chars from ${allText.length} page(s)`);
+    const rawText = allText.join('').slice(0, 40_000);
+    console.log(`[Mighty] ${account.name}: ${rawText.length} chars across ${allText.length} page(s) — pushing`);
 
     const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body:    JSON.stringify({
         api_key:     apiKey,
         source:      account.source,
         sync_source: 'extension',
