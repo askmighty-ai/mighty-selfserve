@@ -6490,6 +6490,31 @@ def registry_paths():
     return jsonify({"paths": [r["path"] for r in rows]})
 
 
+@app.route("/api/debug/fields/<source>")
+@require_login
+def api_debug_fields(source):
+    """Temporary debug endpoint: return raw discovered fields for one account."""
+    uid = session["user_id"]
+    row = get_db().execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "not found"})
+    try:
+        ex = json.loads(decrypt_cred(uid, row["extra_enc"]))
+    except Exception as e:
+        return jsonify({"error": str(e)})
+    fields = ex.get("discovered_fields", [])
+    enabled = ex.get("enabled_fields", [])
+    return jsonify({
+        "total_discovered": len(fields),
+        "enabled_count": len(enabled),
+        "enabled_keys": enabled,
+        "fields": [{"key": f.get("key"), "label": f.get("label"), "value": f.get("value")} for f in fields]
+    })
+
+
 @app.route("/api/my-key")
 @require_login
 def api_my_key():
