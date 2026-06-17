@@ -475,6 +475,71 @@ CRITICAL: Member numbers, account IDs, and loyalty IDs must NEVER be first. Stat
 CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included — only include named tiers with real meaning.
 CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
+def _post_filter_fields(fields: list) -> list:
+    """Remove fields that are clearly noise regardless of what the AI returned.
+
+    Applied after Gemini responds so prompt language alone can't be gamed.
+    """
+    import datetime as _dt, re as _re
+
+    _today = _dt.date.today()
+
+    # Labels that are pure noise (raw identifiers, not useful context)
+    _LABEL_NOISE = (
+        "eticket", "e-ticket", "ticket number", "confirmation number",
+        "loyalty id", "member id", "membership id", "account number",
+        "record locator", "pnr",
+    )
+
+    # Patterns for values that are pure long numeric IDs (>12 consecutive digits)
+    _LONG_NUM_RE = _re.compile(r'^\d{12,}$')
+
+    def _is_past_date(value: str) -> bool:
+        """Return True if value is a date string that is in the past."""
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y",
+                    "%d %b %Y", "%d %B %Y", "%Y/%m/%d"):
+            try:
+                d = _dt.datetime.strptime(value.strip(), fmt).date()
+                return d < _today
+            except ValueError:
+                pass
+        return False
+
+    out = []
+    for f in fields:
+        label = (f.get("label") or "").strip()
+        value = str(f.get("value") or "").strip()
+        lbl_low = label.lower()
+
+        # Drop labels that match known noise patterns
+        if any(n in lbl_low for n in _LABEL_NOISE):
+            continue
+
+        # Drop fields whose value is only a long numeric ID
+        if _LONG_NUM_RE.match(value.replace(" ", "").replace("-", "")):
+            continue
+
+        # Drop fields where the label contains a number that looks like a ticket ID
+        # e.g. "eTicket 0062253264364 Expiry"
+        if _re.search(r'\b\d{8,}\b', label):
+            continue
+
+        # Drop upcoming-flight/reservation fields where the embedded date is past
+        _date_match = _re.search(
+            r'\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})\b', value + " " + label
+        )
+        if _date_match and _is_past_date(_date_match.group(0)):
+            # Only drop if the label suggests it's a booking/reservation/flight
+            _BOOKING_TERMS = ("flight", "reservation", "booking", "trip",
+                              "check-in", "check-out", "arrival", "departure",
+                              "stay", "itinerary", "travel")
+            if any(t in lbl_low for t in _BOOKING_TERMS):
+                continue
+
+        out.append(f)
+    return out
+
+
 def claude_discover_fields(raw_text: str, site_name: str) -> list:
     """Use Gemini Flash to identify all useful data fields in a page."""
     if not _claude or not raw_text:
@@ -512,17 +577,17 @@ def claude_discover_fields(raw_text: str, site_name: str) -> list:
         try:
             result = json.loads(text)
             if isinstance(result, list):
-                return result
+                return _post_filter_fields(result)
             # Handle {"fields": [...]} or similar wrapper
             if isinstance(result, dict):
                 for k in ("fields", "data", "items", "results"):
                     if isinstance(result.get(k), list):
-                        return result[k]
+                        return _post_filter_fields(result[k])
             return []
         except json.JSONDecodeError:
             m = re.search(r'\[.*\]', text, re.DOTALL)
             if m:
-                try: return json.loads(m.group())
+                try: return _post_filter_fields(json.loads(m.group()))
                 except Exception: pass
             return []
     except Exception as e:
