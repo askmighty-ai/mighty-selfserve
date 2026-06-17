@@ -212,6 +212,17 @@ def init_db():
                 changed_at  TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_fh_user ON field_history(user_id, source, changed_at);
+            CREATE TABLE IF NOT EXISTS field_observations (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                source      TEXT NOT NULL,
+                field_key   TEXT NOT NULL,
+                first_seen  TEXT NOT NULL,
+                last_seen   TEXT NOT NULL,
+                seen_count  INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(user_id, source, field_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_fo_user ON field_observations(user_id, source);
             CREATE TABLE IF NOT EXISTS approved_domains (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id     TEXT NOT NULL,
@@ -6099,13 +6110,14 @@ def _system_confidence(
 
     try:
         db = get_db()
-        # Field persistence: how many times has this field appeared historically?
-        history_count = db.execute(
-            "SELECT COUNT(*) FROM field_history WHERE user_id=? AND source=? AND field_key=?",
+        # Field persistence: how many syncs have we seen this field?
+        obs_row = db.execute(
+            "SELECT seen_count FROM field_observations WHERE user_id=? AND source=? AND field_key=?",
             (uid, source, field_key)
-        ).fetchone()[0] or 0
-        # Each prior sync adds up to 0.05 confidence (caps at 0.15)
-        persistence_bonus = min(0.15, history_count * 0.05)
+        ).fetchone()
+        seen_count = obs_row["seen_count"] if obs_row else 0
+        # Each sync we've seen this field adds 0.03 confidence (caps at 0.15 at 5+ syncs)
+        persistence_bonus = min(0.15, seen_count * 0.03)
         score = min(1.0, score + persistence_bonus)
 
         # Hint success rate for this field
@@ -6138,6 +6150,22 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
     if cred_row and cred_row["extra_enc"]:
         try: ex = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
         except Exception: pass
+
+    # Snapshot existing account_data items BEFORE any writes — used for field_history diff below
+    _existing_items_snapshot: dict = {}
+    try:
+        _snap_ad = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
+        ).fetchone()
+        if _snap_ad:
+            _snap_data = decrypt_account_data(uid, _snap_ad["data_enc"] or "")
+            _existing_items_snapshot = {
+                item["key"]: item.get("value", "")
+                for item in (_snap_data.get("items") or _snap_data.get("ai_items") or [])
+                if item.get("key")
+            }
+    except Exception:
+        pass
 
     # Re-discover REPLACES fields entirely — no merging with stale data.
     # Apply filter first to strip noise (past flights, ticket IDs, etc.)
@@ -6226,23 +6254,42 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             (encrypt_account_data(uid, ad_data), uid, source)
         )
 
-    # Record field value changes in history
-    existing_ad = db.execute(
-        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
-    ).fetchone()
-    if existing_ad:
-        existing_items = decrypt_account_data(uid, existing_ad["data_enc"] or "").get("items", [])
-        existing_by_key = {i["key"]: i["value"] for i in existing_items}
-        for item in ai_items:
-            old_val = existing_by_key.get(item["key"])
-            new_val = item["value"]
-            if old_val is not None and old_val != new_val and old_val not in ("–", "") and new_val not in ("–", ""):
-                db.execute(
+    # Field history diff: compare new fields against pre-write snapshot
+    try:
+        now_iso = iso()
+        fh_db = get_db()
+        for f in deduped:
+            fk = f.get("key")
+            nv = str(f.get("value", ""))
+            ov = _existing_items_snapshot.get(fk)
+            if ov is not None and ov != nv:
+                fh_db.execute(
                     "INSERT INTO field_history (user_id, source, field_key, field_label, old_value, new_value, changed_at) "
                     "VALUES (?,?,?,?,?,?,?)",
-                    (uid, source, item["key"], item["label"], old_val, new_val, iso())
+                    (uid, source, fk, f.get("label", fk), ov, nv, now_iso)
                 )
-    db.commit()
+        fh_db.commit()
+    except Exception:
+        pass
+
+    # Update field_observations: increment seen_count for every field we extracted
+    try:
+        now_iso = iso()
+        fo_db = get_db()
+        for f in deduped:
+            fk = f.get("key")
+            if not fk:
+                continue
+            fo_db.execute("""
+                INSERT INTO field_observations (user_id, source, field_key, first_seen, last_seen, seen_count)
+                VALUES (?, ?, ?, ?, ?, 1)
+                ON CONFLICT(user_id, source, field_key) DO UPDATE SET
+                    last_seen = excluded.last_seen,
+                    seen_count = seen_count + 1
+            """, (uid, source, fk, now_iso, now_iso))
+        fo_db.commit()
+    except Exception:
+        pass
 
     # Propagate failure reason to account_data if all fields were dropped
     if _failure_reason:
