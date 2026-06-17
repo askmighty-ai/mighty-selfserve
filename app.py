@@ -8280,8 +8280,8 @@ def api_extension_capture():
         )
     else:
         db.execute(
-            "INSERT INTO account_data (user_id, source, data_enc, synced_at) VALUES (?,?,?,?)",
-            (uid, source, enc, synced_at)
+            "INSERT INTO account_data (user_id, source, display_name, icon, color, data_enc, synced_at) VALUES (?,?,?,?,?,?,?)",
+            (uid, source, name, "", "", enc, synced_at)
         )
     db.commit()
 
