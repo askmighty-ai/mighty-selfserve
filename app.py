@@ -6753,6 +6753,29 @@ def api_data_sync():
                         # Route through _save_discovered_fields so hint population,
                         # confidence-based auto-selection, and failure tracking all apply.
                         _save_discovered_fields(uid, source, fields)
+                        # Store snippets hash so the first _bg_refresh can skip
+                        # discovery if the page content hasn't changed.
+                        try:
+                            import hashlib as _hl_d
+                            _snip_d  = _extract_candidate_snippets(raw_text)
+                            _hash_d  = _hl_d.md5(_snip_d.encode()).hexdigest()
+                            _cred_d  = _db.execute(
+                                "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                                (uid, source)
+                            ).fetchone()
+                            _ex_d: dict = {}
+                            if _cred_d and _cred_d["extra_enc"]:
+                                try: _ex_d = json.loads(decrypt_cred(uid, _cred_d["extra_enc"]))
+                                except Exception: pass
+                            _ex_d["snippets_hash"] = _hash_d
+                            _db.execute(
+                                "UPDATE account_credentials SET extra_enc=?, updated_at=? "
+                                "WHERE user_id=? AND source=?",
+                                (encrypt_cred(uid, json.dumps(_ex_d)), iso(), uid, source)
+                            )
+                            _db.commit()
+                        except Exception:
+                            pass
                         # Path-specific quality score boost
                         try:
                             _paths = _paths_from_raw(raw_text)
@@ -6793,29 +6816,94 @@ def api_data_sync():
             # Existing prefs: re-run full discovery so new fields (credits, offers, certs)
             # from freshly-scraped benefit pages are picked up and merged in.
             def _bg_refresh():
-                new_fields = claude_discover_fields(raw_text, site_name, source=source)
-                if not new_fields:
-                    return
+                # Everything inside app context so get_db() works throughout,
+                # including hint-phrase loading inside claude_discover_fields.
                 with app.app_context():
+                    import hashlib as _hl
+                    _db_r = get_db()
+
+                    # ── Snippet hash check — skip Gemini if content unchanged ────
+                    # Extract snippets (with hints) and hash them. If the hash
+                    # matches the last discovery run, the account data hasn't
+                    # meaningfully changed — no need to spend a Gemini call.
+                    _hint_phrases_r: list[str] = []
+                    try:
+                        _hint_phrases_r = [
+                            r["trigger_phrase"] for r in _db_r.execute(
+                                "SELECT trigger_phrase FROM extraction_hints WHERE site=? "
+                                "ORDER BY success_count DESC, confidence DESC LIMIT 50",
+                                (source,)
+                            ).fetchall()
+                        ]
+                    except Exception:
+                        pass
+
+                    _snippets_r   = _extract_candidate_snippets(raw_text, hint_phrases=_hint_phrases_r)
+                    _new_hash     = _hl.md5(_snippets_r.encode()).hexdigest()
+
+                    _cred_r = _db_r.execute(
+                        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                        (uid, source)
+                    ).fetchone()
+                    _ex_r: dict = {}
+                    if _cred_r and _cred_r["extra_enc"]:
+                        try: _ex_r = json.loads(decrypt_cred(uid, _cred_r["extra_enc"]))
+                        except Exception: pass
+
+                    if _ex_r.get("snippets_hash") == _new_hash:
+                        print(
+                            f"[Mighty] Skipping re-discovery for {source} "
+                            f"— snippets unchanged (hash {_new_hash[:8]})",
+                            flush=True,
+                        )
+                        return
+
+                    print(
+                        f"[Mighty] Re-discovering {source} — snippets changed "
+                        f"({(_ex_r.get('snippets_hash') or 'none')[:8]} → {_new_hash[:8]})",
+                        flush=True,
+                    )
+
+                    # ── Run discovery ──────────────────────────────────────────
+                    new_fields = claude_discover_fields(raw_text, site_name, source=source)
+                    if not new_fields:
+                        return
                     _save_discovered_fields(uid, source, new_fields)
+
+                    # Persist the new hash so the next sync can skip if unchanged
+                    _cred_r2 = _db_r.execute(
+                        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                        (uid, source)
+                    ).fetchone()
+                    _ex_r2: dict = {}
+                    if _cred_r2 and _cred_r2["extra_enc"]:
+                        try: _ex_r2 = json.loads(decrypt_cred(uid, _cred_r2["extra_enc"]))
+                        except Exception: pass
+                    _ex_r2["snippets_hash"] = _new_hash
+                    _db_r.execute(
+                        "UPDATE account_credentials SET extra_enc=?, updated_at=? "
+                        "WHERE user_id=? AND source=?",
+                        (encrypt_cred(uid, json.dumps(_ex_r2)), iso(), uid, source)
+                    )
+                    _db_r.commit()
+
                     # Self-improving coverage: boost specific paths that contributed
                     try:
-                        _db2 = get_db()
                         _paths2 = _paths_from_raw(raw_text)
                         if _paths2:
                             for _p2 in _paths2:
-                                _db2.execute(
+                                _db_r.execute(
                                     "UPDATE site_paths SET quality_score = MIN(quality_score + 0.3, 10.0), "
                                     "last_seen = ? WHERE site = ? AND path = ?",
                                     (iso(), source, _p2)
                                 )
                         else:
-                            _db2.execute(
+                            _db_r.execute(
                                 "UPDATE site_paths SET quality_score = MIN(quality_score + 0.1, 8.0), "
                                 "last_seen = ? WHERE site = ? AND quality_score < 5.0",
                                 (iso(), source)
                             )
-                        _db2.commit()
+                        _db_r.commit()
                     except Exception:
                         pass
             threading.Thread(target=_bg_refresh, daemon=True).start()
