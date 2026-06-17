@@ -5000,7 +5000,7 @@ def dashboard():
         new_accounts_banner = ""
 
     onboarding_modal = ""
-    if not user.get("onboarded"):
+    if not user["onboarded"]:
         onboarding_modal = """
 <div id="onboarding-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px">
   <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
@@ -5077,7 +5077,7 @@ def settings():
             .replace("{ntfy_checked}",            "checked" if user["notify_ntfy"]    else "")
             .replace("{email_checked}",           "checked" if user["notify_email"]   else "")
             .replace("{minimal_logging_checked}", "checked" if user["minimal_logging"] else "")
-            .replace("{delete_raw_checked}",      "checked" if user.get("delete_raw_after_extract") else "")
+            .replace("{delete_raw_checked}",      "checked" if user["delete_raw_after_extract"] else "")
             .replace("{postmark_warn}",           postmark_warn)
             .replace("{postmark_js}",             "true" if postmark_ok else "false")
             .replace("{csrf_token}",              _csrf))
