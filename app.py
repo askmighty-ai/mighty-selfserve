@@ -836,7 +836,7 @@ def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
     return list(additional)
 
 
-def _estimate_benefit_value(field_key: str, field_label: str, field_value: str) -> tuple[float, str]:
+def _benefit_priority_score(field_key: str, field_label: str, field_value: str) -> tuple[float, str]:
     """
     Conservative internal estimate for sorting benefit items by value.
     Returns (dollar_value, methodology). Values are NOT shown to users.
@@ -5516,7 +5516,7 @@ def dashboard():
                     if f.get("key") in disc_v.get("enabled", set())
                 ]
             for it in items_v:
-                dval, method = _estimate_benefit_value(it.get("key",""), it.get("label",""), str(it.get("value","")))
+                dval, method = _benefit_priority_score(it.get("key",""), it.get("label",""), str(it.get("value","")))
                 if dval > 0:
                     total_value += dval
                     value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), dval, method))
