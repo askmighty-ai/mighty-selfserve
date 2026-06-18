@@ -1352,6 +1352,11 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
         if len(components) < 1:
             continue
 
+        # Skip STATUS-only cards — elite status is something you are, not something you redeem
+        _non_status = [c for c in components if c.get("canonical") != "STATUS"]
+        if not _non_status:
+            continue
+
         # Compute opportunity-level urgency and score
         opp_urgency = "none"
         for c in components:
@@ -1369,8 +1374,24 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
                 why_parts.append(f"{c['label']} {c['exp_label'].lower()}")
         if context:
             why_parts.insert(0, f"Relevant for {context} booking")
+        # Type-specific fallback why text — better than "Available in your accounts"
         if not why_parts:
-            why_parts = ["Available in your accounts"]
+            _canonical_set = {c.get("canonical") for c in components}
+            if "FREE_NIGHT" in _canonical_set:
+                why_parts = ["Free night cert available to book"]
+            elif "FLIGHT_CREDIT" in _canonical_set:
+                why_parts = ["Flight credit can be applied at checkout"]
+            elif "COMPANION_CERT" in _canonical_set:
+                why_parts = ["Companion certificate can bring a second passenger free"]
+            elif "UPGRADE_CERT" in _canonical_set:
+                why_parts = ["Upgrade certificate available — use when booking or at the gate"]
+            elif "MILES_POINTS" in _canonical_set:
+                caps_name_why = SOURCE_CAPABILITIES.get(src, {}).get("display_name", src.title())
+                why_parts = [f"Redeem your {caps_name_why} balance for award travel"]
+            elif "STATEMENT_CREDIT" in _canonical_set:
+                why_parts = ["Statement credit available — use it before it resets"]
+            else:
+                why_parts = [f"Benefit available in your {SOURCE_CAPABILITIES.get(src, {}).get('display_name', src.title())} account"]
         why_str = ". ".join(why_parts[:3]) + "."
 
         # Title: "Marriott Stay" / "Delta Flight" / generic
@@ -6784,11 +6805,25 @@ def dashboard():
 
     # ── LAYER 3: Don't forget section (no dollar amounts) ────────────────────
     if value_items:
+        import re as _vc_re
+
+        def _use_soon_eligible(label: str, val_str: str) -> bool:
+            """Exclude progress trackers and zero/empty values from Use Soon."""
+            lc = label.lower()
+            vs = val_str.strip()
+            if 'progress' in lc: return False          # progress tracker, not a usable benefit
+            if not vs or vs in {'0', '—', '-', '–', 'N/A', 'n/a', 'None', 'TBD'}: return False
+            if _vc_re.match(r'^0\s+of\s+', vs): return False  # "0 of 135,000"
+            if _vc_re.match(r'^\d{7,}$', vs.replace(',', '')): return False  # bare account number
+            return True
+
         # Group by type without showing amounts
         credit_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
-                        if any(k in label.lower() for k in ['credit', 'voucher', 'ecredit'])]
+                        if any(k in label.lower() for k in ['credit', 'voucher', 'ecredit'])
+                        and _use_soon_eligible(label, val_str)]
         cert_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
-                      if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])]
+                      if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])
+                      and _use_soon_eligible(label, val_str)]
 
         forgotten_lines = []
         for disp, label, val_str in (credit_items + cert_items)[:6]:
