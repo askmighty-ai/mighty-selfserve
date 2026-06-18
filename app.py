@@ -5515,24 +5515,54 @@ def dashboard():
                     + "".join(coverage_lines) +
                     f'</div>'
                 )
-                # Coverage face bar — always visible on card face
+                # Coverage face — always visible on card face
                 cov_color = "#16a34a" if completeness_pct >= 80 else "#d97706" if completeness_pct >= 50 else "#dc2626"
-                searching_text = ""
-                if gaps:
-                    searching_text = (
-                        f'<div style="font-size:10px;color:#9ca3af;margin-top:1px">' +
-                        f'Searching for: {", ".join(gdesc for _, gdesc in gaps[:2])}' +
-                        ("\u2026" if len(gaps) > 2 else "") +
-                        f'</div>'
+
+                # Build found/missing lists
+                found_lines = []
+                missing_lines = []
+                for exp_key, exp_desc in cat_expected.items():
+                    matched = any(
+                        exp_key == it.get("key", "") or
+                        (len([t for t in exp_key.split("_") if len(t) > 3]) >= 2 and
+                         len(set([t for t in exp_key.split("_") if len(t) > 3]) &
+                             set([t for t in it.get("key", "").split("_") if len(t) > 3])) >= 2) or
+                        (len(exp_key) > 7 and exp_key in it.get("key", ""))
+                        for it in items
                     )
+                    if matched:
+                        found_lines.append(f'<span style="color:#16a34a">✓ {he(exp_desc)}</span>')
+                    else:
+                        missing_lines.append(f'<span style="color:#9ca3af">• {he(exp_desc)}</span>')
+
+                found_html = ""
+                if found_lines:
+                    found_html = (
+                        '<div style="font-size:10px;line-height:1.7;margin-top:4px">'
+                        + " &nbsp;".join(found_lines[:4]) +
+                        '</div>'
+                    )
+
+                searching_html = ""
+                if missing_lines:
+                    searching_html = (
+                        '<div style="font-size:10px;color:#9ca3af;margin-top:2px">'
+                        f'Searching: ' + " &nbsp;".join(missing_lines[:3]) +
+                        ('…' if len(missing_lines) > 3 else '') +
+                        '</div>'
+                    )
+
                 coverage_face = (
-                    f'<div style="display:flex;align-items:center;gap:6px;margin-top:3px">' +
-                    f'<div style="flex:1;height:3px;background:#e5e7eb;border-radius:2px">' +
-                    f'<div style="height:3px;width:{completeness_pct}%;background:{cov_color};border-radius:2px"></div>' +
-                    f'</div>' +
-                    f'<span style="font-size:10px;color:{cov_color};font-weight:600">{completeness_pct}%</span>' +
+                    f'<div style="margin-top:5px;padding-top:5px;border-top:1px solid #f3f4f6">'
+                    f'<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">'
+                    f'<div style="flex:1;height:2px;background:#e5e7eb;border-radius:2px">'
+                    f'<div style="height:2px;width:{completeness_pct}%;background:{cov_color};border-radius:2px"></div>'
                     f'</div>'
-                ) + searching_text
+                    f'<span style="font-size:10px;color:{cov_color};font-weight:600;flex-shrink:0">{completeness_pct}%</span>'
+                    f'</div>'
+                    + found_html + searching_html +
+                    f'</div>'
+                )
             else:
                 completeness_badge = ""
                 gaps_inline = ""
@@ -5646,6 +5676,43 @@ def dashboard():
     _greeting = "Good morning" if _hour < 12 else "Good afternoon" if _hour < 17 else "Good evening"
     _first_name = ((user["email"] or "").split("@")[0].split(".")[0] or "").capitalize() or "there"
     _account_count = len(connected_sources)
+
+    # Top attention item for hero
+    _top_reminder = None
+    _inline_reminders = []
+    try:
+        import datetime as _dthero
+        _now_hero = _dthero.datetime.utcnow().isoformat()
+        _snoozed_keys = {r["reminder_key"] for r in get_db().execute(
+            "SELECT reminder_key FROM reminder_snoozes WHERE user_id=? AND snoozed_until > ?",
+            (uid, _now_hero)
+        ).fetchall()}
+        _all_reminders = _get_reminders(uid)
+        _urgent = [r for r in _all_reminders
+                   if r.get("urgency") == "urgent"
+                   and f"{r.get('type','')}::{r.get('source','')}" not in _snoozed_keys]
+        if not _urgent:
+            _urgent = [r for r in _all_reminders
+                       if f"{r.get('type','')}::{r.get('source','')}" not in _snoozed_keys]
+        _top_reminder = _urgent[0] if _urgent else None
+        _inline_reminders = _urgent[:3]
+    except Exception:
+        pass
+
+    if _top_reminder:
+        _focus_html = (
+            f'<div style="margin-top:12px;background:#fef3c7;border-left:3px solid #f59e0b;'
+            f'border-radius:0 6px 6px 0;padding:8px 12px">'
+            f'<div style="font-size:11px;font-weight:600;color:#92400e;text-transform:uppercase;'
+            f'letter-spacing:.05em;margin-bottom:2px">Today\'s focus</div>'
+            f'<div style="font-size:13px;color:#78350f">{he(_top_reminder.get("message",""))}</div>'
+            f'</div>'
+        )
+    else:
+        _focus_html = (
+            '<div style="margin-top:12px;font-size:13px;color:#22c55e">✓ Nothing urgent today</div>'
+        )
+
     hero_section_html = (
         f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
         f'<div style="font-size:22px;font-weight:700;color:#111;margin-bottom:12px">'
@@ -5656,25 +5723,39 @@ def dashboard():
         f'<span style="font-size:26px;font-weight:700;color:#111" id="hero-account-count">{_account_count}</span>'
         f'<span style="font-size:12px;color:#6b7280">accounts connected</span>'
         f'</div>'
-        f'<div style="display:flex;flex-direction:column">'
-        f'<span style="font-size:26px;font-weight:700;color:#f59e0b" id="hero-attention-count">—</span>'
-        f'<span style="font-size:12px;color:#6b7280">things need attention</span>'
         f'</div>'
-        f'</div>'
+        + _focus_html +
         f'</div>'
     )
 
     # ── LAYER 2: Action Center ────────────────────────────────────────────────
+    if _inline_reminders:
+        _inline_items = ""
+        for _r in _inline_reminders:
+            _urgency_color = "#dc2626" if _r.get("urgency") == "urgent" else "#d97706" if _r.get("urgency") == "warning" else "#6b7280"
+            _inline_items += (
+                f'<div style="padding:8px 0;border-bottom:1px solid #f3f4f6;display:flex;'
+                f'align-items:flex-start;gap:8px">'
+                f'<span style="color:{_urgency_color};font-size:14px;flex-shrink:0">'
+                f'{"&#x1F534;" if _r.get("urgency")=="urgent" else "&#x1F7E1;"}</span>'
+                f'<div style="flex:1">'
+                f'<div style="font-size:13px;color:#111">{he(_r.get("message",""))}</div>'
+                f'<div style="font-size:11px;color:#9ca3af;margin-top:1px">{he(_r.get("source_display",""))}</div>'
+                f'</div>'
+                f'</div>'
+            )
+        _inline_reminder_html = _inline_items
+    else:
+        _inline_reminder_html = '<div style="color:#6b7280;font-size:13px;padding:8px 0">✓ Nothing needs attention right now</div>'
+
     action_center_html = (
-        '<div style="margin-bottom:28px">'
+        '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;margin-bottom:28px">'
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
-        '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0;text-transform:uppercase;'
-        'letter-spacing:.05em">Action Center</h2>'
+        '<h2 style="font-size:15px;font-weight:700;color:#111;margin:0;text-transform:uppercase;'
+        'letter-spacing:.05em;border-left:3px solid #6366f1;padding-left:10px">Action Center</h2>'
         '<span style="font-size:12px;color:#9ca3af" id="action-center-meta"></span>'
         '</div>'
-        '<div id="action-center-panel">'
-        '<div style="color:#9ca3af;font-size:13px;padding:8px 0">Loading…</div>'
-        '</div>'
+        f'<div id="action-center-panel">{_inline_reminder_html}</div>'
         '</div>'
     )
 
