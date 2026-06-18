@@ -255,6 +255,14 @@ def init_db():
                 UNIQUE(user_id, source, field_key)
             );
             CREATE INDEX IF NOT EXISTS idx_fc_user ON field_candidates(user_id, source);
+            CREATE TABLE IF NOT EXISTS reminder_snoozes (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      TEXT NOT NULL,
+                reminder_key TEXT NOT NULL,
+                snoozed_until TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                UNIQUE(user_id, reminder_key)
+            );
         """)
 
         # Pre-seed with known-good paths (quality_score=5 → treated as trusted immediately)
@@ -8997,8 +9005,11 @@ def candidates_page(source):
 """ + items_html + """
 </div>
 <script>
+const CSRF = '""" + get_csrf_token() + """';
 async function act(id, action) {
-  await fetch('/api/candidates/'+id+'/'+action, {method:'POST'});
+  await fetch('/api/candidates/'+id+'/'+action, {
+    method:'POST', headers:{'X-CSRF-Token': CSRF}
+  });
   location.reload();
 }
 </script>
