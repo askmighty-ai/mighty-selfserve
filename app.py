@@ -2707,46 +2707,60 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     </div>
 
     <div id="fview-accounts">
-      <div id="reminders-panel" style="margin-bottom:20px;display:none">
-        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px;display:flex;align-items:center;gap:6px">
-          <span>🔔</span> Reminders
-          <span id="reminders-count" style="font-size:11px;background:#fee2e2;color:#dc2626;padding:1px 6px;border-radius:10px;font-weight:600"></span>
-        </div>
-        <div id="reminders-list" style="display:flex;flex-direction:column;gap:8px"></div>
-      </div>
+      {hero_section_html}
+      {action_center_html}
+      {value_center_html}
       <script>
       (function() {
-        fetch('/api/reminders').then(r=>r.json()).then(d=>{
-          var items = d.reminders || [];
-          if (!items.length) return;
-          var panel = document.getElementById('reminders-panel');
-          var list  = document.getElementById('reminders-list');
-          var count = document.getElementById('reminders-count');
-          panel.style.display = 'block';
-          count.textContent = items.length;
-          var colors  = {urgent:'#fef2f2', soon:'#fffbeb', info:'#f0f9ff'};
-          var borders = {urgent:'#fca5a5', soon:'#fcd34d', info:'#7dd3fc'};
-          var urgency_icons = {urgent:'🚨', soon:'⏰', info:'💡'};
-          var TYPE_ICONS = {
-            'value_drop': '📉',
-            'bill_increase': '📈',
-            'credit_added': '💰',
-            'expiry': '📅',
-            'payment_due': '💳',
-            'unused_credit': '💡'
-          };
-          items.forEach(function(r){
-            var el = document.createElement('div');
-            el.style.cssText = 'background:'+colors[r.urgency]+';border:1px solid '+borders[r.urgency]+';border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;font-size:13px';
-            var icon = TYPE_ICONS[r.type] || urgency_icons[r.urgency] || '🔔';
-            var days = r.days_left !== null && r.days_left !== undefined ? (r.days_left === 0 ? ' — today' : ' — '+r.days_left+'d') : '';
+        var TYPE_ICONS = {
+          'value_drop': '📉',
+          'bill_increase': '📈',
+          'credit_added': '💰',
+          'expiry': '📅',
+          'payment_due': '💳',
+          'unused_credit': '💡'
+        };
+        function renderActionCenter(items) {
+          var panel = document.getElementById('action-center-panel');
+          var meta  = document.getElementById('action-center-meta');
+          var heroAttn = document.getElementById('hero-attention-count');
+          if (!panel) return;
+          var actionable = items.filter(function(r){ return r.urgency === 'urgent' || r.urgency === 'soon'; });
+          if (heroAttn) heroAttn.textContent = actionable.length || '✓';
+          if (!items.length) {
+            panel.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0">All clear — nothing needs attention right now.</div>';
+            if (meta) meta.textContent = 'All clear';
+            return;
+          }
+          if (meta) meta.textContent = items.length + ' item' + (items.length !== 1 ? 's' : '');
+          var borderColors = {urgent:'#ef4444', soon:'#f59e0b', info:'#3b82f6', change:'#3b82f6'};
+          var bgColors     = {urgent:'#fef2f2', soon:'#fffbeb', info:'#f0f9ff', change:'#f0f9ff'};
+          var html = '';
+          items.forEach(function(r) {
+            var icon = TYPE_ICONS[r.type] || (r.urgency === 'urgent' ? '🚨' : r.urgency === 'soon' ? '⏰' : '💡');
+            var border = borderColors[r.urgency] || '#e5e7eb';
+            var bg     = bgColors[r.urgency]     || '#f9fafb';
+            var days = r.days_left !== null && r.days_left !== undefined ? (r.days_left === 0 ? ' — today' : ' — ' + r.days_left + 'd') : '';
             var name = r.account_name || r.source || '';
-            el.innerHTML = '<span style="font-size:16px">'+icon+'</span><div><strong style="color:#111">'+name+'</strong><span style="color:#6b7280;margin:0 4px">·</span><span style="color:#374151">'+r.message+'</span>'+(days ? '<span style="color:#9ca3af;font-size:12px">'+days+'</span>' : '')+'</div>';
-            list.appendChild(el);
+            html += '<div style="background:' + bg + ';border-left:3px solid ' + border + ';border-radius:0 8px 8px 0;padding:10px 14px;display:flex;align-items:center;gap:10px;font-size:13px;margin-bottom:6px">'
+              + '<span style="font-size:16px">' + icon + '</span>'
+              + '<div style="flex:1"><strong style="color:#111">' + name + '</strong>'
+              + '<span style="color:#6b7280;margin:0 4px">·</span>'
+              + '<span style="color:#374151">' + r.message + '</span>'
+              + (days ? '<span style="color:#9ca3af;font-size:12px">' + days + '</span>' : '')
+              + '</div></div>';
           });
-        }).catch(function(){});
+          panel.innerHTML = html;
+        }
+        fetch('/api/reminders').then(function(r){return r.json();}).then(function(d){
+          renderActionCenter(d.reminders || []);
+        }).catch(function(){
+          var panel = document.getElementById('action-center-panel');
+          if (panel) panel.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0">Could not load.</div>';
+        });
       })();
       </script>
+      <h2 style="font-size:14px;font-weight:700;color:#111;text-transform:uppercase;letter-spacing:.05em;margin-bottom:16px">Your Accounts</h2>
       {account_data_html}
     </div>
 
@@ -3316,6 +3330,16 @@ function toggleHealth(btn, source) {
             covLabel = '<span style="color:#a3a3a3">'+cv.found_count+' fields found</span>';
           }
           detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="margin-top:2px">'+covLabel+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+          // Completeness checklist
+          if (cv && cv.expected_count > 0 && cv.gaps && cv.gaps.length > 0) {
+            var checklist = '<div style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:8px">';
+            checklist += '<div style="font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px">FIELD COVERAGE</div>';
+            cv.gaps.slice(0,4).forEach(function(g) {
+              checklist += '<div style="font-size:11px;color:#9ca3af">? ' + (g.description || g) + '</div>';
+            });
+            checklist += '</div>';
+            detail.innerHTML += checklist;
+          }
         }).catch(function(){
           detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
         });
@@ -5117,9 +5141,9 @@ def dashboard():
             if alert_item and not hero_item and secondary_items:
                 hero_item = secondary_items.pop(0)
 
-            # Build hero section
+            # Build card hero section
             if hero_item:
-                hero_html = (
+                card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
                     f'<div class="hero-val" title="{he(hero_item["value"])}">{he(hero_item["value"])}</div>'
@@ -5127,7 +5151,7 @@ def dashboard():
                     f'</div>'
                 )
             elif sync_status == "login_required":
-                hero_html = (
+                card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
                     f'<div style="color:#ef4444;font-size:12px;font-weight:500">⚠ Login required — sync to reconnect</div>'
@@ -5142,7 +5166,7 @@ def dashboard():
                 _disc_info = discovered_by_source.get(src, {})
                 _no_data = _disc_info.get("failed", False) or sync_status == "no_data"
                 if _no_data:
-                    hero_html = (
+                    card_hero_html = (
                         f'<div class="acct-divider"></div>'
                         f'<div class="acct-hero">'
                         f'<div style="color:#d97706;font-size:12px">No account data — sync to retry</div>'
@@ -5150,7 +5174,7 @@ def dashboard():
                     )
                     status_color = "#f59e0b"
                 else:
-                    hero_html = (
+                    card_hero_html = (
                         f'<div class="acct-divider"></div>'
                         f'<div class="acct-hero" data-discovering="1">'
                         f'<div style="color:#6366f1;font-size:12px;font-weight:500">'
@@ -5160,7 +5184,7 @@ def dashboard():
                     )
                     status_color = "#9ca3af"
             else:
-                hero_html = (
+                card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
                     f'<div style="color:#c0bab4;font-style:italic;font-size:12px">Awaiting sync…</div>'
@@ -5288,6 +5312,7 @@ def dashboard():
 
             health_footer = (
                 f'<div class="card-health-footer" style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:6px;padding:6px 14px 8px">'
+                f'{gaps_inline}'
                 f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;padding:0;display:flex;align-items:center;gap:3px">'
                 f'<span class="health-chevron">&#9656;</span> Sync health'
                 f'</button>'
@@ -5295,11 +5320,37 @@ def dashboard():
                 f'</div>'
             )
 
+            # Completeness score for card header + coverage gap hints
+            cat_expected = _EXPECTED_FIELDS.get(_source_category(src), {})
+            if cat_expected:
+                gaps = _coverage_gaps(src, [it.get("key","") for it in items])
+                found_count = len(cat_expected) - len(gaps)
+                completeness_pct = int(found_count / len(cat_expected) * 100)
+                completeness_color = "#22c55e" if completeness_pct >= 80 else "#f59e0b" if completeness_pct >= 50 else "#ef4444"
+                completeness_badge = (
+                    f'<span style="font-size:10px;color:{completeness_color};font-weight:600;'
+                    f'background:{completeness_color}18;padding:1px 5px;border-radius:10px;margin-left:6px">'
+                    f'{completeness_pct}%</span>'
+                )
+                # Show top 2 coverage gaps inline (always visible, not behind sync health expand)
+                if gaps:
+                    top_gaps = gaps[:2]
+                    gap_hints = "".join(
+                        f'<span style="font-size:10px;color:#d1d5db;margin-right:8px">? {he(gdesc)}</span>'
+                        for _, gdesc in top_gaps
+                    )
+                    gaps_inline = f'<div style="margin:4px 0 2px">{gap_hints}</div>'
+                else:
+                    gaps_inline = ""
+            else:
+                completeness_badge = ""
+                gaps_inline = ""
+
             grid_cards += (
                 f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}">'
                 f'<div class="acct-card-header">'
                 f'<div style="flex:1;min-width:0">'
-                f'<div class="acct-name">{he(display_name)}</div>'
+                f'<div class="acct-name">{he(display_name)}{completeness_badge}</div>'
                 f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{freshness_html}</div>'
                 f'</div>'
                 f'<div class="acct-controls">'
@@ -5308,7 +5359,7 @@ def dashboard():
                 f'</div>'
                 f'</div>'
                 f'{bad_banner}'
-                f'{hero_html}'
+                f'{card_hero_html}'
                 f'{sec_html}'
                 f'{alert_html}'
                 f'{cand_notice}'
@@ -5358,6 +5409,148 @@ def dashboard():
         '🔌 Setup Extension</a>'
         '</div>'
     )
+
+    # Compute total tracked value across all accounts
+    total_value = 0.0
+    value_items = []  # list of (source_display, field_label, value_str, dollar_val, methodology)
+    for cat in _cat_order:
+        for src, display_name_v, icon_v, color_v in _cat_map[cat]:
+            row_v = synced_map.get(src)
+            if not row_v:
+                continue
+            data_v = decrypt_account_data(user["id"], row_v["data_enc"] or "")
+            items_v = data_v.get("items", []) or data_v.get("ai_items", []) or []
+            if src in discovered_by_source:
+                disc_v = discovered_by_source[src]
+                items_v = [
+                    {"key": f["key"], "label": f["label"], "value": f.get("value", "")}
+                    for f in disc_v.get("fields", [])
+                    if f.get("key") in disc_v.get("enabled", set())
+                ]
+            for it in items_v:
+                dval, method = _estimate_benefit_value(it.get("key",""), it.get("label",""), str(it.get("value","")))
+                if dval > 0:
+                    total_value += dval
+                    value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), dval, method))
+    value_items.sort(key=lambda x: -x[3])
+
+    # ── LAYER 1: Hero section ─────────────────────────────────────────────────
+    import datetime as _dth
+    _hour = _dth.datetime.now().hour
+    _greeting = "Good morning" if _hour < 12 else "Good afternoon" if _hour < 17 else "Good evening"
+    _first_name = (user.get("email","").split("@")[0].split(".")[0] or "").capitalize() or "there"
+    _account_count = len(connected_sources)
+    hero_section_html = (
+        f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
+        f'<div style="font-size:22px;font-weight:700;color:#111;margin-bottom:12px">'
+        f'{_greeting}, {he(_first_name)} \U0001f44b'
+        f'</div>'
+        f'<div style="display:flex;gap:24px;flex-wrap:wrap">'
+        f'<div style="display:flex;flex-direction:column">'
+        f'<span style="font-size:26px;font-weight:700;color:#111" id="hero-account-count">{_account_count}</span>'
+        f'<span style="font-size:12px;color:#6b7280">accounts connected</span>'
+        f'</div>'
+        f'<div style="display:flex;flex-direction:column">'
+        f'<span style="font-size:26px;font-weight:700;color:#059669" id="hero-value">'
+        f'{"${:,.0f}".format(total_value) if total_value >= 50 else "—"}'
+        f'</span>'
+        f'<span style="font-size:12px;color:#6b7280">tracked value</span>'
+        f'</div>'
+        f'<div style="display:flex;flex-direction:column">'
+        f'<span style="font-size:26px;font-weight:700;color:#f59e0b" id="hero-attention-count">—</span>'
+        f'<span style="font-size:12px;color:#6b7280">things need attention</span>'
+        f'</div>'
+        f'</div>'
+        f'</div>'
+    )
+
+    # ── LAYER 2: Action Center ────────────────────────────────────────────────
+    action_center_html = (
+        '<div style="margin-bottom:28px">'
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+        '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0;text-transform:uppercase;'
+        'letter-spacing:.05em">Action Center</h2>'
+        '<span style="font-size:12px;color:#9ca3af" id="action-center-meta"></span>'
+        '</div>'
+        '<div id="action-center-panel">'
+        '<div style="color:#9ca3af;font-size:13px;padding:8px 0">Loading…</div>'
+        '</div>'
+        '</div>'
+    )
+
+    # ── LAYER 3: Value Center ─────────────────────────────────────────────────
+    if total_value >= 50:
+        # Build category breakdown
+        category_totals: dict = {}
+        forgotten_items: list = []
+        for (disp, label, val_str, dval, method) in value_items:
+            label_l = label.lower()
+            if any(k in label_l for k in ['credit', 'voucher', 'ecredit']):
+                category_totals['Credits'] = category_totals.get('Credits', 0) + dval
+                if dval >= 50:
+                    forgotten_items.append(f"{disp} {label} ({val_str})")
+            elif any(k in label_l for k in ['certificate', 'free night', 'companion']):
+                category_totals['Certificates'] = category_totals.get('Certificates', 0) + dval
+                if dval >= 100:
+                    forgotten_items.append(f"{disp} {label}")
+            elif any(k in label_l for k in ['miles', 'points', 'rewards']):
+                category_totals['Points & Miles'] = category_totals.get('Points & Miles', 0) + dval
+            else:
+                category_totals['Other'] = category_totals.get('Other', 0) + dval
+
+        cat_breakdown = " · ".join(
+            f'<span style="color:#374151"><strong>{he(k)}</strong> ${v:,.0f}</span>'
+            for k, v in sorted(category_totals.items(), key=lambda x: -x[1])
+        )
+
+        forgotten_html = ""
+        if forgotten_items:
+            forgotten_html = (
+                f'<div style="margin-top:8px;font-size:12px;color:#92400e;background:#fffbeb;'
+                f'padding:6px 10px;border-radius:6px">'
+                f'\U0001f4a1 Potentially forgotten: {he(", ".join(forgotten_items[:3]))}'
+                f'{"&hellip;" if len(forgotten_items) > 3 else ""}</div>'
+            )
+
+        value_center_html = (
+            f'<div style="margin-bottom:28px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);'
+            f'border:1px solid #bbf7d0;border-radius:10px;padding:16px 18px">'
+            f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
+            f'<h2 style="font-size:14px;font-weight:700;color:#065f46;margin:0;text-transform:uppercase;'
+            f'letter-spacing:.05em">Value Center</h2>'
+            f'<span style="font-size:20px;font-weight:700;color:#059669">${total_value:,.0f}</span>'
+            f'</div>'
+            f'<div style="font-size:13px;line-height:1.6">{cat_breakdown}</div>'
+            f'<div style="font-size:11px;color:#6b7280;margin-top:4px">'
+            f'Conservative estimate · Points at 1¢ · Certificates at estimated value'
+            f'</div>'
+            f'{forgotten_html}'
+            f'</div>'
+        )
+
+        # Keep old value_banner for any remaining template references
+        top_items = value_items[:4]
+        items_html_v = "".join(
+            f'<div style="font-size:12px;color:#374151">• {he(it[0])}: {he(it[1])} '
+            f'<span style="color:#6b7280">({he(it[4])})</span></div>'
+            for it in top_items
+        )
+        more_v = f'<div style="font-size:11px;color:#9ca3af;margin-top:2px">+{len(value_items)-4} more</div>' if len(value_items) > 4 else ""
+        value_banner = (
+            f'<div style="background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border:1px solid #bbf7d0;'
+            f'border-radius:10px;padding:14px 16px;margin-bottom:16px">'
+            f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
+            f'<span style="font-size:20px">💎</span>'
+            f'<div>'
+            f'<div style="font-size:18px;font-weight:700;color:#111">${total_value:,.0f} of tracked value</div>'
+            f'<div style="font-size:11px;color:#6b7280">Conservative estimates · Points at 1¢ · Certs at estimated value</div>'
+            f'</div></div>'
+            f'{items_html_v}{more_v}'
+            f'</div>'
+        )
+    else:
+        value_center_html = ""
+        value_banner = ""
 
     # Build re-auth banner if any accounts need re-login
     if login_required_accounts:
@@ -5466,6 +5659,9 @@ function dismissOnboarding() {
             .replace("{reauth_banner}",           reauth_banner)
             .replace("{new_accounts_banner}",     new_accounts_banner)
             .replace("{account_data_html}",       account_data_html)
+            .replace("{hero_section_html}",       hero_section_html)
+            .replace("{action_center_html}",      action_center_html)
+            .replace("{value_center_html}",       value_center_html)
             .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{csrf_token}",              _csrf))
 
@@ -8610,7 +8806,50 @@ def api_reminders():
     # sort: urgent first, then soon, then info
     priority = {"urgent": 0, "soon": 1, "info": 2}
     all_reminders.sort(key=lambda x: priority.get(x.get("urgency", "info"), 2))
+
+    # Filter snoozed reminders
+    import datetime as _dt
+    now_iso = _dt.datetime.utcnow().isoformat()
+    try:
+        snoozed_rows = get_db().execute(
+            "SELECT reminder_key FROM reminder_snoozes WHERE user_id=? AND snoozed_until > ?",
+            (uid, now_iso)
+        ).fetchall()
+        snoozed_keys = {r["reminder_key"] for r in snoozed_rows}
+        def _reminder_key(r):
+            return "{}::{}".format(r.get("type",""), r.get("source",""))
+        all_reminders = [r for r in all_reminders if _reminder_key(r) not in snoozed_keys]
+    except Exception:
+        pass
+
     return jsonify({"reminders": all_reminders})
+
+
+@app.route("/api/reminders/snooze", methods=["POST"])
+@require_login
+def api_reminders_snooze():
+    check_csrf()
+    uid = session["user_id"]
+    body = request.get_json(silent=True) or {}
+    rtype = body.get("type", "")
+    source = body.get("source", "")
+    days = min(int(body.get("days", 7)), 365)
+
+    if not rtype:
+        return jsonify({"error": "missing type"}), 400
+
+    reminder_key = "{}::{}".format(rtype, source)
+    import datetime as _dt
+    snoozed_until = (_dt.datetime.utcnow() + _dt.timedelta(days=days)).isoformat()
+
+    db = get_db()
+    db.execute("""
+        INSERT INTO reminder_snoozes (user_id, reminder_key, snoozed_until, created_at)
+        VALUES (?,?,?,?)
+        ON CONFLICT(user_id, reminder_key) DO UPDATE SET snoozed_until=excluded.snoozed_until
+    """, (uid, reminder_key, snoozed_until, iso()))
+    db.commit()
+    return jsonify({"ok": True, "snoozed_until": snoozed_until})
 
 
 @app.route("/candidates/<source>")
