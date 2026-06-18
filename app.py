@@ -5687,15 +5687,26 @@ def dashboard():
             "SELECT reminder_key FROM reminder_snoozes WHERE user_id=? AND snoozed_until > ?",
             (uid, _now_hero)
         ).fetchall()}
-        _all_reminders = _get_reminders(uid)
-        _urgent = [r for r in _all_reminders
-                   if r.get("urgency") == "urgent"
-                   and f"{r.get('type','')}::{r.get('source','')}" not in _snoozed_keys]
-        if not _urgent:
-            _urgent = [r for r in _all_reminders
-                       if f"{r.get('type','')}::{r.get('source','')}" not in _snoozed_keys]
-        _top_reminder = _urgent[0] if _urgent else None
-        _inline_reminders = _urgent[:3]
+        _all_reminders = _get_reminders(uid) + _get_change_alerts(uid)
+        # Inject login-required accounts as top-priority reminders
+        for _src, _dname, _ic, _cl in [
+            item for cat in _cat_order for item in _cat_map[cat]
+            if synced_map.get(item[0]) and
+               (synced_map[item[0]]["sync_status"] or "") == "login_required"
+        ]:
+            _all_reminders.insert(0, {
+                "type": "login_required", "source": _src,
+                "account_name": _dname, "source_display": _dname,
+                "message": f"{_dname} — login required to re-sync",
+                "urgency": "urgent",
+            })
+        _unsnoozed = [r for r in _all_reminders
+                      if f"{r.get('type','')}::{r.get('source','')}" not in _snoozed_keys]
+        _urgent = [r for r in _unsnoozed if r.get("urgency") == "urgent"]
+        _soon   = [r for r in _unsnoozed if r.get("urgency") in ("soon", "warning", "info")]
+        _ordered = _urgent + _soon
+        _top_reminder = _ordered[0] if _ordered else None
+        _inline_reminders = _ordered[:5]
     except Exception:
         pass
 
@@ -5732,15 +5743,21 @@ def dashboard():
     if _inline_reminders:
         _inline_items = ""
         for _r in _inline_reminders:
-            _urgency_color = "#dc2626" if _r.get("urgency") == "urgent" else "#d97706" if _r.get("urgency") == "warning" else "#6b7280"
+            _is_urgent = _r.get("urgency") == "urgent"
+            _urgency_color = "#dc2626" if _is_urgent else "#d97706"
+            # Action-oriented message: inject days_left context if available
+            _msg = _r.get("message", "")
+            _days = _r.get("days_left")
+            if _days is not None and "expires" not in _msg.lower() and "due" not in _msg.lower():
+                _msg += f" — {_days} day{'s' if _days != 1 else ''} left"
             _inline_items += (
-                f'<div style="padding:8px 0;border-bottom:1px solid #f3f4f6;display:flex;'
-                f'align-items:flex-start;gap:8px">'
-                f'<span style="color:{_urgency_color};font-size:14px;flex-shrink:0">'
-                f'{"&#x1F534;" if _r.get("urgency")=="urgent" else "&#x1F7E1;"}</span>'
+                f'<div style="padding:10px 0;border-bottom:1px solid #f3f4f6;display:flex;'
+                f'align-items:flex-start;gap:10px">'
+                f'<span style="color:{_urgency_color};font-size:15px;flex-shrink:0;margin-top:1px">'
+                f'{"🔴" if _is_urgent else "🟡"}</span>'
                 f'<div style="flex:1">'
-                f'<div style="font-size:13px;color:#111">{he(_r.get("message",""))}</div>'
-                f'<div style="font-size:11px;color:#9ca3af;margin-top:1px">{he(_r.get("source_display",""))}</div>'
+                f'<div style="font-size:13px;font-weight:500;color:#111">{he(_msg)}</div>'
+                f'<div style="font-size:11px;color:#9ca3af;margin-top:2px">{he(_r.get("source_display","") or _r.get("account_name",""))}</div>'
                 f'</div>'
                 f'</div>'
             )
@@ -5752,7 +5769,7 @@ def dashboard():
         '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;margin-bottom:28px">'
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
         '<h2 style="font-size:15px;font-weight:700;color:#111;margin:0;text-transform:uppercase;'
-        'letter-spacing:.05em;border-left:3px solid #6366f1;padding-left:10px">Action Center</h2>'
+        'letter-spacing:.05em;border-left:3px solid #dc2626;padding-left:10px">Needs Attention</h2>'
         '<span style="font-size:12px;color:#9ca3af" id="action-center-meta"></span>'
         '</div>'
         f'<div id="action-center-panel">{_inline_reminder_html}</div>'
