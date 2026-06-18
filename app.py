@@ -797,54 +797,77 @@ _FIELD_TO_PATH_KEYWORDS: dict[str, list[str]] = {
 # Inference rules: if a field VALUE matches these patterns, expect additional fields
 # Format: (field_key, value_substring) → [additional_expected_field_keys]
 _INFERENCE_RULES: list[tuple[str, str, list[str]]] = [
-    # Airline status implies specific benefits
-    ("elite_status", "diamond",    ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "platinum",   ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "gold",       ["certificates", "travel_credits"]),
-    ("elite_status", "medallion",  ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "1k",         ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "global",     ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "mosaic",     ["certificates"]),
-    # Card implies credits
-    ("card_name",    "platinum",   ["statement_credits", "travel_credits"]),
-    ("card_name",    "reserve",    ["statement_credits", "travel_credits"]),
-    ("card_name",    "sapphire",   ["travel_credits"]),
-    # Companion pass presence implies points threshold
-    ("companion_pass", "active",   ["miles_balance"]),
-    ("companion_pass", "available",["miles_balance"]),
+    # Companion pass existence guarantees a points balance exists
+    ("companion_pass",   "active",    ["miles_balance"]),
+    ("companion_pass",   "available", ["miles_balance"]),
+    # Free night cert existence implies a points balance (hotel loyalty)
+    ("free_night",       "",          ["miles_balance"]),
+    ("certificate_type", "free night",["miles_balance"]),
+    # Annual fee implies renewal date exists
+    ("annual_fee",       "",          ["renewal_date"]),
+    # If auto-pay found, due date and balance usually exist too
+    ("auto_pay",         "enabled",   ["amount_due", "due_date"]),
+    ("auto_pay_status",  "enrolled",  ["amount_due", "due_date"]),
 ]
 
 def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
     """Given found fields, return additional expected field keys implied by those values."""
     additional = set()
     for f in found_fields:
-        fk = f.get("key", "").lower()
+        fk = f.get("key", "").lower().replace("-", "_")
         fv = f.get("value", "").lower()
+        if not fv:
+            continue  # skip fields with no value
         for rule_key, rule_val, implied in _INFERENCE_RULES:
-            if rule_key in fk and rule_val in fv:
-                additional.update(implied)
+            rule_key_norm = rule_key.replace("-", "_")
+            if rule_key_norm not in fk:
+                continue
+            if rule_val and rule_val not in fv:
+                continue  # value must contain the trigger substring if specified
+            additional.update(implied)
     return list(additional)
 
 
 def _coverage_gaps(source: str, found_keys: list[str]) -> list[tuple[str, str]]:
     """Return list of (field_key, description) for expected fields not yet found."""
-    cat_key = None
-    for ck, schema in _CATEGORY_SCHEMAS.items():
+    cat = _source_category(source)
+    # Look up the schema key directly from _CATEGORY_SCHEMAS
+    schema_key = None
+    for k, schema in _CATEGORY_SCHEMAS.items():
         if source in schema.get("sources", set()):
-            cat_key = ck
+            schema_key = k
             break
-    expected = _EXPECTED_FIELDS.get(cat_key or "", {})
+    expected = _EXPECTED_FIELDS.get(schema_key or cat, {})
     if not expected:
         return []
-    found_lower = {k.lower().replace("-", "_") for k in found_keys}
+
+    found_normalized = {k.lower().replace("-", "_") for k in found_keys}
+
     gaps = []
     for exp_key, exp_desc in expected.items():
-        if not any(
-            exp_key in fk or fk in exp_key or
-            exp_key.split("_")[0] in fk
-            for fk in found_lower
-        ):
+        exp_tokens = set(exp_key.split("_"))  # e.g. {"miles", "balance"}
+
+        matched = False
+        for fk in found_normalized:
+            fk_tokens = set(fk.split("_"))
+            # Exact match
+            if fk == exp_key:
+                matched = True
+                break
+            # Require at least 2 tokens to match (prevents single-word over-matching)
+            shared = exp_tokens & fk_tokens
+            meaningful = {t for t in shared if len(t) > 3}  # ignore short tokens like "due", "pay"
+            if len(meaningful) >= 2:
+                matched = True
+                break
+            # Single-token exact match only for long specific tokens (>7 chars)
+            if any(len(t) > 7 and t in fk_tokens for t in exp_tokens):
+                matched = True
+                break
+
+        if not matched:
             gaps.append((exp_key, exp_desc))
+
     return gaps
 
 
@@ -899,12 +922,19 @@ _MIN_ACCOUNT_SIGNALS = {
 
 def _classify_path_content(raw_text: str) -> str:
     """
-    Returns 'account_data', 'navigation', 'marketing', or 'login_wall'.
+    Returns 'account_data', 'navigation', 'marketing', 'login_wall', 'bot_challenge', or 'empty'.
     Used to mark paths that should not be re-visited.
     """
     if not raw_text or len(raw_text) < 100:
         return "empty"
     text_lower = raw_text.lower()
+
+    # Bot challenge / CAPTCHA detection — transient, don't penalize
+    if any(phrase in text_lower for phrase in [
+        "bot detected", "captcha", "are you a robot", "security check",
+        "cloudflare", "access denied", "ray id", "verifying you are human"
+    ]):
+        return "bot_challenge"
 
     if any(phrase in text_lower for phrase in ["sign in", "log in", "login", "please log"]):
         if len(raw_text) < 3000:
@@ -8104,7 +8134,19 @@ def api_data_sync():
                                 _m_cls = _seg_re.search(raw_text)
                                 _seg_text = _m_cls.group(1) if _m_cls else ""
                                 _cls = _classify_path_content(_seg_text or raw_text[:2000])
-                                if _cls in ("navigation", "marketing"):
+                                if _cls in ("login_wall", "bot_challenge", "account_data"):
+                                    pass  # no penalty
+                                elif _cls == "empty":
+                                    # tiny transient penalty only for already-middling paths
+                                    try:
+                                        _db.execute(
+                                            "UPDATE site_paths SET failure_count = failure_count + 1 "
+                                            "WHERE site=? AND path=? AND quality_score > 1.0",
+                                            (source, _p_cls)
+                                        )
+                                    except Exception:
+                                        pass
+                                elif _cls in ("navigation", "marketing"):
                                     _db.execute(
                                         "UPDATE site_paths SET failure_count = failure_count + 2, "
                                         "quality_score = MAX(0.0, quality_score - 0.8) "
@@ -8236,7 +8278,19 @@ def api_data_sync():
                                 _m_r = _seg_re_r.search(raw_text)
                                 _seg_r = _m_r.group(1) if _m_r else ""
                                 _cls_r = _classify_path_content(_seg_r or raw_text[:2000])
-                                if _cls_r in ("navigation", "marketing"):
+                                if _cls_r in ("login_wall", "bot_challenge", "account_data"):
+                                    pass  # no penalty
+                                elif _cls_r == "empty":
+                                    # tiny transient penalty only for already-middling paths
+                                    try:
+                                        _db_r.execute(
+                                            "UPDATE site_paths SET failure_count = failure_count + 1 "
+                                            "WHERE site=? AND path=? AND quality_score > 1.0",
+                                            (source, _p_r)
+                                        )
+                                    except Exception:
+                                        pass
+                                elif _cls_r in ("navigation", "marketing"):
                                     _db_r.execute(
                                         "UPDATE site_paths SET failure_count = failure_count + 2, "
                                         "quality_score = MAX(0.0, quality_score - 0.8) "

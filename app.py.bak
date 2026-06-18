@@ -241,7 +241,22 @@ def init_db():
                 created_at  TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_pal_user ON privacy_audit_log(user_id, created_at);
+            CREATE TABLE IF NOT EXISTS field_candidates (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                source      TEXT NOT NULL,
+                field_key   TEXT NOT NULL,
+                field_label TEXT NOT NULL,
+                field_value TEXT NOT NULL,
+                confidence  REAL DEFAULT 0.0,
+                source_snippet TEXT,
+                discovered_at  TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                UNIQUE(user_id, source, field_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_fc_user ON field_candidates(user_id, source);
         """)
+
         # Pre-seed with known-good paths (quality_score=5 → treated as trusted immediately)
         _KNOWN_PATHS = [
             ('delta',      '/my-profile/certificates'),
@@ -704,7 +719,209 @@ _CATEGORY_SCHEMAS: dict = {
     },
 }
 
+
+# Expected fields per category — used for coverage gap detection
+_EXPECTED_FIELDS: dict[str, dict[str, str]] = {
+    "travel_loyalty": {
+        "elite_status":   "Elite/tier status",
+        "miles_balance":  "Miles or points balance",
+        "certificates":   "Free night or companion certificates",
+        "travel_credits": "Travel or ancillary credits",
+        "upgrades":       "Upgrade certificates",
+        "expiry_date":    "Status or cert expiry",
+        "upcoming_trips": "Upcoming reservations",
+    },
+    "credit_card": {
+        "current_balance": "Current balance",
+        "payment_due_date":"Payment due date",
+        "credit_limit":    "Credit limit",
+        "rewards_balance": "Points or cashback",
+        "annual_fee":      "Annual fee / renewal",
+        "statement_credits":"Statement credits",
+    },
+    "banking": {
+        "checking_balance":"Checking balance",
+        "savings_balance": "Savings balance",
+        "interest_rate":   "APY / interest rate",
+        "monthly_fee":     "Monthly fee",
+    },
+    "utilities": {
+        "amount_due":  "Amount due",
+        "due_date":    "Due date",
+        "auto_pay":    "Auto-pay status",
+        "plan":        "Service plan",
+        "usage":       "Usage this period",
+    },
+    "insurance": {
+        "policy_number": "Policy number",
+        "premium":       "Premium / payment",
+        "next_payment":  "Next payment date",
+        "coverage":      "Coverage type",
+        "expiry_date":   "Policy expiry",
+    },
+    "shopping": {
+        "membership_status": "Membership status",
+        "rewards_balance":   "Rewards balance",
+        "renewal_date":      "Renewal date",
+        "membership_fee":    "Membership fee",
+    },
+    "automotive": {
+        "account_balance": "Account balance",
+        "vehicle":         "Vehicle",
+        "subscription":    "Active subscriptions",
+        "warranty":        "Warranty expiry",
+    },
+}
+
+
+# Maps expected field keys → URL path keywords likely to contain them
+# Used for goal-driven crawl: "certificates missing → look for pages with these keywords"
+_FIELD_TO_PATH_KEYWORDS: dict[str, list[str]] = {
+    "certificates":    ["certificate", "cert", "award", "companion", "free-night", "fnc"],
+    "travel_credits":  ["credits", "wallet", "ecredit", "voucher", "travel-credit", "benefits"],
+    "upgrades":        ["upgrade", "sticker", "gpu", "rpu", "instrument", "systemwide"],
+    "upcoming_trips":  ["trips", "travel", "itinerary", "reservation", "booking", "upcoming"],
+    "elite_status":    ["status", "medallion", "loyalty", "tier", "elite"],
+    "miles_balance":   ["skymiles", "miles", "points", "balance", "mileageplus", "rapid-rewards"],
+    "statement_credits": ["credits", "benefits", "rewards", "statement", "offers"],
+    "current_balance": ["account", "billing", "statement", "summary", "balance"],
+    "payment_due_date":["billing", "payment", "due", "invoice"],
+    "policy_number":   ["policy", "coverage", "plan", "details"],
+    "premium":         ["billing", "payment", "premium", "invoice"],
+    "amount_due":      ["billing", "payment", "account", "invoice", "summary"],
+    "checking_balance":["account", "checking", "dashboard", "overview"],
+    "savings_balance": ["savings", "account", "dashboard", "overview"],
+    "renewal_date":    ["membership", "account", "plan", "subscription", "renewal"],
+}
+
+# Inference rules: if a field VALUE matches these patterns, expect additional fields
+# Format: (field_key, value_substring) → [additional_expected_field_keys]
+_INFERENCE_RULES: list[tuple[str, str, list[str]]] = [
+    # Airline status implies specific benefits
+    ("elite_status", "diamond",    ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "platinum",   ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "gold",       ["certificates", "travel_credits"]),
+    ("elite_status", "medallion",  ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "1k",         ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "global",     ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "mosaic",     ["certificates"]),
+    # Card implies credits
+    ("card_name",    "platinum",   ["statement_credits", "travel_credits"]),
+    ("card_name",    "reserve",    ["statement_credits", "travel_credits"]),
+    ("card_name",    "sapphire",   ["travel_credits"]),
+    # Companion pass presence implies points threshold
+    ("companion_pass", "active",   ["miles_balance"]),
+    ("companion_pass", "available",["miles_balance"]),
+]
+
+def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
+    """Given found fields, return additional expected field keys implied by those values."""
+    additional = set()
+    for f in found_fields:
+        fk = f.get("key", "").lower()
+        fv = f.get("value", "").lower()
+        for rule_key, rule_val, implied in _INFERENCE_RULES:
+            if rule_key in fk and rule_val in fv:
+                additional.update(implied)
+    return list(additional)
+
+
+def _coverage_gaps(source: str, found_keys: list[str]) -> list[tuple[str, str]]:
+    """Return list of (field_key, description) for expected fields not yet found."""
+    cat_key = None
+    for ck, schema in _CATEGORY_SCHEMAS.items():
+        if source in schema.get("sources", set()):
+            cat_key = ck
+            break
+    expected = _EXPECTED_FIELDS.get(cat_key or "", {})
+    if not expected:
+        return []
+    found_lower = {k.lower().replace("-", "_") for k in found_keys}
+    gaps = []
+    for exp_key, exp_desc in expected.items():
+        if not any(
+            exp_key in fk or fk in exp_key or
+            exp_key.split("_")[0] in fk
+            for fk in found_lower
+        ):
+            gaps.append((exp_key, exp_desc))
+    return gaps
+
+
+def _generate_gap_targets(source: str, found_keys: list[str], found_fields: list[dict] = None) -> list[str]:
+    """
+    Given missing expected fields, return URL path keywords to search for.
+    Returns list of path keyword strings (not full URLs) to guide crawl.
+    Applies inference rules to expand the target set.
+    """
+    gaps = _coverage_gaps(source, found_keys)
+    if not gaps:
+        return []
+
+    gap_keys = [gk for gk, _ in gaps]
+
+    # Apply inference rules to expand gap targets
+    if found_fields:
+        additional = _apply_inference_rules(found_fields)
+        gap_keys = list(set(gap_keys) | set(additional))
+
+    # Collect path keywords for all gap fields
+    target_keywords: list[str] = []
+    for gk in gap_keys:
+        keywords = _FIELD_TO_PATH_KEYWORDS.get(gk, [])
+        target_keywords.extend(keywords)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_keywords = []
+    for kw in target_keywords:
+        if kw not in seen:
+            seen.add(kw)
+            unique_keywords.append(kw)
+
+    return unique_keywords[:12]  # cap to avoid crawl explosion
+
+
 _URL_MARKER_RE = re.compile(r'===\s*(https?://[^\s=]+)\s*===', re.IGNORECASE)
+
+# Phrases that indicate a page contains only navigation/marketing, not account data
+_NAV_MARKETING_SIGNALS = {
+    "sign up", "get started", "learn more", "explore", "compare plans",
+    "why choose", "our features", "contact us", "help center", "faq",
+    "privacy policy", "terms of service", "cookie policy", "about us",
+    "press", "careers", "investor", "advertise",
+}
+_MIN_ACCOUNT_SIGNALS = {
+    "your account", "my account", "account summary", "balance", "points",
+    "miles", "status", "certificate", "reward", "credit", "bill", "due",
+    "membership", "expir", "renewal", "subscription",
+}
+
+def _classify_path_content(raw_text: str) -> str:
+    """
+    Returns 'account_data', 'navigation', 'marketing', or 'login_wall'.
+    Used to mark paths that should not be re-visited.
+    """
+    if not raw_text or len(raw_text) < 100:
+        return "empty"
+    text_lower = raw_text.lower()
+
+    if any(phrase in text_lower for phrase in ["sign in", "log in", "login", "please log"]):
+        if len(raw_text) < 3000:
+            return "login_wall"
+
+    account_hits = sum(1 for sig in _MIN_ACCOUNT_SIGNALS if sig in text_lower)
+    nav_hits = sum(1 for sig in _NAV_MARKETING_SIGNALS if sig in text_lower)
+
+    if account_hits >= 3:
+        return "account_data"
+    elif nav_hits > account_hits * 2:
+        return "marketing"
+    elif len(raw_text) < 500:
+        return "navigation"
+    return "account_data"  # default: give it a chance
+
+
 
 def _paths_from_raw(raw_text: str) -> list[str]:
     """Extract URL paths from === https://... === markers embedded in a raw_text blob.
@@ -849,7 +1066,7 @@ CRITICAL: Member numbers, account IDs, and loyalty IDs must NEVER be first. Stat
 CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included — only include named tiers with real meaning.
 CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
-def _post_filter_fields(fields: list) -> list:
+def _post_filter_fields(fields: list, source: str = "") -> list:
     """Remove fields that are clearly noise regardless of what the AI returned.
 
     Applied after Gemini responds so prompt language alone can't be gamed.
@@ -979,6 +1196,27 @@ def _post_filter_fields(fields: list) -> list:
         if val_low in _GENERIC_TIER_VALUES:
             continue
 
+        # Drop loyalty-program hallucinations on utility/telecom sources
+        _UTILITY_SOURCES = {
+            "xfinity", "comcast", "spectrum", "cox", "centurylink", "att_internet",
+            "pge", "sdge", "palo_alto_utilities", "verizon", "tmobile",
+        }
+        _LOYALTY_LABELS = {
+            "elite status", "elite_status", "member status", "tier status", "medallion",
+            "elite member", "diamond member", "platinum member", "gold member", "silver member",
+            "loyalty tier", "membership tier", "reward tier", "status level",
+        }
+        _LOYALTY_VALUES = {
+            "diamond member", "gold member", "platinum member", "silver member",
+            "diamond", "platinum elite", "gold elite", "silver elite",
+            "mosaic", "executive platinum", "1k", "global services",
+        }
+        if source in _UTILITY_SOURCES:
+            if any(lbl in lbl_low or lbl in (f.get("key") or "").lower() for lbl in _LOYALTY_LABELS):
+                continue
+            if val_low in _LOYALTY_VALUES:
+                continue
+
         # Drop labels that match known noise patterns
         if any(n in lbl_low for n in _LABEL_NOISE):
             continue
@@ -1011,6 +1249,11 @@ def _post_filter_fields(fields: list) -> list:
     return out
 
 
+import hashlib as _hashlib
+import time as _time
+_discovery_cache: dict[str, tuple[float, list]] = {}  # content-hash -> (timestamp, results)
+
+
 def claude_discover_fields(raw_text: str, site_name: str, source: str | None = None) -> list:
     """Use Gemini Flash to identify all useful data fields in a page.
 
@@ -1020,6 +1263,13 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         source:    Account source key (e.g. "delta") used to look up the category schema.
                    If provided, the prompt gets a focused hint on which field types to prioritise.
     """
+    global _discovery_cache
+    # Cache key: hash of first 5000 chars of raw_text + source
+    cache_key = _hashlib.md5(((raw_text or "")[:5000] + str(source)).encode()).hexdigest()
+    cached = _discovery_cache.get(cache_key)
+    if cached and (_time.time() - cached[0]) < 60:
+        return cached[1]  # return cached result
+
     if not _claude or not raw_text:
         return []
     try:
@@ -1092,25 +1342,92 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             return []
         text = response.text.strip()
         print(f"[Mighty] Gemini response ({len(text)} chars): {text[:400]}", flush=True)
+        fields = []
         try:
             result = json.loads(text)
             if isinstance(result, list):
-                return _post_filter_fields(result)
-            # Handle {"fields": [...]} or similar wrapper
-            if isinstance(result, dict):
+                fields = _post_filter_fields(result)
+            elif isinstance(result, dict):
                 for k in ("fields", "data", "items", "results"):
                     if isinstance(result.get(k), list):
-                        return _post_filter_fields(result[k])
-            return []
+                        fields = _post_filter_fields(result[k])
+                        break
         except json.JSONDecodeError:
             m = re.search(r'\[.*\]', text, re.DOTALL)
             if m:
-                try: return _post_filter_fields(json.loads(m.group()))
+                try: fields = _post_filter_fields(json.loads(m.group()))
                 except Exception: pass
-            return []
+
+        # Second pass: ask Gemini to identify missing high-value pages
+        # Only run if coverage is low (< 3 high-confidence fields found)
+        high_conf_count = sum(1 for f in fields if (f.get("confidence") or 0) >= 0.85)
+        if high_conf_count < 3 and source:
+            cat_key = None
+            for ck, schema in _CATEGORY_SCHEMAS.items():
+                if source in schema.get("sources", set()):
+                    cat_key = ck
+                    break
+            expected = _EXPECTED_FIELDS.get(cat_key or "", {})
+            if expected:
+                found_labels = [f.get("label", "") for f in fields]
+                missing_expected = [desc for key, desc in expected.items()
+                                   if not any(key.split("_")[0] in fl.lower() for fl in found_labels)]
+                if missing_expected:
+                    missing_str = ", ".join(missing_expected[:4])
+                    page_prompt = (
+                        f"Based on this {source} account page text, what specific page URLs or sections "
+                        f"are probably missing that would contain: {missing_str}?\n\n"
+                        "List only specific paths like /my-account/certificates or /loyalty/wallet. "
+                        "Max 5 paths. One per line. No explanation."
+                    )
+                    try:
+                        _gc = _gemini_client()
+                        if _gc:
+                            page_resp = _gc.models.generate_content(
+                                model="gemini-2.0-flash",
+                                contents=[{"role": "user", "parts": [{"text": page_prompt + "\n\n" + (raw_text[:2000] if raw_text else "")}]}],
+                                config={"temperature": 0.3, "max_output_tokens": 200}
+                            )
+                            page_text = page_resp.text.strip() if page_resp.text else ""
+                            if page_text and source:
+                                _store_suggested_paths(source, page_text)
+                    except Exception:
+                        pass
+
+        _discovery_cache[cache_key] = (_time.time(), fields)
+        return fields
     except Exception as e:
         print(f"[Mighty] Gemini discovery error: {e}", flush=True)
         return []
+
+
+def _store_suggested_paths(site: str, paths_text: str) -> None:
+    """Store Gemini-suggested missing paths into site_paths for future crawling."""
+    import re as _re
+    try:
+        db = get_db()
+        now = iso()
+        for line in paths_text.splitlines():
+            line = line.strip().lstrip("- •*123456789.")
+            m = _re.search(r'(/[a-z0-9/_\-]+)', line.lower())
+            if m:
+                path = m.group(1)
+                if len(path) > 2:
+                    db.execute("""
+                        INSERT INTO site_paths (site, path, reporter_count, last_seen, quality_score)
+                        VALUES (?, ?, 0, ?, 2.0)
+                        ON CONFLICT(site, path) DO UPDATE SET
+                            quality_score = MAX(quality_score, 2.0)
+                    """, (site, path, now))
+        db.commit()
+    except Exception:
+        pass
+
+
+def _gemini_client():
+    """Return the Gemini client (_claude) if configured, else None."""
+    return _claude
+
 
 def encrypt_cred(user_id: str, value: str) -> str:
     if not value:
@@ -2576,7 +2893,18 @@ if (document.querySelector('[data-discovering="1"]')) {
     // (counter resets to 0 naturally when fields are successfully found and card loses data-discovering)
     localStorage.setItem('mighty-discover-reloads', '99');
     document.querySelectorAll('[data-discovering="1"]').forEach(function(el) {
-      el.innerHTML = '<span style="color:#9ca3af;font-size:12px;font-style:italic">No fields found — use ↻ to retry sync</span>';
+      var card = el.closest('.acct-card');
+      var cardName = card ? (card.getAttribute('data-name') || '') : '';
+      var syncStatus = card ? (card.getAttribute('data-sync-status') || '') : '';
+      var msg;
+      if (syncStatus === 'login_required') {
+        msg = '<div style="color:#92400e;background:#fef3c7;border-radius:6px;padding:10px 12px;font-size:13px;margin:0">⚠️ Log in to ' + (cardName || 'this site') + ' in Chrome to restore sync</div>';
+      } else if (syncStatus === 'no_data') {
+        msg = '<div style="color:#6b7280;font-size:13px;font-style:italic">Visit ' + (cardName || 'this site') + ' in Chrome to capture your account data</div>';
+      } else {
+        msg = '<span style="color:#9ca3af;font-size:12px;font-style:italic">No fields found — use ↻ to retry sync</span>';
+      }
+      el.innerHTML = msg;
     });
   }
 } else {
@@ -2602,7 +2930,16 @@ function updateSyncTimes() {
     var ts = el.dataset.synced;
     if (!ts) return;
     var rel = fmtRelative(ts);
-    if (rel) el.textContent = 'Synced ' + rel;
+    if (rel) {
+      var color = '#22c55e', icon = '✓';
+      var secs2 = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+      var hrs2 = secs2 / 3600;
+      if (hrs2 >= 168) { color = '#ef4444'; icon = '!'; }
+      else if (hrs2 >= 48) { color = '#f59e0b'; icon = '~'; }
+      else if (hrs2 >= 24) { color = '#f59e0b'; icon = '~'; }
+      else if (hrs2 >= 2) { color = '#6b7280'; icon = '✓'; }
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:500">' + icon + ' Synced ' + rel + '</span>';
+    }
     try {
       var d = new Date(ts);
       el.title = d.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'})
@@ -2927,13 +3264,31 @@ function toggleHealth(btn, source) {
         var fa = h.failure_reason ? '<span style="color:#ef4444">✗ '+h.failure_reason+'</span>' : '<span style="color:#22c55e">✓ ok</span>';
         var conf = h.confidence_avg ? Math.round(h.confidence_avg*100)+'% avg confidence' : 'no confidence data';
         var cov  = h.coverage ? h.coverage.message+' ('+h.coverage.score+'/100)' : '';
+        var gapHtml = '';
+        if (h.gaps && h.gaps.count > 0) {
+          var moreStr = h.gaps.more > 0 ? ' +'+h.gaps.more+' more' : '';
+          gapHtml = '<div style="font-size:11px;color:#9ca3af;margin-top:3px">Missing: '+h.gaps.labels.join(', ')+moreStr+'</div>';
+        } else if (h.gaps && h.gaps.count === 0 && h.field_count > 0) {
+          gapHtml = '<div style="font-size:11px;color:#22c55e;margin-top:3px">All expected fields found &#10003;</div>';
+        }
         var hint = h.coverage && h.coverage.hint ? '<div style="color:#f59e0b;margin-top:2px">⚠ '+h.coverage.hint+'</div>' : '';
         var api  = h.sources && h.sources.api > 0 ? ' · '+h.sources.api+' from API' : '';
         var changes = '';
         if (h.recent_changes && h.recent_changes.length) {
           changes = '<div style="margin-top:4px;color:#6b7280">Recent changes: '+h.recent_changes.slice(0,2).map(function(c){return c.field_label+': '+c.old_value+'→'+c.new_value;}).join(' · ')+'</div>';
         }
-        detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+hint+changes;
+        // Fetch coverage pct from dedicated endpoint and augment display
+        fetch('/api/coverage/' + source).then(function(cr){return cr.json();}).then(function(cv){
+          var covLabel = '';
+          if (cv.expected_count > 0) {
+            covLabel = '<span style="color:#a3a3a3">Coverage '+cv.coverage_pct+'% ('+cv.found_count+'/'+cv.expected_count+' expected fields)</span>';
+          } else {
+            covLabel = '<span style="color:#a3a3a3">'+cv.found_count+' fields found</span>';
+          }
+          detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="margin-top:2px">'+covLabel+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+        }).catch(function(){
+          detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+        });
       }).catch(function(){ detail.innerHTML = 'Could not load health data'; });
     }
   } else {
@@ -4648,7 +5003,7 @@ def dashboard():
                         "value": f.get("value", "–"),
                         "source_snippet": f.get("source_snippet", ""),
                     }
-                    for f in _post_filter_fields(disc["fields"])
+                    for f in _post_filter_fields(disc["fields"], source=src)
                     if f.get("key") in disc["enabled"]
                 ]
             else:
@@ -4656,7 +5011,40 @@ def dashboard():
 
             synced_at   = row["synced_at"] if row else ""
             sync_status = data.get("sync_status", "ok") if row else ""
+            cand_count = 0
+            try:
+                cand_count = get_db().execute(
+                    "SELECT COUNT(*) FROM field_candidates WHERE user_id=? AND source=? AND status='pending'",
+                    (uid, src)
+                ).fetchone()[0] or 0
+            except Exception:
+                pass
+            if cand_count > 0:
+                plural = "s" if cand_count > 1 else ""
+                _cand_url = f"/candidates/{src}"
+                cand_notice = (
+                    f'<div style="margin:8px 0 4px;padding:6px 10px;background:#eff6ff;'
+                    f'border-radius:6px;font-size:12px;color:#1d4ed8;cursor:pointer" '
+                    f'onclick="window.location=&apos;{_cand_url}&apos;">'
+                    f'&#10024; Mighty found {cand_count} possible new benefit{plural} &#8594; Review</div>'
+                )
+            else:
+                cand_notice = ""
             status_color = "#30d158"
+
+            # For utility/telecom sources, promote billing fields to the front
+            _UTILITY_SOURCES_CARD = {
+                "xfinity", "comcast", "spectrum", "cox", "centurylink", "att_internet",
+                "pge", "sdge", "palo_alto_utilities", "verizon", "tmobile",
+            }
+            _UTILITY_HERO_KEYS = {
+                "amount_due", "balance_due", "current_balance", "next_payment",
+                "monthly_rate", "bill_amount", "account_balance", "auto_pay", "due_date",
+            }
+            if src in _UTILITY_SOURCES_CARD:
+                preferred = [it for it in items if it.get("key") in _UTILITY_HERO_KEYS]
+                rest = [it for it in items if it.get("key") not in _UTILITY_HERO_KEYS]
+                items = preferred + rest
 
             # Separate hero stat from secondary stats, and find alerts
             hero_item = None
@@ -4878,7 +5266,7 @@ def dashboard():
             )
 
             grid_cards += (
-                f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}">'
+                f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}">'
                 f'<div class="acct-card-header">'
                 f'<div style="flex:1;min-width:0">'
                 f'<div class="acct-name">{he(display_name)}</div>'
@@ -4893,6 +5281,7 @@ def dashboard():
                 f'{hero_html}'
                 f'{sec_html}'
                 f'{alert_html}'
+                f'{cand_notice}'
                 f'{expanded_html}'
                 f'{health_footer}'
                 f'{card_footer}'
@@ -5439,6 +5828,7 @@ async function deleteAllRaw() {
 @app.route("/api/privacy/delete-raw-captures", methods=["POST"])
 @require_login
 def api_delete_raw_captures():
+    check_csrf()
     uid = session["user_id"]
     db = get_db()
     rows = db.execute(
@@ -6205,23 +6595,47 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             uid=uid,
         )
 
-    # Confidence-based auto-selection:
-    # >=0.85 -> auto-enable; <0.85 -> store but mark review_required
-    # Uses system_confidence (calibrated) if available, else raw confidence
+    # Confidence-based routing:
+    # >=0.85 -> auto-enable; 0.60-0.84 -> candidate for review; <0.60 -> discard
     auto_enabled = []
-    review_required = []
+    candidates_to_insert = []
     for f in deduped:
-        conf = f.get("system_confidence") or f.get("confidence")
-        if isinstance(conf, (int, float)) and conf < 0.85:
-            review_required.append(f["key"])
-        else:
+        sc = f.get("system_confidence") or f.get("confidence") or 0.0
+        if sc >= 0.85:
             auto_enabled.append(f["key"])
+        elif sc >= 0.60:
+            candidates_to_insert.append(f)
+        # else: discard silently
+
     # If no field has confidence metadata (old-style), enable all
-    if not auto_enabled and not review_required:
+    if not auto_enabled and not candidates_to_insert:
         auto_enabled = [f["key"] for f in deduped]
 
+    # Insert candidates into field_candidates table
+    if candidates_to_insert:
+        now_iso = iso()
+        cdb = get_db()
+        for cf in candidates_to_insert:
+            try:
+                cdb.execute("""
+                    INSERT INTO field_candidates
+                        (user_id, source, field_key, field_label, field_value, confidence, source_snippet, discovered_at, status)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(user_id, source, field_key) DO UPDATE SET
+                        field_value=excluded.field_value,
+                        confidence=excluded.confidence,
+                        source_snippet=excluded.source_snippet,
+                        discovered_at=excluded.discovered_at,
+                        status=CASE WHEN status='dismissed' THEN 'dismissed' ELSE 'pending' END
+                """, (uid, source, cf["key"], cf.get("label", cf["key"]),
+                      str(cf.get("value", "")), cf.get("system_confidence", cf.get("confidence", 0)),
+                      cf.get("source_snippet", ""), now_iso, "pending"))
+            except Exception:
+                pass
+        cdb.commit()
+
     ex["enabled_fields"]         = auto_enabled
-    ex["review_required_fields"] = review_required
+    ex["review_required_fields"] = []
     ex["discovered_fields"]      = deduped
     ex["discovered_at"]          = iso()
     db.execute(
@@ -7077,7 +7491,16 @@ function updateSyncTimes() {{
     var ts = el.dataset.synced;
     if (!ts) return;
     var rel = fmtRelative(ts);
-    if (rel) el.textContent = 'Synced ' + rel;
+    if (rel) {{
+      var color = '#22c55e', icon = '✓';
+      var secs2 = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+      var hrs2 = secs2 / 3600;
+      if (hrs2 >= 168) {{ color = '#ef4444'; icon = '!'; }}
+      else if (hrs2 >= 48) {{ color = '#f59e0b'; icon = '~'; }}
+      else if (hrs2 >= 24) {{ color = '#f59e0b'; icon = '~'; }}
+      else if (hrs2 >= 2) {{ color = '#6b7280'; icon = '✓'; }}
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:500">' + icon + ' Synced ' + rel + '</span>';
+    }}
   }});
 }}
 updateSyncTimes();
@@ -7323,18 +7746,10 @@ def _credentials_discover_impl(source):
     # Find site display name
     site_name = next((name for key, name, *_ in SUPPORTED_SITES if key == source), source)
 
-    # Run discovery 3 times and merge — maximises field coverage without user effort
+    # Single discovery call — the 60-second cache makes repeated calls return
+    # identical results at temperature 0, so one call is sufficient.
     try:
-        merged: dict = {}
-        for _run in range(3):
-            run_fields = claude_discover_fields(raw_text, site_name, source=source)
-            for f in run_fields:
-                k = f.get("key", "")
-                if k and k not in merged:
-                    merged[k] = f          # new field
-                elif k and f.get("value"):
-                    merged[k]["value"] = f["value"]  # refresh value
-        fields = list(merged.values())
+        fields = claude_discover_fields(raw_text, site_name, source=source)
     except Exception as e:
         return jsonify({"ok": False, "error": f"Discovery error: {str(e)[:100]}"}), 500
     if not fields:
@@ -7677,6 +8092,27 @@ def api_data_sync():
                             _db.commit()
                         except Exception:
                             pass
+                        # Negative learning: accelerated decay for nav/marketing paths
+                        try:
+                            for _p_cls in (_paths if _paths else []):
+                                # Read path text from raw_text segment if present
+                                import re as _re_cls
+                                _seg_re = _re_cls.compile(
+                                    r'(?:---|===)\s*https?://[^\s]*' + _re_cls.escape(_p_cls) + r'[^\n]*\n(.*?)(?=(?:---|===)\s*https?://|\Z)',
+                                    _re_cls.dotall | _re_cls.ignorecase
+                                )
+                                _m_cls = _seg_re.search(raw_text)
+                                _seg_text = _m_cls.group(1) if _m_cls else ""
+                                _cls = _classify_path_content(_seg_text or raw_text[:2000])
+                                if _cls in ("navigation", "marketing"):
+                                    _db.execute(
+                                        "UPDATE site_paths SET failure_count = failure_count + 2, "
+                                        "quality_score = MAX(0.0, quality_score - 0.8) "
+                                        "WHERE site=? AND path=?", (source, _p_cls)
+                                    )
+                            _db.commit()
+                        except Exception:
+                            pass
                         _record_path_failures(source, raw_text, succeeded=True)
                     else:
                         # Discovery ran but LLM returned nothing — set discovery_failed
@@ -7789,6 +8225,26 @@ def api_data_sync():
                                 "last_seen = ? WHERE site = ? AND quality_score < 5.0",
                                 (iso(), source)
                             )
+                        # Negative learning: accelerated decay for nav/marketing paths
+                        try:
+                            import re as _re_r
+                            for _p_r in (_paths2 if _paths2 else []):
+                                _seg_re_r = _re_r.compile(
+                                    r'(?:---|===)\s*https?://[^\s]*' + _re_r.escape(_p_r) + r'[^\n]*\n(.*?)(?=(?:---|===)\s*https?://|\Z)',
+                                    _re_r.dotall | _re_r.ignorecase
+                                )
+                                _m_r = _seg_re_r.search(raw_text)
+                                _seg_r = _m_r.group(1) if _m_r else ""
+                                _cls_r = _classify_path_content(_seg_r or raw_text[:2000])
+                                if _cls_r in ("navigation", "marketing"):
+                                    _db_r.execute(
+                                        "UPDATE site_paths SET failure_count = failure_count + 2, "
+                                        "quality_score = MAX(0.0, quality_score - 0.8) "
+                                        "WHERE site=? AND path=?", (source, _p_r)
+                                    )
+                            _db_r.commit()
+                        except Exception:
+                            pass
                         _db_r.commit()
                     except Exception:
                         pass
@@ -8103,6 +8559,124 @@ def api_reminders():
     return jsonify({"reminders": all_reminders})
 
 
+@app.route("/candidates/<source>")
+@require_login
+def candidates_page(source):
+    uid = session["user_id"]
+    rows = get_db().execute(
+        "SELECT * FROM field_candidates WHERE user_id=? AND source=? AND status='pending' ORDER BY confidence DESC",
+        (uid, source)
+    ).fetchall()
+
+    items_html = ""
+    for r in rows:
+        snip_html = (
+            f'<div style="font-size:11px;color:#9ca3af;font-style:italic;margin-top:4px">{he(r["source_snippet"][:150])}</div>'
+            if r['source_snippet'] else ''
+        )
+        row_id = r['id']
+        conf_pct = int(r['confidence'] * 100)
+        items_html += (
+            f'<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:10px">'
+            f'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+            f'<div>'
+            f'<div style="font-size:13px;font-weight:600;color:#111">{he(r["field_label"])}</div>'
+            f'<div style="font-size:15px;color:#374151;margin:3px 0">{he(r["field_value"])}</div>'
+            f'{snip_html}'
+            f'</div>'
+            f'<div style="font-size:11px;color:#6b7280;text-align:right">'
+            f'<div style="margin-bottom:6px">{conf_pct}% confidence</div>'
+            f'<div style="display:flex;gap:6px">'
+            f'<button onclick="act({row_id},\'approve\')" style="padding:4px 10px;background:#22c55e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer">Add to card</button>'
+            f'<button onclick="act({row_id},\'dismiss\')" style="padding:4px 10px;background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;border-radius:4px;font-size:12px;cursor:pointer">Dismiss</button>'
+            f'</div></div></div></div>'
+        )
+
+    if not items_html:
+        items_html = '<p style="color:#9ca3af;font-size:13px;text-align:center;padding:20px">No pending candidates</p>'
+
+    return render_template_string("""<!DOCTYPE html><html><head><title>Review Candidates — Mighty</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:-apple-system,sans-serif;margin:0;background:#f9fafb}
+.container{max-width:600px;margin:0 auto;padding:24px}</style></head>
+<body><div class="container">
+<div style="margin-bottom:16px"><a href="/dashboard" style="color:#6b7280;font-size:13px;text-decoration:none">← Dashboard</a></div>
+<h2 style="font-size:18px;font-weight:700;color:#111;margin:0 0 4px">Possible new benefits</h2>
+<p style="font-size:13px;color:#6b7280;margin:0 0 16px">Mighty found these but isn't sure enough to show them automatically.</p>
+""" + items_html + """
+</div>
+<script>
+async function act(id, action) {
+  await fetch('/api/candidates/'+id+'/'+action, {method:'POST'});
+  location.reload();
+}
+</script>
+</body></html>""")
+
+
+@app.route("/api/candidates/count")
+@require_login
+def api_candidates_count():
+    uid = session["user_id"]
+    counts = get_db().execute(
+        "SELECT source, COUNT(*) as cnt FROM field_candidates "
+        "WHERE user_id=? AND status='pending' GROUP BY source",
+        (uid,)
+    ).fetchall()
+    total = sum(r["cnt"] for r in counts)
+    by_source = {r["source"]: r["cnt"] for r in counts}
+    return jsonify({"total": total, "by_source": by_source})
+
+
+@app.route("/api/candidates/<int:cid>/approve", methods=["POST"])
+@require_login
+def api_candidate_approve(cid):
+    check_csrf()
+    uid = session["user_id"]
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM field_candidates WHERE id=? AND user_id=?", (cid, uid)
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    ad_row = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, row["source"])
+    ).fetchone()
+    if ad_row:
+        d = decrypt_account_data(uid, ad_row["data_enc"] or "")
+        items = d.get("items") or d.get("ai_items") or []
+        new_item = {
+            "key": row["field_key"],
+            "label": row["field_label"],
+            "value": row["field_value"],
+            "confidence": row["confidence"],
+            "source_snippet": row["source_snippet"],
+        }
+        existing_keys = {item.get("key") for item in items}
+        if row["field_key"] in existing_keys:
+            items = [new_item if item.get("key") == row["field_key"] else item for item in items]
+        else:
+            items.append(new_item)
+        d["items"] = items
+        db.execute("UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                   (encrypt_account_data(uid, d), uid, row["source"]))
+    db.execute("UPDATE field_candidates SET status='approved' WHERE id=?", (cid,))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/candidates/<int:cid>/dismiss", methods=["POST"])
+@require_login
+def api_candidate_dismiss(cid):
+    check_csrf()
+    uid = session["user_id"]
+    get_db().execute(
+        "UPDATE field_candidates SET status='dismissed' WHERE id=? AND user_id=?", (cid, uid)
+    )
+    get_db().commit()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/sync-health/<source>")
 @require_login
 def api_sync_health(source):
@@ -8125,6 +8699,12 @@ def api_sync_health(source):
         "dom":   sum(1 for i in items if not i.get("from_api")),
     }
     coverage = _coverage_score(source, len(items))
+    gaps = _coverage_gaps(source, [f.get("key","") for f in items])
+    gap_info = {
+        "count": len(gaps),
+        "labels": [desc for _, desc in gaps[:3]],
+        "more": max(0, len(gaps) - 3),
+    }
 
     # Recent changes
     recent_changes = db.execute(
@@ -8139,6 +8719,7 @@ def api_sync_health(source):
         "sync_status":      data.get("sync_status", "ok"),
         "failure_reason":   ad_row["sync_failure_reason"],
         "field_count":      len(items),
+        "gaps":            gap_info,
         "confidence_avg":   round(sum(confidences) / len(confidences), 2) if confidences else None,
         "confidence_min":   round(min(confidences), 2) if confidences else None,
         "sources":          sources_breakdown,
@@ -8147,6 +8728,57 @@ def api_sync_health(source):
         "path_failures":    db.execute(
             "SELECT SUM(failure_count) FROM site_paths WHERE site=?", (source,)
         ).fetchone()[0] or 0,
+    })
+
+
+@app.route("/api/coverage/<source>")
+@require_login
+def api_account_coverage(source):
+    """
+    Returns coverage score, found fields, gaps, and suggested crawl targets.
+    Used by extension to decide whether to keep crawling.
+    """
+    uid = session["user_id"]
+    db = get_db()
+
+    ad_row = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
+    ).fetchone()
+    if not ad_row:
+        return jsonify({"coverage_pct": 0, "gaps": [], "targets": [], "found_count": 0})
+
+    d = decrypt_account_data(uid, ad_row["data_enc"] or "")
+    items = d.get("items") or d.get("ai_items") or []
+
+    cat = _source_category(source)
+    cat_key = None
+    for ck, schema in _CATEGORY_SCHEMAS.items():
+        if source in schema.get("sources", set()):
+            cat_key = ck
+            break
+    expected = _EXPECTED_FIELDS.get(cat_key or "", {})
+    found_keys = [it.get("key", "") for it in items]
+
+    gaps = _coverage_gaps(source, found_keys)
+    targets = _generate_gap_targets(source, found_keys, items)
+
+    coverage_pct = 0
+    if expected:
+        found_count = len(expected) - len(gaps)
+        coverage_pct = int(found_count / len(expected) * 100)
+    else:
+        found_count = len(items)
+        coverage_pct = min(100, found_count * 15)  # rough estimate when no schema
+
+    return jsonify({
+        "source": source,
+        "category": cat,
+        "coverage_pct": coverage_pct,
+        "found_count": len(items),
+        "expected_count": len(expected),
+        "gaps": [{"key": gk, "description": gdesc} for gk, gdesc in gaps],
+        "targets": targets,  # path keywords to hunt for
+        "should_continue": coverage_pct < 70 and len(gaps) > 0,
     })
 
 
