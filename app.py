@@ -6529,7 +6529,7 @@ def dashboard():
     # Get latest intent for context-aware sorting
     _latest_intent = get_db().execute(
         "SELECT intent_type FROM intent_history WHERE user_id=? ORDER BY detected_at DESC LIMIT 1",
-        (uid,)
+        (session["user_id"],)
     ).fetchone()
     _sort_context = _latest_intent["intent_type"] if _latest_intent else None
     value_items.sort(key=lambda x: -_relevance_score(
