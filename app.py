@@ -1174,6 +1174,36 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
             fl  = f.get("label") or fk.replace("_", " ").title()
             fv  = str(f.get("value") or "")
             fc  = float(f.get("confidence", 0.85))
+
+            # ── Value-level pre-filters ──────────────────────────────────────
+            # Skip account identifiers and metadata — not actionable
+            _SKIP_KEY_FRAGMENTS = (
+                "_number", "_id", "member_since", "account_number",
+                "loyalty_number", "member_id", "account_id", "customer_id",
+                "program_number", "joining_date", "since_", "enrollment",
+                "username", "email", "phone", "address",
+            )
+            if any(skip in fk for skip in _SKIP_KEY_FRAGMENTS):
+                continue
+
+            # Skip empty or placeholder values
+            _fv_stripped = fv.strip()
+            if not _fv_stripped or _fv_stripped in {"—", "-", "–", "N/A", "n/a", "None", "0", "TBD", ""}:
+                continue
+
+            # Skip "0 of X" progress fields (user has made zero progress)
+            if _rop.match(r'^0\s+of\s+[\d,]+', _fv_stripped):
+                continue
+
+            # Skip bare account/loyalty numbers (7+ digit strings)
+            if _rop.match(r'^\d{7,}$', _fv_stripped.replace(",", "").replace(" ", "")):
+                continue
+
+            # Skip year-only values that look like join dates ("2002", "2018")
+            if _rop.match(r'^(19|20)\d{2}$', _fv_stripped):
+                continue
+            # ────────────────────────────────────────────────────────────────
+
             ctype, ctype_conf = _canonical_benefit_type(fk, fl, source=src)
             if ctype == "OTHER":
                 continue
