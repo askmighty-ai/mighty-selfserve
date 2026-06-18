@@ -5518,7 +5518,7 @@ def dashboard():
     import datetime as _dth
     _hour = _dth.datetime.now().hour
     _greeting = "Good morning" if _hour < 12 else "Good afternoon" if _hour < 17 else "Good evening"
-    _first_name = (user.get("email","").split("@")[0].split(".")[0] or "").capitalize() or "there"
+    _first_name = ((user["email"] or "").split("@")[0].split(".")[0] or "").capitalize() or "there"
     _account_count = len(connected_sources)
     hero_section_html = (
         f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
