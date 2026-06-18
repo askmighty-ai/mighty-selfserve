@@ -134,6 +134,7 @@ function showBenefits(context, benefits, count) {
     acctDiv.innerHTML = `<div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${account}</div>`;
     for (const item of items) {
       const row = document.createElement('div');
+      row.setAttribute('data-mighty-benefit', '1');
       row.style.cssText = 'font-size:13px;color:#374151;padding:2px 0;display:flex;justify-content:space-between;align-items:baseline;gap:8px;';
       var benefitHtml = `<span>• ${item.label}</span><span style="color:#6b7280;font-size:12px;flex-shrink:0">${item.value.length > 20 ? item.value.slice(0,20)+'…' : item.value}</span>`;
       if (item._why) {
@@ -148,6 +149,11 @@ function showBenefits(context, benefits, count) {
             'margin-top:3px;padding:4px 8px;background:rgba(255,255,255,0.08);border-radius:4px">' +
             escapeHtml(explainWhy(item._why)) +
           '</div>';
+      }
+      if (item.source && item.field_key) {
+        benefitHtml += '<span style="margin-left:8px;font-size:10px;color:#a5b4fc;cursor:pointer;opacity:0.7" ' +
+          'title="Remove this suggestion" ' +
+          'onclick="mightyDismiss(this, \'' + escapeHtml(item.source) + '\', \'' + escapeHtml(item.field_key) + '\', \'' + escapeHtml(context) + '\')">&#x2715;</span>';
       }
       row.innerHTML = benefitHtml;
       acctDiv.appendChild(row);
@@ -184,6 +190,22 @@ function showBenefits(context, benefits, count) {
       removePill();
     }
   }, 12000);
+}
+
+function mightyDismiss(el, source, fieldKey, context) {
+  // Hide the row immediately
+  var row = el.closest('[data-mighty-benefit]') || el.parentElement;
+  row.style.opacity = '0.3';
+  row.style.pointerEvents = 'none';
+
+  // Send feedback to server via background script
+  chrome.runtime.sendMessage({
+    type: 'MIGHTY_FEEDBACK',
+    source: source,
+    field_key: fieldKey,
+    feedback: 'not_relevant',
+    context: context,
+  });
 }
 
 // Listen for messages from background script

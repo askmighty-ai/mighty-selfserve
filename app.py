@@ -345,6 +345,26 @@ def init_db():
             db.execute("ALTER TABLE site_paths ADD COLUMN failure_count INTEGER DEFAULT 0")
         except Exception:
             pass
+        try:
+            get_db().execute("ALTER TABLE users ADD COLUMN notification_pref TEXT NOT NULL DEFAULT 'quiet'")
+            get_db().commit()
+        except Exception:
+            pass  # column already exists
+        try:
+            get_db().execute("""
+                CREATE TABLE IF NOT EXISTS benefit_feedback (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id      TEXT NOT NULL,
+                    source       TEXT NOT NULL,
+                    field_key    TEXT NOT NULL,
+                    feedback     TEXT NOT NULL,
+                    context      TEXT,
+                    created_at   TEXT NOT NULL
+                )
+            """)
+            get_db().commit()
+        except Exception:
+            pass
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -3890,6 +3910,44 @@ body{display:flex;flex-direction:row}
   </div>
 
   <div class="card">
+    <div class="section-title">Extension notifications</div>
+    <div style="font-size:12px;color:#8892a4;margin-bottom:16px">Control when the Mighty extension surfaces benefits while you browse.</div>
+    <div style="display:flex;flex-direction:column;gap:10px" id="notif-pref-wrap" data-current="{notification_pref}">
+      <label class="toggle-row" style="cursor:pointer;align-items:flex-start;gap:12px;padding:10px 0">
+        <input type="radio" name="notif_pref" value="quiet" style="margin-top:3px;flex-shrink:0;accent-color:#6366f1">
+        <div>
+          <div class="toggle-label">Quiet pill</div>
+          <div class="toggle-hint">Small indicator in the corner — expand to see benefits.</div>
+        </div>
+      </label>
+      <label class="toggle-row" style="cursor:pointer;align-items:flex-start;gap:12px;padding:10px 0">
+        <input type="radio" name="notif_pref" value="checkout" style="margin-top:3px;flex-shrink:0;accent-color:#6366f1">
+        <div>
+          <div class="toggle-label">Checkout only</div>
+          <div class="toggle-hint">Surface benefits only on booking and payment pages.</div>
+        </div>
+      </label>
+      <label class="toggle-row" style="cursor:pointer;align-items:flex-start;gap:12px;padding:10px 0">
+        <input type="radio" name="notif_pref" value="expiring" style="margin-top:3px;flex-shrink:0;accent-color:#6366f1">
+        <div>
+          <div class="toggle-label">Expiring only</div>
+          <div class="toggle-hint">Only show benefits that expire within 30 days.</div>
+        </div>
+      </label>
+      <label class="toggle-row" style="cursor:pointer;align-items:flex-start;gap:12px;padding:10px 0">
+        <input type="radio" name="notif_pref" value="never" style="margin-top:3px;flex-shrink:0;accent-color:#6366f1">
+        <div>
+          <div class="toggle-label">Never</div>
+          <div class="toggle-hint">Don't surface benefits while browsing.</div>
+        </div>
+      </label>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:flex-end;margin-top:4px">
+      <span id="notif-pref-ind" style="font-size:11px;color:#34d399;display:none">Saved ✓</span>
+    </div>
+  </div>
+
+  <div class="card">
     <div class="section-title">Data &amp; Privacy</div>
     <button class="btn-sm" onclick="window.location.href=\'/settings/export-csv\'">↓ Export activity log (CSV)</button>
     <hr style="border:none;border-top:1px solid #f5f2ed;margin:16px 0">
@@ -3984,6 +4042,26 @@ function saveDeleteRaw() {
     if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
   }).catch(function() {});
 }
+function initNotifPref() {
+  var wrap = document.getElementById('notif-pref-wrap');
+  if (!wrap) return;
+  var current = wrap.getAttribute('data-current') || 'quiet';
+  document.querySelectorAll('input[name="notif_pref"]').forEach(function(el) {
+    if (el.value === current) el.checked = true;
+    el.addEventListener('change', function() {
+      var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
+      fetch('/api/settings/notifications', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json','X-CSRF-Token': csrf},
+        body: JSON.stringify({pref: this.value})
+      }).then(function() {
+        var ind = document.getElementById('notif-pref-ind');
+        if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
+      }).catch(function() {});
+    });
+  });
+}
+initNotifPref();
 function changeEmail() {
   var newEmail = (document.getElementById('email-new').value || '').trim();
   var pw = document.getElementById('email-pw').value;
@@ -6207,6 +6285,7 @@ def settings():
     key_prefix = raw_key[:3] if raw_key else ""
     api_key_masked = key_prefix + "•" * max(0, len(raw_key) - 3)
     _csrf = get_csrf_token()
+    notif_pref = user["notification_pref"] if user["notification_pref"] else "quiet"
     return (SETTINGS_HTML
             .replace("{_SIDEBAR_}",               _sidebar_html('settings', user["email"], _csrf))
             .replace("{email}",                   he(user["email"]))
@@ -6220,6 +6299,7 @@ def settings():
             .replace("{delete_raw_checked}",      "checked" if user["delete_raw_after_extract"] else "")
             .replace("{postmark_warn}",           postmark_warn)
             .replace("{postmark_js}",             "true" if postmark_ok else "false")
+            .replace("{notification_pref}",       notif_pref)
             .replace("{csrf_token}",              _csrf))
 
 @app.route("/extension-setup")
@@ -10400,6 +10480,7 @@ def api_benefits_relevant():
                 benefits.append({
                     "account": row["display_name"],
                     "source": row["source"],
+                    "field_key": it.get("key", ""),
                     "label": it.get("label", ""),
                     "value": fv,
                     "_score": score,
@@ -10416,11 +10497,78 @@ def api_benefits_relevant():
             unique_benefits.append({k: v for k, v in b.items() if k not in ("_score",)})
     unique_benefits = unique_benefits[:8]
 
+    # Load dont_show list for this user
+    _suppressed = set()
+    for _row in get_db().execute(
+        "SELECT source, field_key FROM benefit_feedback "
+        "WHERE user_id=? AND feedback='dont_show'",
+        (uid,)
+    ).fetchall():
+        _suppressed.add((_row["source"], _row["field_key"]))
+
+    # Filter from unique_benefits
+    unique_benefits = [
+        b for b in unique_benefits
+        if (b.get("source",""), b.get("field_key","")) not in _suppressed
+    ]
+
     return jsonify({
         "context": context,
         "benefits": unique_benefits,
         "count": len(unique_benefits),
     })
+
+
+@app.route("/api/settings/notifications", methods=["GET", "POST"])
+@require_login_or_key
+def api_settings_notifications():
+    uid = get_current_user_id()
+    if request.method == "GET":
+        row = get_db().execute(
+            "SELECT notification_pref FROM users WHERE id=?", (uid,)
+        ).fetchone()
+        pref = (row["notification_pref"] if row and row["notification_pref"] else "quiet")
+        return jsonify({"pref": pref})
+    # POST
+    if not hasattr(g, "api_key_user_id"):
+        check_csrf()
+    data = request.get_json(silent=True) or {}
+    pref = data.get("pref", "quiet")
+    if pref not in ("never", "quiet", "checkout", "expiring"):
+        return jsonify({"error": "invalid pref"}), 400
+    get_db().execute(
+        "UPDATE users SET notification_pref=? WHERE id=?", (pref, uid)
+    )
+    get_db().commit()
+    return jsonify({"ok": True, "pref": pref})
+
+
+@app.route("/api/benefits/feedback", methods=["POST"])
+@require_login_or_key
+def api_benefits_feedback():
+    """Record user negative feedback on a surfaced benefit."""
+    if not hasattr(g, "api_key_user_id"):
+        check_csrf()
+    uid = get_current_user_id()
+    data = request.get_json(silent=True) or {}
+    source    = str(data.get("source", ""))[:100]
+    field_key = str(data.get("field_key", ""))[:200]
+    feedback  = str(data.get("feedback", "not_relevant"))
+    context   = str(data.get("context", ""))[:50]
+
+    if not source or not field_key:
+        return jsonify({"error": "missing source or field_key"}), 400
+    if feedback not in ("not_relevant", "dont_show"):
+        feedback = "not_relevant"
+
+    import datetime as _dt_fb
+    get_db().execute(
+        "INSERT INTO benefit_feedback (user_id, source, field_key, feedback, context, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (uid, source, field_key, feedback, context, _dt_fb.datetime.utcnow().isoformat())
+    )
+    get_db().commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/csrf-token")

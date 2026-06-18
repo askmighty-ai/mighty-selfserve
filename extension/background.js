@@ -255,7 +255,40 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 // Messages from popup
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
+  if (msg.type === 'MIGHTY_FEEDBACK') {
+    chrome.storage.local.get('api_key', async function(items) {
+      const apiKey = items.api_key || '';
+      if (!apiKey) return;
+      try {
+        // Get CSRF token first
+        const csrfResp = await fetch(`${MIGHTY_URL}/api/csrf-token`, {
+          headers: { 'X-Mighty-Key': apiKey },
+          credentials: 'include'
+        });
+        const csrfData = csrfResp.ok ? await csrfResp.json() : {};
+
+        await fetch(`${MIGHTY_URL}/api/benefits/feedback`, {
+          method: 'POST',
+          headers: {
+            'X-Mighty-Key': apiKey,
+            'X-CSRF-Token': csrfData.token || '',
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            source:    msg.source,
+            field_key: msg.field_key,
+            feedback:  msg.feedback,
+            context:   msg.context,
+          }),
+        });
+      } catch(e) {
+        console.log('[Mighty] Feedback error:', e);
+      }
+    });
+    return true; // keep channel open for async
+  }
   if (msg.action === 'sync_now') {
     // Respond immediately so the message channel doesn't time out during a long sync
     sendResponse({ ok: true });
@@ -1365,12 +1398,45 @@ chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
     const data = await resp.json();
     if (!data.count || data.count === 0) return;
 
+    // Fetch notification pref
+    let notifPref = 'quiet';
+    try {
+      const prefResp = await fetch(`${MIGHTY_URL}/api/settings/notifications`, {
+        headers: { 'X-Mighty-Key': apiKey },
+        credentials: 'include'
+      });
+      if (prefResp.ok) {
+        const prefData = await prefResp.json();
+        notifPref = prefData.pref || 'quiet';
+      }
+    } catch(e) {}
+
+    if (notifPref === 'never') return;
+
+    // Filter benefits for 'expiring' mode
+    let filteredBenefits = data.benefits;
+    if (notifPref === 'expiring') {
+      filteredBenefits = data.benefits.filter(b =>
+        b._why && b._why.urgency_factor >= 0.7
+      );
+      if (!filteredBenefits.length) return;
+    }
+
+    // For 'checkout', only fire on checkout/cart/booking URLs
+    if (notifPref === 'checkout') {
+      const checkoutPatterns = [
+        /\/checkout/i, /\/cart/i, /\/payment/i, /\/booking\/confirm/i,
+        /\/purchase/i, /\/order\/review/i, /reserve/i, /\/book\b/i,
+      ];
+      if (!checkoutPatterns.some(p => p.test(tab.url))) return;
+    }
+
     // Send to content script
     chrome.tabs.sendMessage(tabId, {
       type: 'MIGHTY_BENEFITS',
       context: intent,
-      benefits: data.benefits,
-      count: data.count,
+      benefits: filteredBenefits,
+      count: filteredBenefits.length,
     }).catch(() => {}); // content script may not be loaded yet
 
     // Log the intent so the dashboard can show "Relevant Right Now"
