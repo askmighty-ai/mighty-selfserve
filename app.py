@@ -2720,16 +2720,13 @@ body{display:flex;flex-direction:row;background:#eee9e2}
           'payment_due': '💳',
           'unused_credit': '💡'
         };
-        function renderActionCenter(items) {
+        function renderActionCenter(items, themesHtml) {
+          themesHtml = themesHtml || '';
           var panel = document.getElementById('action-center-panel');
           var meta  = document.getElementById('action-center-meta');
-          var heroAttn = document.getElementById('hero-attention-count');
           if (!panel) return;
-          var actionable = items.filter(function(r){ return r.urgency === 'urgent' || r.urgency === 'soon'; });
-          if (heroAttn) heroAttn.textContent = actionable.length || '✓';
           if (!items.length) {
-            panel.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0">All clear — nothing needs attention right now.</div>';
-            if (meta) meta.textContent = 'All clear';
+            panel.innerHTML = '<div style="color:#6b7280;font-size:13px;padding:8px 0">✓ Nothing needs attention right now</div>';
             return;
           }
           if (meta) meta.textContent = items.length + ' item' + (items.length !== 1 ? 's' : '');
@@ -2750,14 +2747,54 @@ body{display:flex;flex-direction:row;background:#eee9e2}
               + (days ? '<span style="color:#9ca3af;font-size:12px">' + days + '</span>' : '')
               + '</div></div>';
           });
-          panel.innerHTML = html;
+          panel.innerHTML = themesHtml + html;
         }
-        fetch('/api/reminders').then(function(r){return r.json();}).then(function(d){
-          renderActionCenter(d.reminders || []);
-        }).catch(function(){
-          var panel = document.getElementById('action-center-panel');
-          if (panel) panel.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0">Could not load.</div>';
-        });
+        async function loadActionCenter() {
+          try {
+            var remResp = fetch('/api/reminders');
+            var summResp = fetch('/api/reminders/summary');
+            var remData = await (await remResp).json();
+            var summary = {};
+            try { summary = await (await summResp).json(); } catch(e) { summary = {themes: [], total: 0}; }
+            var reminders = remData.reminders || [];
+
+            // Update hero attention count
+            var heroCount = document.getElementById('hero-attention-count');
+            if (heroCount) heroCount.textContent = summary.total || (summary.urgent > 0 ? summary.urgent : '✓');
+
+            // Update action center meta
+            var meta = document.getElementById('action-center-meta');
+            if (meta) meta.textContent = summary.total > 0 ? summary.total + ' items' : 'All clear';
+
+            // Render theme chips if multiple themes
+            var themesHtml = '';
+            if (summary.themes && summary.themes.length > 1) {
+              themesHtml = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+                summary.themes.map(function(t) {
+                  return '<div style="display:flex;align-items:center;gap:4px;padding:4px 10px;' +
+                    'background:' + (t.urgent_count > 0 ? '#fef2f2' : '#f3f4f6') + ';' +
+                    'border-radius:20px;font-size:12px;color:' + (t.urgent_count > 0 ? '#b91c1c' : '#374151') + '">' +
+                    t.icon + ' ' + t.label + ' <strong>' + t.count + '</strong>' +
+                    '</div>';
+                }).join('') + '</div>';
+            }
+
+            var panel = document.getElementById('action-center-panel');
+            if (!panel) return;
+
+            if (reminders.length === 0) {
+              panel.innerHTML = '<div style="color:#6b7280;font-size:13px;padding:8px 0">✓ Nothing needs attention right now</div>';
+              return;
+            }
+
+            renderActionCenter(reminders, themesHtml);
+          } catch(e) {
+            console.error('Action center load error:', e);
+            var panel = document.getElementById('action-center-panel');
+            if (panel) panel.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0">Could not load.</div>';
+          }
+        }
+        loadActionCenter();
       })();
       </script>
       <h2 style="font-size:14px;font-weight:700;color:#111;text-transform:uppercase;letter-spacing:.05em;margin-bottom:16px">Your Accounts</h2>
@@ -5451,12 +5488,6 @@ def dashboard():
         f'<span style="font-size:12px;color:#6b7280">accounts connected</span>'
         f'</div>'
         f'<div style="display:flex;flex-direction:column">'
-        f'<span style="font-size:26px;font-weight:700;color:#059669" id="hero-value">'
-        f'{"${:,.0f}".format(total_value) if total_value >= 50 else "—"}'
-        f'</span>'
-        f'<span style="font-size:12px;color:#6b7280">tracked value</span>'
-        f'</div>'
-        f'<div style="display:flex;flex-direction:column">'
         f'<span style="font-size:26px;font-weight:700;color:#f59e0b" id="hero-attention-count">—</span>'
         f'<span style="font-size:12px;color:#6b7280">things need attention</span>'
         f'</div>'
@@ -5478,76 +5509,38 @@ def dashboard():
         '</div>'
     )
 
-    # ── LAYER 3: Value Center ─────────────────────────────────────────────────
-    if total_value >= 50:
-        # Build category breakdown
-        category_totals: dict = {}
-        forgotten_items: list = []
-        for (disp, label, val_str, dval, method) in value_items:
-            label_l = label.lower()
-            if any(k in label_l for k in ['credit', 'voucher', 'ecredit']):
-                category_totals['Credits'] = category_totals.get('Credits', 0) + dval
-                if dval >= 50:
-                    forgotten_items.append(f"{disp} {label} ({val_str})")
-            elif any(k in label_l for k in ['certificate', 'free night', 'companion']):
-                category_totals['Certificates'] = category_totals.get('Certificates', 0) + dval
-                if dval >= 100:
-                    forgotten_items.append(f"{disp} {label}")
-            elif any(k in label_l for k in ['miles', 'points', 'rewards']):
-                category_totals['Points & Miles'] = category_totals.get('Points & Miles', 0) + dval
-            else:
-                category_totals['Other'] = category_totals.get('Other', 0) + dval
+    # ── LAYER 3: Don't forget section (no dollar amounts) ────────────────────
+    if value_items:
+        # Group by type without showing amounts
+        credit_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
+                        if any(k in label.lower() for k in ['credit', 'voucher', 'ecredit'])]
+        cert_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
+                      if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])]
 
-        cat_breakdown = " · ".join(
-            f'<span style="color:#374151"><strong>{he(k)}</strong> ${v:,.0f}</span>'
-            for k, v in sorted(category_totals.items(), key=lambda x: -x[1])
-        )
-
-        forgotten_html = ""
-        if forgotten_items:
-            forgotten_html = (
-                f'<div style="margin-top:8px;font-size:12px;color:#92400e;background:#fffbeb;'
-                f'padding:6px 10px;border-radius:6px">'
-                f'\U0001f4a1 Potentially forgotten: {he(", ".join(forgotten_items[:3]))}'
-                f'{"&hellip;" if len(forgotten_items) > 3 else ""}</div>'
+        forgotten_lines = []
+        for disp, label, val_str in (credit_items + cert_items)[:6]:
+            forgotten_lines.append(
+                f'<div style="font-size:13px;color:#374151;padding:4px 0;'
+                f'border-bottom:1px solid #f3f4f6">• {he(disp)}: {he(label)}'
+                f'<span style="color:#6b7280;margin-left:6px">{he(val_str)}</span></div>'
             )
 
-        value_center_html = (
-            f'<div style="margin-bottom:28px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);'
-            f'border:1px solid #bbf7d0;border-radius:10px;padding:16px 18px">'
-            f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
-            f'<h2 style="font-size:14px;font-weight:700;color:#065f46;margin:0;text-transform:uppercase;'
-            f'letter-spacing:.05em">Value Center</h2>'
-            f'<span style="font-size:20px;font-weight:700;color:#059669">${total_value:,.0f}</span>'
-            f'</div>'
-            f'<div style="font-size:13px;line-height:1.6">{cat_breakdown}</div>'
-            f'<div style="font-size:11px;color:#6b7280;margin-top:4px">'
-            f'Conservative estimate · Points at 1¢ · Certificates at estimated value'
-            f'</div>'
-            f'{forgotten_html}'
-            f'</div>'
-        )
+        if forgotten_lines:
+            value_center_html = (
+                '<div style="margin-bottom:28px;background:#fffbeb;border:1px solid #fde68a;'
+                'border-radius:10px;padding:16px 18px">'
+                '<h2 style="font-size:14px;font-weight:700;color:#92400e;margin:0 0 10px;'
+                'text-transform:uppercase;letter-spacing:.05em">\U0001f4a1 Don\u2019t forget</h2>'
+                '<p style="font-size:12px;color:#92400e;margin:0 0 10px">'
+                'These benefits were found but may go unused:'
+                '</p>'
+                + "".join(forgotten_lines) +
+                '</div>'
+            )
+        else:
+            value_center_html = ""
 
-        # Keep old value_banner for any remaining template references
-        top_items = value_items[:4]
-        items_html_v = "".join(
-            f'<div style="font-size:12px;color:#374151">• {he(it[0])}: {he(it[1])} '
-            f'<span style="color:#6b7280">({he(it[4])})</span></div>'
-            for it in top_items
-        )
-        more_v = f'<div style="font-size:11px;color:#9ca3af;margin-top:2px">+{len(value_items)-4} more</div>' if len(value_items) > 4 else ""
-        value_banner = (
-            f'<div style="background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border:1px solid #bbf7d0;'
-            f'border-radius:10px;padding:14px 16px;margin-bottom:16px">'
-            f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">'
-            f'<span style="font-size:20px">💎</span>'
-            f'<div>'
-            f'<div style="font-size:18px;font-weight:700;color:#111">${total_value:,.0f} of tracked value</div>'
-            f'<div style="font-size:11px;color:#6b7280">Conservative estimates · Points at 1¢ · Certs at estimated value</div>'
-            f'</div></div>'
-            f'{items_html_v}{more_v}'
-            f'</div>'
-        )
+        value_banner = ""
     else:
         value_center_html = ""
         value_banner = ""
@@ -8823,6 +8816,68 @@ def api_reminders():
         pass
 
     return jsonify({"reminders": all_reminders})
+
+
+@app.route("/api/reminders/summary")
+@require_login
+def api_reminders_summary():
+    """
+    Returns a cross-account summary: groups all reminders by type/theme,
+    not by account. Shows what the user is collectively forgetting.
+    """
+    uid = session["user_id"]
+    try:
+        reminders = _get_reminders(uid)
+        change_alerts = _get_change_alerts(uid)
+        all_items = reminders + change_alerts
+
+        # Filter snoozed
+        import datetime as _dt
+        now_iso = _dt.datetime.utcnow().isoformat()
+        snoozed = {r["reminder_key"] for r in get_db().execute(
+            "SELECT reminder_key FROM reminder_snoozes WHERE user_id=? AND snoozed_until > ?",
+            (uid, now_iso)
+        ).fetchall()}
+        all_items = [r for r in all_items if f"{r.get('type','')}::{r.get('source','')}" not in snoozed]
+
+        # Group by theme
+        themes = {
+            "expiring": {"label": "Expiring benefits", "icon": "\U0001f4c5", "items": []},
+            "bill":     {"label": "Bill changes",      "icon": "\U0001f4cb", "items": []},
+            "unused":   {"label": "Unused credits",    "icon": "\U0001f4a1", "items": []},
+            "payment":  {"label": "Payments due",      "icon": "\U0001f4b3", "items": []},
+        }
+        for r in all_items:
+            rtype = r.get("type", "")
+            if rtype in ("expiry",):
+                themes["expiring"]["items"].append(r)
+            elif rtype in ("bill_increase", "value_drop"):
+                themes["bill"]["items"].append(r)
+            elif rtype in ("unused_credit", "credit_added"):
+                themes["unused"]["items"].append(r)
+            elif rtype in ("payment_due",):
+                themes["payment"]["items"].append(r)
+
+        summary = []
+        for theme_key, theme in themes.items():
+            if theme["items"]:
+                urgent_count = sum(1 for i in theme["items"] if i.get("urgency") == "urgent")
+                summary.append({
+                    "theme": theme_key,
+                    "label": theme["label"],
+                    "icon": theme["icon"],
+                    "count": len(theme["items"]),
+                    "urgent_count": urgent_count,
+                    "items": theme["items"][:3],  # top 3 per theme
+                })
+
+        return jsonify({
+            "total": len(all_items),
+            "urgent": sum(1 for i in all_items if i.get("urgency") == "urgent"),
+            "themes": summary,
+        })
+    except Exception as e:
+        return jsonify({"total": 0, "urgent": 0, "themes": [], "error": str(e)})
 
 
 @app.route("/api/reminders/snooze", methods=["POST"])

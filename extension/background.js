@@ -862,6 +862,8 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
   let entryOrigin;
   try { entryOrigin = new URL(entry).origin; } catch { return; }
 
+  let prevCoverage = -1;
+
   for (let iter = 0; iter < maxIterations; iter++) {
     try {
       const covResp = await fetch(`${MIGHTY_URL}/api/coverage/${source}`, {
@@ -870,9 +872,26 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
       if (!covResp.ok) break;
       const cov = await covResp.json();
 
-      console.log(`[Mighty] ${source} coverage: ${cov.coverage_pct}% (${cov.found_count}/${cov.expected_count} fields)`);
+      const currentCoverage = cov.coverage_pct || 0;
+      console.log(`[Mighty] ${source} coverage: ${currentCoverage}% (${cov.found_count}/${cov.expected_count} fields) (iter ${iter + 1})`);
 
-      if (!cov.should_continue || !cov.targets || cov.targets.length === 0) break;
+      // Skip gap-filling entirely if already well-covered on first iteration
+      if (iter === 0 && currentCoverage >= 85) {
+        console.log(`[Mighty] ${source}: coverage already ${currentCoverage}%, skipping gap-fill`);
+        break;
+      }
+
+      // STOP CONDITION: information gain < 5% → plateau reached
+      if (prevCoverage >= 0 && (currentCoverage - prevCoverage) < 5) {
+        console.log(`[Mighty] ${source}: coverage plateaued (${prevCoverage}% → ${currentCoverage}%), stopping`);
+        break;
+      }
+      prevCoverage = currentCoverage;
+
+      if (!cov.should_continue || !cov.targets || cov.targets.length === 0) {
+        console.log(`[Mighty] ${source}: coverage sufficient or no targets`);
+        break;
+      }
 
       // Find known registry paths matching gap target keywords
       const knownPaths = await fetchRegistryPaths(source);
