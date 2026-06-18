@@ -5691,6 +5691,7 @@ async function deleteAllRaw() {
 @app.route("/api/privacy/delete-raw-captures", methods=["POST"])
 @require_login
 def api_delete_raw_captures():
+    check_csrf()
     uid = session["user_id"]
     db = get_db()
     rows = db.execute(
@@ -7608,18 +7609,10 @@ def _credentials_discover_impl(source):
     # Find site display name
     site_name = next((name for key, name, *_ in SUPPORTED_SITES if key == source), source)
 
-    # Run discovery 3 times and merge — maximises field coverage without user effort
+    # Single discovery call — the 60-second cache makes repeated calls return
+    # identical results at temperature 0, so one call is sufficient.
     try:
-        merged: dict = {}
-        for _run in range(3):
-            run_fields = claude_discover_fields(raw_text, site_name, source=source)
-            for f in run_fields:
-                k = f.get("key", "")
-                if k and k not in merged:
-                    merged[k] = f          # new field
-                elif k and f.get("value"):
-                    merged[k]["value"] = f["value"]  # refresh value
-        fields = list(merged.values())
+        fields = claude_discover_fields(raw_text, site_name, source=source)
     except Exception as e:
         return jsonify({"ok": False, "error": f"Discovery error: {str(e)[:100]}"}), 500
     if not fields:
@@ -8460,6 +8453,7 @@ def api_candidates_count():
 @app.route("/api/candidates/<int:cid>/approve", methods=["POST"])
 @require_login
 def api_candidate_approve(cid):
+    check_csrf()
     uid = session["user_id"]
     db = get_db()
     row = db.execute(
@@ -8473,9 +8467,18 @@ def api_candidate_approve(cid):
     if ad_row:
         d = decrypt_account_data(uid, ad_row["data_enc"] or "")
         items = d.get("items") or d.get("ai_items") or []
-        items.append({"key": row["field_key"], "label": row["field_label"],
-                      "value": row["field_value"], "confidence": row["confidence"],
-                      "source_snippet": row["source_snippet"]})
+        new_item = {
+            "key": row["field_key"],
+            "label": row["field_label"],
+            "value": row["field_value"],
+            "confidence": row["confidence"],
+            "source_snippet": row["source_snippet"],
+        }
+        existing_keys = {item.get("key") for item in items}
+        if row["field_key"] in existing_keys:
+            items = [new_item if item.get("key") == row["field_key"] else item for item in items]
+        else:
+            items.append(new_item)
         d["items"] = items
         db.execute("UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
                    (encrypt_account_data(uid, d), uid, row["source"]))
@@ -8487,6 +8490,7 @@ def api_candidate_approve(cid):
 @app.route("/api/candidates/<int:cid>/dismiss", methods=["POST"])
 @require_login
 def api_candidate_dismiss(cid):
+    check_csrf()
     uid = session["user_id"]
     get_db().execute(
         "UPDATE field_candidates SET status='dismissed' WHERE id=? AND user_id=?", (cid, uid)
