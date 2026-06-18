@@ -10403,6 +10403,7 @@ def api_benefits_relevant():
                     "label": it.get("label", ""),
                     "value": fv,
                     "_score": score,
+                    "_why": factors,
                 })
 
     # Deduplicate by (account, label), sort by relevance score, cap at 8
@@ -10412,7 +10413,7 @@ def api_benefits_relevant():
         key = (b["account"], b["label"])
         if key not in seen:
             seen.add(key)
-            unique_benefits.append({k: v for k, v in b.items() if k != "_score"})
+            unique_benefits.append({k: v for k, v in b.items() if k not in ("_score",)})
     unique_benefits = unique_benefits[:8]
 
     return jsonify({

@@ -10,6 +10,49 @@ function removePill() {
   if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function explainWhy(why) {
+  if (!why) return "Matched your account data.";
+
+  var parts = [];
+
+  // Intent (weight 0.4 — lead if high)
+  if (why.intent_factor >= 0.9)
+    parts.push("directly matches your current search");
+  else if (why.intent_factor >= 0.4)
+    parts.push("related to your current activity");
+  else
+    parts.push("available in your accounts");
+
+  // Urgency (weight 0.2)
+  if (why.urgency_factor >= 0.9)
+    parts.push("expires very soon");
+  else if (why.urgency_factor >= 0.7)
+    parts.push("expires this month");
+  else if (why.urgency_factor >= 0.4)
+    parts.push("expires within 90 days");
+  // else: omit — no urgency signal
+
+  // Value (weight 0.3)
+  if (why.value_factor >= 0.7)
+    parts.push("high-value");
+  else if (why.value_factor >= 0.3)
+    parts.push("moderate value");
+  // else: omit low value
+
+  // Confidence (only mention if low)
+  if (why.confidence_factor < 0.5)
+    parts.push("data needs review");
+
+  if (parts.length === 0) return "Matched your account data.";
+  // Capitalize first, join the rest
+  return parts[0].charAt(0).toUpperCase() + parts[0].slice(1) +
+    (parts.length > 1 ? " · " + parts.slice(1).join(" · ") : "") + ".";
+}
+
 function showBenefits(context, benefits, count) {
   removePill(); // clear any existing
 
@@ -92,7 +135,21 @@ function showBenefits(context, benefits, count) {
     for (const item of items) {
       const row = document.createElement('div');
       row.style.cssText = 'font-size:13px;color:#374151;padding:2px 0;display:flex;justify-content:space-between;align-items:baseline;gap:8px;';
-      row.innerHTML = `<span>• ${item.label}</span><span style="color:#6b7280;font-size:12px;flex-shrink:0">${item.value.length > 20 ? item.value.slice(0,20)+'…' : item.value}</span>`;
+      var benefitHtml = `<span>• ${item.label}</span><span style="color:#6b7280;font-size:12px;flex-shrink:0">${item.value.length > 20 ? item.value.slice(0,20)+'…' : item.value}</span>`;
+      if (item._why) {
+        var whyId = 'mighty-why-' + Math.random().toString(36).slice(2);
+        benefitHtml += '<span style="margin-left:6px;font-size:10px;color:#a5b4fc;cursor:pointer;' +
+          'text-decoration:underline;text-underline-offset:2px" ' +
+          'onclick="(function(el){' +
+            'var t=document.getElementById(\'' + whyId + '\');' +
+            't.style.display=t.style.display===\'none\'?\'block\':\'none\';' +
+          '})(this)">Why?</span>' +
+          '<div id="' + whyId + '" style="display:none;font-size:11px;color:#e0e7ff;' +
+            'margin-top:3px;padding:4px 8px;background:rgba(255,255,255,0.08);border-radius:4px">' +
+            escapeHtml(explainWhy(item._why)) +
+          '</div>';
+      }
+      row.innerHTML = benefitHtml;
       acctDiv.appendChild(row);
     }
     list.appendChild(acctDiv);
