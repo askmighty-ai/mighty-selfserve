@@ -827,6 +827,161 @@ _EXPECTED_FIELDS: dict[str, dict[str, str]] = {
 }
 
 
+SOURCE_CAPABILITIES: dict[str, dict] = {
+    # Airlines
+    "delta": {
+        "display_name": "Delta SkyMiles",
+        "category": "airline",
+        "benefit_types": ["miles", "ecredit", "companion_cert", "upgrade_cert", "medallion_status"],
+        "key_pages": ["/myprofile/credits", "/myprofile/documents", "/shop/mktg/cert/companion"],
+    },
+    "united": {
+        "display_name": "United MileagePlus",
+        "category": "airline",
+        "benefit_types": ["miles", "ecredit", "upgrade_cert", "premier_status"],
+        "key_pages": ["/ual/en/us/fly/travel/awards/certificates.html"],
+    },
+    "american": {
+        "display_name": "American Airlines AAdvantage",
+        "category": "airline",
+        "benefit_types": ["miles", "ecredit", "upgrade_cert", "systemwide_upgrade", "elite_status"],
+        "key_pages": ["/account/myaccount/travelerinfo/redeemmiles"],
+    },
+    "southwest": {
+        "display_name": "Southwest Rapid Rewards",
+        "category": "airline",
+        "benefit_types": ["points", "companion_pass", "tier_status"],
+        "key_pages": ["/account/"],
+    },
+    # Hotels
+    "marriott": {
+        "display_name": "Marriott Bonvoy",
+        "category": "hotel",
+        "benefit_types": ["points", "free_night_cert", "suite_night_award", "tier_status"],
+        "key_pages": ["/loyalty/myAccount/default.mi", "/loyalty/myAccount/rewards/redeemPoints.mi"],
+    },
+    "hilton": {
+        "display_name": "Hilton Honors",
+        "category": "hotel",
+        "benefit_types": ["points", "free_night_reward", "tier_status"],
+        "key_pages": ["/en/hiltonhonors/account/"],
+    },
+    "hyatt": {
+        "display_name": "World of Hyatt",
+        "category": "hotel",
+        "benefit_types": ["points", "free_night_award", "suite_upgrade_award", "tier_status"],
+        "key_pages": ["/woh/account/activity"],
+    },
+    "ihg": {
+        "display_name": "IHG One Rewards",
+        "category": "hotel",
+        "benefit_types": ["points", "milestone_reward_night", "tier_status"],
+        "key_pages": ["/us/en/ihg-one-rewards/account"],
+    },
+    # Credit cards
+    "amex": {
+        "display_name": "American Express",
+        "category": "credit_card",
+        "benefit_types": ["membership_rewards", "travel_credit", "dining_credit", "hotel_credit",
+                         "airline_fee_credit", "purchase_protection", "extended_warranty",
+                         "global_entry_credit", "digital_entertainment_credit"],
+        "key_pages": ["/account/login", "/dashboard"],
+    },
+    "chase": {
+        "display_name": "Chase",
+        "category": "credit_card",
+        "benefit_types": ["ultimate_rewards", "travel_credit", "dining_credit", "hotel_credit",
+                         "purchase_protection", "trip_delay", "cell_phone_protection"],
+        "key_pages": ["/web/auth/#/pages/login/simple-challenge", "/account-summary"],
+    },
+    "citi": {
+        "display_name": "Citi",
+        "category": "credit_card",
+        "benefit_types": ["thank_you_points", "travel_credit", "purchase_protection",
+                         "extended_warranty", "price_protection"],
+        "key_pages": ["/US/JRS/portal/53004.do"],
+    },
+    # Retail / Other
+    "amazon": {
+        "display_name": "Amazon",
+        "category": "retail",
+        "benefit_types": ["prime_benefits", "gift_card_balance", "reward_balance"],
+        "key_pages": ["/cpe/yourpayments/wallet"],
+    },
+    "costco": {
+        "display_name": "Costco",
+        "category": "retail",
+        "benefit_types": ["reward_certificate", "membership_expiry"],
+        "key_pages": ["/Warehouse/AccountManagement.aspx"],
+    },
+    "uber": {
+        "display_name": "Uber / Uber Eats",
+        "category": "rideshare",
+        "benefit_types": ["cash_balance", "uber_cash", "pass_membership"],
+        "key_pages": ["/m/menu"],
+    },
+}
+
+
+def _get_missing_benefits(uid: str) -> list[dict]:
+    """
+    Returns a list of benefit types that SOURCE_CAPABILITIES says should exist
+    for a connected source, but haven't been found yet in account_data.
+    Each item: {source, display_name, missing_type, key_pages, message}
+    """
+    import json as _jmb
+    missing = []
+    rows = get_db().execute(
+        "SELECT source, data_enc FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+
+    for row in rows:
+        src = row["source"]
+        caps = SOURCE_CAPABILITIES.get(src)
+        if not caps:
+            continue
+
+        # Decrypt and parse
+        try:
+            data = decrypt_account_data(uid, row["data_enc"] or "")
+            items_list = data.get("items", []) or data.get("ai_items", []) or []
+            if not isinstance(items_list, list):
+                items_list = []
+        except Exception:
+            continue
+
+        # Collect found field keys
+        found_keys = set()
+        for f in items_list:
+            if isinstance(f, dict):
+                k = (f.get("key") or f.get("field_key") or "").lower()
+                found_keys.add(k)
+
+        # Check which benefit types are expected but not found
+        for btype in caps["benefit_types"]:
+            # Check if any found key contains the benefit type (or close fragment)
+            fragments = btype.replace("_", " ").split()
+            if not any(frag in fk for frag in fragments for fk in found_keys):
+                missing.append({
+                    "source": src,
+                    "display_name": caps["display_name"],
+                    "missing_type": btype,
+                    "key_pages": caps.get("key_pages", []),
+                    "message": f"{caps['display_name']} — {btype.replace('_',' ')} not yet found",
+                })
+
+    # Cap: return top 5 by source diversity (one per source)
+    seen_sources = set()
+    top = []
+    for m in missing:
+        if m["source"] not in seen_sources:
+            top.append(m)
+            seen_sources.add(m["source"])
+        if len(top) >= 5:
+            break
+    return top
+
+
 # Maps expected field keys → URL path keywords likely to contain them
 # Used for goal-driven crawl: "certificates missing → look for pages with these keywords"
 _FIELD_TO_PATH_KEYWORDS: dict[str, list[str]] = {
@@ -2928,10 +3083,11 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 
     <div id="fview-accounts">
       {hero_section_html}
-      {action_center_html}
-      {recently_found_html}
-      {relevant_now_html}
       {value_center_html}
+      {opportunities_html}
+      {action_center_html}
+      {relevant_now_html}
+      {recently_found_html}
       <script>
       (function() {
         var TYPE_ICONS = {
@@ -3019,8 +3175,29 @@ body{display:flex;flex-direction:row;background:#eee9e2}
         loadActionCenter();
       })();
       </script>
-      <h2 style="font-size:14px;font-weight:700;color:#111;text-transform:uppercase;letter-spacing:.05em;margin-bottom:16px">Your Accounts</h2>
-      {account_data_html}
+      <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
+        <h2 style="font-size:14px;font-weight:700;color:#111;margin:0;text-transform:uppercase;
+           letter-spacing:.05em">Your Accounts</h2>
+        <button onclick="toggleAccounts()" id="accounts-toggle-btn"
+          style="font-size:11px;color:#6b7280;background:none;border:none;cursor:pointer;
+          padding:2px 6px">Hide ▲</button>
+      </div>
+      <div id="accounts-grid-wrapper">
+        {account_data_html}
+      </div>
+      <script>
+      function toggleAccounts() {
+        var w = document.getElementById('accounts-grid-wrapper');
+        var b = document.getElementById('accounts-toggle-btn');
+        if (w.style.display === 'none') {
+          w.style.display = '';
+          b.textContent = 'Hide ▲';
+        } else {
+          w.style.display = 'none';
+          b.textContent = 'Show ▼';
+        }
+      }
+      </script>
     </div>
 
     <div id="fview-activity" style="display:none">
@@ -5956,6 +6133,46 @@ def dashboard():
             '<div style="margin-top:12px;font-size:13px;color:#22c55e">✓ Nothing urgent today</div>'
         )
 
+    # Compute aggregate opportunity summary for hero
+    import re as _re_hero
+    _credit_total = 0.0
+    _cert_count = 0
+    _points_total = 0
+    for _vi in value_items:
+        _vk = (_vi[1] if isinstance(_vi, tuple) else (_vi.get("key") or "")).lower()
+        _vv = _vi[2] if isinstance(_vi, tuple) else (_vi.get("value") or "")
+        _vv = str(_vv)
+        if "credit" in _vk or "credit" in _vv.lower():
+            _nums = _re_hero.findall(r'\d+(?:\.\d+)?', _vv)
+            if _nums:
+                _credit_total += float(_nums[0])
+        elif "cert" in _vk or "free_night" in _vk or "award_night" in _vk:
+            _cert_count += 1
+        elif "point" in _vk or "mile" in _vk:
+            _nums2 = _re_hero.findall(r'[\d,]+', _vv)
+            if _nums2:
+                try:
+                    _points_total += int(_nums2[0].replace(',', ''))
+                except Exception:
+                    pass
+
+    _value_parts = []
+    if _credit_total > 0:
+        _value_parts.append(f"${_credit_total:,.0f} in credits")
+    if _cert_count > 0:
+        _value_parts.append(f"{_cert_count} certificate{'s' if _cert_count > 1 else ''}")
+    if _value_parts:
+        _value_summary = " · ".join(_value_parts) + " available to use"
+    else:
+        _value_summary = ""
+
+    _value_summary_html = ""
+    if _value_summary:
+        _value_summary_html = (
+            f'<div style="margin-top:10px;font-size:13px;color:#374151;'
+            f'font-weight:500">{he(_value_summary)}</div>'
+        )
+
     hero_section_html = (
         f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
         f'<div style="font-size:22px;font-weight:700;color:#111;margin-bottom:12px">'
@@ -5967,7 +6184,8 @@ def dashboard():
         f'<span style="font-size:12px;color:#6b7280">accounts connected</span>'
         f'</div>'
         f'</div>'
-        + _focus_html +
+        + _focus_html
+        + _value_summary_html +
         f'</div>'
     )
 
@@ -6112,6 +6330,70 @@ def dashboard():
     else:
         value_center_html = ""
         value_banner = ""
+
+    # ── LAYER 3b: Opportunity Groups ─────────────────────────────────────────
+    _ctx_groups: dict[str, list] = {"Travel": [], "Shopping": [], "Dining": [], "Other": []}
+    _ctx_map = {
+        "flight": "Travel", "hotel": "Travel", "car": "Travel",
+        "airline": "Travel", "miles": "Travel", "cert": "Travel", "upgrade": "Travel",
+        "shopping": "Shopping", "purchase": "Shopping", "warranty": "Shopping", "protection": "Shopping",
+        "dining": "Dining", "restaurant": "Dining",
+    }
+    for _vi in value_items:
+        _vk = (_vi[1] if isinstance(_vi, tuple) else (_vi.get("key") or "")).lower()
+        _placed = False
+        for _frag, _grp in _ctx_map.items():
+            if _frag in _vk:
+                _ctx_groups[_grp].append(_vi)
+                _placed = True
+                break
+        if not _placed:
+            _ctx_groups["Other"].append(_vi)
+
+    _opp_sections_html = ""
+    for _grp_name, _grp_items in _ctx_groups.items():
+        if not _grp_items:
+            continue
+        _grp_icon = {"Travel": "✈️", "Shopping": "🛍", "Dining": "🍽", "Other": "✦"}.get(_grp_name, "✦")
+        _grp_rows = ""
+        for _vi in _grp_items[:6]:
+            if isinstance(_vi, tuple):
+                _acct  = he(_vi[0])
+                _label = he(_vi[1])
+                _val   = he(_vi[2])
+                _exp   = ""
+            else:
+                _acct  = he(_vi.get("account") or _vi.get("source_display") or "")
+                _label = he(_vi.get("label") or _vi.get("display_label") or "")
+                _val   = he(_vi.get("value") or "")
+                _exp   = he(_vi.get("expiry_label") or "")
+            _grp_rows += (
+                f'<div style="display:flex;align-items:baseline;justify-content:space-between;'
+                f'padding:5px 0;border-bottom:1px solid #f3f4f6">'
+                f'<div><span style="font-size:12px;font-weight:600;color:#111">{_label}</span>'
+                f' <span style="font-size:11px;color:#6b7280">{_acct}</span></div>'
+                f'<div style="text-align:right">'
+                f'<span style="font-size:12px;color:#374151">{_val}</span>'
+                + (f' <span style="font-size:10px;color:#dc2626;margin-left:4px">{_exp}</span>' if _exp else '') +
+                f'</div></div>'
+            )
+        _opp_sections_html += (
+            f'<div style="margin-bottom:16px">'
+            f'<div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;'
+            f'letter-spacing:.06em;margin-bottom:6px">{_grp_icon} {_grp_name}</div>'
+            f'{_grp_rows}'
+            f'</div>'
+        )
+
+    opportunities_html = ""
+    if _opp_sections_html:
+        opportunities_html = (
+            f'<div style="margin-bottom:28px">'
+            f'<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
+            f'text-transform:uppercase;letter-spacing:.05em">Opportunities</h2>'
+            f'{_opp_sections_html}'
+            f'</div>'
+        )
 
     relevant_now_html = """
 <div id="relevant-now-section" style="margin-bottom:28px;display:none">
@@ -6265,6 +6547,7 @@ function dismissOnboarding() {
             .replace("{recently_found_html}",     recently_found_html)
             .replace("{relevant_now_html}",      relevant_now_html)
             .replace("{value_center_html}",       value_center_html)
+            .replace("{opportunities_html}",      opportunities_html)
             .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{csrf_token}",              _csrf))
 
