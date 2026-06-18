@@ -928,37 +928,81 @@ SOURCE_CAPABILITIES: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 CANONICAL_BENEFIT_TYPES: dict[str, list[str]] = {
-    "FREE_NIGHT":         ["free_night", "award_night", "milestone_reward", "free_night_cert",
-                           "free_night_reward", "suite_night"],
-    "MILES_POINTS":       ["miles", "points", "award_miles", "reward_points", "bonvoy_points",
-                           "honors_points", "skymiles", "rapid_rewards", "thank_you_points",
-                           "membership_rewards", "ultimate_rewards"],
-    "FLIGHT_CREDIT":      ["ecredit", "flight_credit", "travel_credit", "airline_credit",
-                           "trip_credit"],
+    # Most specific types first; within each list, longest fragments first.
+    "FREE_NIGHT":         ["free_night_reward", "free_night_cert", "milestone_reward",
+                           "award_night", "free_night", "suite_night"],
     "COMPANION_CERT":     ["companion_cert", "companion_pass", "buddy_pass"],
-    "UPGRADE_CERT":       ["upgrade_cert", "systemwide_upgrade", "suite_upgrade",
-                           "complimentary_upgrade"],
-    "STATEMENT_CREDIT":   ["statement_credit", "dining_credit", "hotel_credit",
-                           "airline_fee_credit", "entertainment_credit", "digital_credit",
-                           "travel_credit_annual", "global_entry_credit", "cash_back"],
+    "UPGRADE_CERT":       ["complimentary_upgrade", "systemwide_upgrade", "suite_upgrade",
+                           "upgrade_cert"],
+    "FLIGHT_CREDIT":      ["flight_credit", "travel_credit", "airline_credit",
+                           "trip_credit", "ecredit"],
     "PURCHASE_PROTECTION":["purchase_protection", "extended_warranty", "price_protection",
                            "return_protection"],
-    "TRIP_PROTECTION":    ["trip_delay", "trip_cancellation", "baggage_delay",
-                           "travel_accident"],
-    "STATUS":             ["elite_status", "medallion_status", "tier_status", "premier_status",
-                           "platinum_status", "gold_status", "diamond_status"],
-    "MEMBERSHIP":         ["prime_benefits", "pass_membership", "clear_membership",
+    "TRIP_PROTECTION":    ["trip_cancellation", "travel_accident", "baggage_delay",
+                           "trip_delay"],
+    "MEMBERSHIP":         ["clear_membership", "pass_membership", "prime_benefits",
                            "lounge_access", "global_entry"],
+    "STATEMENT_CREDIT":   ["travel_credit_annual", "global_entry_credit", "airline_fee_credit",
+                           "entertainment_credit", "statement_credit", "dining_credit",
+                           "digital_credit", "hotel_credit", "cash_back"],
+    "MILES_POINTS":       ["membership_rewards", "ultimate_rewards", "thank_you_points",
+                           "rapid_rewards", "bonvoy_points", "honors_points", "award_miles",
+                           "reward_points", "skymiles", "miles", "points"],
+    "STATUS":             ["medallion_status", "platinum_status", "diamond_status",
+                           "premier_status", "elite_status", "gold_status", "tier_status"],
 }
 
 
-def _canonical_benefit_type(field_key: str, field_label: str = "") -> str:
-    """Map a raw field key/label to a canonical benefit type. Returns 'OTHER' if no match."""
-    combined = (field_key + " " + field_label).lower().replace("-", "_")
+def _raw_to_canonical(raw_bt: str) -> str:
+    """Maps a SOURCE_CAPABILITIES benefit_type string to a CANONICAL_BENEFIT_TYPES key."""
     for ctype, fragments in CANONICAL_BENEFIT_TYPES.items():
-        if any(frag in combined for frag in fragments):
+        if any(frag in raw_bt for frag in fragments):
             return ctype
     return "OTHER"
+
+
+def _canonical_benefit_type(
+    field_key: str,
+    field_label: str = "",
+    source: str | None = None,
+) -> tuple[str, float]:
+    """
+    Map a raw field key/label to a (canonical_type, confidence) pair.
+
+    confidence:
+      1.0 — matched a specific (len >= 8) fragment AND source confirms it
+      0.85 — matched a specific fragment, no source confirmation
+      0.65 — matched a short (len < 6) broad fragment (e.g. "points", "credit")
+      0.0  — no match → returns ("OTHER", 0.0)
+
+    source: if provided, uses SOURCE_CAPABILITIES to gate implausible types.
+    """
+    combined = (field_key + " " + field_label).lower().replace("-", "_").replace(" ", "_")
+
+    # What canonical types are plausible for this source?
+    plausible_types: set[str] | None = None
+    if source and source in SOURCE_CAPABILITIES:
+        src_benefit_types = SOURCE_CAPABILITIES[source].get("benefit_types", [])
+        plausible_types = {
+            _raw_to_canonical(bt)
+            for bt in src_benefit_types
+        }
+        plausible_types.discard("OTHER")
+
+    for ctype, fragments in CANONICAL_BENEFIT_TYPES.items():
+        # Source gate: skip implausible types
+        if plausible_types is not None and ctype not in plausible_types:
+            continue
+        for frag in fragments:  # already sorted longest-first
+            if frag in combined:
+                # Confidence based on fragment specificity
+                if len(frag) >= 8:
+                    conf = 1.0 if plausible_types is not None else 0.85
+                else:
+                    conf = 0.65
+                return ctype, conf
+
+    return "OTHER", 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1127,8 +1171,10 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
             fl  = f.get("label") or fk.replace("_", " ").title()
             fv  = str(f.get("value") or "")
             fc  = float(f.get("confidence", 0.85))
-            ctype = _canonical_benefit_type(fk, fl)
+            ctype, ctype_conf = _canonical_benefit_type(fk, fl, source=src)
             if ctype == "OTHER":
+                continue
+            if ctype_conf < 0.65:
                 continue
             if ctype not in relevant_canonicals:
                 continue
