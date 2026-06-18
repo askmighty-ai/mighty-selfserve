@@ -828,6 +828,49 @@ def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
     return list(additional)
 
 
+def _estimate_benefit_value(field_key: str, field_label: str, field_value: str) -> tuple[float, str]:
+    """
+    Conservative internal estimate for sorting benefit items by value.
+    Returns (dollar_value, methodology). Values are NOT shown to users.
+    """
+    import re as _re
+    fk = field_key.lower()
+    fl = field_label.lower()
+    fv = field_value.lower().strip()
+
+    # Points/miles: 1 cent per point (conservative)
+    if any(k in fk for k in ("miles", "points", "rewards")):
+        m = _re.search(r"[\d,]+", fv.replace(",", ""))
+        if m:
+            try:
+                pts = int(_re.sub(r"[^\d]", "", m.group()))
+                return (pts * 0.01, "points@1¢")
+            except ValueError:
+                pass
+
+    # Free night certificates
+    if any(k in fk for k in ("free_night", "free night", "award_night")) or \
+       any(k in fl for k in ("free night", "award night")):
+        return (200.0, "free_night")
+
+    # Companion pass / certificates
+    if any(k in fk for k in ("companion", "certificate", "cert")) or \
+       any(k in fl for k in ("companion", "certificate")):
+        return (300.0, "certificate")
+
+    # Travel / statement credits — parse dollar amount if present
+    if any(k in fk for k in ("credit", "voucher", "ecredit")):
+        m = _re.search(r"\$?([\d,]+(?:\.\d{1,2})?)", fv)
+        if m:
+            try:
+                return (float(m.group(1).replace(",", "")), "credit_amount")
+            except ValueError:
+                pass
+        return (50.0, "credit_generic")
+
+    return (0.0, "none")
+
+
 def _coverage_gaps(source: str, found_keys: list[str]) -> list[tuple[str, str]]:
     """Return list of (field_key, description) for expected fields not yet found."""
     cat = _source_category(source)
