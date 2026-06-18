@@ -5547,7 +5547,7 @@ def dashboard():
                 if missing_lines:
                     searching_html = (
                         '<div style="font-size:10px;color:#9ca3af;margin-top:2px">'
-                        f'Searching: ' + " &nbsp;".join(missing_lines[:3]) +
+                        f'Still checking: ' + " &nbsp;".join(missing_lines[:3]) +
                         ('…' if len(missing_lines) > 3 else '') +
                         '</div>'
                     )
@@ -5849,9 +5849,9 @@ def dashboard():
                 '<div style="margin-bottom:28px;background:#fffbeb;border:1px solid #fde68a;'
                 'border-radius:10px;padding:16px 18px">'
                 '<h2 style="font-size:14px;font-weight:700;color:#92400e;margin:0 0 10px;'
-                'text-transform:uppercase;letter-spacing:.05em">\U0001f4a1 Don\u2019t forget</h2>'
+                'text-transform:uppercase;letter-spacing:.05em">\u23f3 Use Soon</h2>'
                 '<p style="font-size:12px;color:#92400e;margin:0 0 10px">'
-                'These benefits were found but may go unused:'
+                'Benefits worth using before they expire:'
                 '</p>'
                 + "".join(forgotten_lines) +
                 '</div>'
