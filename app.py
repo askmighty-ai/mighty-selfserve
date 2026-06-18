@@ -5347,16 +5347,6 @@ def dashboard():
                 f'</div>'
             )
 
-            health_footer = (
-                f'<div class="card-health-footer" style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:6px;padding:6px 14px 8px">'
-                f'{gaps_inline}'
-                f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;padding:0;display:flex;align-items:center;gap:3px">'
-                f'<span class="health-chevron">&#9656;</span> Sync health'
-                f'</button>'
-                f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}"></div>'
-                f'</div>'
-            )
-
             # Completeness score for card header + coverage gap hints
             cat_expected = _EXPECTED_FIELDS.get(_source_category(src), {})
             if cat_expected:
@@ -5382,6 +5372,16 @@ def dashboard():
             else:
                 completeness_badge = ""
                 gaps_inline = ""
+
+            health_footer = (
+                f'<div class="card-health-footer" style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:6px;padding:6px 14px 8px">'
+                f'{gaps_inline}'
+                f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;padding:0;display:flex;align-items:center;gap:3px">'
+                f'<span class="health-chevron">&#9656;</span> Sync health'
+                f'</button>'
+                f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}"></div>'
+                f'</div>'
+            )
 
             grid_cards += (
                 f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}">'
