@@ -241,7 +241,22 @@ def init_db():
                 created_at  TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_pal_user ON privacy_audit_log(user_id, created_at);
+            CREATE TABLE IF NOT EXISTS field_candidates (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                source      TEXT NOT NULL,
+                field_key   TEXT NOT NULL,
+                field_label TEXT NOT NULL,
+                field_value TEXT NOT NULL,
+                confidence  REAL DEFAULT 0.0,
+                source_snippet TEXT,
+                discovered_at  TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                UNIQUE(user_id, source, field_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_fc_user ON field_candidates(user_id, source);
         """)
+
         # Pre-seed with known-good paths (quality_score=5 → treated as trusted immediately)
         _KNOWN_PATHS = [
             ('delta',      '/my-profile/certificates'),
@@ -704,6 +719,82 @@ _CATEGORY_SCHEMAS: dict = {
     },
 }
 
+
+# Expected fields per category — used for coverage gap detection
+_EXPECTED_FIELDS: dict[str, dict[str, str]] = {
+    "travel_loyalty": {
+        "elite_status":   "Elite/tier status",
+        "miles_balance":  "Miles or points balance",
+        "certificates":   "Free night or companion certificates",
+        "travel_credits": "Travel or ancillary credits",
+        "upgrades":       "Upgrade certificates",
+        "expiry_date":    "Status or cert expiry",
+        "upcoming_trips": "Upcoming reservations",
+    },
+    "credit_card": {
+        "current_balance": "Current balance",
+        "payment_due_date":"Payment due date",
+        "credit_limit":    "Credit limit",
+        "rewards_balance": "Points or cashback",
+        "annual_fee":      "Annual fee / renewal",
+        "statement_credits":"Statement credits",
+    },
+    "banking": {
+        "checking_balance":"Checking balance",
+        "savings_balance": "Savings balance",
+        "interest_rate":   "APY / interest rate",
+        "monthly_fee":     "Monthly fee",
+    },
+    "utilities": {
+        "amount_due":  "Amount due",
+        "due_date":    "Due date",
+        "auto_pay":    "Auto-pay status",
+        "plan":        "Service plan",
+        "usage":       "Usage this period",
+    },
+    "insurance": {
+        "policy_number": "Policy number",
+        "premium":       "Premium / payment",
+        "next_payment":  "Next payment date",
+        "coverage":      "Coverage type",
+        "expiry_date":   "Policy expiry",
+    },
+    "shopping": {
+        "membership_status": "Membership status",
+        "rewards_balance":   "Rewards balance",
+        "renewal_date":      "Renewal date",
+        "membership_fee":    "Membership fee",
+    },
+    "automotive": {
+        "account_balance": "Account balance",
+        "vehicle":         "Vehicle",
+        "subscription":    "Active subscriptions",
+        "warranty":        "Warranty expiry",
+    },
+}
+
+
+def _coverage_gaps(source: str, found_keys: list[str]) -> list[tuple[str, str]]:
+    """Return list of (field_key, description) for expected fields not yet found."""
+    cat_key = None
+    for ck, schema in _CATEGORY_SCHEMAS.items():
+        if source in schema.get("sources", set()):
+            cat_key = ck
+            break
+    expected = _EXPECTED_FIELDS.get(cat_key or "", {})
+    if not expected:
+        return []
+    found_lower = {k.lower().replace("-", "_") for k in found_keys}
+    gaps = []
+    for exp_key, exp_desc in expected.items():
+        if not any(
+            exp_key in fk or fk in exp_key or
+            exp_key.split("_")[0] in fk
+            for fk in found_lower
+        ):
+            gaps.append((exp_key, exp_desc))
+    return gaps
+
 _URL_MARKER_RE = re.compile(r'===\s*(https?://[^\s=]+)\s*===', re.IGNORECASE)
 
 def _paths_from_raw(raw_text: str) -> list[str]:
@@ -1032,6 +1123,11 @@ def _post_filter_fields(fields: list, source: str = "") -> list:
     return out
 
 
+import hashlib as _hashlib
+import time as _time
+_discovery_cache: dict[str, tuple[float, list]] = {}  # content-hash -> (timestamp, results)
+
+
 def claude_discover_fields(raw_text: str, site_name: str, source: str | None = None) -> list:
     """Use Gemini Flash to identify all useful data fields in a page.
 
@@ -1041,6 +1137,13 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         source:    Account source key (e.g. "delta") used to look up the category schema.
                    If provided, the prompt gets a focused hint on which field types to prioritise.
     """
+    global _discovery_cache
+    # Cache key: hash of first 5000 chars of raw_text + source
+    cache_key = _hashlib.md5(((raw_text or "")[:5000] + str(source)).encode()).hexdigest()
+    cached = _discovery_cache.get(cache_key)
+    if cached and (_time.time() - cached[0]) < 60:
+        return cached[1]  # return cached result
+
     if not _claude or not raw_text:
         return []
     try:
@@ -1113,25 +1216,92 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             return []
         text = response.text.strip()
         print(f"[Mighty] Gemini response ({len(text)} chars): {text[:400]}", flush=True)
+        fields = []
         try:
             result = json.loads(text)
             if isinstance(result, list):
-                return _post_filter_fields(result)
-            # Handle {"fields": [...]} or similar wrapper
-            if isinstance(result, dict):
+                fields = _post_filter_fields(result)
+            elif isinstance(result, dict):
                 for k in ("fields", "data", "items", "results"):
                     if isinstance(result.get(k), list):
-                        return _post_filter_fields(result[k])
-            return []
+                        fields = _post_filter_fields(result[k])
+                        break
         except json.JSONDecodeError:
             m = re.search(r'\[.*\]', text, re.DOTALL)
             if m:
-                try: return _post_filter_fields(json.loads(m.group()))
+                try: fields = _post_filter_fields(json.loads(m.group()))
                 except Exception: pass
-            return []
+
+        # Second pass: ask Gemini to identify missing high-value pages
+        # Only run if coverage is low (< 3 high-confidence fields found)
+        high_conf_count = sum(1 for f in fields if (f.get("confidence") or 0) >= 0.85)
+        if high_conf_count < 3 and source:
+            cat_key = None
+            for ck, schema in _CATEGORY_SCHEMAS.items():
+                if source in schema.get("sources", set()):
+                    cat_key = ck
+                    break
+            expected = _EXPECTED_FIELDS.get(cat_key or "", {})
+            if expected:
+                found_labels = [f.get("label", "") for f in fields]
+                missing_expected = [desc for key, desc in expected.items()
+                                   if not any(key.split("_")[0] in fl.lower() for fl in found_labels)]
+                if missing_expected:
+                    missing_str = ", ".join(missing_expected[:4])
+                    page_prompt = (
+                        f"Based on this {source} account page text, what specific page URLs or sections "
+                        f"are probably missing that would contain: {missing_str}?\n\n"
+                        "List only specific paths like /my-account/certificates or /loyalty/wallet. "
+                        "Max 5 paths. One per line. No explanation."
+                    )
+                    try:
+                        _gc = _gemini_client()
+                        if _gc:
+                            page_resp = _gc.models.generate_content(
+                                model="gemini-2.0-flash",
+                                contents=[{"role": "user", "parts": [{"text": page_prompt + "\n\n" + (raw_text[:2000] if raw_text else "")}]}],
+                                config={"temperature": 0.3, "max_output_tokens": 200}
+                            )
+                            page_text = page_resp.text.strip() if page_resp.text else ""
+                            if page_text and source:
+                                _store_suggested_paths(source, page_text)
+                    except Exception:
+                        pass
+
+        _discovery_cache[cache_key] = (_time.time(), fields)
+        return fields
     except Exception as e:
         print(f"[Mighty] Gemini discovery error: {e}", flush=True)
         return []
+
+
+def _store_suggested_paths(site: str, paths_text: str) -> None:
+    """Store Gemini-suggested missing paths into site_paths for future crawling."""
+    import re as _re
+    try:
+        db = get_db()
+        now = iso()
+        for line in paths_text.splitlines():
+            line = line.strip().lstrip("- •*123456789.")
+            m = _re.search(r'(/[a-z0-9/_\-]+)', line.lower())
+            if m:
+                path = m.group(1)
+                if len(path) > 2:
+                    db.execute("""
+                        INSERT INTO site_paths (site, path, reporter_count, last_seen, quality_score)
+                        VALUES (?, ?, 0, ?, 2.0)
+                        ON CONFLICT(site, path) DO UPDATE SET
+                            quality_score = MAX(quality_score, 2.0)
+                    """, (site, path, now))
+        db.commit()
+    except Exception:
+        pass
+
+
+def _gemini_client():
+    """Return the Gemini client (_claude) if configured, else None."""
+    return _claude
+
 
 def encrypt_cred(user_id: str, value: str) -> str:
     if not value:
@@ -2968,13 +3138,20 @@ function toggleHealth(btn, source) {
         var fa = h.failure_reason ? '<span style="color:#ef4444">✗ '+h.failure_reason+'</span>' : '<span style="color:#22c55e">✓ ok</span>';
         var conf = h.confidence_avg ? Math.round(h.confidence_avg*100)+'% avg confidence' : 'no confidence data';
         var cov  = h.coverage ? h.coverage.message+' ('+h.coverage.score+'/100)' : '';
+        var gapHtml = '';
+        if (h.gaps && h.gaps.count > 0) {
+          var moreStr = h.gaps.more > 0 ? ' +'+h.gaps.more+' more' : '';
+          gapHtml = '<div style="font-size:11px;color:#9ca3af;margin-top:3px">Missing: '+h.gaps.labels.join(', ')+moreStr+'</div>';
+        } else if (h.gaps && h.gaps.count === 0 && h.field_count > 0) {
+          gapHtml = '<div style="font-size:11px;color:#22c55e;margin-top:3px">All expected fields found &#10003;</div>';
+        }
         var hint = h.coverage && h.coverage.hint ? '<div style="color:#f59e0b;margin-top:2px">⚠ '+h.coverage.hint+'</div>' : '';
         var api  = h.sources && h.sources.api > 0 ? ' · '+h.sources.api+' from API' : '';
         var changes = '';
         if (h.recent_changes && h.recent_changes.length) {
           changes = '<div style="margin-top:4px;color:#6b7280">Recent changes: '+h.recent_changes.slice(0,2).map(function(c){return c.field_label+': '+c.old_value+'→'+c.new_value;}).join(' · ')+'</div>';
         }
-        detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+hint+changes;
+        detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
       }).catch(function(){ detail.innerHTML = 'Could not load health data'; });
     }
   } else {
@@ -4697,6 +4874,25 @@ def dashboard():
 
             synced_at   = row["synced_at"] if row else ""
             sync_status = data.get("sync_status", "ok") if row else ""
+            cand_count = 0
+            try:
+                cand_count = get_db().execute(
+                    "SELECT COUNT(*) FROM field_candidates WHERE user_id=? AND source=? AND status='pending'",
+                    (uid, src)
+                ).fetchone()[0] or 0
+            except Exception:
+                pass
+            if cand_count > 0:
+                plural = "s" if cand_count > 1 else ""
+                _cand_url = f"/candidates/{src}"
+                cand_notice = (
+                    f'<div style="margin:8px 0 4px;padding:6px 10px;background:#eff6ff;'
+                    f'border-radius:6px;font-size:12px;color:#1d4ed8;cursor:pointer" '
+                    f'onclick="window.location=&apos;{_cand_url}&apos;">'
+                    f'&#10024; Mighty found {cand_count} possible new benefit{plural} &#8594; Review</div>'
+                )
+            else:
+                cand_notice = ""
             status_color = "#30d158"
 
             # For utility/telecom sources, promote billing fields to the front
@@ -4948,6 +5144,7 @@ def dashboard():
                 f'{hero_html}'
                 f'{sec_html}'
                 f'{alert_html}'
+                f'{cand_notice}'
                 f'{expanded_html}'
                 f'{health_footer}'
                 f'{card_footer}'
@@ -6260,23 +6457,47 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             uid=uid,
         )
 
-    # Confidence-based auto-selection:
-    # >=0.85 -> auto-enable; <0.85 -> store but mark review_required
-    # Uses system_confidence (calibrated) if available, else raw confidence
+    # Confidence-based routing:
+    # >=0.85 -> auto-enable; 0.60-0.84 -> candidate for review; <0.60 -> discard
     auto_enabled = []
-    review_required = []
+    candidates_to_insert = []
     for f in deduped:
-        conf = f.get("system_confidence") or f.get("confidence")
-        if isinstance(conf, (int, float)) and conf < 0.85:
-            review_required.append(f["key"])
-        else:
+        sc = f.get("system_confidence") or f.get("confidence") or 0.0
+        if sc >= 0.85:
             auto_enabled.append(f["key"])
+        elif sc >= 0.60:
+            candidates_to_insert.append(f)
+        # else: discard silently
+
     # If no field has confidence metadata (old-style), enable all
-    if not auto_enabled and not review_required:
+    if not auto_enabled and not candidates_to_insert:
         auto_enabled = [f["key"] for f in deduped]
 
+    # Insert candidates into field_candidates table
+    if candidates_to_insert:
+        now_iso = iso()
+        cdb = get_db()
+        for cf in candidates_to_insert:
+            try:
+                cdb.execute("""
+                    INSERT INTO field_candidates
+                        (user_id, source, field_key, field_label, field_value, confidence, source_snippet, discovered_at, status)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(user_id, source, field_key) DO UPDATE SET
+                        field_value=excluded.field_value,
+                        confidence=excluded.confidence,
+                        source_snippet=excluded.source_snippet,
+                        discovered_at=excluded.discovered_at,
+                        status=CASE WHEN status='dismissed' THEN 'dismissed' ELSE 'pending' END
+                """, (uid, source, cf["key"], cf.get("label", cf["key"]),
+                      str(cf.get("value", "")), cf.get("system_confidence", cf.get("confidence", 0)),
+                      cf.get("source_snippet", ""), now_iso, "pending"))
+            except Exception:
+                pass
+        cdb.commit()
+
     ex["enabled_fields"]         = auto_enabled
-    ex["review_required_fields"] = review_required
+    ex["review_required_fields"] = []
     ex["discovered_fields"]      = deduped
     ex["discovered_at"]          = iso()
     db.execute(
@@ -8167,6 +8388,113 @@ def api_reminders():
     return jsonify({"reminders": all_reminders})
 
 
+@app.route("/candidates/<source>")
+@require_login
+def candidates_page(source):
+    uid = session["user_id"]
+    rows = get_db().execute(
+        "SELECT * FROM field_candidates WHERE user_id=? AND source=? AND status='pending' ORDER BY confidence DESC",
+        (uid, source)
+    ).fetchall()
+
+    items_html = ""
+    for r in rows:
+        snip_html = (
+            f'<div style="font-size:11px;color:#9ca3af;font-style:italic;margin-top:4px">{he(r["source_snippet"][:150])}</div>'
+            if r['source_snippet'] else ''
+        )
+        row_id = r['id']
+        conf_pct = int(r['confidence'] * 100)
+        items_html += (
+            f'<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:10px">'
+            f'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+            f'<div>'
+            f'<div style="font-size:13px;font-weight:600;color:#111">{he(r["field_label"])}</div>'
+            f'<div style="font-size:15px;color:#374151;margin:3px 0">{he(r["field_value"])}</div>'
+            f'{snip_html}'
+            f'</div>'
+            f'<div style="font-size:11px;color:#6b7280;text-align:right">'
+            f'<div style="margin-bottom:6px">{conf_pct}% confidence</div>'
+            f'<div style="display:flex;gap:6px">'
+            f'<button onclick="act({row_id},\'approve\')" style="padding:4px 10px;background:#22c55e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer">Add to card</button>'
+            f'<button onclick="act({row_id},\'dismiss\')" style="padding:4px 10px;background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;border-radius:4px;font-size:12px;cursor:pointer">Dismiss</button>'
+            f'</div></div></div></div>'
+        )
+
+    if not items_html:
+        items_html = '<p style="color:#9ca3af;font-size:13px;text-align:center;padding:20px">No pending candidates</p>'
+
+    return render_template_string("""<!DOCTYPE html><html><head><title>Review Candidates — Mighty</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:-apple-system,sans-serif;margin:0;background:#f9fafb}
+.container{max-width:600px;margin:0 auto;padding:24px}</style></head>
+<body><div class="container">
+<div style="margin-bottom:16px"><a href="/dashboard" style="color:#6b7280;font-size:13px;text-decoration:none">← Dashboard</a></div>
+<h2 style="font-size:18px;font-weight:700;color:#111;margin:0 0 4px">Possible new benefits</h2>
+<p style="font-size:13px;color:#6b7280;margin:0 0 16px">Mighty found these but isn't sure enough to show them automatically.</p>
+""" + items_html + """
+</div>
+<script>
+async function act(id, action) {
+  await fetch('/api/candidates/'+id+'/'+action, {method:'POST'});
+  location.reload();
+}
+</script>
+</body></html>""")
+
+
+@app.route("/api/candidates/count")
+@require_login
+def api_candidates_count():
+    uid = session["user_id"]
+    counts = get_db().execute(
+        "SELECT source, COUNT(*) as cnt FROM field_candidates "
+        "WHERE user_id=? AND status='pending' GROUP BY source",
+        (uid,)
+    ).fetchall()
+    total = sum(r["cnt"] for r in counts)
+    by_source = {r["source"]: r["cnt"] for r in counts}
+    return jsonify({"total": total, "by_source": by_source})
+
+
+@app.route("/api/candidates/<int:cid>/approve", methods=["POST"])
+@require_login
+def api_candidate_approve(cid):
+    uid = session["user_id"]
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM field_candidates WHERE id=? AND user_id=?", (cid, uid)
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    ad_row = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, row["source"])
+    ).fetchone()
+    if ad_row:
+        d = decrypt_account_data(uid, ad_row["data_enc"] or "")
+        items = d.get("items") or d.get("ai_items") or []
+        items.append({"key": row["field_key"], "label": row["field_label"],
+                      "value": row["field_value"], "confidence": row["confidence"],
+                      "source_snippet": row["source_snippet"]})
+        d["items"] = items
+        db.execute("UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                   (encrypt_account_data(uid, d), uid, row["source"]))
+    db.execute("UPDATE field_candidates SET status='approved' WHERE id=?", (cid,))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/candidates/<int:cid>/dismiss", methods=["POST"])
+@require_login
+def api_candidate_dismiss(cid):
+    uid = session["user_id"]
+    get_db().execute(
+        "UPDATE field_candidates SET status='dismissed' WHERE id=? AND user_id=?", (cid, uid)
+    )
+    get_db().commit()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/sync-health/<source>")
 @require_login
 def api_sync_health(source):
@@ -8189,6 +8517,12 @@ def api_sync_health(source):
         "dom":   sum(1 for i in items if not i.get("from_api")),
     }
     coverage = _coverage_score(source, len(items))
+    gaps = _coverage_gaps(source, [f.get("key","") for f in items])
+    gap_info = {
+        "count": len(gaps),
+        "labels": [desc for _, desc in gaps[:3]],
+        "more": max(0, len(gaps) - 3),
+    }
 
     # Recent changes
     recent_changes = db.execute(
@@ -8203,6 +8537,7 @@ def api_sync_health(source):
         "sync_status":      data.get("sync_status", "ok"),
         "failure_reason":   ad_row["sync_failure_reason"],
         "field_count":      len(items),
+        "gaps":            gap_info,
         "confidence_avg":   round(sum(confidences) / len(confidences), 2) if confidences else None,
         "confidence_min":   round(min(confidences), 2) if confidences else None,
         "sources":          sources_breakdown,
