@@ -90,6 +90,9 @@ def close_db(e=None):
         db.close()
 
 def init_db():
+    _db_dir = os.path.dirname(DATABASE)
+    if _db_dir:
+        os.makedirs(_db_dir, exist_ok=True)
     with sqlite3.connect(DATABASE) as db:
         db.executescript("""
             CREATE TABLE IF NOT EXISTS users (
