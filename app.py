@@ -861,47 +861,143 @@ def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
     return list(additional)
 
 
-def _benefit_priority_score(field_key: str, field_label: str, field_value: str) -> tuple[float, str]:
+def _relevance_score(
+    field_key: str,
+    field_label: str,
+    field_value: str,
+    confidence: float = 0.85,
+    context: str | None = None,
+    expiry_date_str: str | None = None,
+) -> tuple[float, dict]:
     """
-    Conservative internal estimate for sorting benefit items by value.
-    Returns (dollar_value, methodology). Values are NOT shown to users.
+    Composite relevance score for sorting benefits.
+    Output NEVER shown to users — internal sorting only.
+
+    Returns (score, factors) where factors dict has keys:
+      value_factor, intent_factor, urgency_factor, confidence_factor
     """
     import re as _re
-    fk = field_key.lower()
-    fl = field_label.lower()
-    fv = field_value.lower().strip()
+    import datetime as _dt
 
-    # Points/miles: 1 cent per point (conservative)
-    if any(k in fk for k in ("miles", "points", "rewards")):
-        m = _re.search(r"[\d,]+", fv.replace(",", ""))
-        if m:
+    k = field_key.lower()
+    l = field_label.lower()  # noqa: E741
+
+    # ── value_factor ─────────────────────────────────────────────────────────
+    raw = 0.0
+    if "point" in k or "mile" in k:
+        nums = _re.findall(r'[\d,]+', field_value)
+        pts = max(
+            (int(n.replace(',', '')) for n in nums if int(n.replace(',', '')) < 2_000_000),
+            default=0,
+        )
+        raw = pts * 0.01
+    elif "free_night" in k or "award_night" in k:
+        raw = 200.0
+    elif "certificate" in k or "cert" in k:
+        raw = 300.0
+    elif "credit" in k:
+        nums = _re.findall(r'\d+(?:\.\d+)?', field_value)
+        raw = float(nums[0]) if nums else 50.0
+    else:
+        raw = 10.0
+    value_factor = min(raw / 300.0, 1.0)
+
+    # ── intent_factor ─────────────────────────────────────────────────────────
+    if context is None:
+        intent_factor = 0.5
+    elif context in _BENEFIT_APPLICABILITY:
+        relevant_keys = _BENEFIT_APPLICABILITY[context]
+        k_lower = field_key.lower()
+        l_lower = field_label.lower()
+        if any(rk in k_lower or rk in l_lower for rk in relevant_keys):
+            intent_factor = 1.0
+        else:
+            in_any = any(
+                any(rk in k_lower or rk in l_lower for rk in keys)
+                for keys in _BENEFIT_APPLICABILITY.values()
+            )
+            intent_factor = 0.1 if in_any else 0.3
+    else:
+        intent_factor = 0.4  # unknown context
+
+    # ── urgency_factor ────────────────────────────────────────────────────────
+    parsed_expiry = None
+    if expiry_date_str:
+        for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m/%Y'):
             try:
-                pts = int(_re.sub(r"[^\d]", "", m.group()))
-                return (pts * 0.01, "points@1¢")
+                parsed_expiry = _dt.datetime.strptime(expiry_date_str, fmt).date()
+                break
             except ValueError:
                 pass
 
-    # Free night certificates
-    if any(k in fk for k in ("free_night", "free night", "award_night")) or \
-       any(k in fl for k in ("free night", "award night")):
-        return (200.0, "free_night")
-
-    # Companion pass / certificates
-    if any(k in fk for k in ("companion", "certificate", "cert")) or \
-       any(k in fl for k in ("companion", "certificate")):
-        return (300.0, "certificate")
-
-    # Travel / statement credits — parse dollar amount if present
-    if any(k in fk for k in ("credit", "voucher", "ecredit")):
-        m = _re.search(r"\$?([\d,]+(?:\.\d{1,2})?)", fv)
+    if parsed_expiry is None:
+        combined = f"{field_label} {field_value}"
+        m = _re.search(r'\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b', combined)
         if m:
+            mo, da, yr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if yr < 100:
+                yr += 2000
             try:
-                return (float(m.group(1).replace(",", "")), "credit_amount")
+                parsed_expiry = _dt.date(yr, mo, da)
             except ValueError:
                 pass
-        return (50.0, "credit_generic")
+        if not parsed_expiry:
+            m2 = _re.search(
+                r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+(\d{1,2}),?\s+(\d{4})',
+                combined,
+                _re.I,
+            )
+            if m2:
+                mon_map = {
+                    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+                }
+                mo = mon_map[m2.group(1)[:3].lower()]
+                da, yr = int(m2.group(2)), int(m2.group(3))
+                try:
+                    parsed_expiry = _dt.date(yr, mo, da)
+                except ValueError:
+                    pass
 
-    return (0.0, "none")
+    if parsed_expiry:
+        today = _dt.date.today()
+        days_left = (parsed_expiry - today).days
+        if days_left < 0:
+            urgency_factor = 0.0    # already expired
+        elif days_left <= 7:
+            urgency_factor = 1.0    # expires this week
+        elif days_left <= 30:
+            urgency_factor = 0.8    # expires this month
+        elif days_left <= 90:
+            urgency_factor = 0.5    # expires this quarter
+        else:
+            urgency_factor = 0.2    # long-dated
+    else:
+        urgency_factor = 0.3    # no expiry found — moderate
+
+    # ── confidence_factor ─────────────────────────────────────────────────────
+    if confidence >= 0.85:
+        confidence_factor = 1.0
+    elif confidence >= 0.60:
+        confidence_factor = 0.7
+    else:
+        confidence_factor = 0.4
+
+    # ── composite score ───────────────────────────────────────────────────────
+    score = (
+        0.3 * value_factor
+        + 0.4 * intent_factor
+        + 0.2 * urgency_factor
+        + 0.1 * confidence_factor
+    )
+
+    factors = {
+        "value_factor": round(value_factor, 3),
+        "intent_factor": round(intent_factor, 3),
+        "urgency_factor": round(urgency_factor, 3),
+        "confidence_factor": round(confidence_factor, 3),
+    }
+    return score, factors
 
 
 def _coverage_gaps(source: str, found_keys: list[str]) -> list[tuple[str, str]]:
@@ -5685,11 +5781,20 @@ def dashboard():
                     if f.get("key") in disc_v.get("enabled", set())
                 ]
             for it in items_v:
-                dval, method = _benefit_priority_score(it.get("key",""), it.get("label",""), str(it.get("value","")))
-                if dval > 0:
-                    total_value += dval
-                    value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), dval, method))
-    value_items.sort(key=lambda x: -x[3])
+                _rs, _rf = _relevance_score(it.get("key",""), it.get("label",""), str(it.get("value","")))
+                _raw_val = _rf["value_factor"] * 300.0
+                if _raw_val > 0:
+                    total_value += _raw_val
+                    value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), _rs, "relevance"))
+    # Get latest intent for context-aware sorting
+    _latest_intent = get_db().execute(
+        "SELECT intent_type FROM intent_history WHERE user_id=? ORDER BY detected_at DESC LIMIT 1",
+        (uid,)
+    ).fetchone()
+    _sort_context = _latest_intent["intent_type"] if _latest_intent else None
+    value_items.sort(key=lambda x: -_relevance_score(
+        "", x[1], x[2], context=_sort_context
+    )[0])
 
     # ── LAYER 1: Hero section ─────────────────────────────────────────────────
     import datetime as _dth
@@ -10261,21 +10366,25 @@ def api_benefits_relevant():
                 for rk in relevant_keys
             )
             if matched:
+                score, factors = _relevance_score(
+                    it.get("key", ""), it.get("label", ""), fv, context=context
+                )
                 benefits.append({
                     "account": row["display_name"],
                     "source": row["source"],
                     "label": it.get("label", ""),
                     "value": fv,
+                    "_score": score,
                 })
 
-    # Deduplicate by (account, label) and cap at 8
+    # Deduplicate by (account, label), sort by relevance score, cap at 8
     seen = set()
     unique_benefits = []
-    for b in benefits:
+    for b in sorted(benefits, key=lambda x: -x["_score"]):
         key = (b["account"], b["label"])
         if key not in seen:
             seen.add(key)
-            unique_benefits.append(b)
+            unique_benefits.append({k: v for k, v in b.items() if k != "_score"})
     unique_benefits = unique_benefits[:8]
 
     return jsonify({
