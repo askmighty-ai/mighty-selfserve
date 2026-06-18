@@ -263,6 +263,16 @@ def init_db():
                 created_at   TEXT NOT NULL,
                 UNIQUE(user_id, reminder_key)
             );
+            CREATE TABLE IF NOT EXISTS intent_history (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      TEXT NOT NULL,
+                intent_type  TEXT NOT NULL,
+                page_url     TEXT,
+                benefit_count INTEGER DEFAULT 0,
+                benefits_json TEXT,
+                detected_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ih_user ON intent_history(user_id, detected_at);
         """)
 
         # Pre-seed with known-good paths (quality_score=5 → treated as trusted immediately)
@@ -2776,6 +2786,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       {hero_section_html}
       {action_center_html}
       {recently_found_html}
+      {relevant_now_html}
       {value_center_html}
       <script>
       (function() {
@@ -5891,6 +5902,46 @@ def dashboard():
         value_center_html = ""
         value_banner = ""
 
+    relevant_now_html = """
+<div id="relevant-now-section" style="margin-bottom:28px;display:none">
+  <h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;
+     text-transform:uppercase;letter-spacing:.05em">&#10022; Relevant Right Now</h2>
+  <div id="relevant-now-panel"></div>
+</div>
+<script>
+(function(){
+  fetch('/api/intent/recent').then(r=>r.json()).then(function(items){
+    if(!items || !items.length) return;
+    var section = document.getElementById('relevant-now-section');
+    var panel   = document.getElementById('relevant-now-panel');
+    var LABELS  = {flight:'flight search', hotel:'hotel search', car:'car rental', shopping:'shopping', dining:'dining'};
+    var html = '';
+    for(var i=0;i<items.length;i++){
+      var item = items[i];
+      if(!item.benefit_count) continue;
+      var label = LABELS[item.intent_type] || item.intent_type;
+      var blist = (item.benefits||[]).slice(0,3).map(function(b){
+        return '<div style="font-size:12px;color:#374151;padding:1px 0">&#8226; <strong>'+
+          escHtml(b.account)+'</strong> '+escHtml(b.label)+
+          (b.value ? ' <span style="color:#6b7280">'+escHtml(b.value.slice(0,25))+'</span>' : '')+
+          '</div>';
+      }).join('');
+      html += '<div style="padding:10px 12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px">'+
+        '<div style="font-size:12px;font-weight:600;color:#6b7280;margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em">'+
+          escHtml(label)+'</div>'+
+        blist+
+        '</div>';
+    }
+    if(html){
+      panel.innerHTML = html;
+      section.style.display = 'block';
+    }
+  }).catch(function(){});
+  function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+})();
+</script>
+"""
+
     # Build re-auth banner if any accounts need re-login
     if login_required_accounts:
         _n = len(login_required_accounts)
@@ -6001,6 +6052,7 @@ function dismissOnboarding() {
             .replace("{hero_section_html}",       hero_section_html)
             .replace("{action_center_html}",      action_center_html)
             .replace("{recently_found_html}",     recently_found_html)
+            .replace("{relevant_now_html}",      relevant_now_html)
             .replace("{value_center_html}",       value_center_html)
             .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{csrf_token}",              _csrf))
@@ -10231,6 +10283,85 @@ def api_benefits_relevant():
         "benefits": unique_benefits,
         "count": len(unique_benefits),
     })
+
+
+@app.route("/api/csrf-token")
+@require_login
+def api_csrf_token():
+    """Returns CSRF token for extension POST requests."""
+    return jsonify({"token": get_csrf_token()})
+
+
+@app.route("/api/intent/log", methods=["POST"])
+@require_login
+def api_intent_log():
+    """Called by extension when intent is detected and benefits are surfaced."""
+    check_csrf()
+    uid = session["user_id"]
+    data = request.get_json(silent=True) or {}
+    intent_type   = str(data.get("intent_type", ""))[:50]
+    page_url      = str(data.get("page_url", ""))[:500]
+    benefits      = data.get("benefits", [])
+    benefit_count = len(benefits)
+
+    if not intent_type:
+        return jsonify({"ok": False, "error": "missing intent_type"}), 400
+
+    import json as _json
+    import datetime as _dt_il
+    now_iso = _dt_il.datetime.utcnow().isoformat()
+
+    # Upsert: if same intent_type logged in last 30 min, update instead of insert
+    existing = get_db().execute(
+        "SELECT id FROM intent_history WHERE user_id=? AND intent_type=? "
+        "AND detected_at > datetime('now','-30 minutes')",
+        (uid, intent_type)
+    ).fetchone()
+
+    if existing:
+        get_db().execute(
+            "UPDATE intent_history SET page_url=?, benefit_count=?, benefits_json=?, detected_at=? "
+            "WHERE id=?",
+            (page_url, benefit_count, _json.dumps(benefits), now_iso, existing["id"])
+        )
+    else:
+        get_db().execute(
+            "INSERT INTO intent_history (user_id, intent_type, page_url, benefit_count, benefits_json, detected_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (uid, intent_type, page_url, benefit_count, _json.dumps(benefits), now_iso)
+        )
+    get_db().commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/intent/recent")
+@require_login
+def api_intent_recent():
+    """Returns recent intent detections for the dashboard."""
+    uid = session["user_id"]
+    import json as _json
+    rows = get_db().execute(
+        "SELECT intent_type, page_url, benefit_count, benefits_json, detected_at "
+        "FROM intent_history WHERE user_id=? "
+        "ORDER BY detected_at DESC LIMIT 5",
+        (uid,)
+    ).fetchall()
+
+    results = []
+    for r in rows:
+        try:
+            benefits = _json.loads(r["benefits_json"] or "[]")
+        except Exception:
+            benefits = []
+        results.append({
+            "intent_type": r["intent_type"],
+            "page_url": r["page_url"],
+            "benefit_count": r["benefit_count"],
+            "benefits": benefits[:3],  # top 3 for display
+            "detected_at": r["detected_at"],
+        })
+
+    return jsonify(results)
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────

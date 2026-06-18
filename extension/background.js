@@ -1284,12 +1284,58 @@ async function setStatus(msg) {
 // ── Contextual benefit surfacing — intent detection ───────────────────────────
 
 const INTENT_PATTERNS = {
-  flight:   [/google\.com\/flights/, /kayak\.com\/flights/, /delta\.com\/(us\/en\/)?flight/, /united\.com.*\/flight/, /aa\.com\/booking/, /southwest\.com\/air\/booking/, /expedia\.com\/Flights/, /skiplagged\.com/],
-  hotel:    [/google\.com\/travel\/hotels/, /booking\.com/, /hotels\.com/, /marriott\.com\/search/, /hyatt\.com.*\/hotel/, /hilton\.com\/en\/hotels/, /expedia\.com\/Hotel/],
-  car:      [/hertz\.com/, /avis\.com/, /enterprise\.com/, /budget\.com/, /turo\.com/],
-  shopping: [/amazon\.com\/(dp|gp\/product)/, /bestbuy\.com\/site/, /apple\.com\/shop/, /walmart\.com\/ip\//, /target\.com\/-\/A-/],
-  dining:   [/opentable\.com/, /resy\.com/, /yelp\.com\/biz/],
-};
+  flight: [
+    /google\.com\/flights.*[?&](q|hl|tfs)=/i,          // Google Flights with search
+    /google\.com\/travel\/flights\//i,
+    /kayak\.com\/flights\//i,                            // Kayak results
+    /kayak\.com\/flight/i,
+    /expedia\.com\/Flights-Search/i,
+    /delta\.com\/.*\/book-a-flight/i,
+    /delta\.com\/us\/en\/flight-search/i,
+    /aa\.com\/booking\/choose-flights/i,
+    /united\.com\/en\/us\/fsr\/choose-flights/i,
+    /southwest\.com\/air\/booking\/select\.html/i,
+    /skiplagged\.com\/flights\//i,
+  ],
+  hotel: [
+    /google\.com\/travel\/hotels\/.*entity/i,            // Google Hotels with selection
+    /google\.com\/maps\/search\/hotels/i,
+    /booking\.com\/searchresults/i,                      // Booking.com search results (not homepage)
+    /booking\.com\/hotel\//i,                            // Specific hotel page
+    /hotels\.com\/search/i,
+    /hotels\.com\/ho\d+/i,                               // Hotel detail page
+    /marriott\.com\/search\/findHotels/i,
+    /marriott\.com\/hotels\/travel\//i,
+    /hyatt\.com\/en-US\/hotel\//i,
+    /hilton\.com\/en\/hotels\//i,
+    /hilton\.com\/en\/search\//i,
+  ],
+  car: [
+    /hertz\.com\/rentacar\/reservation/i,
+    /avis\.com\/site\/car-rental\/search/i,
+    /enterprise\.com\/en\/car-rental\/deeplinking/i,
+    /budget\.com\/en\/reservation/i,
+    /turo\.com\/cars\//i,
+    /turo\.com\/search/i,
+  ],
+  shopping: [
+    /amazon\.com\/dp\/[A-Z0-9]{10}/i,                   // Amazon product page
+    /amazon\.com\/gp\/product\//i,
+    /amazon\.com\/.*\/dp\//i,
+    /bestbuy\.com\/site\/[^/]+\/[^/]+\.p\?/i,           // Best Buy product page
+    /apple\.com\/shop\/product\//i,
+    /apple\.com\/shop\/buy-/i,
+    /walmart\.com\/ip\/[^/]+\/\d+/i,                     // Walmart product
+    /target\.com\/-\/A-\d+/i,                            // Target product
+    /costco\.com\/[^/]+\.[0-9]+\.html/i,                 // Costco product
+  ],
+  dining: [
+    /opentable\.com\/r\//i,                              // OpenTable specific restaurant
+    /opentable\.com\/restaurant\/profile\//i,
+    /resy\.com\/cities\/.*\/venues\//i,
+    /yelp\.com\/biz\//i,
+  ],
+}
 
 function detectIntent(url) {
   for (const [ctx, patterns] of Object.entries(INTENT_PATTERNS)) {
@@ -1326,6 +1372,33 @@ chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
       benefits: data.benefits,
       count: data.count,
     }).catch(() => {}); // content script may not be loaded yet
+
+    // Log the intent so the dashboard can show "Relevant Right Now"
+    try {
+      const csrfResp = await fetch(`${MIGHTY_URL}/api/csrf-token`, {
+        headers: { 'X-Mighty-Key': apiKey },
+        credentials: 'include'
+      });
+      const csrfData = csrfResp.ok ? await csrfResp.json() : {};
+      const csrfToken = csrfData.token || '';
+
+      await fetch(`${MIGHTY_URL}/api/intent/log`, {
+        method: 'POST',
+        headers: {
+          'X-Mighty-Key': apiKey,
+          'X-CSRF-Token': csrfToken,
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          intent_type: intent,
+          page_url: tab.url,
+          benefits: data.benefits,
+        }),
+      });
+    } catch(e) {
+      console.log('[Mighty] Intent log error:', e);
+    }
   } catch (e) {
     console.log('[Mighty] Intent fetch error:', e);
   }

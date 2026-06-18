@@ -255,6 +255,14 @@ def init_db():
                 UNIQUE(user_id, source, field_key)
             );
             CREATE INDEX IF NOT EXISTS idx_fc_user ON field_candidates(user_id, source);
+            CREATE TABLE IF NOT EXISTS reminder_snoozes (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      TEXT NOT NULL,
+                reminder_key TEXT NOT NULL,
+                snoozed_until TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                UNIQUE(user_id, reminder_key)
+            );
         """)
 
         # Pre-seed with known-good paths (quality_score=5 → treated as trusted immediately)
@@ -409,9 +417,14 @@ def _fmt_sync(ts):
         return ts[:10] if ts else "—"
 
 def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
-    """Return a freshness label, CSS color, and icon for display on cards."""
+    """Return a (label, color, icon) tuple for display on cards.
+
+    Stale (3+ days) and login-required states use red + bold to draw attention.
+    Returns (label, color, icon) — callers that need font-weight should check
+    whether the color is '#dc2626' and apply font-weight:600 accordingly.
+    """
     if sync_status == "login_required":
-        return ("Login required", "#ef4444", "⚠")
+        return ("🔐 Login required", "#dc2626", "")
     if sync_status == "no_data" or not synced_at:
         return ("No data", "#9ca3af", "—")
     try:
@@ -426,10 +439,10 @@ def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
             return (f"{int(age_h)}h ago", "#6b7280", "✓")
         elif age_h < 48:
             return ("Yesterday", "#f59e0b", "~")
-        elif age_h < 168:
+        elif age_h < 72:
             return (f"{int(age_h/24)}d ago", "#f59e0b", "~")
         else:
-            return ("Stale", "#ef4444", "!")
+            return ("Stale", "#dc2626", "!")
     except Exception:
         return ("Unknown", "#9ca3af", "?")
 
@@ -797,54 +810,120 @@ _FIELD_TO_PATH_KEYWORDS: dict[str, list[str]] = {
 # Inference rules: if a field VALUE matches these patterns, expect additional fields
 # Format: (field_key, value_substring) → [additional_expected_field_keys]
 _INFERENCE_RULES: list[tuple[str, str, list[str]]] = [
-    # Airline status implies specific benefits
-    ("elite_status", "diamond",    ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "platinum",   ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "gold",       ["certificates", "travel_credits"]),
-    ("elite_status", "medallion",  ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "1k",         ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "global",     ["certificates", "upgrades", "travel_credits"]),
-    ("elite_status", "mosaic",     ["certificates"]),
-    # Card implies credits
-    ("card_name",    "platinum",   ["statement_credits", "travel_credits"]),
-    ("card_name",    "reserve",    ["statement_credits", "travel_credits"]),
-    ("card_name",    "sapphire",   ["travel_credits"]),
-    # Companion pass presence implies points threshold
-    ("companion_pass", "active",   ["miles_balance"]),
-    ("companion_pass", "available",["miles_balance"]),
+    # Companion pass existence guarantees a points balance exists
+    ("companion_pass",   "active",    ["miles_balance"]),
+    ("companion_pass",   "available", ["miles_balance"]),
+    # Free night cert existence implies a points balance (hotel loyalty)
+    ("free_night",       "",          ["miles_balance"]),
+    ("certificate_type", "free night",["miles_balance"]),
+    # Annual fee implies renewal date exists
+    ("annual_fee",       "",          ["renewal_date"]),
+    # If auto-pay found, due date and balance usually exist too
+    ("auto_pay",         "enabled",   ["amount_due", "due_date"]),
+    ("auto_pay_status",  "enrolled",  ["amount_due", "due_date"]),
 ]
 
 def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
     """Given found fields, return additional expected field keys implied by those values."""
     additional = set()
     for f in found_fields:
-        fk = f.get("key", "").lower()
+        fk = f.get("key", "").lower().replace("-", "_")
         fv = f.get("value", "").lower()
+        if not fv:
+            continue  # skip fields with no value
         for rule_key, rule_val, implied in _INFERENCE_RULES:
-            if rule_key in fk and rule_val in fv:
-                additional.update(implied)
+            rule_key_norm = rule_key.replace("-", "_")
+            if rule_key_norm not in fk:
+                continue
+            if rule_val and rule_val not in fv:
+                continue  # value must contain the trigger substring if specified
+            additional.update(implied)
     return list(additional)
+
+
+def _benefit_priority_score(field_key: str, field_label: str, field_value: str) -> tuple[float, str]:
+    """
+    Conservative internal estimate for sorting benefit items by value.
+    Returns (dollar_value, methodology). Values are NOT shown to users.
+    """
+    import re as _re
+    fk = field_key.lower()
+    fl = field_label.lower()
+    fv = field_value.lower().strip()
+
+    # Points/miles: 1 cent per point (conservative)
+    if any(k in fk for k in ("miles", "points", "rewards")):
+        m = _re.search(r"[\d,]+", fv.replace(",", ""))
+        if m:
+            try:
+                pts = int(_re.sub(r"[^\d]", "", m.group()))
+                return (pts * 0.01, "points@1¢")
+            except ValueError:
+                pass
+
+    # Free night certificates
+    if any(k in fk for k in ("free_night", "free night", "award_night")) or \
+       any(k in fl for k in ("free night", "award night")):
+        return (200.0, "free_night")
+
+    # Companion pass / certificates
+    if any(k in fk for k in ("companion", "certificate", "cert")) or \
+       any(k in fl for k in ("companion", "certificate")):
+        return (300.0, "certificate")
+
+    # Travel / statement credits — parse dollar amount if present
+    if any(k in fk for k in ("credit", "voucher", "ecredit")):
+        m = _re.search(r"\$?([\d,]+(?:\.\d{1,2})?)", fv)
+        if m:
+            try:
+                return (float(m.group(1).replace(",", "")), "credit_amount")
+            except ValueError:
+                pass
+        return (50.0, "credit_generic")
+
+    return (0.0, "none")
 
 
 def _coverage_gaps(source: str, found_keys: list[str]) -> list[tuple[str, str]]:
     """Return list of (field_key, description) for expected fields not yet found."""
-    cat_key = None
-    for ck, schema in _CATEGORY_SCHEMAS.items():
+    cat = _source_category(source)
+    # Look up the schema key directly from _CATEGORY_SCHEMAS
+    schema_key = None
+    for k, schema in _CATEGORY_SCHEMAS.items():
         if source in schema.get("sources", set()):
-            cat_key = ck
+            schema_key = k
             break
-    expected = _EXPECTED_FIELDS.get(cat_key or "", {})
+    expected = _EXPECTED_FIELDS.get(schema_key or cat, {})
     if not expected:
         return []
-    found_lower = {k.lower().replace("-", "_") for k in found_keys}
+
+    found_normalized = {k.lower().replace("-", "_") for k in found_keys}
+
     gaps = []
     for exp_key, exp_desc in expected.items():
-        if not any(
-            exp_key in fk or fk in exp_key or
-            exp_key.split("_")[0] in fk
-            for fk in found_lower
-        ):
+        exp_tokens = set(exp_key.split("_"))  # e.g. {"miles", "balance"}
+
+        matched = False
+        for fk in found_normalized:
+            fk_tokens = set(fk.split("_"))
+            # Exact match
+            if fk == exp_key:
+                matched = True
+                break
+            # Require at least 2 tokens to match (prevents single-word over-matching)
+            shared = exp_tokens & fk_tokens
+            meaningful = {t for t in shared if len(t) > 3}  # ignore short tokens like "due", "pay"
+            if len(meaningful) >= 2:
+                matched = True
+                break
+            # Single-token exact match only for long specific tokens (>7 chars)
+            if any(len(t) > 7 and t in fk_tokens for t in exp_tokens):
+                matched = True
+                break
+
+        if not matched:
             gaps.append((exp_key, exp_desc))
+
     return gaps
 
 
@@ -899,12 +978,19 @@ _MIN_ACCOUNT_SIGNALS = {
 
 def _classify_path_content(raw_text: str) -> str:
     """
-    Returns 'account_data', 'navigation', 'marketing', or 'login_wall'.
+    Returns 'account_data', 'navigation', 'marketing', 'login_wall', 'bot_challenge', or 'empty'.
     Used to mark paths that should not be re-visited.
     """
     if not raw_text or len(raw_text) < 100:
         return "empty"
     text_lower = raw_text.lower()
+
+    # Bot challenge / CAPTCHA detection — transient, don't penalize
+    if any(phrase in text_lower for phrase in [
+        "bot detected", "captcha", "are you a robot", "security check",
+        "cloudflare", "access denied", "ray id", "verifying you are human"
+    ]):
+        return "bot_challenge"
 
     if any(phrase in text_lower for phrase in ["sign in", "log in", "login", "please log"]):
         if len(raw_text) < 3000:
@@ -2677,46 +2763,98 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     </div>
 
     <div id="fview-accounts">
-      <div id="reminders-panel" style="margin-bottom:20px;display:none">
-        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px;display:flex;align-items:center;gap:6px">
-          <span>🔔</span> Reminders
-          <span id="reminders-count" style="font-size:11px;background:#fee2e2;color:#dc2626;padding:1px 6px;border-radius:10px;font-weight:600"></span>
-        </div>
-        <div id="reminders-list" style="display:flex;flex-direction:column;gap:8px"></div>
-      </div>
+      {hero_section_html}
+      {action_center_html}
+      {recently_found_html}
+      {value_center_html}
       <script>
       (function() {
-        fetch('/api/reminders').then(r=>r.json()).then(d=>{
-          var items = d.reminders || [];
-          if (!items.length) return;
-          var panel = document.getElementById('reminders-panel');
-          var list  = document.getElementById('reminders-list');
-          var count = document.getElementById('reminders-count');
-          panel.style.display = 'block';
-          count.textContent = items.length;
-          var colors  = {urgent:'#fef2f2', soon:'#fffbeb', info:'#f0f9ff'};
-          var borders = {urgent:'#fca5a5', soon:'#fcd34d', info:'#7dd3fc'};
-          var urgency_icons = {urgent:'🚨', soon:'⏰', info:'💡'};
-          var TYPE_ICONS = {
-            'value_drop': '📉',
-            'bill_increase': '📈',
-            'credit_added': '💰',
-            'expiry': '📅',
-            'payment_due': '💳',
-            'unused_credit': '💡'
-          };
-          items.forEach(function(r){
-            var el = document.createElement('div');
-            el.style.cssText = 'background:'+colors[r.urgency]+';border:1px solid '+borders[r.urgency]+';border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;font-size:13px';
-            var icon = TYPE_ICONS[r.type] || urgency_icons[r.urgency] || '🔔';
-            var days = r.days_left !== null && r.days_left !== undefined ? (r.days_left === 0 ? ' — today' : ' — '+r.days_left+'d') : '';
+        var TYPE_ICONS = {
+          'value_drop': '📉',
+          'bill_increase': '📈',
+          'credit_added': '💰',
+          'expiry': '📅',
+          'payment_due': '💳',
+          'unused_credit': '💡'
+        };
+        function renderActionCenter(items, themesHtml) {
+          themesHtml = themesHtml || '';
+          var panel = document.getElementById('action-center-panel');
+          var meta  = document.getElementById('action-center-meta');
+          if (!panel) return;
+          if (!items.length) {
+            panel.innerHTML = '<div style="color:#6b7280;font-size:13px;padding:8px 0">✓ Nothing needs attention right now</div>';
+            return;
+          }
+          if (meta) meta.textContent = items.length + ' item' + (items.length !== 1 ? 's' : '');
+          var borderColors = {urgent:'#ef4444', soon:'#f59e0b', info:'#3b82f6', change:'#3b82f6'};
+          var bgColors     = {urgent:'#fef2f2', soon:'#fffbeb', info:'#f0f9ff', change:'#f0f9ff'};
+          var html = '';
+          items.forEach(function(r) {
+            var icon = TYPE_ICONS[r.type] || (r.urgency === 'urgent' ? '🚨' : r.urgency === 'soon' ? '⏰' : '💡');
+            var border = borderColors[r.urgency] || '#e5e7eb';
+            var bg     = bgColors[r.urgency]     || '#f9fafb';
+            var days = r.days_left !== null && r.days_left !== undefined ? (r.days_left === 0 ? ' — today' : ' — ' + r.days_left + 'd') : '';
             var name = r.account_name || r.source || '';
-            el.innerHTML = '<span style="font-size:16px">'+icon+'</span><div><strong style="color:#111">'+name+'</strong><span style="color:#6b7280;margin:0 4px">·</span><span style="color:#374151">'+r.message+'</span>'+(days ? '<span style="color:#9ca3af;font-size:12px">'+days+'</span>' : '')+'</div>';
-            list.appendChild(el);
+            html += '<div style="background:' + bg + ';border-left:3px solid ' + border + ';border-radius:0 8px 8px 0;padding:10px 14px;display:flex;align-items:center;gap:10px;font-size:13px;margin-bottom:6px">'
+              + '<span style="font-size:16px">' + icon + '</span>'
+              + '<div style="flex:1"><strong style="color:#111">' + name + '</strong>'
+              + '<span style="color:#6b7280;margin:0 4px">·</span>'
+              + '<span style="color:#374151">' + r.message + '</span>'
+              + (days ? '<span style="color:#9ca3af;font-size:12px">' + days + '</span>' : '')
+              + '</div></div>';
           });
-        }).catch(function(){});
+          panel.innerHTML = themesHtml + html;
+        }
+        async function loadActionCenter() {
+          try {
+            var remResp = fetch('/api/reminders');
+            var summResp = fetch('/api/reminders/summary');
+            var remData = await (await remResp).json();
+            var summary = {};
+            try { summary = await (await summResp).json(); } catch(e) { summary = {themes: [], total: 0}; }
+            var reminders = remData.reminders || [];
+
+            // Update hero attention count
+            var heroCount = document.getElementById('hero-attention-count');
+            if (heroCount) heroCount.textContent = summary.total || (summary.urgent > 0 ? summary.urgent : '✓');
+
+            // Update action center meta
+            var meta = document.getElementById('action-center-meta');
+            if (meta) meta.textContent = summary.total > 0 ? summary.total + ' items' : 'All clear';
+
+            // Render theme chips if multiple themes
+            var themesHtml = '';
+            if (summary.themes && summary.themes.length > 1) {
+              themesHtml = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+                summary.themes.map(function(t) {
+                  return '<div style="display:flex;align-items:center;gap:4px;padding:4px 10px;' +
+                    'background:' + (t.urgent_count > 0 ? '#fef2f2' : '#f3f4f6') + ';' +
+                    'border-radius:20px;font-size:12px;color:' + (t.urgent_count > 0 ? '#b91c1c' : '#374151') + '">' +
+                    t.icon + ' ' + t.label + ' <strong>' + t.count + '</strong>' +
+                    '</div>';
+                }).join('') + '</div>';
+            }
+
+            var panel = document.getElementById('action-center-panel');
+            if (!panel) return;
+
+            if (reminders.length === 0) {
+              panel.innerHTML = '<div style="color:#6b7280;font-size:13px;padding:8px 0">✓ Nothing needs attention right now</div>';
+              return;
+            }
+
+            renderActionCenter(reminders, themesHtml);
+          } catch(e) {
+            console.error('Action center load error:', e);
+            var panel = document.getElementById('action-center-panel');
+            if (panel) panel.innerHTML = '<div style="color:#9ca3af;font-size:13px;padding:8px 0">Could not load.</div>';
+          }
+        }
+        loadActionCenter();
       })();
       </script>
+      <h2 style="font-size:14px;font-weight:700;color:#111;text-transform:uppercase;letter-spacing:.05em;margin-bottom:16px">Your Accounts</h2>
       {account_data_html}
     </div>
 
@@ -2929,16 +3067,23 @@ function updateSyncTimes() {
   document.querySelectorAll('[data-synced]').forEach(function(el) {
     var ts = el.dataset.synced;
     if (!ts) return;
+    // Login-required accounts carry a data-sync-status on the parent card
+    var card = el.closest('[data-sync-status]');
+    var syncStatus = card ? card.dataset.syncStatus : '';
+    if (syncStatus === 'login_required') {
+      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">🔐 Login required</span>';
+      return;
+    }
     var rel = fmtRelative(ts);
     if (rel) {
-      var color = '#22c55e', icon = '✓';
+      var color = '#22c55e', icon = '✓', fw = '500';
       var secs2 = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
       var hrs2 = secs2 / 3600;
-      if (hrs2 >= 168) { color = '#ef4444'; icon = '!'; }
+      if (hrs2 >= 72) { color = '#dc2626'; icon = '!'; fw = '700'; }
       else if (hrs2 >= 48) { color = '#f59e0b'; icon = '~'; }
       else if (hrs2 >= 24) { color = '#f59e0b'; icon = '~'; }
       else if (hrs2 >= 2) { color = '#6b7280'; icon = '✓'; }
-      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:500">' + icon + ' Synced ' + rel + '</span>';
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' Synced ' + rel + '</span>';
     }
     try {
       var d = new Date(ts);
@@ -3259,10 +3404,13 @@ function toggleHealth(btn, source) {
     chevron.textContent = '▾';
     if (!detail.dataset.loaded) {
       detail.dataset.loaded = '1';
-      detail.innerHTML = '<span style="color:#d1d5db">Loading…</span>';
+      var _staticCoverage = detail.innerHTML; // preserve server-rendered coverage block
+      detail.innerHTML = _staticCoverage + '<div style="color:#d1d5db;font-size:11px;margin-top:4px">Loading sync health…</div>';
       fetch('/api/sync-health/' + source).then(function(r){return r.json();}).then(function(h){
         var fa = h.failure_reason ? '<span style="color:#ef4444">✗ '+h.failure_reason+'</span>' : '<span style="color:#22c55e">✓ ok</span>';
-        var conf = h.confidence_avg ? Math.round(h.confidence_avg*100)+'% avg confidence' : 'no confidence data';
+        var _ca = h.confidence_avg || 0;
+        var _clabel = _ca >= 0.85 ? 'High' : _ca >= 0.60 ? 'Medium' : _ca > 0 ? 'Needs review' : null;
+        var conf = _clabel ? _clabel + ' confidence' : 'no confidence data';
         var cov  = h.coverage ? h.coverage.message+' ('+h.coverage.score+'/100)' : '';
         var gapHtml = '';
         if (h.gaps && h.gaps.count > 0) {
@@ -3285,11 +3433,13 @@ function toggleHealth(btn, source) {
           } else {
             covLabel = '<span style="color:#a3a3a3">'+cv.found_count+' fields found</span>';
           }
-          detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="margin-top:2px">'+covLabel+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+          var _syncHtml = '<div style="border-top:1px solid #f3f4f6;padding-top:6px;margin-top:4px">'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="margin-top:2px">'+covLabel+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+          detail.innerHTML = _staticCoverage + _syncHtml;
         }).catch(function(){
-          detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+          var _syncHtml = '<div style="border-top:1px solid #f3f4f6;padding-top:6px;margin-top:4px">'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+          detail.innerHTML = _staticCoverage + _syncHtml;
         });
-      }).catch(function(){ detail.innerHTML = 'Could not load health data'; });
+      }).catch(function(){ detail.innerHTML = _staticCoverage + '<div style="color:#ef4444;font-size:11px;margin-top:4px">Could not load sync health</div>'; });
     }
   } else {
     detail.style.display = 'none';
@@ -5087,9 +5237,9 @@ def dashboard():
             if alert_item and not hero_item and secondary_items:
                 hero_item = secondary_items.pop(0)
 
-            # Build hero section
+            # Build card hero section
             if hero_item:
-                hero_html = (
+                card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
                     f'<div class="hero-val" title="{he(hero_item["value"])}">{he(hero_item["value"])}</div>'
@@ -5097,7 +5247,7 @@ def dashboard():
                     f'</div>'
                 )
             elif sync_status == "login_required":
-                hero_html = (
+                card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
                     f'<div style="color:#ef4444;font-size:12px;font-weight:500">⚠ Login required — sync to reconnect</div>'
@@ -5112,7 +5262,7 @@ def dashboard():
                 _disc_info = discovered_by_source.get(src, {})
                 _no_data = _disc_info.get("failed", False) or sync_status == "no_data"
                 if _no_data:
-                    hero_html = (
+                    card_hero_html = (
                         f'<div class="acct-divider"></div>'
                         f'<div class="acct-hero">'
                         f'<div style="color:#d97706;font-size:12px">No account data — sync to retry</div>'
@@ -5120,7 +5270,7 @@ def dashboard():
                     )
                     status_color = "#f59e0b"
                 else:
-                    hero_html = (
+                    card_hero_html = (
                         f'<div class="acct-divider"></div>'
                         f'<div class="acct-hero" data-discovering="1">'
                         f'<div style="color:#6366f1;font-size:12px;font-weight:500">'
@@ -5130,7 +5280,7 @@ def dashboard():
                     )
                     status_color = "#9ca3af"
             else:
-                hero_html = (
+                card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
                     f'<div style="color:#c0bab4;font-style:italic;font-size:12px">Awaiting sync…</div>'
@@ -5235,7 +5385,9 @@ def dashboard():
             stale_cls = " is-stale" if not synced_at else ""
             expiring_cls = " is-expiring" if alert_item else ""
             _flabel, _fcolor, _ficon = _freshness_label(synced_at, sync_status)
-            freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:500">{_ficon} {_flabel}</span>'
+            _fw = "700" if _fcolor == "#dc2626" else "500"
+            _fprefix = f"{_ficon} " if _ficon else ""
+            freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
 
             # Footer: expand toggle only if there are extra items
             if extra_items:
@@ -5256,12 +5408,70 @@ def dashboard():
                 f'</div>'
             )
 
+            # Completeness score for card header + coverage gap hints
+            cat_expected = _EXPECTED_FIELDS.get(_source_category(src), {})
+            if cat_expected:
+                gaps = _coverage_gaps(src, [it.get("key","") for it in items])
+                found_count = len(cat_expected) - len(gaps)
+                completeness_pct = int(found_count / len(cat_expected) * 100)
+                completeness_color = "#22c55e" if completeness_pct >= 80 else "#f59e0b" if completeness_pct >= 50 else "#ef4444"
+                completeness_badge = (
+                    f'<span style="font-size:10px;color:{completeness_color};font-weight:600;'
+                    f'background:{completeness_color}18;padding:1px 5px;border-radius:10px;margin-left:6px">'
+                    f'{completeness_pct}%</span>'
+                )
+                # Show top 2 coverage gaps inline (always visible, not behind sync health expand)
+                if gaps:
+                    top_gaps = gaps[:2]
+                    gap_hints = "".join(
+                        f'<span style="font-size:10px;color:#d1d5db;margin-right:8px">? {he(gdesc)}</span>'
+                        for _, gdesc in top_gaps
+                    )
+                    gaps_inline = f'<div style="margin:4px 0 2px">{gap_hints}</div>'
+                else:
+                    gaps_inline = ""
+
+                # Build coverage detail block (server-rendered, shown when health panel expands)
+                coverage_lines = []
+                found_labels = {}
+                for it in items:
+                    fk = it.get("key", "")
+                    for exp_key, exp_desc in cat_expected.items():
+                        tokens_exp = [t for t in exp_key.split("_") if len(t) > 3]
+                        tokens_fk  = [t for t in fk.split("_")  if len(t) > 3]
+                        if exp_key == fk or (len(tokens_exp) >= 2 and len(set(tokens_exp) & set(tokens_fk)) >= 2) \
+                           or (len(exp_key) > 7 and exp_key in fk):
+                            found_labels[exp_key] = it.get("label", exp_desc)
+                for exp_key, exp_desc in cat_expected.items():
+                    if exp_key in found_labels:
+                        coverage_lines.append(
+                            f'<div style="font-size:11px;color:#16a34a;padding:1px 0">'
+                            f'✓ {he(found_labels[exp_key])}</div>'
+                        )
+                    else:
+                        coverage_lines.append(
+                            f'<div style="font-size:11px;color:#d97706;padding:1px 0">'
+                            f'? {he(exp_desc)}</div>'
+                        )
+                coverage_block = (
+                    f'<div style="margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #f3f4f6">'
+                    f'<div style="font-size:10px;font-weight:600;color:#9ca3af;text-transform:uppercase;'
+                    f'letter-spacing:.05em;margin-bottom:4px">Coverage {completeness_pct}%</div>'
+                    + "".join(coverage_lines) +
+                    f'</div>'
+                )
+            else:
+                completeness_badge = ""
+                gaps_inline = ""
+                coverage_block = ""
+
             health_footer = (
                 f'<div class="card-health-footer" style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:6px;padding:6px 14px 8px">'
+                f'{gaps_inline}'
                 f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;padding:0;display:flex;align-items:center;gap:3px">'
                 f'<span class="health-chevron">&#9656;</span> Sync health'
                 f'</button>'
-                f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}"></div>'
+                f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}">{coverage_block}</div>'
                 f'</div>'
             )
 
@@ -5269,7 +5479,7 @@ def dashboard():
                 f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}">'
                 f'<div class="acct-card-header">'
                 f'<div style="flex:1;min-width:0">'
-                f'<div class="acct-name">{he(display_name)}</div>'
+                f'<div class="acct-name">{he(display_name)}{completeness_badge}</div>'
                 f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{freshness_html}</div>'
                 f'</div>'
                 f'<div class="acct-controls">'
@@ -5278,7 +5488,7 @@ def dashboard():
                 f'</div>'
                 f'</div>'
                 f'{bad_banner}'
-                f'{hero_html}'
+                f'{card_hero_html}'
                 f'{sec_html}'
                 f'{alert_html}'
                 f'{cand_notice}'
@@ -5328,6 +5538,173 @@ def dashboard():
         '🔌 Setup Extension</a>'
         '</div>'
     )
+
+    # Compute total tracked value across all accounts
+    total_value = 0.0
+    value_items = []  # list of (source_display, field_label, value_str, dollar_val, methodology)
+    for cat in _cat_order:
+        for src, display_name_v, icon_v, color_v in _cat_map[cat]:
+            row_v = synced_map.get(src)
+            if not row_v:
+                continue
+            data_v = decrypt_account_data(user["id"], row_v["data_enc"] or "")
+            items_v = data_v.get("items", []) or data_v.get("ai_items", []) or []
+            if src in discovered_by_source:
+                disc_v = discovered_by_source[src]
+                items_v = [
+                    {"key": f["key"], "label": f["label"], "value": f.get("value", "")}
+                    for f in disc_v.get("fields", [])
+                    if f.get("key") in disc_v.get("enabled", set())
+                ]
+            for it in items_v:
+                dval, method = _benefit_priority_score(it.get("key",""), it.get("label",""), str(it.get("value","")))
+                if dval > 0:
+                    total_value += dval
+                    value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), dval, method))
+    value_items.sort(key=lambda x: -x[3])
+
+    # ── LAYER 1: Hero section ─────────────────────────────────────────────────
+    import datetime as _dth
+    _hour = _dth.datetime.now().hour
+    _greeting = "Good morning" if _hour < 12 else "Good afternoon" if _hour < 17 else "Good evening"
+    _first_name = ((user["email"] or "").split("@")[0].split(".")[0] or "").capitalize() or "there"
+    _account_count = len(connected_sources)
+    hero_section_html = (
+        f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
+        f'<div style="font-size:22px;font-weight:700;color:#111;margin-bottom:12px">'
+        f'{_greeting}, {he(_first_name)} \U0001f44b'
+        f'</div>'
+        f'<div style="display:flex;gap:24px;flex-wrap:wrap">'
+        f'<div style="display:flex;flex-direction:column">'
+        f'<span style="font-size:26px;font-weight:700;color:#111" id="hero-account-count">{_account_count}</span>'
+        f'<span style="font-size:12px;color:#6b7280">accounts connected</span>'
+        f'</div>'
+        f'<div style="display:flex;flex-direction:column">'
+        f'<span style="font-size:26px;font-weight:700;color:#f59e0b" id="hero-attention-count">—</span>'
+        f'<span style="font-size:12px;color:#6b7280">things need attention</span>'
+        f'</div>'
+        f'</div>'
+        f'</div>'
+    )
+
+    # ── LAYER 2: Action Center ────────────────────────────────────────────────
+    action_center_html = (
+        '<div style="margin-bottom:28px">'
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+        '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0;text-transform:uppercase;'
+        'letter-spacing:.05em">Action Center</h2>'
+        '<span style="font-size:12px;color:#9ca3af" id="action-center-meta"></span>'
+        '</div>'
+        '<div id="action-center-panel">'
+        '<div style="color:#9ca3af;font-size:13px;padding:8px 0">Loading…</div>'
+        '</div>'
+        '</div>'
+    )
+
+    # ── LAYER 2b: Recently Discovered feed ───────────────────────────────────
+    import datetime as _dtrd
+    _cutoff = (_dtrd.datetime.utcnow() - _dtrd.timedelta(days=14)).isoformat()
+    try:
+        _recent_rows = get_db().execute(
+            "SELECT source, field_label, new_value, changed_at FROM field_history "
+            "WHERE user_id=? AND change_type='added' AND changed_at > ? "
+            "ORDER BY changed_at DESC LIMIT 10",
+            (uid, _cutoff)
+        ).fetchall()
+    except Exception:
+        _recent_rows = []
+
+    # Build a flat source→display_name lookup from _cat_map
+    _src_display_lookup = {}
+    for _cat_vals in _cat_map.values():
+        for _sk, _sn, _si, _sc in _cat_vals:
+            _src_display_lookup[_sk] = _sn
+
+    def _source_display_name(src):
+        return _src_display_lookup.get(src) or src.replace("_", " ").title()
+
+    recently_found_html = ""
+    if _recent_rows:
+        _day_groups: dict = {}
+        _now_date = _dtrd.datetime.utcnow().date()
+        for _rrow in _recent_rows:
+            try:
+                _row_date = _dtrd.datetime.fromisoformat(_rrow["changed_at"]).date()
+            except Exception:
+                continue
+            _delta = (_now_date - _row_date).days
+            if _delta == 0:
+                _day_label = "Today"
+            elif _delta == 1:
+                _day_label = "Yesterday"
+            elif _delta <= 7:
+                _day_label = f"{_delta} days ago"
+            else:
+                _day_label = _row_date.strftime("%b %-d")
+            _day_groups.setdefault(_day_label, []).append(_rrow)
+
+        _feed_html = ""
+        for _day_label, _rows in list(_day_groups.items())[:4]:
+            _items_html = "".join(
+                f'<div style="font-size:13px;color:#374151;padding:2px 0">'
+                f'• <strong>{he(_source_display_name(_r["source"]))}</strong>'
+                f' {he(_r["field_label"])}'
+                + (f': <span style="color:#6b7280">{he(str(_r["new_value"])[:40])}</span>'
+                   if _r["new_value"] else "") +
+                f'</div>'
+                for _r in _rows
+            )
+            _feed_html += (
+                f'<div style="margin-bottom:10px">'
+                f'<div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;'
+                f'letter-spacing:.05em;margin-bottom:4px">{he(_day_label)}</div>'
+                + _items_html +
+                f'</div>'
+            )
+
+        recently_found_html = (
+            '<div style="margin-bottom:28px">'
+            '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
+            'text-transform:uppercase;letter-spacing:.05em">\U0001f50d Recently Found</h2>'
+            + _feed_html +
+            '</div>'
+        )
+
+    # ── LAYER 3: Don't forget section (no dollar amounts) ────────────────────
+    if value_items:
+        # Group by type without showing amounts
+        credit_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
+                        if any(k in label.lower() for k in ['credit', 'voucher', 'ecredit'])]
+        cert_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
+                      if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])]
+
+        forgotten_lines = []
+        for disp, label, val_str in (credit_items + cert_items)[:6]:
+            forgotten_lines.append(
+                f'<div style="font-size:13px;color:#374151;padding:4px 0;'
+                f'border-bottom:1px solid #f3f4f6">• {he(disp)}: {he(label)}'
+                f'<span style="color:#6b7280;margin-left:6px">{he(val_str)}</span></div>'
+            )
+
+        if forgotten_lines:
+            value_center_html = (
+                '<div style="margin-bottom:28px;background:#fffbeb;border:1px solid #fde68a;'
+                'border-radius:10px;padding:16px 18px">'
+                '<h2 style="font-size:14px;font-weight:700;color:#92400e;margin:0 0 10px;'
+                'text-transform:uppercase;letter-spacing:.05em">\U0001f4a1 Don\u2019t forget</h2>'
+                '<p style="font-size:12px;color:#92400e;margin:0 0 10px">'
+                'These benefits were found but may go unused:'
+                '</p>'
+                + "".join(forgotten_lines) +
+                '</div>'
+            )
+        else:
+            value_center_html = ""
+
+        value_banner = ""
+    else:
+        value_center_html = ""
+        value_banner = ""
 
     # Build re-auth banner if any accounts need re-login
     if login_required_accounts:
@@ -5436,6 +5813,10 @@ function dismissOnboarding() {
             .replace("{reauth_banner}",           reauth_banner)
             .replace("{new_accounts_banner}",     new_accounts_banner)
             .replace("{account_data_html}",       account_data_html)
+            .replace("{hero_section_html}",       hero_section_html)
+            .replace("{action_center_html}",      action_center_html)
+            .replace("{recently_found_html}",     recently_found_html)
+            .replace("{value_center_html}",       value_center_html)
             .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{csrf_token}",              _csrf))
 
@@ -6477,6 +6858,16 @@ SUPPORTED_SITES = [
 ]
 
 
+def _confidence_label(score: float) -> str:
+    """Convert a 0-1 confidence score to a human-readable label."""
+    if score >= 0.85:
+        return "High"
+    elif score >= 0.60:
+        return "Medium"
+    else:
+        return "Needs review"
+
+
 def _system_confidence(
     llm_confidence: float,
     source_type: str,           # "api", "dom", "llm"
@@ -7490,16 +7881,22 @@ function updateSyncTimes() {{
   document.querySelectorAll('[data-synced]').forEach(function(el) {{
     var ts = el.dataset.synced;
     if (!ts) return;
+    var card = el.closest('[data-sync-status]');
+    var syncStatus = card ? card.dataset.syncStatus : '';
+    if (syncStatus === 'login_required') {{
+      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">🔐 Login required</span>';
+      return;
+    }}
     var rel = fmtRelative(ts);
     if (rel) {{
-      var color = '#22c55e', icon = '✓';
+      var color = '#22c55e', icon = '✓', fw = '500';
       var secs2 = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
       var hrs2 = secs2 / 3600;
-      if (hrs2 >= 168) {{ color = '#ef4444'; icon = '!'; }}
+      if (hrs2 >= 72) {{ color = '#dc2626'; icon = '!'; fw = '700'; }}
       else if (hrs2 >= 48) {{ color = '#f59e0b'; icon = '~'; }}
       else if (hrs2 >= 24) {{ color = '#f59e0b'; icon = '~'; }}
       else if (hrs2 >= 2) {{ color = '#6b7280'; icon = '✓'; }}
-      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:500">' + icon + ' Synced ' + rel + '</span>';
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' Synced ' + rel + '</span>';
     }}
   }});
 }}
@@ -8104,7 +8501,19 @@ def api_data_sync():
                                 _m_cls = _seg_re.search(raw_text)
                                 _seg_text = _m_cls.group(1) if _m_cls else ""
                                 _cls = _classify_path_content(_seg_text or raw_text[:2000])
-                                if _cls in ("navigation", "marketing"):
+                                if _cls in ("login_wall", "bot_challenge", "account_data"):
+                                    pass  # no penalty
+                                elif _cls == "empty":
+                                    # tiny transient penalty only for already-middling paths
+                                    try:
+                                        _db.execute(
+                                            "UPDATE site_paths SET failure_count = failure_count + 1 "
+                                            "WHERE site=? AND path=? AND quality_score > 1.0",
+                                            (source, _p_cls)
+                                        )
+                                    except Exception:
+                                        pass
+                                elif _cls in ("navigation", "marketing"):
                                     _db.execute(
                                         "UPDATE site_paths SET failure_count = failure_count + 2, "
                                         "quality_score = MAX(0.0, quality_score - 0.8) "
@@ -8236,7 +8645,19 @@ def api_data_sync():
                                 _m_r = _seg_re_r.search(raw_text)
                                 _seg_r = _m_r.group(1) if _m_r else ""
                                 _cls_r = _classify_path_content(_seg_r or raw_text[:2000])
-                                if _cls_r in ("navigation", "marketing"):
+                                if _cls_r in ("login_wall", "bot_challenge", "account_data"):
+                                    pass  # no penalty
+                                elif _cls_r == "empty":
+                                    # tiny transient penalty only for already-middling paths
+                                    try:
+                                        _db_r.execute(
+                                            "UPDATE site_paths SET failure_count = failure_count + 1 "
+                                            "WHERE site=? AND path=? AND quality_score > 1.0",
+                                            (source, _p_r)
+                                        )
+                                    except Exception:
+                                        pass
+                                elif _cls_r in ("navigation", "marketing"):
                                     _db_r.execute(
                                         "UPDATE site_paths SET failure_count = failure_count + 2, "
                                         "quality_score = MAX(0.0, quality_score - 0.8) "
@@ -8556,7 +8977,112 @@ def api_reminders():
     # sort: urgent first, then soon, then info
     priority = {"urgent": 0, "soon": 1, "info": 2}
     all_reminders.sort(key=lambda x: priority.get(x.get("urgency", "info"), 2))
+
+    # Filter snoozed reminders
+    import datetime as _dt
+    now_iso = _dt.datetime.utcnow().isoformat()
+    try:
+        snoozed_rows = get_db().execute(
+            "SELECT reminder_key FROM reminder_snoozes WHERE user_id=? AND snoozed_until > ?",
+            (uid, now_iso)
+        ).fetchall()
+        snoozed_keys = {r["reminder_key"] for r in snoozed_rows}
+        def _reminder_key(r):
+            return "{}::{}".format(r.get("type",""), r.get("source",""))
+        all_reminders = [r for r in all_reminders if _reminder_key(r) not in snoozed_keys]
+    except Exception:
+        pass
+
     return jsonify({"reminders": all_reminders})
+
+
+@app.route("/api/reminders/summary")
+@require_login
+def api_reminders_summary():
+    """
+    Returns a cross-account summary: groups all reminders by type/theme,
+    not by account. Shows what the user is collectively forgetting.
+    """
+    uid = session["user_id"]
+    try:
+        reminders = _get_reminders(uid)
+        change_alerts = _get_change_alerts(uid)
+        all_items = reminders + change_alerts
+
+        # Filter snoozed
+        import datetime as _dt
+        now_iso = _dt.datetime.utcnow().isoformat()
+        snoozed = {r["reminder_key"] for r in get_db().execute(
+            "SELECT reminder_key FROM reminder_snoozes WHERE user_id=? AND snoozed_until > ?",
+            (uid, now_iso)
+        ).fetchall()}
+        all_items = [r for r in all_items if f"{r.get('type','')}::{r.get('source','')}" not in snoozed]
+
+        # Group by theme
+        themes = {
+            "expiring": {"label": "Expiring benefits", "icon": "\U0001f4c5", "items": []},
+            "bill":     {"label": "Bill changes",      "icon": "\U0001f4cb", "items": []},
+            "unused":   {"label": "Unused credits",    "icon": "\U0001f4a1", "items": []},
+            "payment":  {"label": "Payments due",      "icon": "\U0001f4b3", "items": []},
+        }
+        for r in all_items:
+            rtype = r.get("type", "")
+            if rtype in ("expiry",):
+                themes["expiring"]["items"].append(r)
+            elif rtype in ("bill_increase", "value_drop"):
+                themes["bill"]["items"].append(r)
+            elif rtype in ("unused_credit", "credit_added"):
+                themes["unused"]["items"].append(r)
+            elif rtype in ("payment_due",):
+                themes["payment"]["items"].append(r)
+
+        summary = []
+        for theme_key, theme in themes.items():
+            if theme["items"]:
+                urgent_count = sum(1 for i in theme["items"] if i.get("urgency") == "urgent")
+                summary.append({
+                    "theme": theme_key,
+                    "label": theme["label"],
+                    "icon": theme["icon"],
+                    "count": len(theme["items"]),
+                    "urgent_count": urgent_count,
+                    "items": theme["items"][:3],  # top 3 per theme
+                })
+
+        return jsonify({
+            "total": len(all_items),
+            "urgent": sum(1 for i in all_items if i.get("urgency") == "urgent"),
+            "themes": summary,
+        })
+    except Exception as e:
+        return jsonify({"total": 0, "urgent": 0, "themes": [], "error": str(e)})
+
+
+@app.route("/api/reminders/snooze", methods=["POST"])
+@require_login
+def api_reminders_snooze():
+    check_csrf()
+    uid = session["user_id"]
+    body = request.get_json(silent=True) or {}
+    rtype = body.get("type", "")
+    source = body.get("source", "")
+    days = min(int(body.get("days", 7)), 365)
+
+    if not rtype:
+        return jsonify({"error": "missing type"}), 400
+
+    reminder_key = "{}::{}".format(rtype, source)
+    import datetime as _dt
+    snoozed_until = (_dt.datetime.utcnow() + _dt.timedelta(days=days)).isoformat()
+
+    db = get_db()
+    db.execute("""
+        INSERT INTO reminder_snoozes (user_id, reminder_key, snoozed_until, created_at)
+        VALUES (?,?,?,?)
+        ON CONFLICT(user_id, reminder_key) DO UPDATE SET snoozed_until=excluded.snoozed_until
+    """, (uid, reminder_key, snoozed_until, iso()))
+    db.commit()
+    return jsonify({"ok": True, "snoozed_until": snoozed_until})
 
 
 @app.route("/candidates/<source>")
@@ -8576,6 +9102,7 @@ def candidates_page(source):
         )
         row_id = r['id']
         conf_pct = int(r['confidence'] * 100)
+        conf_label = _confidence_label(r['confidence'])
         items_html += (
             f'<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:10px">'
             f'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
@@ -8585,7 +9112,7 @@ def candidates_page(source):
             f'{snip_html}'
             f'</div>'
             f'<div style="font-size:11px;color:#6b7280;text-align:right">'
-            f'<div style="margin-bottom:6px">{conf_pct}% confidence</div>'
+            f'<div style="margin-bottom:6px">{conf_label} confidence</div>'
             f'<div style="display:flex;gap:6px">'
             f'<button onclick="act({row_id},\'approve\')" style="padding:4px 10px;background:#22c55e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer">Add to card</button>'
             f'<button onclick="act({row_id},\'dismiss\')" style="padding:4px 10px;background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;border-radius:4px;font-size:12px;cursor:pointer">Dismiss</button>'
@@ -8606,8 +9133,11 @@ def candidates_page(source):
 """ + items_html + """
 </div>
 <script>
+const CSRF = '""" + get_csrf_token() + """';
 async function act(id, action) {
-  await fetch('/api/candidates/'+id+'/'+action, {method:'POST'});
+  await fetch('/api/candidates/'+id+'/'+action, {
+    method:'POST', headers:{'X-CSRF-Token': CSRF}
+  });
   location.reload();
 }
 </script>
