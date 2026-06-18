@@ -1192,7 +1192,7 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
 
             # Pattern 2: MM/DD/YYYY or MM/DD/YY
             if exp_days is None:
-                _m2 = _rop.search(r'(\d{1,2})/(\d{1,2})/(\d{2,4})', _combined_for_exp)
+                _m2 = _rop.search(r'\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b', _combined_for_exp)
                 if _m2:
                     try:
                         _mo, _da, _yr = int(_m2.group(1)), int(_m2.group(2)), int(_m2.group(3))
@@ -1229,7 +1229,7 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
 
             # Pattern 4: "exp MM/YY" (short credit card style)
             if exp_days is None:
-                _m4 = _rop.search(r'exp\.?\s*(\d{1,2})/(\d{2,4})', _combined_for_exp, _rop.I)
+                _m4 = _rop.search(r'\bexp\.?\s*(\d{1,2})/(\d{2,4})\b', _combined_for_exp, _rop.I)
                 if _m4:
                     try:
                         _mo, _yr = int(_m4.group(1)), int(_m4.group(2))
