@@ -1280,3 +1280,53 @@ function sleep(ms) {
 async function setStatus(msg) {
   await chrome.storage.local.set({ sync_status: msg });
 }
+
+// ── Contextual benefit surfacing — intent detection ───────────────────────────
+
+const INTENT_PATTERNS = {
+  flight:   [/google\.com\/flights/, /kayak\.com\/flights/, /delta\.com\/(us\/en\/)?flight/, /united\.com.*\/flight/, /aa\.com\/booking/, /southwest\.com\/air\/booking/, /expedia\.com\/Flights/, /skiplagged\.com/],
+  hotel:    [/google\.com\/travel\/hotels/, /booking\.com/, /hotels\.com/, /marriott\.com\/search/, /hyatt\.com.*\/hotel/, /hilton\.com\/en\/hotels/, /expedia\.com\/Hotel/],
+  car:      [/hertz\.com/, /avis\.com/, /enterprise\.com/, /budget\.com/, /turo\.com/],
+  shopping: [/amazon\.com\/(dp|gp\/product)/, /bestbuy\.com\/site/, /apple\.com\/shop/, /walmart\.com\/ip\//, /target\.com\/-\/A-/],
+  dining:   [/opentable\.com/, /resy\.com/, /yelp\.com\/biz/],
+};
+
+function detectIntent(url) {
+  for (const [ctx, patterns] of Object.entries(INTENT_PATTERNS)) {
+    if (patterns.some(p => p.test(url))) return ctx;
+  }
+  return null;
+}
+
+// Tab intent detection — runs when a tab finishes loading
+chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
+  if (changeInfo.status !== 'complete' || !tab.url) return;
+
+  const intent = detectIntent(tab.url);
+  if (!intent) return;
+
+  // Get API key from storage (key name is 'api_key')
+  const stored = await chrome.storage.local.get(['api_key']);
+  const apiKey = stored.api_key;
+  if (!apiKey) return;
+
+  try {
+    const resp = await fetch(
+      `${MIGHTY_URL}/api/benefits/relevant?context=${intent}`,
+      { headers: { 'X-Mighty-Key': apiKey }, credentials: 'include' }
+    );
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data.count || data.count === 0) return;
+
+    // Send to content script
+    chrome.tabs.sendMessage(tabId, {
+      type: 'MIGHTY_BENEFITS',
+      context: intent,
+      benefits: data.benefits,
+      count: data.count,
+    }).catch(() => {}); // content script may not be loaded yet
+  } catch (e) {
+    console.log('[Mighty] Intent fetch error:', e);
+  }
+});

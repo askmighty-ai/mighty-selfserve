@@ -733,6 +733,16 @@ _CATEGORY_SCHEMAS: dict = {
 }
 
 
+# Maps intent context → field key fragments that are relevant
+_BENEFIT_APPLICABILITY: dict[str, list[str]] = {
+    "flight":   ["companion", "ecredit", "miles", "flight_credit", "travel_credit", "upgrade", "certificate"],
+    "hotel":    ["free_night", "award_night", "points", "hotel_credit", "travel_credit", "certificate"],
+    "car":      ["rental", "insurance", "coverage"],
+    "shopping": ["purchase_protection", "extended_warranty", "cash_back", "price_protection", "credit"],
+    "dining":   ["dining_credit", "dining", "cash_back", "credit"],
+}
+
+
 # Expected fields per category — used for coverage gap detection
 _EXPECTED_FIELDS: dict[str, dict[str, str]] = {
     "travel_loyalty": {
@@ -10151,6 +10161,76 @@ def not_found(e):
 def server_error(e):
     return NOT_FOUND_HTML.replace("Page not found", "Something went wrong").replace("The page you were looking for doesn't exist.", "An unexpected error occurred. Please try again or <a href=\"/\">return home</a>."), 500
 
+
+
+
+@app.route("/api/benefits/relevant")
+@require_login
+def api_benefits_relevant():
+    """
+    Returns benefits relevant to the user's current intent.
+    Query params:
+      context: 'flight' | 'hotel' | 'car' | 'shopping' | 'dining'
+      url: current page URL (used for logging/debugging, not matched)
+    """
+    uid = session["user_id"]
+    context = request.args.get("context", "").lower().strip()
+
+    if context not in _BENEFIT_APPLICABILITY:
+        return jsonify({"context": context, "benefits": [], "count": 0})
+
+    relevant_keys = _BENEFIT_APPLICABILITY[context]
+
+    # Scan all account data for matching fields
+    rows = get_db().execute(
+        "SELECT source, display_name, data_enc FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+
+    benefits = []
+    for row in rows:
+        try:
+            data = decrypt_account_data(uid, row["data_enc"] or "")
+            items = data.get("items", []) or data.get("ai_items", []) or []
+        except Exception:
+            continue
+
+        for it in items:
+            fk = (it.get("key") or "").lower()
+            fl = (it.get("label") or "").lower()
+            fv = str(it.get("value") or "")
+
+            # Skip empty, zero, or obviously irrelevant values
+            if not fv or fv.lower() in ("0", "none", "n/a", "unknown", ""):
+                continue
+
+            # Match against relevant keys
+            matched = any(
+                rk in fk or rk in fl
+                for rk in relevant_keys
+            )
+            if matched:
+                benefits.append({
+                    "account": row["display_name"],
+                    "source": row["source"],
+                    "label": it.get("label", ""),
+                    "value": fv,
+                })
+
+    # Deduplicate by (account, label) and cap at 8
+    seen = set()
+    unique_benefits = []
+    for b in benefits:
+        key = (b["account"], b["label"])
+        if key not in seen:
+            seen.add(key)
+            unique_benefits.append(b)
+    unique_benefits = unique_benefits[:8]
+
+    return jsonify({
+        "context": context,
+        "benefits": unique_benefits,
+        "count": len(unique_benefits),
+    })
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────

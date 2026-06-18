@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Mighty Sync",
-  "description": "Automatically sync your account data to your Mighty dashboard — no login needed.",
+  "description": "Automatically sync your account data to your Mighty dashboard \u2014 no login needed.",
   "version": "1.2.6",
   "permissions": [
     "tabs",
     "windows",
     "storage",
     "alarms",
-    "scripting"
+    "scripting",
+    "activeTab"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -34,7 +35,9 @@
       "matches": [
         "https://mighty-selfserve-production.up.railway.app/*"
       ],
-      "js": ["content_scripts/dashboard_relay.js"],
+      "js": [
+        "content_scripts/dashboard_relay.js"
+      ],
       "world": "ISOLATED",
       "run_at": "document_end"
     },
@@ -51,7 +54,9 @@
         "*://*.americanexpress.com/*",
         "*://*.chase.com/*"
       ],
-      "js": ["content_scripts/api_interceptor.js"],
+      "js": [
+        "content_scripts/api_interceptor.js"
+      ],
       "world": "MAIN",
       "run_at": "document_start"
     },
@@ -68,9 +73,20 @@
         "*://*.americanexpress.com/*",
         "*://*.chase.com/*"
       ],
-      "js": ["content_scripts/api_relay.js"],
+      "js": [
+        "content_scripts/api_relay.js"
+      ],
       "world": "ISOLATED",
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
     }
   ]
 }
