@@ -734,6 +734,49 @@ const BOT_DETECTION_PHRASES = [
   'cookie functionality is turned off',
 ];
 
+// ── Bot detection helpers ────────────────────────────────────────────────────
+
+// Random delay between page visits to avoid bot detection
+async function randomDelay(minMs = 800, maxMs = 2500) {
+  const ms = Math.floor(Math.random() * (maxMs - minMs)) + minMs;
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Domains known to aggressively detect bots — visit fewer pages for these
+const BOT_SENSITIVE_DOMAINS = new Set([
+  'delta.com', 'aa.com', 'united.com', 'chase.com', 'citi.com', 'barclays.com'
+]);
+
+function maxPagesForSite(source) {
+  const url = (ACCOUNT_ENTRY[source] || source || '').replace(/https?:\/\//, '');
+  for (const d of BOT_SENSITIVE_DOMAINS) {
+    if (url.includes(d)) return 2; // only visit 2 pages for bot-sensitive sites
+  }
+  return 5; // default
+}
+
+// Persist bot-detected path counts so we skip persistent bad paths across syncs
+async function markBotDetected(site, path) {
+  const data = await chrome.storage.local.get('botDetectedPaths');
+  const bots = data.botDetectedPaths || {};
+  const key = `${site}::${path}`;
+  bots[key] = (bots[key] || 0) + 1;
+  await chrome.storage.local.set({ botDetectedPaths: bots });
+}
+
+async function isBotBlocked(site, path) {
+  const data = await chrome.storage.local.get('botDetectedPaths');
+  const bots = data.botDetectedPaths || {};
+  return (bots[`${site}::${path}`] || 0) >= 2;
+}
+
+// Detect SPA/hash-routed URLs that need extra settle time after load
+function isSpaUrl(url) {
+  return url.includes('#/') || url.includes('/#') ||
+         url.includes('xfinity.com') || url.includes('spectrum.net') ||
+         url.includes('pge.com') || url.includes('att.com/my/');
+}
+
 // ── Per-account sync ─────────────────────────────────────────────────────────
 
 /**
@@ -823,7 +866,7 @@ async function crawlAccount(apiKey, account, syncSessionTime) {
     return;
   }
 
-  const MAX_SUBPAGES   = 5;
+  const MAX_SUBPAGES   = maxPagesForSite(account.source);
   const ENTRY_SETTLE   = 5_000;
   const SUBPAGE_SETTLE = 3_000;
   const allText        = [];
@@ -929,20 +972,46 @@ async function crawlAccount(apiKey, account, syncSessionTime) {
     // ── Visit subpages ──────────────────────────────────────────────────────────
     for (const link of toVisit) {
       try {
+        // Skip paths that have been bot-detected 2+ times
+        let linkPath;
+        try { linkPath = new URL(link.href).pathname; } catch { linkPath = link.href; }
+        if (await isBotBlocked(account.source, linkPath)) {
+          console.log(`[Mighty] ${account.name} → ${link.href}: bot-blocked path, skipping`);
+          continue;
+        }
+
+        // Random inter-page delay to avoid bot detection
+        await randomDelay();
+
         await chrome.tabs.update(tabId, { url: link.href });
         await waitForTabLoad(tabId, 15_000);
-        await sleep(SUBPAGE_SETTLE);
+
+        // Extra settle time for SPA pages that render content after load
+        const extraSettle = isSpaUrl(link.href) ? 4000 : 1000;
+        await sleep(SUBPAGE_SETTLE + extraSettle);
 
         try {
           const [d] = await chrome.scripting.executeScript({ target: { tabId }, func: dismissSessionTimeouts });
           if (d?.result) await sleep(2_000);
         } catch (_) {}
 
-        const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: extractPageText });
+        const [r] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: async function waitForContent() {
+            // Wait up to 5s for meaningful content to appear
+            for (let i = 0; i < 10; i++) {
+              const text = document.body ? document.body.innerText : '';
+              if (text && text.trim().length > 500) return text;
+              await new Promise(res => setTimeout(res, 500));
+            }
+            return document.body ? document.body.innerText : '';
+          },
+        });
         const text = r?.result || '';
 
         if (BOT_DETECTION_PHRASES.some(p => text.toLowerCase().includes(p))) {
           console.warn(`[Mighty] ${account.name} → ${link.href}: bot detected — skipping`);
+          await markBotDetected(account.source, linkPath);
           continue;
         }
         if (text.length < 100) {

@@ -2597,7 +2597,18 @@ if (document.querySelector('[data-discovering="1"]')) {
     // (counter resets to 0 naturally when fields are successfully found and card loses data-discovering)
     localStorage.setItem('mighty-discover-reloads', '99');
     document.querySelectorAll('[data-discovering="1"]').forEach(function(el) {
-      el.innerHTML = '<span style="color:#9ca3af;font-size:12px;font-style:italic">No fields found — use ↻ to retry sync</span>';
+      var card = el.closest('.acct-card');
+      var cardName = card ? (card.getAttribute('data-name') || '') : '';
+      var syncStatus = card ? (card.getAttribute('data-sync-status') || '') : '';
+      var msg;
+      if (syncStatus === 'login_required') {
+        msg = '<div style="color:#92400e;background:#fef3c7;border-radius:6px;padding:10px 12px;font-size:13px;margin:0">⚠️ Log in to ' + (cardName || 'this site') + ' in Chrome to restore sync</div>';
+      } else if (syncStatus === 'no_data') {
+        msg = '<div style="color:#6b7280;font-size:13px;font-style:italic">Visit ' + (cardName || 'this site') + ' in Chrome to capture your account data</div>';
+      } else {
+        msg = '<span style="color:#9ca3af;font-size:12px;font-style:italic">No fields found — use ↻ to retry sync</span>';
+      }
+      el.innerHTML = msg;
     });
   }
 } else {
@@ -4922,7 +4933,7 @@ def dashboard():
             )
 
             grid_cards += (
-                f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}">'
+                f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}">'
                 f'<div class="acct-card-header">'
                 f'<div style="flex:1;min-width:0">'
                 f'<div class="acct-name">{he(display_name)}</div>'
