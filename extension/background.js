@@ -344,6 +344,12 @@ async function runSync() {
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ACCOUNT_TIMEOUT_MS)),
       ]);
       ok++;
+      // Autonomous gap-filling: after successful sync, check coverage and visit missing pages
+      try {
+        await gapFillAccount(api_key, account, syncSessionTime);
+      } catch(gfe) {
+        console.log(`[Mighty] ${account.name}: gap-fill skipped: ${gfe.message}`);
+      }
     } catch (e) {
       console.error(`[Mighty] Failed: ${account.name}:`, e.message);
       failed++;
@@ -847,6 +853,120 @@ async function syncAccountViaTab(apiKey, account, urls, syncSessionTime) {
  * visits the most account-relevant ones, and sends accumulated text to the server.
  * No hardcoded sub-paths — the crawler finds benefit/certificate/wallet pages automatically.
  */
+// Autonomous gap-filling: check coverage and visit missing-field pages
+async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 2) {
+  const source = account.source;
+  const entry = ACCOUNT_ENTRY[source];
+  if (!entry) return;
+
+  let entryOrigin;
+  try { entryOrigin = new URL(entry).origin; } catch { return; }
+
+  for (let iter = 0; iter < maxIterations; iter++) {
+    try {
+      const covResp = await fetch(`${MIGHTY_URL}/api/coverage/${source}`, {
+        headers: { 'X-Mighty-Key': apiKey }
+      });
+      if (!covResp.ok) break;
+      const cov = await covResp.json();
+
+      console.log(`[Mighty] ${source} coverage: ${cov.coverage_pct}% (${cov.found_count}/${cov.expected_count} fields)`);
+
+      if (!cov.should_continue || !cov.targets || cov.targets.length === 0) break;
+
+      // Find known registry paths matching gap target keywords
+      const knownPaths = await fetchRegistryPaths(source);
+
+      const targetPaths = knownPaths.filter(p =>
+        cov.targets.some(kw => p.toLowerCase().includes(kw))
+      ).slice(0, 3); // visit at most 3 gap-fill pages per iteration
+
+      if (targetPaths.length === 0) {
+        console.log(`[Mighty] ${source}: no matching gap-fill paths found`);
+        break;
+      }
+
+      console.log(`[Mighty] ${source}: gap-filling ${targetPaths.length} pages for missing: ${cov.gaps.map(g => g.key).join(', ')}`);
+
+      // Open a popup window to visit gap-fill pages (reuses the crawlAccount pattern)
+      const win = await chrome.windows.create({
+        url: entry,
+        type: 'popup',
+        width: 800,
+        height: 600,
+      });
+      chrome.windows.update(win.id, { state: 'minimized' });
+      const tabId = win.tabs[0].id;
+
+      let newText = '';
+      try {
+        await waitForTabLoad(tabId, 15_000);
+        await sleep(3_000);
+
+        for (const path of targetPaths) {
+          const fullUrl = entryOrigin + path;
+          await randomDelay(1000, 2000);
+          try {
+            await chrome.tabs.update(tabId, { url: fullUrl });
+            await waitForTabLoad(tabId, 15_000);
+            await sleep(3_000);
+
+            const [r] = await chrome.scripting.executeScript({
+              target: { tabId },
+              func: async function waitForContent() {
+                for (let i = 0; i < 10; i++) {
+                  const text = document.body ? document.body.innerText : '';
+                  if (text && text.trim().length > 500) return text;
+                  await new Promise(res => setTimeout(res, 500));
+                }
+                return document.body ? document.body.innerText : '';
+              },
+            });
+            const pageText = r?.result || '';
+            if (pageText && pageText.length > 200) {
+              newText += `\n\n--- ${fullUrl} ---\n${pageText}`;
+              reportPathToRegistry(source, fullUrl);
+            }
+          } catch(e) {
+            console.log(`[Mighty] gap-fill visit failed: ${fullUrl}: ${e.message}`);
+          }
+        }
+      } finally {
+        chrome.windows.remove(win.id).catch(() => {});
+      }
+
+      if (newText.trim().length < 200) break;
+
+      // Push gap-fill data to server (merged into existing raw_text by api_data_sync)
+      const syncResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key:     apiKey,
+          source:      source,
+          sync_source: 'extension',
+          gap_fill:    true,
+          data: {
+            name:     account.name,
+            icon:     account.icon,
+            color:    account.color,
+            status:   'ok',
+            items:    [],
+            raw_text: newText.slice(0, 20_000),
+          },
+          synced_at: syncSessionTime,
+        }),
+      });
+      if (!syncResp.ok) break;
+
+      console.log(`[Mighty] ${source}: gap-fill iteration ${iter + 1} complete`);
+    } catch(e) {
+      console.log(`[Mighty] ${source}: gap-fill error: ${e.message}`);
+      break;
+    }
+  }
+}
+
 async function crawlAccount(apiKey, account, syncSessionTime) {
   const entry = ACCOUNT_ENTRY[account.source];
   if (!entry) {

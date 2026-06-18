@@ -774,6 +774,58 @@ _EXPECTED_FIELDS: dict[str, dict[str, str]] = {
 }
 
 
+# Maps expected field keys → URL path keywords likely to contain them
+# Used for goal-driven crawl: "certificates missing → look for pages with these keywords"
+_FIELD_TO_PATH_KEYWORDS: dict[str, list[str]] = {
+    "certificates":    ["certificate", "cert", "award", "companion", "free-night", "fnc"],
+    "travel_credits":  ["credits", "wallet", "ecredit", "voucher", "travel-credit", "benefits"],
+    "upgrades":        ["upgrade", "sticker", "gpu", "rpu", "instrument", "systemwide"],
+    "upcoming_trips":  ["trips", "travel", "itinerary", "reservation", "booking", "upcoming"],
+    "elite_status":    ["status", "medallion", "loyalty", "tier", "elite"],
+    "miles_balance":   ["skymiles", "miles", "points", "balance", "mileageplus", "rapid-rewards"],
+    "statement_credits": ["credits", "benefits", "rewards", "statement", "offers"],
+    "current_balance": ["account", "billing", "statement", "summary", "balance"],
+    "payment_due_date":["billing", "payment", "due", "invoice"],
+    "policy_number":   ["policy", "coverage", "plan", "details"],
+    "premium":         ["billing", "payment", "premium", "invoice"],
+    "amount_due":      ["billing", "payment", "account", "invoice", "summary"],
+    "checking_balance":["account", "checking", "dashboard", "overview"],
+    "savings_balance": ["savings", "account", "dashboard", "overview"],
+    "renewal_date":    ["membership", "account", "plan", "subscription", "renewal"],
+}
+
+# Inference rules: if a field VALUE matches these patterns, expect additional fields
+# Format: (field_key, value_substring) → [additional_expected_field_keys]
+_INFERENCE_RULES: list[tuple[str, str, list[str]]] = [
+    # Airline status implies specific benefits
+    ("elite_status", "diamond",    ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "platinum",   ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "gold",       ["certificates", "travel_credits"]),
+    ("elite_status", "medallion",  ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "1k",         ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "global",     ["certificates", "upgrades", "travel_credits"]),
+    ("elite_status", "mosaic",     ["certificates"]),
+    # Card implies credits
+    ("card_name",    "platinum",   ["statement_credits", "travel_credits"]),
+    ("card_name",    "reserve",    ["statement_credits", "travel_credits"]),
+    ("card_name",    "sapphire",   ["travel_credits"]),
+    # Companion pass presence implies points threshold
+    ("companion_pass", "active",   ["miles_balance"]),
+    ("companion_pass", "available",["miles_balance"]),
+]
+
+def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
+    """Given found fields, return additional expected field keys implied by those values."""
+    additional = set()
+    for f in found_fields:
+        fk = f.get("key", "").lower()
+        fv = f.get("value", "").lower()
+        for rule_key, rule_val, implied in _INFERENCE_RULES:
+            if rule_key in fk and rule_val in fv:
+                additional.update(implied)
+    return list(additional)
+
+
 def _coverage_gaps(source: str, found_keys: list[str]) -> list[tuple[str, str]]:
     """Return list of (field_key, description) for expected fields not yet found."""
     cat_key = None
@@ -795,7 +847,81 @@ def _coverage_gaps(source: str, found_keys: list[str]) -> list[tuple[str, str]]:
             gaps.append((exp_key, exp_desc))
     return gaps
 
+
+def _generate_gap_targets(source: str, found_keys: list[str], found_fields: list[dict] = None) -> list[str]:
+    """
+    Given missing expected fields, return URL path keywords to search for.
+    Returns list of path keyword strings (not full URLs) to guide crawl.
+    Applies inference rules to expand the target set.
+    """
+    gaps = _coverage_gaps(source, found_keys)
+    if not gaps:
+        return []
+
+    gap_keys = [gk for gk, _ in gaps]
+
+    # Apply inference rules to expand gap targets
+    if found_fields:
+        additional = _apply_inference_rules(found_fields)
+        gap_keys = list(set(gap_keys) | set(additional))
+
+    # Collect path keywords for all gap fields
+    target_keywords: list[str] = []
+    for gk in gap_keys:
+        keywords = _FIELD_TO_PATH_KEYWORDS.get(gk, [])
+        target_keywords.extend(keywords)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_keywords = []
+    for kw in target_keywords:
+        if kw not in seen:
+            seen.add(kw)
+            unique_keywords.append(kw)
+
+    return unique_keywords[:12]  # cap to avoid crawl explosion
+
+
 _URL_MARKER_RE = re.compile(r'===\s*(https?://[^\s=]+)\s*===', re.IGNORECASE)
+
+# Phrases that indicate a page contains only navigation/marketing, not account data
+_NAV_MARKETING_SIGNALS = {
+    "sign up", "get started", "learn more", "explore", "compare plans",
+    "why choose", "our features", "contact us", "help center", "faq",
+    "privacy policy", "terms of service", "cookie policy", "about us",
+    "press", "careers", "investor", "advertise",
+}
+_MIN_ACCOUNT_SIGNALS = {
+    "your account", "my account", "account summary", "balance", "points",
+    "miles", "status", "certificate", "reward", "credit", "bill", "due",
+    "membership", "expir", "renewal", "subscription",
+}
+
+def _classify_path_content(raw_text: str) -> str:
+    """
+    Returns 'account_data', 'navigation', 'marketing', or 'login_wall'.
+    Used to mark paths that should not be re-visited.
+    """
+    if not raw_text or len(raw_text) < 100:
+        return "empty"
+    text_lower = raw_text.lower()
+
+    if any(phrase in text_lower for phrase in ["sign in", "log in", "login", "please log"]):
+        if len(raw_text) < 3000:
+            return "login_wall"
+
+    account_hits = sum(1 for sig in _MIN_ACCOUNT_SIGNALS if sig in text_lower)
+    nav_hits = sum(1 for sig in _NAV_MARKETING_SIGNALS if sig in text_lower)
+
+    if account_hits >= 3:
+        return "account_data"
+    elif nav_hits > account_hits * 2:
+        return "marketing"
+    elif len(raw_text) < 500:
+        return "navigation"
+    return "account_data"  # default: give it a chance
+
+
 
 def _paths_from_raw(raw_text: str) -> list[str]:
     """Extract URL paths from === https://... === markers embedded in a raw_text blob.
@@ -3151,7 +3277,18 @@ function toggleHealth(btn, source) {
         if (h.recent_changes && h.recent_changes.length) {
           changes = '<div style="margin-top:4px;color:#6b7280">Recent changes: '+h.recent_changes.slice(0,2).map(function(c){return c.field_label+': '+c.old_value+'→'+c.new_value;}).join(' · ')+'</div>';
         }
-        detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+        // Fetch coverage pct from dedicated endpoint and augment display
+        fetch('/api/coverage/' + source).then(function(cr){return cr.json();}).then(function(cv){
+          var covLabel = '';
+          if (cv.expected_count > 0) {
+            covLabel = '<span style="color:#a3a3a3">Coverage '+cv.coverage_pct+'% ('+cv.found_count+'/'+cv.expected_count+' expected fields)</span>';
+          } else {
+            covLabel = '<span style="color:#a3a3a3">'+cv.found_count+' fields found</span>';
+          }
+          detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="margin-top:2px">'+covLabel+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+        }).catch(function(){
+          detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+        });
       }).catch(function(){ detail.innerHTML = 'Could not load health data'; });
     }
   } else {
@@ -7955,6 +8092,27 @@ def api_data_sync():
                             _db.commit()
                         except Exception:
                             pass
+                        # Negative learning: accelerated decay for nav/marketing paths
+                        try:
+                            for _p_cls in (_paths if _paths else []):
+                                # Read path text from raw_text segment if present
+                                import re as _re_cls
+                                _seg_re = _re_cls.compile(
+                                    r'(?:---|===)\s*https?://[^\s]*' + _re_cls.escape(_p_cls) + r'[^\n]*\n(.*?)(?=(?:---|===)\s*https?://|\Z)',
+                                    _re_cls.dotall | _re_cls.ignorecase
+                                )
+                                _m_cls = _seg_re.search(raw_text)
+                                _seg_text = _m_cls.group(1) if _m_cls else ""
+                                _cls = _classify_path_content(_seg_text or raw_text[:2000])
+                                if _cls in ("navigation", "marketing"):
+                                    _db.execute(
+                                        "UPDATE site_paths SET failure_count = failure_count + 2, "
+                                        "quality_score = MAX(0.0, quality_score - 0.8) "
+                                        "WHERE site=? AND path=?", (source, _p_cls)
+                                    )
+                            _db.commit()
+                        except Exception:
+                            pass
                         _record_path_failures(source, raw_text, succeeded=True)
                     else:
                         # Discovery ran but LLM returned nothing — set discovery_failed
@@ -8067,6 +8225,26 @@ def api_data_sync():
                                 "last_seen = ? WHERE site = ? AND quality_score < 5.0",
                                 (iso(), source)
                             )
+                        # Negative learning: accelerated decay for nav/marketing paths
+                        try:
+                            import re as _re_r
+                            for _p_r in (_paths2 if _paths2 else []):
+                                _seg_re_r = _re_r.compile(
+                                    r'(?:---|===)\s*https?://[^\s]*' + _re_r.escape(_p_r) + r'[^\n]*\n(.*?)(?=(?:---|===)\s*https?://|\Z)',
+                                    _re_r.dotall | _re_r.ignorecase
+                                )
+                                _m_r = _seg_re_r.search(raw_text)
+                                _seg_r = _m_r.group(1) if _m_r else ""
+                                _cls_r = _classify_path_content(_seg_r or raw_text[:2000])
+                                if _cls_r in ("navigation", "marketing"):
+                                    _db_r.execute(
+                                        "UPDATE site_paths SET failure_count = failure_count + 2, "
+                                        "quality_score = MAX(0.0, quality_score - 0.8) "
+                                        "WHERE site=? AND path=?", (source, _p_r)
+                                    )
+                            _db_r.commit()
+                        except Exception:
+                            pass
                         _db_r.commit()
                     except Exception:
                         pass
@@ -8550,6 +8728,57 @@ def api_sync_health(source):
         "path_failures":    db.execute(
             "SELECT SUM(failure_count) FROM site_paths WHERE site=?", (source,)
         ).fetchone()[0] or 0,
+    })
+
+
+@app.route("/api/coverage/<source>")
+@require_login
+def api_account_coverage(source):
+    """
+    Returns coverage score, found fields, gaps, and suggested crawl targets.
+    Used by extension to decide whether to keep crawling.
+    """
+    uid = session["user_id"]
+    db = get_db()
+
+    ad_row = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
+    ).fetchone()
+    if not ad_row:
+        return jsonify({"coverage_pct": 0, "gaps": [], "targets": [], "found_count": 0})
+
+    d = decrypt_account_data(uid, ad_row["data_enc"] or "")
+    items = d.get("items") or d.get("ai_items") or []
+
+    cat = _source_category(source)
+    cat_key = None
+    for ck, schema in _CATEGORY_SCHEMAS.items():
+        if source in schema.get("sources", set()):
+            cat_key = ck
+            break
+    expected = _EXPECTED_FIELDS.get(cat_key or "", {})
+    found_keys = [it.get("key", "") for it in items]
+
+    gaps = _coverage_gaps(source, found_keys)
+    targets = _generate_gap_targets(source, found_keys, items)
+
+    coverage_pct = 0
+    if expected:
+        found_count = len(expected) - len(gaps)
+        coverage_pct = int(found_count / len(expected) * 100)
+    else:
+        found_count = len(items)
+        coverage_pct = min(100, found_count * 15)  # rough estimate when no schema
+
+    return jsonify({
+        "source": source,
+        "category": cat,
+        "coverage_pct": coverage_pct,
+        "found_count": len(items),
+        "expected_count": len(expected),
+        "gaps": [{"key": gk, "description": gdesc} for gk, gdesc in gaps],
+        "targets": targets,  # path keywords to hunt for
+        "should_continue": coverage_pct < 70 and len(gaps) > 0,
     })
 
 
