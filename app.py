@@ -1724,6 +1724,34 @@ def require_login(f):
         return f(*a, **kw)
     return inner
 
+def require_login_or_key(f):
+    """Accepts either session cookie (web) or X-Mighty-Key header (extension)."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Check API key first (extension path — no CSRF needed)
+        api_key = request.headers.get("X-Mighty-Key", "").strip()
+        if api_key:
+            row = get_db().execute(
+                "SELECT id FROM users WHERE api_key=?", (api_key,)
+            ).fetchone()
+            if not row:
+                return jsonify({"error": "invalid api key"}), 401
+            # Stash user_id in g so the route can access it the same way
+            g.api_key_user_id = row["id"]
+            return f(*args, **kwargs)
+        # Fall back to session cookie (web path)
+        if "user_id" not in session:
+            nxt = request.path
+            return redirect(f"/login?next={nxt}")
+        return f(*args, **kwargs)
+    return decorated
+
+def get_current_user_id() -> str:
+    """Returns user_id whether request came via API key or session cookie."""
+    if hasattr(g, "api_key_user_id"):
+        return g.api_key_user_id
+    return session["user_id"]
+
 def get_csrf_token():
     """Return (and lazily create) a per-session CSRF token."""
     if "_csrf" not in session:
@@ -10322,7 +10350,7 @@ def server_error(e):
 
 
 @app.route("/api/benefits/relevant")
-@require_login
+@require_login_or_key
 def api_benefits_relevant():
     """
     Returns benefits relevant to the user's current intent.
@@ -10330,7 +10358,7 @@ def api_benefits_relevant():
       context: 'flight' | 'hotel' | 'car' | 'shopping' | 'dining'
       url: current page URL (used for logging/debugging, not matched)
     """
-    uid = session["user_id"]
+    uid = get_current_user_id()
     context = request.args.get("context", "").lower().strip()
 
     if context not in _BENEFIT_APPLICABILITY:
@@ -10402,11 +10430,13 @@ def api_csrf_token():
 
 
 @app.route("/api/intent/log", methods=["POST"])
-@require_login
+@require_login_or_key
 def api_intent_log():
     """Called by extension when intent is detected and benefits are surfaced."""
-    check_csrf()
-    uid = session["user_id"]
+    # Only require CSRF for session-based (web) requests
+    if not hasattr(g, "api_key_user_id"):
+        check_csrf()
+    uid = get_current_user_id()
     data = request.get_json(silent=True) or {}
     intent_type   = str(data.get("intent_type", ""))[:50]
     page_url      = str(data.get("page_url", ""))[:500]
