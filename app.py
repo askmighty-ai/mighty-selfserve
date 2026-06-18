@@ -5161,6 +5161,19 @@ def dashboard():
 
             synced_at   = row["synced_at"] if row else ""
             sync_status = data.get("sync_status", "ok") if row else ""
+
+            # Batch-fetch field_observations for the Why? modal (one query per card)
+            obs_map: dict = {}
+            try:
+                _obs_rows = get_db().execute(
+                    "SELECT field_key, first_seen, last_seen, seen_count "
+                    "FROM field_observations WHERE user_id=? AND source=?",
+                    (uid, src)
+                ).fetchall()
+                obs_map = {r["field_key"]: r for r in _obs_rows}
+            except Exception:
+                pass
+
             cand_count = 0
             try:
                 cand_count = get_db().execute(
@@ -5298,16 +5311,37 @@ def dashboard():
                         'title="Lower confidence — may need verification">⚠ review</span>'
                         if i.get("key") in review_required_keys else ""
                     )
-                    snip = i.get("source_snippet", "")
+                    snip = i.get("source_snippet", "") or i.get("source_url", "") or i.get("url", "")
+                    _fkey = i.get("key", "")
+                    _fconf = i.get("confidence", None)
+                    _obs = obs_map.get(_fkey)
+                    _first_seen_str = _fmt_sync(_obs["first_seen"]) if _obs and _obs["first_seen"] else None
+                    _last_seen_str  = _fmt_sync(_obs["last_seen"])  if _obs and _obs["last_seen"]  else (_fmt_sync(synced_at) if synced_at else None)
+                    _src_url = i.get("source_url") or i.get("url") or (src.replace("_", ".") if src else None)
+                    _conf_label = _confidence_label(float(_fconf)) if _fconf is not None else None
+                    _why_detail_rows = []
+                    if _conf_label:
+                        _why_detail_rows.append(f"<strong>Confidence:</strong> {he(_conf_label)}")
+                    if _first_seen_str:
+                        _why_detail_rows.append(f"<strong>Discovered:</strong> {he(_first_seen_str)}")
+                    if _last_seen_str:
+                        _why_detail_rows.append(f"<strong>Last verified:</strong> {he(_last_seen_str)}")
+                    if _src_url:
+                        _why_detail_rows.append(f"<strong>Source:</strong> {he(_src_url[:80])}")
+                    _why_detail_html = "<br>".join(_why_detail_rows)
+                    _why_snippet_html = (
+                        f'<div style="font-size:11px;color:#6b7280;margin-top:4px;font-style:italic">{he(snip[:200])}</div>'
+                        if snip else ""
+                    )
                     why_html = (
                         f'<span class="why-link" onclick="toggleSnippet(this)" '
                         f'style="font-size:10px;color:#93c5fd;cursor:pointer;margin-left:6px;user-select:none" '
-                        f'title="Show source text">Why?</span>'
-                        f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#9ca3af;'
+                        f'title="Show discovery details">Why?</span>'
+                        f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#374151;'
                         f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
-                        f'margin-top:4px;font-style:italic;line-height:1.4">'
-                        f'{he(snip[:200])}</div>'
-                    ) if snip else ""
+                        f'margin-top:4px;line-height:1.6">'
+                        f'{_why_detail_html}{_why_snippet_html}</div>'
+                    ) if (_why_detail_rows or snip) else ""
                     sec_row_parts.append(
                         f'<div class="sec-row">'
                         f'<span class="sec-lbl">{he(i["label"])}{review_badge}</span>'
@@ -5334,16 +5368,37 @@ def dashboard():
                         'title="Lower confidence — may need verification">⚠ review</span>'
                         if i.get("key") in review_required_keys else ""
                     )
-                    snip = i.get("source_snippet", "")
+                    snip = i.get("source_snippet", "") or i.get("source_url", "") or i.get("url", "")
+                    _fkey = i.get("key", "")
+                    _fconf = i.get("confidence", None)
+                    _obs = obs_map.get(_fkey)
+                    _first_seen_str = _fmt_sync(_obs["first_seen"]) if _obs and _obs["first_seen"] else None
+                    _last_seen_str  = _fmt_sync(_obs["last_seen"])  if _obs and _obs["last_seen"]  else (_fmt_sync(synced_at) if synced_at else None)
+                    _src_url = i.get("source_url") or i.get("url") or (src.replace("_", ".") if src else None)
+                    _conf_label = _confidence_label(float(_fconf)) if _fconf is not None else None
+                    _why_detail_rows = []
+                    if _conf_label:
+                        _why_detail_rows.append(f"<strong>Confidence:</strong> {he(_conf_label)}")
+                    if _first_seen_str:
+                        _why_detail_rows.append(f"<strong>Discovered:</strong> {he(_first_seen_str)}")
+                    if _last_seen_str:
+                        _why_detail_rows.append(f"<strong>Last verified:</strong> {he(_last_seen_str)}")
+                    if _src_url:
+                        _why_detail_rows.append(f"<strong>Source:</strong> {he(_src_url[:80])}")
+                    _why_detail_html = "<br>".join(_why_detail_rows)
+                    _why_snippet_html = (
+                        f'<div style="font-size:11px;color:#6b7280;margin-top:4px;font-style:italic">{he(snip[:200])}</div>'
+                        if snip else ""
+                    )
                     why_html = (
                         f'<span class="why-link" onclick="toggleSnippet(this)" '
                         f'style="font-size:10px;color:#93c5fd;cursor:pointer;margin-left:6px;user-select:none" '
-                        f'title="Show source text">Why?</span>'
-                        f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#9ca3af;'
+                        f'title="Show discovery details">Why?</span>'
+                        f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#374151;'
                         f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
-                        f'margin-top:4px;font-style:italic;line-height:1.4">'
-                        f'{he(snip[:200])}</div>'
-                    ) if snip else ""
+                        f'margin-top:4px;line-height:1.6">'
+                        f'{_why_detail_html}{_why_snippet_html}</div>'
+                    ) if (_why_detail_rows or snip) else ""
                     exp_row_parts.append(
                         f'<div class="exp-row">'
                         f'<span class="exp-lbl" title="{he(i["label"])}">{he(i["label"])}{review_badge}</span>'
@@ -5460,10 +5515,31 @@ def dashboard():
                     + "".join(coverage_lines) +
                     f'</div>'
                 )
+                # Coverage face bar — always visible on card face
+                cov_color = "#16a34a" if completeness_pct >= 80 else "#d97706" if completeness_pct >= 50 else "#dc2626"
+                searching_text = ""
+                if gaps:
+                    searching_text = (
+                        f'<div style="font-size:10px;color:#9ca3af;margin-top:1px">' +
+                        f'Searching for: {", ".join(gdesc for _, gdesc in gaps[:2])}' +
+                        ("\u2026" if len(gaps) > 2 else "") +
+                        f'</div>'
+                    )
+                coverage_face = (
+                    f'<div style="display:flex;align-items:center;gap:6px;margin-top:3px">' +
+                    f'<div style="flex:1;height:3px;background:#e5e7eb;border-radius:2px">' +
+                    f'<div style="height:3px;width:{completeness_pct}%;background:{cov_color};border-radius:2px"></div>' +
+                    f'</div>' +
+                    f'<span style="font-size:10px;color:{cov_color};font-weight:600">{completeness_pct}%</span>' +
+                    f'</div>'
+                ) + searching_text
             else:
                 completeness_badge = ""
                 gaps_inline = ""
                 coverage_block = ""
+                completeness_pct = None
+                gaps = []
+                coverage_face = ""
 
             health_footer = (
                 f'<div class="card-health-footer" style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:6px;padding:6px 14px 8px">'
@@ -5481,6 +5557,7 @@ def dashboard():
                 f'<div style="flex:1;min-width:0">'
                 f'<div class="acct-name">{he(display_name)}{completeness_badge}</div>'
                 f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{freshness_html}</div>'
+                f'{coverage_face}'
                 f'</div>'
                 f'<div class="acct-controls">'
                 f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;cursor:help" title="{synced_title}"></div>'
@@ -9932,14 +10009,8 @@ def sync_account_cloud(source):
                             (n for k, n, *_ in SUPPORTED_SITES if k == source), source
                         )
                         if raw_text:
-                            # Run 3x discovery and merge (same as manual discover)
-                            merged: dict = {}
-                            for _run in range(3):
-                                for f in claude_discover_fields(raw_text, site_name, source=source):
-                                    k = f.get("key", "")
-                                    if k and k not in merged: merged[k] = f
-                                    elif k: merged[k]["value"] = f.get("value", "")
-                            fields = list(merged.values())
+                            # Single discovery call (LLM is deterministic at temp=0; 3x was redundant)
+                            fields = list(claude_discover_fields(raw_text, site_name, source=source))
                             if fields:
                                 _save_discovered_fields(uid, source, fields)
                 except Exception as de:
