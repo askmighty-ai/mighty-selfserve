@@ -417,9 +417,14 @@ def _fmt_sync(ts):
         return ts[:10] if ts else "—"
 
 def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
-    """Return a freshness label, CSS color, and icon for display on cards."""
+    """Return a (label, color, icon) tuple for display on cards.
+
+    Stale (3+ days) and login-required states use red + bold to draw attention.
+    Returns (label, color, icon) — callers that need font-weight should check
+    whether the color is '#dc2626' and apply font-weight:600 accordingly.
+    """
     if sync_status == "login_required":
-        return ("Login required", "#ef4444", "⚠")
+        return ("🔐 Login required", "#dc2626", "")
     if sync_status == "no_data" or not synced_at:
         return ("No data", "#9ca3af", "—")
     try:
@@ -434,10 +439,10 @@ def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
             return (f"{int(age_h)}h ago", "#6b7280", "✓")
         elif age_h < 48:
             return ("Yesterday", "#f59e0b", "~")
-        elif age_h < 168:
+        elif age_h < 72:
             return (f"{int(age_h/24)}d ago", "#f59e0b", "~")
         else:
-            return ("Stale", "#ef4444", "!")
+            return ("Stale", "#dc2626", "!")
     except Exception:
         return ("Unknown", "#9ca3af", "?")
 
@@ -2760,6 +2765,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     <div id="fview-accounts">
       {hero_section_html}
       {action_center_html}
+      {recently_found_html}
       {value_center_html}
       <script>
       (function() {
@@ -3061,16 +3067,23 @@ function updateSyncTimes() {
   document.querySelectorAll('[data-synced]').forEach(function(el) {
     var ts = el.dataset.synced;
     if (!ts) return;
+    // Login-required accounts carry a data-sync-status on the parent card
+    var card = el.closest('[data-sync-status]');
+    var syncStatus = card ? card.dataset.syncStatus : '';
+    if (syncStatus === 'login_required') {
+      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">🔐 Login required</span>';
+      return;
+    }
     var rel = fmtRelative(ts);
     if (rel) {
-      var color = '#22c55e', icon = '✓';
+      var color = '#22c55e', icon = '✓', fw = '500';
       var secs2 = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
       var hrs2 = secs2 / 3600;
-      if (hrs2 >= 168) { color = '#ef4444'; icon = '!'; }
+      if (hrs2 >= 72) { color = '#dc2626'; icon = '!'; fw = '700'; }
       else if (hrs2 >= 48) { color = '#f59e0b'; icon = '~'; }
       else if (hrs2 >= 24) { color = '#f59e0b'; icon = '~'; }
       else if (hrs2 >= 2) { color = '#6b7280'; icon = '✓'; }
-      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:500">' + icon + ' Synced ' + rel + '</span>';
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' Synced ' + rel + '</span>';
     }
     try {
       var d = new Date(ts);
@@ -3391,10 +3404,13 @@ function toggleHealth(btn, source) {
     chevron.textContent = '▾';
     if (!detail.dataset.loaded) {
       detail.dataset.loaded = '1';
-      detail.innerHTML = '<span style="color:#d1d5db">Loading…</span>';
+      var _staticCoverage = detail.innerHTML; // preserve server-rendered coverage block
+      detail.innerHTML = _staticCoverage + '<div style="color:#d1d5db;font-size:11px;margin-top:4px">Loading sync health…</div>';
       fetch('/api/sync-health/' + source).then(function(r){return r.json();}).then(function(h){
         var fa = h.failure_reason ? '<span style="color:#ef4444">✗ '+h.failure_reason+'</span>' : '<span style="color:#22c55e">✓ ok</span>';
-        var conf = h.confidence_avg ? Math.round(h.confidence_avg*100)+'% avg confidence' : 'no confidence data';
+        var _ca = h.confidence_avg || 0;
+        var _clabel = _ca >= 0.85 ? 'High' : _ca >= 0.60 ? 'Medium' : _ca > 0 ? 'Needs review' : null;
+        var conf = _clabel ? _clabel + ' confidence' : 'no confidence data';
         var cov  = h.coverage ? h.coverage.message+' ('+h.coverage.score+'/100)' : '';
         var gapHtml = '';
         if (h.gaps && h.gaps.count > 0) {
@@ -3417,21 +3433,13 @@ function toggleHealth(btn, source) {
           } else {
             covLabel = '<span style="color:#a3a3a3">'+cv.found_count+' fields found</span>';
           }
-          detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="margin-top:2px">'+covLabel+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
-          // Completeness checklist
-          if (cv && cv.expected_count > 0 && cv.gaps && cv.gaps.length > 0) {
-            var checklist = '<div style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:8px">';
-            checklist += '<div style="font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px">FIELD COVERAGE</div>';
-            cv.gaps.slice(0,4).forEach(function(g) {
-              checklist += '<div style="font-size:11px;color:#9ca3af">? ' + (g.description || g) + '</div>';
-            });
-            checklist += '</div>';
-            detail.innerHTML += checklist;
-          }
+          var _syncHtml = '<div style="border-top:1px solid #f3f4f6;padding-top:6px;margin-top:4px">'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="margin-top:2px">'+covLabel+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+          detail.innerHTML = _staticCoverage + _syncHtml;
         }).catch(function(){
-          detail.innerHTML = '<div>'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+          var _syncHtml = '<div style="border-top:1px solid #f3f4f6;padding-top:6px;margin-top:4px">'+fa+' · '+h.field_count+' fields · '+conf+api+'</div><div style="color:#9ca3af">'+cov+'</div>'+gapHtml+hint+changes;
+          detail.innerHTML = _staticCoverage + _syncHtml;
         });
-      }).catch(function(){ detail.innerHTML = 'Could not load health data'; });
+      }).catch(function(){ detail.innerHTML = _staticCoverage + '<div style="color:#ef4444;font-size:11px;margin-top:4px">Could not load sync health</div>'; });
     }
   } else {
     detail.style.display = 'none';
@@ -5377,7 +5385,9 @@ def dashboard():
             stale_cls = " is-stale" if not synced_at else ""
             expiring_cls = " is-expiring" if alert_item else ""
             _flabel, _fcolor, _ficon = _freshness_label(synced_at, sync_status)
-            freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:500">{_ficon} {_flabel}</span>'
+            _fw = "700" if _fcolor == "#dc2626" else "500"
+            _fprefix = f"{_ficon} " if _ficon else ""
+            freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
 
             # Footer: expand toggle only if there are extra items
             if extra_items:
@@ -5420,9 +5430,40 @@ def dashboard():
                     gaps_inline = f'<div style="margin:4px 0 2px">{gap_hints}</div>'
                 else:
                     gaps_inline = ""
+
+                # Build coverage detail block (server-rendered, shown when health panel expands)
+                coverage_lines = []
+                found_labels = {}
+                for it in items:
+                    fk = it.get("key", "")
+                    for exp_key, exp_desc in cat_expected.items():
+                        tokens_exp = [t for t in exp_key.split("_") if len(t) > 3]
+                        tokens_fk  = [t for t in fk.split("_")  if len(t) > 3]
+                        if exp_key == fk or (len(tokens_exp) >= 2 and len(set(tokens_exp) & set(tokens_fk)) >= 2) \
+                           or (len(exp_key) > 7 and exp_key in fk):
+                            found_labels[exp_key] = it.get("label", exp_desc)
+                for exp_key, exp_desc in cat_expected.items():
+                    if exp_key in found_labels:
+                        coverage_lines.append(
+                            f'<div style="font-size:11px;color:#16a34a;padding:1px 0">'
+                            f'✓ {he(found_labels[exp_key])}</div>'
+                        )
+                    else:
+                        coverage_lines.append(
+                            f'<div style="font-size:11px;color:#d97706;padding:1px 0">'
+                            f'? {he(exp_desc)}</div>'
+                        )
+                coverage_block = (
+                    f'<div style="margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #f3f4f6">'
+                    f'<div style="font-size:10px;font-weight:600;color:#9ca3af;text-transform:uppercase;'
+                    f'letter-spacing:.05em;margin-bottom:4px">Coverage {completeness_pct}%</div>'
+                    + "".join(coverage_lines) +
+                    f'</div>'
+                )
             else:
                 completeness_badge = ""
                 gaps_inline = ""
+                coverage_block = ""
 
             health_footer = (
                 f'<div class="card-health-footer" style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:6px;padding:6px 14px 8px">'
@@ -5430,7 +5471,7 @@ def dashboard():
                 f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;padding:0;display:flex;align-items:center;gap:3px">'
                 f'<span class="health-chevron">&#9656;</span> Sync health'
                 f'</button>'
-                f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}"></div>'
+                f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}">{coverage_block}</div>'
                 f'</div>'
             )
 
@@ -5559,6 +5600,75 @@ def dashboard():
         '</div>'
         '</div>'
     )
+
+    # ── LAYER 2b: Recently Discovered feed ───────────────────────────────────
+    import datetime as _dtrd
+    _cutoff = (_dtrd.datetime.utcnow() - _dtrd.timedelta(days=14)).isoformat()
+    try:
+        _recent_rows = get_db().execute(
+            "SELECT source, field_label, new_value, changed_at FROM field_history "
+            "WHERE user_id=? AND change_type='added' AND changed_at > ? "
+            "ORDER BY changed_at DESC LIMIT 10",
+            (uid, _cutoff)
+        ).fetchall()
+    except Exception:
+        _recent_rows = []
+
+    # Build a flat source→display_name lookup from _cat_map
+    _src_display_lookup = {}
+    for _cat_vals in _cat_map.values():
+        for _sk, _sn, _si, _sc in _cat_vals:
+            _src_display_lookup[_sk] = _sn
+
+    def _source_display_name(src):
+        return _src_display_lookup.get(src) or src.replace("_", " ").title()
+
+    recently_found_html = ""
+    if _recent_rows:
+        _day_groups: dict = {}
+        _now_date = _dtrd.datetime.utcnow().date()
+        for _rrow in _recent_rows:
+            try:
+                _row_date = _dtrd.datetime.fromisoformat(_rrow["changed_at"]).date()
+            except Exception:
+                continue
+            _delta = (_now_date - _row_date).days
+            if _delta == 0:
+                _day_label = "Today"
+            elif _delta == 1:
+                _day_label = "Yesterday"
+            elif _delta <= 7:
+                _day_label = f"{_delta} days ago"
+            else:
+                _day_label = _row_date.strftime("%b %-d")
+            _day_groups.setdefault(_day_label, []).append(_rrow)
+
+        _feed_html = ""
+        for _day_label, _rows in list(_day_groups.items())[:4]:
+            _items_html = "".join(
+                f'<div style="font-size:13px;color:#374151;padding:2px 0">'
+                f'• <strong>{he(_source_display_name(_r["source"]))}</strong>'
+                f' {he(_r["field_label"])}'
+                + (f': <span style="color:#6b7280">{he(str(_r["new_value"])[:40])}</span>'
+                   if _r["new_value"] else "") +
+                f'</div>'
+                for _r in _rows
+            )
+            _feed_html += (
+                f'<div style="margin-bottom:10px">'
+                f'<div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;'
+                f'letter-spacing:.05em;margin-bottom:4px">{he(_day_label)}</div>'
+                + _items_html +
+                f'</div>'
+            )
+
+        recently_found_html = (
+            '<div style="margin-bottom:28px">'
+            '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
+            'text-transform:uppercase;letter-spacing:.05em">\U0001f50d Recently Found</h2>'
+            + _feed_html +
+            '</div>'
+        )
 
     # ── LAYER 3: Don't forget section (no dollar amounts) ────────────────────
     if value_items:
@@ -5705,6 +5815,7 @@ function dismissOnboarding() {
             .replace("{account_data_html}",       account_data_html)
             .replace("{hero_section_html}",       hero_section_html)
             .replace("{action_center_html}",      action_center_html)
+            .replace("{recently_found_html}",     recently_found_html)
             .replace("{value_center_html}",       value_center_html)
             .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{csrf_token}",              _csrf))
@@ -6747,6 +6858,16 @@ SUPPORTED_SITES = [
 ]
 
 
+def _confidence_label(score: float) -> str:
+    """Convert a 0-1 confidence score to a human-readable label."""
+    if score >= 0.85:
+        return "High"
+    elif score >= 0.60:
+        return "Medium"
+    else:
+        return "Needs review"
+
+
 def _system_confidence(
     llm_confidence: float,
     source_type: str,           # "api", "dom", "llm"
@@ -7760,16 +7881,22 @@ function updateSyncTimes() {{
   document.querySelectorAll('[data-synced]').forEach(function(el) {{
     var ts = el.dataset.synced;
     if (!ts) return;
+    var card = el.closest('[data-sync-status]');
+    var syncStatus = card ? card.dataset.syncStatus : '';
+    if (syncStatus === 'login_required') {{
+      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">🔐 Login required</span>';
+      return;
+    }}
     var rel = fmtRelative(ts);
     if (rel) {{
-      var color = '#22c55e', icon = '✓';
+      var color = '#22c55e', icon = '✓', fw = '500';
       var secs2 = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
       var hrs2 = secs2 / 3600;
-      if (hrs2 >= 168) {{ color = '#ef4444'; icon = '!'; }}
+      if (hrs2 >= 72) {{ color = '#dc2626'; icon = '!'; fw = '700'; }}
       else if (hrs2 >= 48) {{ color = '#f59e0b'; icon = '~'; }}
       else if (hrs2 >= 24) {{ color = '#f59e0b'; icon = '~'; }}
       else if (hrs2 >= 2) {{ color = '#6b7280'; icon = '✓'; }}
-      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:500">' + icon + ' Synced ' + rel + '</span>';
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' Synced ' + rel + '</span>';
     }}
   }});
 }}
@@ -8975,6 +9102,7 @@ def candidates_page(source):
         )
         row_id = r['id']
         conf_pct = int(r['confidence'] * 100)
+        conf_label = _confidence_label(r['confidence'])
         items_html += (
             f'<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:10px">'
             f'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
@@ -8984,7 +9112,7 @@ def candidates_page(source):
             f'{snip_html}'
             f'</div>'
             f'<div style="font-size:11px;color:#6b7280;text-align:right">'
-            f'<div style="margin-bottom:6px">{conf_pct}% confidence</div>'
+            f'<div style="margin-bottom:6px">{conf_label} confidence</div>'
             f'<div style="display:flex;gap:6px">'
             f'<button onclick="act({row_id},\'approve\')" style="padding:4px 10px;background:#22c55e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer">Add to card</button>'
             f'<button onclick="act({row_id},\'dismiss\')" style="padding:4px 10px;background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;border-radius:4px;font-size:12px;cursor:pointer">Dismiss</button>'
