@@ -923,6 +923,358 @@ SOURCE_CAPABILITIES: dict[str, dict] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Canonical benefit type normalization
+# ---------------------------------------------------------------------------
+
+CANONICAL_BENEFIT_TYPES: dict[str, list[str]] = {
+    "FREE_NIGHT":         ["free_night", "award_night", "milestone_reward", "free_night_cert",
+                           "free_night_reward", "suite_night"],
+    "MILES_POINTS":       ["miles", "points", "award_miles", "reward_points", "bonvoy_points",
+                           "honors_points", "skymiles", "rapid_rewards", "thank_you_points",
+                           "membership_rewards", "ultimate_rewards"],
+    "FLIGHT_CREDIT":      ["ecredit", "flight_credit", "travel_credit", "airline_credit",
+                           "trip_credit"],
+    "COMPANION_CERT":     ["companion_cert", "companion_pass", "buddy_pass"],
+    "UPGRADE_CERT":       ["upgrade_cert", "systemwide_upgrade", "suite_upgrade",
+                           "complimentary_upgrade"],
+    "STATEMENT_CREDIT":   ["statement_credit", "dining_credit", "hotel_credit",
+                           "airline_fee_credit", "entertainment_credit", "digital_credit",
+                           "travel_credit_annual", "global_entry_credit", "cash_back"],
+    "PURCHASE_PROTECTION":["purchase_protection", "extended_warranty", "price_protection",
+                           "return_protection"],
+    "TRIP_PROTECTION":    ["trip_delay", "trip_cancellation", "baggage_delay",
+                           "travel_accident"],
+    "STATUS":             ["elite_status", "medallion_status", "tier_status", "premier_status",
+                           "platinum_status", "gold_status", "diamond_status"],
+    "MEMBERSHIP":         ["prime_benefits", "pass_membership", "clear_membership",
+                           "lounge_access", "global_entry"],
+}
+
+
+def _canonical_benefit_type(field_key: str, field_label: str = "") -> str:
+    """Map a raw field key/label to a canonical benefit type. Returns 'OTHER' if no match."""
+    combined = (field_key + " " + field_label).lower().replace("-", "_")
+    for ctype, fragments in CANONICAL_BENEFIT_TYPES.items():
+        if any(frag in combined for frag in fragments):
+            return ctype
+    return "OTHER"
+
+
+# ---------------------------------------------------------------------------
+# Transfer partner graph
+# ---------------------------------------------------------------------------
+
+# Maps (source, points_field_fragment) → list of (dest_source, transfer_ratio)
+# transfer_ratio: how many dest points per 1 source point
+TRANSFER_PARTNERS: dict[str, list[tuple[str, float]]] = {
+    # Amex Membership Rewards
+    "amex:membership_rewards": [
+        ("delta",    1.0),
+        ("marriott", 1.0),
+        ("hilton",   1.0),
+        ("british_airways", 1.0),
+        ("air_canada", 1.0),
+        ("singapore", 1.0),
+    ],
+    # Chase Ultimate Rewards
+    "chase:ultimate_rewards": [
+        ("hyatt",      1.0),
+        ("united",     1.0),
+        ("marriott",   1.0),
+        ("southwest",  1.0),
+        ("british_airways", 1.0),
+        ("singapore",  1.0),
+    ],
+    # Citi ThankYou Points
+    "citi:thank_you": [
+        ("american",   1.0),
+        ("hilton",     1.0),
+        ("singapore",  1.0),
+        ("turkish",    1.0),
+    ],
+    # Capital One Miles (future)
+    "capital_one:miles": [
+        ("air_canada", 1.0),
+        ("turkish",    1.0),
+        ("avianca",    1.0),
+    ],
+}
+
+
+def _get_transferable_points(uid: str, dest_source: str) -> list[dict]:
+    """
+    Returns a list of points balances from OTHER sources that can be
+    transferred to dest_source, with estimated transfer amount.
+    e.g. dest_source='hyatt' returns [{'source':'chase', 'label':'Ultimate Rewards', 'balance':45000}]
+    """
+    import json as _jtx
+    import re as _re_tx
+    results = []
+
+    # Which partner keys target this dest?
+    relevant_partners = [
+        (pk, partners)
+        for pk, partners in TRANSFER_PARTNERS.items()
+        if any(dest == dest_source for dest, _ in partners)
+    ]
+    if not relevant_partners:
+        return []
+
+    # Scan account_data for source accounts
+    rows = get_db().execute(
+        "SELECT source, data_enc FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+
+    for row in rows:
+        src = row["source"]
+        for partner_key, partners in relevant_partners:
+            pk_source = partner_key.split(":")[0]
+            if src != pk_source:
+                continue
+            # Parse fields
+            try:
+                raw = decrypt_account_data(uid, row["data_enc"] or "")
+                fields = raw.get("items", [])
+                if not isinstance(fields, list):
+                    continue
+            except Exception:
+                continue
+            for f in fields:
+                if not isinstance(f, dict):
+                    continue
+                fk = (f.get("key") or "").lower()
+                fv = str(f.get("value") or "")
+                # Check if this field is a transferable points balance
+                pk_field = partner_key.split(":")[1]
+                if pk_field.replace("_", "") in fk.replace("_", ""):
+                    nums = _re_tx.findall(r'[\d,]+', fv)
+                    if nums:
+                        balance = int(nums[0].replace(',', ''))
+                        if balance > 1000:  # ignore trivial balances
+                            results.append({
+                                "source": src,
+                                "label": f.get("label") or fk.replace("_", " ").title(),
+                                "balance": balance,
+                                "partner_key": partner_key,
+                            })
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Cross-account opportunity generation
+# ---------------------------------------------------------------------------
+
+def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
+    """
+    Scans all connected accounts and generates cross-account opportunity objects.
+    Each opportunity groups related benefits from multiple sources.
+    Returns list of opportunity dicts sorted by relevance.
+
+    An opportunity looks like:
+    {
+        "id": "hotel_hyatt_20240618",
+        "context": "hotel",
+        "title": "Hyatt Stay",
+        "components": [
+            {"source": "hyatt",  "label": "Free Night Award",     "canonical": "FREE_NIGHT",  "value": "1 cert"},
+            {"source": "chase",  "label": "Ultimate Rewards",     "canonical": "MILES_POINTS","value": "45,000 pts (transferable)"},
+            {"source": "hyatt",  "label": "Globalist Status",     "canonical": "STATUS",      "value": "Globalist"},
+        ],
+        "urgency": "soon",       # urgent / soon / none
+        "expires_label": "Cert expires in 24 days",
+        "relevance_score": 0.87,
+        "why": "Free Night cert expires soon. Chase points transfer 1:1 to Hyatt.",
+    }
+    """
+    import json as _jop
+    import re  as _rop
+    import datetime as _dop
+
+    # Context → which canonical types are relevant
+    CONTEXT_CANONICAL_MAP: dict[str, list[str]] = {
+        "hotel":    ["FREE_NIGHT", "MILES_POINTS", "STATUS", "STATEMENT_CREDIT", "UPGRADE_CERT"],
+        "flight":   ["FLIGHT_CREDIT", "COMPANION_CERT", "UPGRADE_CERT", "MILES_POINTS", "STATUS"],
+        "car":      ["TRIP_PROTECTION", "STATEMENT_CREDIT", "MEMBERSHIP"],
+        "shopping": ["STATEMENT_CREDIT", "PURCHASE_PROTECTION", "MILES_POINTS"],
+        "dining":   ["STATEMENT_CREDIT", "MILES_POINTS"],
+    }
+    relevant_canonicals = CONTEXT_CANONICAL_MAP.get(context or "", [c for cs in CONTEXT_CANONICAL_MAP.values() for c in cs])
+
+    # Collect all benefits across all accounts
+    all_benefits: list[dict] = []
+    rows = get_db().execute(
+        "SELECT source, data_enc FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+
+    for row in rows:
+        src = row["source"]
+        try:
+            raw = decrypt_account_data(uid, row["data_enc"] or "")
+            fields = raw.get("items", [])
+            if not isinstance(fields, list):
+                fields = []
+        except Exception:
+            continue
+
+        caps = SOURCE_CAPABILITIES.get(src, {})
+        src_display = caps.get("display_name", src.title())
+
+        for f in fields:
+            if not isinstance(f, dict):
+                continue
+            fk  = (f.get("key") or "").lower()
+            fl  = f.get("label") or fk.replace("_", " ").title()
+            fv  = str(f.get("value") or "")
+            fc  = float(f.get("confidence", 0.85))
+            ctype = _canonical_benefit_type(fk, fl)
+            if ctype == "OTHER":
+                continue
+            if ctype not in relevant_canonicals:
+                continue
+
+            # Parse urgency from value/label
+            exp_days = None
+            exp_label = ""
+            exp_match = _rop.search(r'(\d+)\s*day', fv, _rop.I)
+            if exp_match:
+                exp_days = int(exp_match.group(1))
+                exp_label = f"Expires in {exp_days} days"
+
+            urgency = "none"
+            if exp_days is not None:
+                if exp_days <= 14:   urgency = "urgent"
+                elif exp_days <= 45: urgency = "soon"
+
+            score, factors = _relevance_score(fk, fl, fv, fc, context, None)
+
+            all_benefits.append({
+                "source":      src,
+                "source_display": src_display,
+                "field_key":   fk,
+                "label":       fl,
+                "value":       fv,
+                "canonical":   ctype,
+                "urgency":     urgency,
+                "exp_days":    exp_days,
+                "exp_label":   exp_label,
+                "confidence":  fc,
+                "score":       score,
+                "factors":     factors,
+            })
+
+    if not all_benefits:
+        return []
+
+    # Sort all benefits by score descending
+    all_benefits.sort(key=lambda x: x["score"], reverse=True)
+
+    # Group into opportunity clusters by (context + primary_source)
+    # Strategy: anchor on the highest-scoring benefit per source, then
+    # attach transferable points from other sources
+    seen_keys: set[tuple] = set()
+    opportunities: list[dict] = []
+
+    for anchor in all_benefits:
+        src = anchor["source"]
+        if (src, anchor["field_key"]) in seen_keys:
+            continue
+
+        # Build components for this opportunity: start with anchor
+        components = [anchor.copy()]
+        seen_keys.add((src, anchor["field_key"]))
+
+        # Add other top benefits from same source (complementary canonical types)
+        for b in all_benefits:
+            if b["source"] == src and b["field_key"] != anchor["field_key"]:
+                key = (b["source"], b["field_key"])
+                if key not in seen_keys and b["canonical"] != anchor["canonical"]:
+                    components.append(b.copy())
+                    seen_keys.add(key)
+                if len(components) >= 3:
+                    break
+
+        # Check for transferable points from other sources
+        transferable = _get_transferable_points(uid, src)
+        for tx in transferable:
+            tk = (tx["source"], tx.get("partner_key", "tx"))
+            if tk not in seen_keys:
+                components.append({
+                    "source":         tx["source"],
+                    "source_display": SOURCE_CAPABILITIES.get(tx["source"], {}).get("display_name", tx["source"].title()),
+                    "label":          tx["label"] + " (transferable)",
+                    "value":          f"{tx['balance']:,} pts",
+                    "canonical":      "MILES_POINTS",
+                    "urgency":        "none",
+                    "exp_label":      "",
+                    "confidence":     0.9,
+                    "score":          0.4,
+                    "factors":        {},
+                    "is_transfer":    True,
+                })
+                seen_keys.add(tk)
+
+        if len(components) < 1:
+            continue
+
+        # Compute opportunity-level urgency and score
+        opp_urgency = "none"
+        for c in components:
+            if c.get("urgency") == "urgent":   opp_urgency = "urgent";  break
+            if c.get("urgency") == "soon":      opp_urgency = "soon"
+        opp_score = max(c["score"] for c in components)
+
+        expires_labels = [c["exp_label"] for c in components if c.get("exp_label")]
+        exp_label_str = expires_labels[0] if expires_labels else ""
+
+        # Build "why" explanation
+        why_parts = []
+        for c in components:
+            if c.get("exp_label"):
+                why_parts.append(f"{c['label']} {c['exp_label'].lower()}")
+        if context:
+            why_parts.insert(0, f"Relevant for {context} booking")
+        if not why_parts:
+            why_parts = ["Available in your accounts"]
+        why_str = ". ".join(why_parts[:3]) + "."
+
+        # Title: "Marriott Stay" / "Delta Flight" / generic
+        ctx_noun = {"hotel": "Stay", "flight": "Flight", "car": "Rental",
+                    "shopping": "Purchase", "dining": "Meal"}.get(context or "", "Opportunity")
+        caps_name = SOURCE_CAPABILITIES.get(src, {}).get("display_name", src.title())
+        # Shorten display name for title
+        short_name = caps_name.split()[0]  # "Marriott" from "Marriott Bonvoy"
+        title = f"{short_name} {ctx_noun}"
+
+        opportunities.append({
+            "id":           f"{context}_{src}_{_dop.date.today().isoformat()}",
+            "context":      context,
+            "title":        title,
+            "source":       src,
+            "components":   [
+                {
+                    "source":         c["source"],
+                    "source_display": c.get("source_display", ""),
+                    "label":          c["label"],
+                    "value":          c["value"],
+                    "canonical":      c["canonical"],
+                    "exp_label":      c.get("exp_label", ""),
+                    "is_transfer":    c.get("is_transfer", False),
+                }
+                for c in components
+            ],
+            "urgency":        opp_urgency,
+            "expires_label":  exp_label_str,
+            "relevance_score": round(opp_score, 3),
+            "why":            why_str,
+        })
+
+        if len(opportunities) >= 6:
+            break
+
+    return opportunities
+
+
 def _get_missing_benefits(uid: str) -> list[dict]:
     """
     Returns a list of benefit types that SOURCE_CAPABILITIES says should exist
@@ -6331,69 +6683,52 @@ def dashboard():
         value_center_html = ""
         value_banner = ""
 
-    # ── LAYER 3b: Opportunity Groups ─────────────────────────────────────────
-    _ctx_groups: dict[str, list] = {"Travel": [], "Shopping": [], "Dining": [], "Other": []}
-    _ctx_map = {
-        "flight": "Travel", "hotel": "Travel", "car": "Travel",
-        "airline": "Travel", "miles": "Travel", "cert": "Travel", "upgrade": "Travel",
-        "shopping": "Shopping", "purchase": "Shopping", "warranty": "Shopping", "protection": "Shopping",
-        "dining": "Dining", "restaurant": "Dining",
-    }
-    for _vi in value_items:
-        _vk = (_vi[1] if isinstance(_vi, tuple) else (_vi.get("key") or "")).lower()
-        _placed = False
-        for _frag, _grp in _ctx_map.items():
-            if _frag in _vk:
-                _ctx_groups[_grp].append(_vi)
-                _placed = True
-                break
-        if not _placed:
-            _ctx_groups["Other"].append(_vi)
-
-    _opp_sections_html = ""
-    for _grp_name, _grp_items in _ctx_groups.items():
-        if not _grp_items:
-            continue
-        _grp_icon = {"Travel": "✈️", "Shopping": "🛍", "Dining": "🍽", "Other": "✦"}.get(_grp_name, "✦")
-        _grp_rows = ""
-        for _vi in _grp_items[:6]:
-            if isinstance(_vi, tuple):
-                _acct  = he(_vi[0])
-                _label = he(_vi[1])
-                _val   = he(_vi[2])
-                _exp   = ""
-            else:
-                _acct  = he(_vi.get("account") or _vi.get("source_display") or "")
-                _label = he(_vi.get("label") or _vi.get("display_label") or "")
-                _val   = he(_vi.get("value") or "")
-                _exp   = he(_vi.get("expiry_label") or "")
-            _grp_rows += (
-                f'<div style="display:flex;align-items:baseline;justify-content:space-between;'
-                f'padding:5px 0;border-bottom:1px solid #f3f4f6">'
-                f'<div><span style="font-size:12px;font-weight:600;color:#111">{_label}</span>'
-                f' <span style="font-size:11px;color:#6b7280">{_acct}</span></div>'
-                f'<div style="text-align:right">'
-                f'<span style="font-size:12px;color:#374151">{_val}</span>'
-                + (f' <span style="font-size:10px;color:#dc2626;margin-left:4px">{_exp}</span>' if _exp else '') +
-                f'</div></div>'
-            )
-        _opp_sections_html += (
-            f'<div style="margin-bottom:16px">'
-            f'<div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;'
-            f'letter-spacing:.06em;margin-bottom:6px">{_grp_icon} {_grp_name}</div>'
-            f'{_grp_rows}'
-            f'</div>'
-        )
-
-    opportunities_html = ""
-    if _opp_sections_html:
-        opportunities_html = (
-            f'<div style="margin-bottom:28px">'
-            f'<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
-            f'text-transform:uppercase;letter-spacing:.05em">Opportunities</h2>'
-            f'{_opp_sections_html}'
-            f'</div>'
-        )
+    opportunities_html = """
+<div id="opportunities-section" style="margin-bottom:28px;display:none">
+  <h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;
+     text-transform:uppercase;letter-spacing:.05em">Opportunities</h2>
+  <div id="opportunities-panel"></div>
+</div>
+<script>
+(function(){
+  // Determine context from latest intent
+  fetch('/api/intent/recent').then(function(r){return r.json();}).then(function(intents){
+    var ctx = (intents && intents.length) ? intents[0].intent_type : null;
+    var url = '/api/opportunities' + (ctx ? '?context=' + ctx : '');
+    return fetch(url).then(function(r){return r.json();});
+  }).then(function(data){
+    if(!data || !data.opportunities || !data.opportunities.length) return;
+    var section = document.getElementById('opportunities-section');
+    var panel   = document.getElementById('opportunities-panel');
+    var html = '';
+    data.opportunities.forEach(function(opp){
+      var urgStyle = opp.urgency==='urgent' ? 'border-left:3px solid #dc2626' :
+                     opp.urgency==='soon'   ? 'border-left:3px solid #f59e0b' :
+                                              'border-left:3px solid #e5e7eb';
+      var rows = opp.components.slice(0,4).map(function(c){
+        var txBadge = c.is_transfer ? '<span style="font-size:9px;color:#6366f1;margin-left:4px;'
+          +'font-weight:600;letter-spacing:.04em">TRANSFER</span>' : '';
+        var expBadge = c.exp_label ? '<span style="font-size:10px;color:#dc2626;margin-left:6px">'
+          +escO(c.exp_label)+'</span>' : '';
+        return '<div style="display:flex;align-items:baseline;justify-content:space-between;'
+          +'padding:3px 0;font-size:12px">'
+          +'<span style="color:#374151">'+escO(c.label)+txBadge+'</span>'
+          +'<span style="color:#6b7280">'+escO(c.value)+expBadge+'</span></div>';
+      }).join('');
+      var whyHtml = '<div style="margin-top:6px;font-size:11px;color:#9ca3af;font-style:italic">'
+        +escO(opp.why)+'</div>';
+      html += '<div style="padding:12px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;'
+        +'margin-bottom:10px;'+urgStyle+'">'
+        +'<div style="font-size:13px;font-weight:600;color:#111;margin-bottom:6px">'+escO(opp.title)+'</div>'
+        +rows+whyHtml
+        +'</div>';
+    });
+    if(html){panel.innerHTML=html; section.style.display='block';}
+  }).catch(function(){});
+  function escO(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+})();
+</script>
+"""
 
     relevant_now_html = """
 <div id="relevant-now-section" style="margin-bottom:28px;display:none">
@@ -10933,6 +11268,19 @@ def api_intent_recent():
         })
 
     return jsonify(results)
+
+
+@app.route("/api/opportunities")
+@require_login_or_key
+def api_opportunities():
+    """
+    Returns cross-account opportunity objects for a given context.
+    Used by the dashboard and (eventually) the extension.
+    """
+    uid     = get_current_user_id()
+    context = request.args.get("context", "").strip().lower() or None
+    opps    = _generate_opportunities(uid, context)
+    return jsonify({"context": context, "opportunities": opps, "count": len(opps)})
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
