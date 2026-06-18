@@ -346,12 +346,12 @@ def init_db():
         except Exception:
             pass
         try:
-            get_db().execute("ALTER TABLE users ADD COLUMN notification_pref TEXT NOT NULL DEFAULT 'quiet'")
-            get_db().commit()
+            db.execute("ALTER TABLE users ADD COLUMN notification_pref TEXT NOT NULL DEFAULT 'quiet'")
+            db.commit()
         except Exception:
             pass  # column already exists
         try:
-            get_db().execute("""
+            db.execute("""
                 CREATE TABLE IF NOT EXISTS benefit_feedback (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id      TEXT NOT NULL,
@@ -362,7 +362,7 @@ def init_db():
                     created_at   TEXT NOT NULL
                 )
             """)
-            get_db().commit()
+            db.commit()
         except Exception:
             pass
 
@@ -841,7 +841,7 @@ SOURCE_CAPABILITIES: dict[str, dict] = {
         "benefit_types": ["miles", "ecredit", "upgrade_cert", "premier_status"],
         "key_pages": ["/ual/en/us/fly/travel/awards/certificates.html"],
     },
-    "american": {
+    "american_air": {
         "display_name": "American Airlines AAdvantage",
         "category": "airline",
         "benefit_types": ["miles", "ecredit", "upgrade_cert", "systemwide_upgrade", "elite_status"],
@@ -1032,7 +1032,7 @@ TRANSFER_PARTNERS: dict[str, list[tuple[str, float]]] = {
     ],
     # Citi ThankYou Points
     "citi:thank_you": [
-        ("american",   1.0),
+        ("american_air",   1.0),
         ("hilton",     1.0),
         ("singapore",  1.0),
         ("turkish",    1.0),
@@ -1179,18 +1179,74 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
             if ctype not in relevant_canonicals:
                 continue
 
-            # Parse urgency from value/label
+            # Expiration parsing — try multiple formats
             exp_days = None
             exp_label = ""
-            exp_match = _rop.search(r'(\d+)\s*day', fv, _rop.I)
-            if exp_match:
-                exp_days = int(exp_match.group(1))
+            _combined_for_exp = f"{fl} {fv}"
+
+            # Pattern 1: "X days" / "expires in X days"
+            _m1 = _rop.search(r'(\d+)\s*day', _combined_for_exp, _rop.I)
+            if _m1:
+                exp_days = int(_m1.group(1))
                 exp_label = f"Expires in {exp_days} days"
+
+            # Pattern 2: MM/DD/YYYY or MM/DD/YY
+            if exp_days is None:
+                _m2 = _rop.search(r'(\d{1,2})/(\d{1,2})/(\d{2,4})', _combined_for_exp)
+                if _m2:
+                    try:
+                        _mo, _da, _yr = int(_m2.group(1)), int(_m2.group(2)), int(_m2.group(3))
+                        if _yr < 100: _yr += 2000
+                        _exp_date = _dop.date(_yr, _mo, _da)
+                        exp_days = (_exp_date - _dop.date.today()).days
+                        if exp_days >= 0:
+                            exp_label = f"Expires {_exp_date.strftime('%b %-d, %Y')}"
+                        else:
+                            exp_days = None  # already expired, don't surface
+                    except ValueError:
+                        pass
+
+            # Pattern 3: Month YYYY (e.g. "January 2027", "Jan 2027")
+            if exp_days is None:
+                _m3 = _rop.search(
+                    r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+(\d{4})',
+                    _combined_for_exp, _rop.I
+                )
+                if _m3:
+                    _mon_map = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+                                'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+                    try:
+                        _mo = _mon_map[_m3.group(1)[:3].lower()]
+                        _yr = int(_m3.group(2))
+                        _exp_date = _dop.date(_yr, _mo, 1)
+                        exp_days = (_exp_date - _dop.date.today()).days
+                        if exp_days >= 0:
+                            exp_label = f"Expires {_exp_date.strftime('%b %Y')}"
+                        else:
+                            exp_days = None
+                    except (ValueError, KeyError):
+                        pass
+
+            # Pattern 4: "exp MM/YY" (short credit card style)
+            if exp_days is None:
+                _m4 = _rop.search(r'exp\.?\s*(\d{1,2})/(\d{2,4})', _combined_for_exp, _rop.I)
+                if _m4:
+                    try:
+                        _mo, _yr = int(_m4.group(1)), int(_m4.group(2))
+                        if _yr < 100: _yr += 2000
+                        _exp_date = _dop.date(_yr, _mo, 1)
+                        exp_days = (_exp_date - _dop.date.today()).days
+                        if exp_days >= 0:
+                            exp_label = f"Expires {_exp_date.strftime('%m/%Y')}"
+                        else:
+                            exp_days = None
+                    except ValueError:
+                        pass
 
             urgency = "none"
             if exp_days is not None:
-                if exp_days <= 14:   urgency = "urgent"
-                elif exp_days <= 45: urgency = "soon"
+                if exp_days <= 14:    urgency = "urgent"
+                elif exp_days <= 45:  urgency = "soon"
 
             score, factors = _relevance_score(fk, fl, fv, fc, context, None)
 
