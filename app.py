@@ -3753,6 +3753,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     <div id="fview-accounts">
       {hero_section_html}
       {top_benefits_html}
+      {progress_section_html}
       {action_center_html}
       {recently_found_html}
       {value_center_html}
@@ -6883,45 +6884,58 @@ def dashboard():
 
     _hero_bullets_html = ""
     _seen_hero = set()
-    for _pr, _, _hdisp, _hlbl, _hval, _hexp in _hero_candidates[:4]:
+    import json as _json_hero
+    import datetime as _hdt
+    for _pr, _, _hdisp, _hlbl, _hval, _hexp in _hero_candidates[:5]:
         _dedup_key = (_hdisp, _hlbl[:30])
         if _dedup_key in _seen_hero: continue
         _seen_hero.add(_dedup_key)
         _icon = _hero_icon(_hlbl.lower())
-        # Expiry label
-        _exp_str = ""
-        if _hexp is not None and _hexp >= 0:
-            if _hexp <= 30:
-                _exp_str = f' <span style="color:#dc2626;font-size:11px;font-weight:600">expires in {_hexp}d</span>'
-            elif _hexp <= 120:
-                import datetime as _hdt
-                _exp_date = _hdt.date.today() + _hdt.timedelta(days=_hexp)
-                _exp_str = f' <span style="color:#d97706;font-size:11px">exp {_exp_date.strftime("%b %Y")}</span>'
         # Color by type
         _lk2 = _hlbl.lower()
         if any(k in _lk2 for k in ['credit', 'voucher']): _bullet_color = "#059669"
         elif any(k in _lk2 for k in ['cert', 'companion', 'upgrade', 'free night']): _bullet_color = "#2563eb"
         elif any(k in _lk2 for k in ['status', 'medallion', 'elite', 'globalist']): _bullet_color = "#7c3aed"
         else: _bullet_color = "#374151"
+        # Sub-line: account name + expiry
+        _sub_parts = [f'<span style="color:#9ca3af">{he(_hdisp)}</span>']
+        if _hexp is not None and _hexp >= 0:
+            _exp_date = _hdt.date.today() + _hdt.timedelta(days=_hexp)
+            if _hexp <= 30:
+                _sub_parts.append(f'<span style="color:#dc2626;font-weight:600">Expires in {_hexp}d</span>')
+            else:
+                _sub_parts.append(f'<span style="color:#d97706">Expires {_exp_date.strftime("%b %Y")}</span>')
+        _sub_html = ' · '.join(_sub_parts)
+        # Show value only if meaningful (not generic "Available" / "Active")
+        _skip_vals = {'available', 'active', 'yes', 'enabled', 'valid', 'earned', ''}
+        _show_val = ""
+        if _hval and _hval.lower().strip() not in _skip_vals:
+            _show_val = f'<span style="font-size:13px;color:#6b7280;margin-left:6px">{he(_hval)}</span>'
+        # JSON data for benefit detail drawer
+        _bd_data = _json_hero.dumps({
+            "label": _hlbl, "account": _hdisp,
+            "value": _hval, "icon": _icon, "expDays": _hexp
+        }).replace("'", "&#39;")
         _hero_bullets_html += (
-            f'<div style="display:flex;align-items:baseline;gap:8px;padding:3px 0">'
-            f'<span style="font-size:14px;flex-shrink:0">{_icon}</span>'
+            f'<div style="display:flex;gap:10px;padding:8px 4px;cursor:pointer;border-radius:7px;'
+            f'transition:background 0.1s" onmouseover="this.style.background=\'#f5f5f5\'" '
+            f'onmouseout="this.style.background=\'\'" '
+            f'onclick="openBenefitDrawer(this)" data-benefit=\'{_bd_data}\'>'
+            f'<span style="font-size:18px;flex-shrink:0;margin-top:1px;line-height:1.3">{_icon}</span>'
             f'<div style="flex:1;min-width:0">'
-            f'<span style="font-size:13px;color:{_bullet_color};font-weight:500">{he(_hdisp)}: {he(_hlbl)}</span>'
-            f'<span style="font-size:12px;color:#6b7280;margin-left:6px">{he(_hval)}{_exp_str}</span>'
+            f'<div style="font-size:14px;font-weight:600;color:{_bullet_color};line-height:1.3">'
+            f'{he(_hlbl)}{_show_val}</div>'
+            f'<div style="font-size:12px;margin-top:2px;line-height:1.4">{_sub_html}</div>'
             f'</div>'
             f'</div>'
         )
 
     if _hero_bullets_html:
-        _available_label = '<div style="font-size:11px;font-weight:600;color:#9ca3af;'
-        _available_label += 'text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">'
-        _available_label += 'Available right now</div>'
-        _hero_value_block = (
-            f'<div style="margin-top:12px;padding:12px 14px;background:#f9fafb;border-radius:8px">'
-            + _available_label + _hero_bullets_html +
-            f'</div>'
+        _available_label = (
+            '<div style="font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;'
+            'letter-spacing:.06em;margin-bottom:4px;margin-top:16px">Available right now</div>'
         )
+        _hero_value_block = _available_label + _hero_bullets_html
     else:
         # No benefit data yet — show a soft prompt
         if _account_count > 0:
@@ -6933,9 +6947,24 @@ def dashboard():
         else:
             _hero_value_block = ''
 
+    # Attention status line — shown inside greeting, removes need for standalone compact row
+    if not _inline_reminders:
+        _attn_status_html = (
+            '<div style="font-size:13px;color:#9ca3af;margin-top:3px">'
+            'Nothing needs attention today.</div>'
+        )
+    else:
+        _n_attn = len(_inline_reminders)
+        _any_urgent = any(r.get("urgency") == "urgent" for r in _inline_reminders)
+        _attn_color = "#dc2626" if _any_urgent else "#d97706"
+        _attn_label = f'{_n_attn} item{"s" if _n_attn != 1 else ""} need{"" if _n_attn != 1 else "s"} your attention'
+        _attn_status_html = (
+            f'<div style="font-size:13px;color:{_attn_color};margin-top:3px">⚠ {_attn_label}</div>'
+        )
+
     hero_section_html = (
         f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
-        f'<div style="font-size:22px;font-weight:700;color:#111;margin-bottom:4px" id="hero-greeting">'
+        f'<div style="font-size:22px;font-weight:700;color:#111" id="hero-greeting">'
         f'Hello, {he(_first_name)} \U0001f44b'
         f'</div>'
         f'<script>'
@@ -6946,6 +6975,7 @@ def dashboard():
         f'  if(el) el.innerHTML=g+", {he(_first_name)} \U0001f44b";'
         f'}})();'
         f'</script>'
+        + _attn_status_html
         + _hero_value_block
         + _focus_html +
         f'</div>'
@@ -6992,14 +7022,8 @@ def dashboard():
             '</div>'
         )
     else:
-        # Nothing needs attention — compact single-line, don't waste card real estate
-        action_center_html = (
-            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:20px;'
-            'padding:0 2px;font-size:13px;color:#6b7280" id="action-center-panel">'
-            '<span style="color:#22c55e;font-size:14px">✓</span>'
-            'Nothing needs attention right now'
-            '</div>'
-        )
+        # Nothing needs attention — status already shown in the greeting, no separate row needed
+        action_center_html = ""
 
     # ── LAYER 2b: Recently Discovered feed ───────────────────────────────────
     import datetime as _dtrd
@@ -7230,7 +7254,9 @@ def dashboard():
         return None
 
     _top_benefit_cards = []
+    _progress_cards = []
     _tb_seen = set()
+    import re as _tb_re2
     for _disp, _lbl, _val, *_ in value_items:
         _lk = _lbl.lower()
         _vk = _val.strip()
@@ -7238,6 +7264,17 @@ def dashboard():
         _is_cert    = any(k in _lk for k in ['companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade cert'])
         _is_credit  = any(k in _lk for k in ['credit', 'voucher', 'ecredit'])
         _is_status  = any(k in _lk for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium', 'senator'])
+        # Detect progress/tracking metrics — e.g. "0 of 100 flights toward Companion Pass"
+        _is_progress = (
+            any(k in _lk for k in ['progress', 'qualifying', 'segment', 'toward', 'threshold', 'required', 'requalif', 'earned toward'])
+            or bool(_tb_re2.search(r'\b\d+\s*(?:of|/)\s*\d+\b', _vk))
+        )
+        if _is_progress and (_is_cert or _is_status):
+            _prog_dedup = (_disp, _lbl[:35])
+            if _prog_dedup not in _tb_seen:
+                _tb_seen.add(_prog_dedup)
+                _progress_cards.append((_disp, _lbl, _vk, _tb_exp_days(_lbl, _vk)))
+            continue
         if not (_is_cert or _is_credit or _is_status): continue
         _dedup = (_disp, _lbl[:35])
         if _dedup in _tb_seen: continue
@@ -7253,6 +7290,49 @@ def dashboard():
         _top_benefit_cards.append((_pri, _exp if _exp is not None else 9999,
                                    _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status))
     _top_benefit_cards.sort(key=lambda x: (-x[0], x[1]))
+
+    # ── PROGRESS SECTION: status-earning metrics with progress bars ───────────
+    _prog_html = ""
+    for _pdisp, _plbl, _pval, _pexp in _progress_cards[:4]:
+        _pm = _tb_re2.search(r'(\d[\d,]*)\s*(?:of|/)\s*(\d[\d,]*)', _pval)
+        if _pm:
+            _pcur = int(_pm.group(1).replace(',', ''))
+            _ptgt = int(_pm.group(2).replace(',', ''))
+            _ppct = int(100 * _pcur / _ptgt) if _ptgt else 0
+            _pbar = (
+                f'<div style="margin-top:6px;height:3px;background:#e5e7eb;border-radius:3px">'
+                f'<div style="height:3px;width:{min(_ppct,100)}%;background:#6366f1;border-radius:3px"></div>'
+                f'</div>'
+            )
+            _pright = f'{_pcur:,} / {_ptgt:,}'
+        else:
+            _pbar = ""
+            _pright = _pval
+        _prog_html += (
+            f'<div style="display:flex;align-items:flex-start;justify-content:space-between;'
+            f'padding:10px 0;border-bottom:1px solid #f3f4f6">'
+            f'<div style="flex:1;min-width:0;margin-right:12px">'
+            f'<div style="font-size:11px;color:#9ca3af;font-weight:500">{he(_pdisp)}</div>'
+            f'<div style="font-size:13px;font-weight:600;color:#374151;white-space:nowrap;'
+            f'overflow:hidden;text-overflow:ellipsis">{he(_plbl)}</div>'
+            f'{_pbar}'
+            f'</div>'
+            f'<div style="font-size:13px;font-weight:600;color:#6366f1;flex-shrink:0;padding-top:12px">'
+            f'{he(_pright)}</div>'
+            f'</div>'
+        )
+    if _prog_html:
+        progress_section_html = (
+            '<div style="margin-bottom:28px">'
+            '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
+            'text-transform:uppercase;letter-spacing:.05em">Progress</h2>'
+            '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:0 12px">'
+            + _prog_html +
+            '</div>'
+            '</div>'
+        )
+    else:
+        progress_section_html = ""
 
     _tb_html = ""
     for _pri, _, _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status in _top_benefit_cards[:6]:
@@ -7301,9 +7381,18 @@ def dashboard():
                 _val_html = f'<span style="font-size:12px;color:#6b7280;margin-left:4px">{he(_val)}</span>'
             elif _is_status:
                 _val_html = f'<span style="font-size:12px;color:{_label_color};margin-left:4px;font-weight:600">{he(_val)}</span>'
+        import json as _tb_json
+        _tb_bd_data = _tb_json.dumps({
+            "label": _lbl, "account": _disp,
+            "value": _val, "icon": _ic, "expDays": _exp
+        }).replace("'", "&#39;")
         _tb_html += (
             f'<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
-            f'background:{_card_bg};border:1px solid {_card_border};border-radius:8px;margin-bottom:8px">'
+            f'background:{_card_bg};border:1px solid {_card_border};border-radius:8px;margin-bottom:8px;'
+            f'cursor:pointer;transition:filter 0.1s" '
+            f'onmouseover="this.style.filter=\'brightness(0.97)\'" '
+            f'onmouseout="this.style.filter=\'\'" '
+            f'onclick="openBenefitDrawer(this)" data-benefit=\'{_tb_bd_data}\'>'
             f'<span style="font-size:16px;flex-shrink:0">{_ic}</span>'
             f'<div style="flex:1;min-width:0">'
             f'<div style="font-size:12px;color:#9ca3af;font-weight:500">{he(_disp)}</div>'
@@ -7554,6 +7643,7 @@ function dismissOnboarding() {
             .replace("{relevant_now_html}",      relevant_now_html)
             .replace("{value_center_html}",       value_center_html)
             .replace("{top_benefits_html}",       top_benefits_html)
+            .replace("{progress_section_html}",   progress_section_html)
             .replace("{opportunities_html}",      "")
             .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{dash_modals}",             _build_dash_modals(configured, _csrf))
@@ -9276,8 +9366,121 @@ document.addEventListener('keydown', function(e) {{
     if (co && co.classList.contains('open')) closeDashConnectModal();
     var fo = document.getElementById('dash-field-overlay');
     if (fo && fo.style.display !== 'none') closeDashFieldModal();
+    closeBenefitDrawer();
   }}
 }});
+</script>
+
+<!-- Benefit detail drawer -->
+<div id="benefit-drawer-overlay" onclick="closeBenefitDrawer()"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:300"></div>
+<div id="benefit-drawer"
+     style="position:fixed;top:0;right:0;height:100vh;width:min(380px,100vw);background:#fff;
+            z-index:301;box-shadow:-4px 0 32px rgba(0,0,0,0.12);display:flex;flex-direction:column;
+            transform:translateX(110%);transition:transform 0.25s cubic-bezier(.4,0,.2,1)">
+  <div style="padding:20px 20px 14px;border-bottom:1px solid #f5f2ed;
+              display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+    <span id="bd-icon" style="font-size:28px;line-height:1"></span>
+    <button onclick="closeBenefitDrawer()"
+            style="background:none;border:none;font-size:22px;color:#9ca3af;cursor:pointer;
+                   padding:4px 8px;line-height:1;margin-left:auto">✕</button>
+  </div>
+  <div style="padding:20px 20px 24px;overflow-y:auto;flex:1">
+    <div id="bd-label" style="font-size:20px;font-weight:700;color:#111;line-height:1.3;margin-bottom:4px"></div>
+    <div id="bd-account" style="font-size:13px;color:#6b7280;margin-bottom:20px"></div>
+
+    <div id="bd-expiry-row" style="display:none;background:#fffbeb;border:1px solid #fde68a;
+         border-radius:8px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                  letter-spacing:.06em;margin-bottom:4px">Expires</div>
+      <div id="bd-expiry" style="font-size:16px;font-weight:700;color:#d97706"></div>
+    </div>
+
+    <div id="bd-value-row" style="display:none;background:#f9fafb;border:1px solid #e5e7eb;
+         border-radius:8px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                  letter-spacing:.06em;margin-bottom:4px">Value</div>
+      <div id="bd-value" style="font-size:16px;font-weight:700;color:#111"></div>
+    </div>
+
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px">
+      <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                  letter-spacing:.06em;margin-bottom:6px">Why this matters</div>
+      <div id="bd-why" style="font-size:13px;color:#374151;line-height:1.65"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+var _BD_WHY = {{
+  cert: 'Can be redeemed for a companion or award ticket — book a flight to your destination and apply it at checkout.',
+  upgrade: 'Apply to an eligible flight for a complimentary cabin upgrade, subject to inventory availability.',
+  credit: 'Offsets travel or dining purchases made on your card. Check eligible categories before it expires.',
+  status: 'Unlocks elite benefits including priority boarding, lounge access, complimentary upgrades, and bonus miles on every flight.',
+  points: 'Redeemable for flights, hotels, gift cards, or merchandise through your loyalty program portal.',
+  night: 'Redeem for a free hotel night at any eligible property in the program.',
+  dflt: 'A benefit in your account — check the account site for redemption instructions.'
+}};
+function _bdWhy(label, icon) {{
+  var l = (label||'').toLowerCase();
+  if (icon==='🎫' || l.includes('cert') || l.includes('companion') || l.includes('free night')) return _BD_WHY.cert;
+  if (icon==='⬆' || l.includes('upgrade')) return _BD_WHY.upgrade;
+  if (l.includes('credit') || l.includes('voucher') || l.includes('ecredit')) return _BD_WHY.credit;
+  if (l.includes('status') || l.includes('elite') || l.includes('medallion') ||
+      l.includes('gold') || l.includes('platinum') || l.includes('diamond')) return _BD_WHY.status;
+  if (l.includes('miles') || l.includes('points') || l.includes('rewards')) return _BD_WHY.points;
+  if (l.includes('night') || l.includes('hotel')) return _BD_WHY.night;
+  return _BD_WHY.dflt;
+}}
+function openBenefitDrawer(el) {{
+  var raw = el && el.dataset && el.dataset.benefit;
+  if (!raw) return;
+  try {{ var d = JSON.parse(raw); }} catch(e) {{ return; }}
+  document.getElementById('bd-icon').textContent = d.icon || '•';
+  document.getElementById('bd-label').textContent = d.label || '';
+  document.getElementById('bd-account').textContent = d.account || '';
+  // Expiry
+  var eRow = document.getElementById('bd-expiry-row');
+  var eEl  = document.getElementById('bd-expiry');
+  if (d.expDays != null && d.expDays >= 0) {{
+    var ed = new Date(); ed.setDate(ed.getDate() + Math.round(d.expDays));
+    var mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][ed.getMonth()];
+    var expStr = mo + ' ' + ed.getDate() + ', ' + ed.getFullYear();
+    if (d.expDays <= 30) {{
+      eEl.innerHTML = expStr + ' <span style="font-size:13px;color:#dc2626">(in ' + d.expDays + ' days)</span>';
+      eEl.style.color = '#dc2626';
+      eRow.style.background = '#fff5f5';
+      eRow.style.borderColor = '#fca5a5';
+    }} else {{
+      eEl.textContent = expStr;
+      eEl.style.color = '#d97706';
+      eRow.style.background = '#fffbeb';
+      eRow.style.borderColor = '#fde68a';
+    }}
+    eRow.style.display = 'block';
+  }} else {{ eRow.style.display = 'none'; }}
+  // Value
+  var vRow = document.getElementById('bd-value-row');
+  var vEl  = document.getElementById('bd-value');
+  var _skipV = {{'available':1,'active':1,'yes':1,'enabled':1,'valid':1,'earned':1,'':1}};
+  if (d.value && !_skipV[(d.value||'').toLowerCase().trim()]) {{
+    vEl.textContent = d.value;
+    vRow.style.display = 'block';
+  }} else {{ vRow.style.display = 'none'; }}
+  // Why
+  document.getElementById('bd-why').textContent = _bdWhy(d.label, d.icon);
+  // Open
+  document.getElementById('benefit-drawer').style.transform = 'translateX(0)';
+  document.getElementById('benefit-drawer-overlay').style.display = 'block';
+  document.body.style.overflow = 'hidden';
+}}
+function closeBenefitDrawer() {{
+  var dr = document.getElementById('benefit-drawer');
+  var ov = document.getElementById('benefit-drawer-overlay');
+  if (dr) dr.style.transform = 'translateX(110%)';
+  if (ov) ov.style.display = 'none';
+  document.body.style.overflow = '';
+}}
 </script>"""
 
 
