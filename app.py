@@ -1616,8 +1616,9 @@ def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
     return list(additional)
 
 
-# moved to mighty.scoring
-
+# mighty/ package lives in the same repo root as app.py and is deployed to Railway
+# alongside it. These imports work because Railway deploys the full repo, not just
+# this file. See mighty/__init__.py, classify.py, scoring.py.
 from mighty.classify import classify_benefit, BENEFIT_TYPES  # noqa: E402
 from mighty.scoring import _relevance_score, _confidence_label, _BENEFIT_APPLICABILITY  # noqa: E402
 
