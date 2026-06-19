@@ -409,6 +409,7 @@ def init_db():
                     created_at    TEXT NOT NULL,
                     dismissed_at  TEXT,
                     snoozed_until TEXT,
+                    completed_at  TEXT,
                     UNIQUE(user_id, field_key)
                 )
             """)
@@ -416,6 +417,18 @@ def init_db():
             db.commit()
         except Exception:
             pass
+        # Migration: add completed_at if table already existed without it
+        try:
+            db.execute("ALTER TABLE action_items ADD COLUMN completed_at TEXT")
+            db.commit()
+        except Exception:
+            pass  # column already exists
+        # Migration: intent aggregation summary on users
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN intent_summary TEXT")
+            db.commit()
+        except Exception:
+            pass  # column already exists
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -553,17 +566,18 @@ def populate_action_items(uid: str, source: str, data: dict):
              exp_date, now)
         )
 
-    # Remove stale rows for this source that no longer appear in the data
+    # Remove stale rows for this source that no longer appear in the data.
+    # Preserve completed rows — they're training signal even if the field disappeared.
     if live_keys:
         placeholders = ",".join("?" * len(live_keys))
         db.execute(
-            f"DELETE FROM action_items WHERE user_id=? AND source=? AND field_key NOT IN ({placeholders})",
+            f"DELETE FROM action_items WHERE user_id=? AND source=? AND field_key NOT IN ({placeholders})"
+            f" AND completed_at IS NULL",
             [uid, source] + live_keys
         )
     else:
-        # Source returned no actionable items — clear any old rows
         db.execute(
-            "DELETE FROM action_items WHERE user_id=? AND source=?",
+            "DELETE FROM action_items WHERE user_id=? AND source=? AND completed_at IS NULL",
             (uid, source)
         )
 
@@ -571,7 +585,7 @@ def populate_action_items(uid: str, source: str, data: dict):
 
 
 def _open_action_items(uid: str) -> list[dict]:
-    """Return open (not dismissed, not snoozed) action items for uid, ordered by urgency."""
+    """Return open (not dismissed, not snoozed, not completed) action items for uid."""
     import datetime as _dt_ai2
     now = _dt_ai2.datetime.utcnow().isoformat()
     rows = get_db().execute(
@@ -580,6 +594,7 @@ def _open_action_items(uid: str) -> list[dict]:
         FROM action_items
         WHERE user_id = ?
           AND dismissed_at IS NULL
+          AND completed_at IS NULL
           AND (snoozed_until IS NULL OR snoozed_until < ?)
         ORDER BY
             CASE urgency WHEN 'urgent' THEN 0 WHEN 'soon' THEN 1 ELSE 2 END,
@@ -588,6 +603,84 @@ def _open_action_items(uid: str) -> list[dict]:
         (uid, now)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _recompute_intent_summary(uid: str) -> dict:
+    """Aggregate intent_history rows from the last 30 days into a count dict.
+
+    Writes the result back to users.intent_summary so the Opportunity Engine
+    can use it for relevance ranking without re-querying intent_history every
+    page load.
+
+    Returns the summary dict for the caller.
+    """
+    import json as _json_is
+    import datetime as _dt_is
+    cutoff = (_dt_is.datetime.utcnow() - _dt_is.timedelta(days=30)).isoformat()
+    db = get_db()
+    rows = db.execute(
+        "SELECT intent_type, COUNT(*) AS cnt FROM intent_history "
+        "WHERE user_id=? AND detected_at > ? GROUP BY intent_type",
+        (uid, cutoff)
+    ).fetchall()
+    summary = {r["intent_type"]: r["cnt"] for r in rows}
+    summary["_computed_at"] = _dt_is.datetime.utcnow().isoformat()
+    db.execute(
+        "UPDATE users SET intent_summary=? WHERE id=?",
+        (_json_is.dumps(summary), uid)
+    )
+    db.commit()
+    return summary
+
+
+def _why_shown(btype: str, days_left=None, source_display: str = "",
+               methodology: str = "") -> str:
+    """Return a one-sentence 'Why am I seeing this?' explanation for a benefit item.
+
+    Used in hero bullets, top benefits, wallet insights, and action center.
+    Kept intentionally short — max ~60 chars, no leading capital, no trailing period.
+    """
+    d = days_left  # alias for brevity
+    if btype == "certificate":
+        if d is not None and d <= 14:  return f"expires in {d} day{'s' if d != 1 else ''} — use it soon"
+        if d is not None and d <= 60:  return f"expires in {d} days"
+        return "unused reward in your account"
+    if btype == "travel_credit":
+        if d is not None and d <= 30:  return f"credit expires in {d} days"
+        return "unused travel credit"
+    if btype == "cash_credit":
+        if d is not None and d <= 30:  return f"credit expires in {d} days"
+        return "available statement credit"
+    if btype == "elite_status":
+        src = f" with {source_display}" if source_display else ""
+        return f"your current status{src}"
+    if btype == "points_balance":
+        src = f" in {source_display}" if source_display else ""
+        return f"redeemable balance{src}"
+    if btype == "progress_toward":
+        return "tracking toward your next tier"
+    if btype == "membership":
+        return "active membership benefit"
+    if btype == "payment_due":
+        if d is not None and d == 0:   return "due today"
+        if d is not None and d <= 3:   return f"due in {d} day{'s' if d != 1 else ''}"
+        if d is not None:              return f"due in {d} days"
+        return "upcoming payment"
+    if btype == "renewal":
+        if d is not None:              return f"renews in {d} days"
+        return "upcoming renewal"
+    if btype == "upcoming_event":
+        if d is not None and d == 0:   return "today"
+        if d is not None and d == 1:   return "tomorrow"
+        if d is not None:              return f"in {d} days"
+        return "upcoming commitment"
+    if btype == "partner_benefit":
+        if methodology:                return methodology[:80]
+        if source_display:             return f"unlocked via {source_display}"
+        return "derived from your existing benefits"
+    if btype == "reservation":
+        return "confirmed booking"
+    return ""  # "other" — omit rather than show a generic line
 
 
 def _find_expiring_for_user(uid):
@@ -2090,7 +2183,7 @@ def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
 try:
     from mighty.classify import (classify_benefit, BENEFIT_TYPES,         # noqa: E402
                                   is_actionable, is_balance, is_status,
-                                  is_needs_attention)
+                                  is_needs_attention, is_upcoming)
     from mighty.scoring import _relevance_score, _confidence_label, _BENEFIT_APPLICABILITY  # noqa: E402
 except ImportError:
     import re as _cb_re
@@ -2123,6 +2216,7 @@ except ImportError:
     def is_balance(btype):    return btype == "points_balance"
     def is_status(btype):     return btype == "elite_status"
     def is_needs_attention(btype): return btype in {"payment_due","renewal"}
+    def is_upcoming(btype):   return btype in {"upcoming_event","reservation"}
     _BENEFIT_APPLICABILITY: dict = {
         "flight":   ["companion","ecredit","miles","travel_credit","upgrade","certificate"],
         "hotel":    ["free_night","award_night","points","hotel_credit","travel_credit","certificate"],
@@ -6977,7 +7071,14 @@ def dashboard():
         _show_val = ""
         if _hval and _hval.lower().strip() not in _skip_vals:
             _show_val = f'<span style="font-size:13px;color:#6b7280;margin-left:6px">{he(_hval)}</span>'
-        # Evidence line — always visible, answers "why is this here?"
+        # Why-shown line — context-aware one-liner above the evidence trail
+        _why_line_txt = _why_shown(_btype, _hexp, _hdisp)
+        _why_line_html = (
+            f'<div style="font-size:11px;color:#6b7280;margin-top:2px;line-height:1.4">'
+            f'{he(_why_line_txt)}</div>'
+        ) if _why_line_txt else ""
+
+        # Evidence line — source + freshness + confidence
         _hsynced_ago = _synced_ago_by_disp.get(_hdisp, "")
         _hstale = bool(_hsynced_ago and "d" in _hsynced_ago and int(_hsynced_ago.split("d")[0].strip() or 0) >= 2)
         _ev_parts = [f'Found in {he(_hdisp)}']
@@ -7006,7 +7107,8 @@ def dashboard():
             f'<div style="font-size:14px;font-weight:600;color:{_bullet_color};line-height:1.3">'
             f'{he(_hlbl)}{_show_val}</div>'
             f'<div style="font-size:12px;margin-top:2px;line-height:1.4">{_sub_html}</div>'
-            f'{_evidence_line}'
+            + _why_line_html
+            + f'{_evidence_line}'
             f'</div>'
             f'</div>'
         )
@@ -7066,25 +7168,6 @@ def dashboard():
     def _ai_urgency_icon(urgency):
         return "🔴" if urgency == "urgent" else "🟡"
 
-    def _ai_why_now(item):
-        """Short "why now" line shown under the label."""
-        days = item.get("days_left")
-        btype = item.get("btype", "")
-        label = item.get("label", "")
-        if btype == "login_required":
-            return "Re-authenticate to continue syncing"
-        if days is not None:
-            if days == 0:   return "Expires today"
-            if days < 0:    return "Expired"
-            if days == 1:   return "Expires tomorrow"
-            if days <= 7:   return f"Expires in {days} days"
-            if days <= 30:  return f"Expires in {days} days"
-            if "due" in label.lower() or "payment" in label.lower():
-                return f"Due in {days} days"
-        if btype in ("payment_due",):  return "Payment coming up"
-        if btype == "renewal":          return "Renewal coming up"
-        return ""
-
     _csrf_tok = get_csrf_token()
     _ac_items_html = ""
     for _ai in _all_action_items[:6]:
@@ -7094,30 +7177,49 @@ def dashboard():
         _ai_icon     = _ai_urgency_icon(_ai_urgency)
         _ai_label    = _ai.get("label", "")
         _ai_val      = _ai.get("value", "")
-        _ai_why      = _ai_why_now(_ai)
+        _ai_btype    = _ai.get("btype", "")
+        _ai_days     = _ai.get("days_left")
+        if _ai_btype == "login_required":
+            _ai_why = "Re-authenticate to continue syncing"
+        elif _ai_days is not None and _ai_days < 0:
+            _ai_why = "Expired"
+        else:
+            _ai_why = _why_shown(_ai_btype, _ai_days)
         _ai_disp_lbl = _ai_val if not _ai_label or _ai_label == "Login required" else f"{_ai_label}: {_ai_val}"
 
-        # Dismiss/snooze buttons — only for persisted items
+        # Action buttons — only for persisted items (not transient login_required)
         if _ai_id is not None:
+            # Shared: remove item from DOM, hide wrap if empty
+            _rm_js = (
+                f"document.getElementById('ai-{_ai_id}').remove();"
+                f"if(!document.querySelector('[id^=\"ai-\"]'))document.getElementById('action-center-wrap').remove();"
+            )
+            _done_js = (
+                f"fetch('/api/action-items/{_ai_id}/complete',{{"
+                f"method:'POST',headers:{{'X-CSRF-Token':'{_csrf_tok}','Content-Type':'application/json'}},"
+                f"credentials:'same-origin'}}).then(r=>r.ok&&({_rm_js}))"
+            )
             _dismiss_js = (
                 f"fetch('/api/action-items/{_ai_id}/dismiss',{{"
                 f"method:'POST',headers:{{'X-CSRF-Token':'{_csrf_tok}','Content-Type':'application/json'}},"
-                f"credentials:'same-origin'}}).then(()=>document.getElementById('ai-{_ai_id}').remove())"
-                f".then(()=>{{ if(!document.querySelector('[id^=ai-]'))document.getElementById('action-center-wrap').remove() }})"
+                f"credentials:'same-origin'}}).then(r=>r.ok&&({_rm_js}))"
             )
             _snooze_js = (
                 f"fetch('/api/action-items/{_ai_id}/snooze',{{"
                 f"method:'POST',headers:{{'X-CSRF-Token':'{_csrf_tok}','Content-Type':'application/json'}},"
                 f"body:JSON.stringify({{days:7}}),credentials:'same-origin'}})"
-                f".then(()=>document.getElementById('ai-{_ai_id}').remove())"
-                f".then(()=>{{ if(!document.querySelector('[id^=ai-]'))document.getElementById('action-center-wrap').remove() }})"
+                f".then(r=>r.ok&&({_rm_js}))"
             )
             _action_btns = (
-                f'<div style="display:flex;gap:8px;margin-top:5px">'
-                f'<button onclick="{_dismiss_js}" style="font-size:11px;color:#6b7280;background:none;border:1px solid #e5e7eb;'
-                f'border-radius:4px;padding:2px 8px;cursor:pointer;line-height:1.5" title="Dismiss permanently">Dismiss</button>'
-                f'<button onclick="{_snooze_js}" style="font-size:11px;color:#6b7280;background:none;border:1px solid #e5e7eb;'
-                f'border-radius:4px;padding:2px 8px;cursor:pointer;line-height:1.5" title="Hide for 7 days">Snooze 7d</button>'
+                f'<div style="display:flex;gap:6px;margin-top:6px">'
+                f'<button onclick="{_done_js}" style="font-size:11px;font-weight:600;color:#fff;'
+                f'background:#16a34a;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;'
+                f'line-height:1.5" title="Mark as done — saves as a signal">✓ Done</button>'
+                f'<button onclick="{_snooze_js}" style="font-size:11px;color:#6b7280;background:none;'
+                f'border:1px solid #e5e7eb;border-radius:4px;padding:3px 8px;cursor:pointer;'
+                f'line-height:1.5" title="Hide for 7 days">Snooze 7d</button>'
+                f'<button onclick="{_dismiss_js}" style="font-size:11px;color:#9ca3af;background:none;'
+                f'border:none;padding:3px 4px;cursor:pointer;line-height:1.5" title="Not relevant">✕</button>'
                 f'</div>'
             )
             _item_id_attr = f'id="ai-{_ai_id}"'
@@ -7441,6 +7543,7 @@ def dashboard():
             _diamond_color = "#6c47ff"  # purple for mid-high
         else:
             _diamond_color = "#6b7280"  # grey for base/silver
+        _tb_why = _why_shown("elite_status", _exp, _disp)
         _tb_html += (
             f'<div style="display:flex;align-items:center;gap:10px;padding:7px 4px;'
             f'cursor:pointer;border-radius:7px;transition:background 0.1s" '
@@ -7452,7 +7555,8 @@ def dashboard():
             f'<div style="font-size:14px;font-weight:700;color:#1c1917;line-height:1.3;'
             f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{he(_tier)}</div>'
             f'<div style="font-size:11px;color:#9ca3af;margin-top:1px">{he(_disp)}</div>'
-            f'</div></div>'
+            + (f'<div style="font-size:10px;color:#a78bfa;margin-top:1px">{he(_tb_why)}</div>' if _tb_why else '')
+            + f'</div></div>'
         )
     _tb_overflow = max(0, len(_top_benefit_cards) - 6)
     if _tb_html:
@@ -12489,6 +12593,25 @@ def api_action_item_snooze(item_id):
     return jsonify({"ok": True, "snoozed_until": snoozed_until})
 
 
+@app.route("/api/action-items/<int:item_id>/complete", methods=["POST"])
+@require_login
+def api_action_item_complete(item_id):
+    """Mark an action item as completed.  Preserves the row as a training signal."""
+    check_csrf()
+    uid = session["user_id"]
+    import datetime as _dt_cmp
+    now = _dt_cmp.datetime.utcnow().isoformat()
+    db = get_db()
+    rowcount = db.execute(
+        "UPDATE action_items SET completed_at=? WHERE id=? AND user_id=?",
+        (now, item_id, uid)
+    ).rowcount
+    db.commit()
+    if rowcount == 0:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, "completed_at": now})
+
+
 @app.route("/candidates/<source>")
 @require_login
 def candidates_page(source):
@@ -13724,7 +13847,30 @@ def api_intent_log():
             (uid, intent_type, page_url, benefit_count, _json.dumps(benefits), now_iso)
         )
     get_db().commit()
+
+    # Refresh rolling 30-day intent aggregates — used by Opportunity Engine for ranking
+    try:
+        _recompute_intent_summary(uid)
+    except Exception as _ris_err:
+        print(f"[Mighty] intent summary error: {_ris_err}", flush=True)
+
     return jsonify({"ok": True})
+
+
+@app.route("/api/intent/summary")
+@require_login
+def api_intent_summary():
+    """Return the user's pre-computed 30-day intent summary for the dashboard/engine."""
+    import json as _json_is2
+    uid = session["user_id"]
+    row = get_db().execute("SELECT intent_summary FROM users WHERE id=?", (uid,)).fetchone()
+    if row and row["intent_summary"]:
+        try:
+            return jsonify(_json_is2.loads(row["intent_summary"]))
+        except Exception:
+            pass
+    # Fallback: compute on-demand
+    return jsonify(_recompute_intent_summary(uid))
 
 
 @app.route("/api/intent/recent")
