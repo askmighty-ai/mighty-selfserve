@@ -4547,6 +4547,13 @@ body{display:flex;flex-direction:row}
 {_SIDEBAR_}
 
 <div class="main-content">
+<div style="display:none;align-items:center;gap:10px;padding:12px 16px;border-bottom:0.5px solid rgba(0,0,0,0.07);background:#eee9e2;position:sticky;top:0;z-index:2" id="mobile-topbar-settings">
+  <button class="nav-hamburger" onclick="openMobileDrawer()" aria-label="Open menu" style="display:none">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <span style="font-size:15px;font-weight:700;color:#1c1917">Settings</span>
+</div>
+<script>(function(){var t=document.getElementById('mobile-topbar-settings');if(t&&window.innerWidth<=768)t.style.display='flex';})();</script>
 <div class="page-wrap">
   <div class="page-title">Settings</div>
 
@@ -6811,7 +6818,7 @@ def dashboard():
     try:
         _recent_rows = get_db().execute(
             "SELECT source, field_label, new_value, changed_at FROM field_history "
-            "WHERE user_id=? AND change_type='added' AND changed_at > ? "
+            "WHERE user_id=? AND old_value IS NULL AND changed_at > ? "
             "ORDER BY changed_at DESC LIMIT 10",
             (uid, _cutoff)
         ).fetchall()
@@ -8382,7 +8389,15 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             fk = f.get("key")
             nv = str(f.get("value", ""))
             ov = _existing_items_snapshot.get(fk)
-            if ov is not None and ov != nv:
+            if fk and nv and ov is None:
+                # Brand-new field (not seen before) — record as addition (old_value NULL)
+                fh_db.execute(
+                    "INSERT INTO field_history (user_id, source, field_key, field_label, old_value, new_value, changed_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (uid, source, fk, f.get("label", fk), None, nv, now_iso)
+                )
+            elif ov is not None and ov != nv:
+                # Existing field whose value changed
                 fh_db.execute(
                     "INSERT INTO field_history (user_id, source, field_key, field_label, old_value, new_value, changed_at) "
                     "VALUES (?,?,?,?,?,?,?)",
@@ -9010,6 +9025,13 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
 {_sidebar_html('accounts', user["email"], csrf)}
 
 <div class="main-content">
+<div style="display:none;align-items:center;gap:10px;padding:12px 16px;border-bottom:0.5px solid rgba(0,0,0,0.07);background:#eee9e2;position:sticky;top:0;z-index:2" id="mobile-topbar-accounts">
+  <button class="nav-hamburger" onclick="openMobileDrawer()" aria-label="Open menu" style="display:none">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <span style="font-size:15px;font-weight:700;color:#1c1917">Accounts</span>
+</div>
+<script>(function(){{var t=document.getElementById('mobile-topbar-accounts');if(t&&window.innerWidth<=768)t.style.display='flex';}})();</script>
 <div class="page">
   <div class="page-header">
     <h1>Connected accounts</h1>
