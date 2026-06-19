@@ -4383,6 +4383,7 @@ body{display:flex;flex-direction:row}
 
 
 <script>
+var CSRF = '{csrf_token}';
 var swReg = null;
 if ('serviceWorker' in navigator && 'PushManager' in window) {
   navigator.serviceWorker.register('/sw.js').then(function(reg) {
