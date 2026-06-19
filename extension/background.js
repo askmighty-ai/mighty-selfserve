@@ -1413,30 +1413,65 @@ chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
 
     if (notifPref === 'never') return;
 
-    // Filter benefits for 'expiring' mode
-    let filteredBenefits = data.benefits;
+    const checkoutPatterns = [
+      /\/checkout/i, /\/cart/i, /\/payment/i, /\/booking\/confirm/i,
+      /\/purchase/i, /\/order\/review/i, /\/reserve/i, /\/book\b/i,
+      /\/confirm/i, /step=payment/i, /step=review/i,
+    ];
+    const isCheckout = checkoutPatterns.some(p => p.test(tab.url));
+
+    // 'checkout' pref: only fire at booking/payment pages
+    if (notifPref === 'checkout' && !isCheckout) return;
+
+    // Split into existing benefits (derived from user's accounts) vs card suggestions
+    let allBenefits = data.benefits || [];
+
+    // 'expiring' mode: only urgent items
     if (notifPref === 'expiring') {
-      filteredBenefits = data.benefits.filter(b =>
-        b._why && b._why.urgency_factor >= 0.7
-      );
-      if (!filteredBenefits.length) return;
+      allBenefits = allBenefits.filter(b => b._why && b._why.urgency_factor >= 0.7);
+      if (!allBenefits.length) return;
     }
 
-    // For 'checkout', only fire on checkout/cart/booking URLs
-    if (notifPref === 'checkout') {
-      const checkoutPatterns = [
-        /\/checkout/i, /\/cart/i, /\/payment/i, /\/booking\/confirm/i,
-        /\/purchase/i, /\/order\/review/i, /reserve/i, /\/book\b/i,
-      ];
-      if (!checkoutPatterns.some(p => p.test(tab.url))) return;
+    // Separate derived (existing status/membership unlocks) from direct matches
+    const existing  = allBenefits.filter(b => b.derived).slice(0, 2);   // max 2
+    const direct    = allBenefits.filter(b => !b.derived).slice(0, 2);  // max 2
+
+    // At checkout: show up to 2 existing + 1 direct. While browsing: 1 existing only.
+    let surfaced;
+    if (isCheckout) {
+      surfaced = [...existing.slice(0, 2), ...direct.slice(0, 1)];
+    } else {
+      // Quiet while browsing — at most 1 high-confidence existing benefit
+      const highConf = existing.filter(b => b.confidence !== 'low');
+      surfaced = highConf.slice(0, 1);
+      if (!surfaced.length) surfaced = direct.slice(0, 1);
+    }
+
+    if (!surfaced.length) return;
+
+    // Fetch card recommendations for this context (shown separately, more quietly)
+    let cardRecs = [];
+    if (isCheckout) {
+      try {
+        const recResp = await fetch(
+          `${MIGHTY_URL}/api/benefits/discover?context=${intent}`,
+          { headers: { 'X-Mighty-Key': apiKey }, credentials: 'include' }
+        );
+        if (recResp.ok) {
+          const recData = await recResp.json();
+          cardRecs = (recData.recommendations || []).slice(0, 1); // max 1 card rec at checkout
+        }
+      } catch(e) {}
     }
 
     // Send to content script
     chrome.tabs.sendMessage(tabId, {
       type: 'MIGHTY_BENEFITS',
       context: intent,
-      benefits: filteredBenefits,
-      count: filteredBenefits.length,
+      benefits: surfaced,
+      cardRecs: cardRecs,
+      isCheckout: isCheckout,
+      count: surfaced.length,
     }).catch(() => {}); // content script may not be loaded yet
 
     // Log the intent so the dashboard can show "Relevant Right Now"

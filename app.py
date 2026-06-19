@@ -367,7 +367,8 @@ def init_db():
                     field_key    TEXT NOT NULL,
                     feedback     TEXT NOT NULL,
                     context      TEXT,
-                    created_at   TEXT NOT NULL
+                    created_at   TEXT NOT NULL,
+                    UNIQUE(user_id, source, field_key, context)
                 )
             """)
             db.commit()
@@ -7086,23 +7087,43 @@ def dashboard():
     countEl.textContent = recs.length;
     var html = '';
     recs.forEach(function(rec) {
+      // Build drawer data for this card recommendation
+      var drawerData = JSON.stringify({
+        icon: '💳',
+        label: rec.card_name,
+        account: rec.issuer + ' · for ' + esc(rec.trigger_source || '').replace(/_/g,' ') + ' members',
+        card_benefits: rec.benefits || [],
+        card_issuer: rec.issuer,
+        trigger_account: (rec.trigger_source || '').replace(/_/g,' '),
+        last_verified: rec.last_verified || '',
+        source_url: rec.source_url || '',
+        confidence: rec.confidence || 'high',
+      });
       html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;'
             + 'padding:14px 16px;margin-bottom:10px">';
-      html += '<div style="display:flex;align-items:baseline;justify-content:space-between;'
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;'
             + 'gap:8px;margin-bottom:8px">';
+      html += '<div>';
       html += '<div style="font-size:13px;font-weight:600;color:#111">' + esc(rec.card_name) + '</div>';
-      html += '<div style="font-size:11px;color:#9ca3af;flex-shrink:0">' + esc(rec.issuer) + '</div>';
+      html += '<div style="font-size:11px;color:#9ca3af">' + esc(rec.issuer) + '</div>';
+      html += '</div>';
+      html += '<button onclick=\'openBenefitDrawer(this)\' data-benefit=\'' + drawerData.replace(/'/g,"&#39;") + '\' '
+            + 'style="font-size:11px;color:#6366f1;background:none;border:none;cursor:pointer;'
+            + 'padding:0;font-family:inherit;white-space:nowrap">Details ›</button>';
       html += '</div>';
       html += '<ul style="margin:0;padding:0 0 0 14px;list-style:disc">';
-      (rec.benefits || []).forEach(function(b) {
+      (rec.benefits || []).slice(0, 3).forEach(function(b) {
         html += '<li style="font-size:12px;color:#374151;margin-bottom:3px;line-height:1.45">'
               + esc(b) + '</li>';
       });
+      if ((rec.benefits || []).length > 3) {
+        html += '<li style="font-size:12px;color:#9ca3af;list-style:none;margin-top:2px">'
+              + '+ ' + ((rec.benefits||[]).length - 3) + ' more — click Details</li>';
+      }
       html += '</ul>';
       if (rec.last_verified) {
         html += '<div style="font-size:10px;color:#d1d5db;margin-top:8px">'
-              + 'Benefits verified ' + esc(rec.last_verified) + ' · confirm current terms at '
-              + esc(rec.issuer) + '</div>';
+              + 'Published benefit · verified ' + esc(rec.last_verified) + '</div>';
       }
       html += '</div>';
     });
@@ -9721,10 +9742,38 @@ document.addEventListener('keydown', function(e) {{
       <div id="bd-value" style="font-size:16px;font-weight:700;color:#111"></div>
     </div>
 
-    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px">
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px;margin-bottom:14px">
       <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;
                   letter-spacing:.06em;margin-bottom:6px">Why this matters</div>
       <div id="bd-why" style="font-size:13px;color:#374151;line-height:1.65"></div>
+    </div>
+
+    <!-- Partnership / card drawer extras -->
+    <div id="bd-detail-row" style="display:none;background:#f9fafb;border:1px solid #e5e7eb;
+         border-radius:8px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                  letter-spacing:.06em;margin-bottom:4px">What it is</div>
+      <div id="bd-detail" style="font-size:13px;color:#374151;line-height:1.5"></div>
+    </div>
+
+    <div id="bd-card-benefits-row" style="display:none;background:#f9fafb;border:1px solid #e5e7eb;
+         border-radius:8px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                  letter-spacing:.06em;margin-bottom:6px">Published benefits</div>
+      <ul id="bd-card-benefits" style="margin:0;padding:0 0 0 14px;list-style:disc"></ul>
+    </div>
+
+    <div id="bd-source-row" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;
+         border-radius:8px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;
+                  letter-spacing:.06em;margin-bottom:4px">Where Mighty found this</div>
+      <div id="bd-source-text" style="font-size:13px;color:#1e40af;line-height:1.5"></div>
+    </div>
+
+    <div id="bd-verified-row" style="display:none;border-top:1px solid #f5f2ed;padding-top:12px">
+      <div style="font-size:10px;color:#d1d5db;line-height:1.5">
+        <span id="bd-verified-text"></span>
+      </div>
     </div>
   </div>
 </div>
@@ -9787,6 +9836,56 @@ function openBenefitDrawer(el) {{
   }} else {{ vRow.style.display = 'none'; }}
   // Why
   document.getElementById('bd-why').textContent = _bdWhy(d.label, d.icon);
+
+  // ── Partnership / card extras ──────────────────────────────────────────
+  // "What it is" (detail text for derived/partnership items)
+  var detRow = document.getElementById('bd-detail-row');
+  var detEl  = document.getElementById('bd-detail');
+  if (d.detail) {{
+    detEl.textContent = d.detail;
+    detRow.style.display = 'block';
+  }} else {{ detRow.style.display = 'none'; }}
+
+  // "Published benefits" (for card recommendations)
+  var cbRow = document.getElementById('bd-card-benefits-row');
+  var cbEl  = document.getElementById('bd-card-benefits');
+  if (d.card_benefits && d.card_benefits.length) {{
+    cbEl.innerHTML = d.card_benefits.map(function(b) {{
+      return '<li style="font-size:12px;color:#374151;margin-bottom:3px;line-height:1.45">' +
+             b.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</li>';
+    }}).join('');
+    cbRow.style.display = 'block';
+  }} else {{ cbRow.style.display = 'none'; }}
+
+  // "Where Mighty found this"
+  var srcRow  = document.getElementById('bd-source-row');
+  var srcText = document.getElementById('bd-source-text');
+  var sourceMsg = '';
+  if (d.derived && d.via_account) {{
+    sourceMsg = 'Derived from your ' + d.via_account + ' account';
+    if (d.via_status) sourceMsg += ' (' + d.via_status + ')';
+  }} else if (d.card_issuer) {{
+    sourceMsg = 'Published card benefit from ' + d.card_issuer;
+    if (d.trigger_account) sourceMsg += ' · triggered by your ' + d.trigger_account + ' account';
+  }} else if (d.account) {{
+    sourceMsg = 'Found in your ' + d.account + ' account';
+  }}
+  if (sourceMsg) {{
+    srcText.textContent = sourceMsg;
+    srcRow.style.display = 'block';
+  }} else {{ srcRow.style.display = 'none'; }}
+
+  // "Last verified"
+  var verRow  = document.getElementById('bd-verified-row');
+  var verText = document.getElementById('bd-verified-text');
+  if (d.last_verified) {{
+    var verMsg = 'Partnership verified ' + d.last_verified;
+    if (d.source_url) verMsg += ' · confirm current terms: ' + d.source_url;
+    if (d.confidence && d.confidence !== 'high') verMsg += ' · ' + d.confidence + ' confidence';
+    verText.textContent = verMsg;
+    verRow.style.display = 'block';
+  }} else {{ verRow.style.display = 'none'; }}
+
   // Open
   document.getElementById('benefit-drawer').style.transform = 'translateX(0)';
   document.getElementById('benefit-drawer-overlay').style.display = 'block';
@@ -12824,20 +12923,28 @@ def api_benefits_relevant():
             unique_benefits.append({k: v for k, v in b.items() if k not in ("_score",)})
     unique_benefits = unique_benefits[:8]
 
-    # Load dont_show list for this user
+    # Load feedback signals: suppress negatives, boost positives
     _suppressed = set()
+    _positive   = set()
     for _row in get_db().execute(
-        "SELECT source, field_key FROM benefit_feedback "
-        "WHERE user_id=? AND feedback='dont_show'",
-        (uid,)
+        "SELECT source, field_key, feedback FROM benefit_feedback WHERE user_id=?", (uid,)
     ).fetchall():
-        _suppressed.add((_row["source"], _row["field_key"]))
+        _key = (_row["source"], _row["field_key"])
+        if _row["feedback"] in ("dont_show", "not_relevant"):
+            _suppressed.add(_key)
+        elif _row["feedback"] in ("useful", "already_used"):
+            _positive.add(_key)
 
-    # Filter from unique_benefits
+    # Filter suppressed items
     unique_benefits = [
         b for b in unique_benefits
         if (b.get("source",""), b.get("field_key","")) not in _suppressed
     ]
+
+    # Boost positively-rated items to the top
+    unique_benefits.sort(
+        key=lambda b: 0 if (b.get("source",""), b.get("field_key","")) in _positive else 1
+    )
 
     # ── Derived benefits from cross-program partnerships ───────────────────
     # Collect all items across all accounts to check for status fields
@@ -12916,7 +13023,12 @@ def api_settings_notifications():
 @app.route("/api/benefits/feedback", methods=["POST"])
 @require_login_or_key
 def api_benefits_feedback():
-    """Record user negative feedback on a surfaced benefit."""
+    """
+    Record user feedback on a surfaced benefit.
+    Actions: 'useful' | 'already_used' | 'not_relevant' | 'dont_show'
+    'dont_show' suppresses the item from future surfacing.
+    'useful' and 'already_used' are positive signals used for ranking.
+    """
     if not hasattr(g, "api_key_user_id"):
         check_csrf()
     uid = get_current_user_id()
@@ -12928,17 +13040,22 @@ def api_benefits_feedback():
 
     if not source or not field_key:
         return jsonify({"error": "missing source or field_key"}), 400
-    if feedback not in ("not_relevant", "dont_show"):
+    _valid = ("useful", "already_used", "not_relevant", "dont_show")
+    if feedback not in _valid:
         feedback = "not_relevant"
 
     import datetime as _dt_fb
+    # Upsert: replace any previous signal for the same (user, source, field_key, context)
+    # so a user can change their mind (e.g. "not_relevant" → "useful")
     get_db().execute(
         "INSERT INTO benefit_feedback (user_id, source, field_key, feedback, context, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(user_id, source, field_key, context) DO UPDATE SET "
+        "  feedback=excluded.feedback, created_at=excluded.created_at",
         (uid, source, field_key, feedback, context, _dt_fb.datetime.utcnow().isoformat())
     )
     get_db().commit()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "action": feedback})
 
 
 @app.route("/api/csrf-token")
