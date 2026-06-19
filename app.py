@@ -1051,85 +1051,9 @@ def _url_allowed_for_source(source: str, url: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Canonical benefit type normalization
+# Canonical benefit type normalization → now lives in mighty/classify.py
+# (classify_benefit() is imported at the top of this file)
 # ---------------------------------------------------------------------------
-
-CANONICAL_BENEFIT_TYPES: dict[str, list[str]] = {
-    # Most specific types first; within each list, longest fragments first.
-    "FREE_NIGHT":         ["free_night_reward", "free_night_cert", "milestone_reward",
-                           "award_night", "free_night", "suite_night"],
-    "COMPANION_CERT":     ["companion_cert", "companion_pass", "buddy_pass"],
-    "UPGRADE_CERT":       ["complimentary_upgrade", "systemwide_upgrade", "suite_upgrade",
-                           "upgrade_cert"],
-    "FLIGHT_CREDIT":      ["flight_credit", "travel_credit", "airline_credit",
-                           "trip_credit", "ecredit"],
-    "PURCHASE_PROTECTION":["purchase_protection", "extended_warranty", "price_protection",
-                           "return_protection"],
-    "TRIP_PROTECTION":    ["trip_cancellation", "travel_accident", "baggage_delay",
-                           "trip_delay"],
-    "MEMBERSHIP":         ["clear_membership", "pass_membership", "prime_benefits",
-                           "lounge_access", "global_entry"],
-    "STATEMENT_CREDIT":   ["travel_credit_annual", "global_entry_credit", "airline_fee_credit",
-                           "entertainment_credit", "statement_credit", "dining_credit",
-                           "digital_credit", "hotel_credit", "cash_back"],
-    "MILES_POINTS":       ["membership_rewards", "ultimate_rewards", "thank_you_points",
-                           "rapid_rewards", "bonvoy_points", "honors_points", "award_miles",
-                           "reward_points", "skymiles", "miles", "points"],
-    "STATUS":             ["medallion_status", "platinum_status", "diamond_status",
-                           "premier_status", "elite_status", "gold_status", "tier_status"],
-}
-
-
-def _raw_to_canonical(raw_bt: str) -> str:
-    """Maps a SOURCE_CAPABILITIES benefit_type string to a CANONICAL_BENEFIT_TYPES key."""
-    for ctype, fragments in CANONICAL_BENEFIT_TYPES.items():
-        if any(frag in raw_bt for frag in fragments):
-            return ctype
-    return "OTHER"
-
-
-def _canonical_benefit_type(
-    field_key: str,
-    field_label: str = "",
-    source: str | None = None,
-) -> tuple[str, float]:
-    """
-    Map a raw field key/label to a (canonical_type, confidence) pair.
-
-    confidence:
-      1.0 — matched a specific (len >= 8) fragment AND source confirms it
-      0.85 — matched a specific fragment, no source confirmation
-      0.65 — matched a short (len < 6) broad fragment (e.g. "points", "credit")
-      0.0  — no match → returns ("OTHER", 0.0)
-
-    source: if provided, uses SOURCE_CAPABILITIES to gate implausible types.
-    """
-    combined = (field_key + " " + field_label).lower().replace("-", "_").replace(" ", "_")
-
-    # What canonical types are plausible for this source?
-    plausible_types: set[str] | None = None
-    if source and source in SOURCE_CAPABILITIES:
-        src_benefit_types = SOURCE_CAPABILITIES[source].get("benefit_types", [])
-        plausible_types = {
-            _raw_to_canonical(bt)
-            for bt in src_benefit_types
-        }
-        plausible_types.discard("OTHER")
-
-    for ctype, fragments in CANONICAL_BENEFIT_TYPES.items():
-        # Source gate: skip implausible types
-        if plausible_types is not None and ctype not in plausible_types:
-            continue
-        for frag in fragments:  # already sorted longest-first
-            if frag in combined:
-                # Confidence based on fragment specificity
-                if len(frag) >= 8:
-                    conf = 1.0 if plausible_types is not None else 0.85
-                else:
-                    conf = 0.65
-                return ctype, conf
-
-    return "OTHER", 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1262,15 +1186,16 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
     import re  as _rop
     import datetime as _dop
 
-    # Context → which canonical types are relevant
-    CONTEXT_CANONICAL_MAP: dict[str, list[str]] = {
-        "hotel":    ["FREE_NIGHT", "MILES_POINTS", "STATUS", "STATEMENT_CREDIT", "UPGRADE_CERT"],
-        "flight":   ["FLIGHT_CREDIT", "COMPANION_CERT", "UPGRADE_CERT", "MILES_POINTS", "STATUS"],
-        "car":      ["TRIP_PROTECTION", "STATEMENT_CREDIT", "MEMBERSHIP"],
-        "shopping": ["STATEMENT_CREDIT", "PURCHASE_PROTECTION", "MILES_POINTS"],
-        "dining":   ["STATEMENT_CREDIT", "MILES_POINTS"],
+    # Context → which _type values (from mighty/classify.py) are relevant
+    CONTEXT_TYPE_MAP: dict[str, list[str]] = {
+        "hotel":    ["certificate", "points_balance", "elite_status", "cash_credit", "travel_credit"],
+        "flight":   ["travel_credit", "certificate", "cash_credit", "points_balance", "elite_status"],
+        "car":      ["cash_credit", "membership"],
+        "shopping": ["cash_credit", "points_balance"],
+        "dining":   ["cash_credit", "points_balance"],
     }
-    relevant_canonicals = CONTEXT_CANONICAL_MAP.get(context or "", [c for cs in CONTEXT_CANONICAL_MAP.values() for c in cs])
+    all_types = list({t for ts in CONTEXT_TYPE_MAP.values() for t in ts})
+    relevant_types = CONTEXT_TYPE_MAP.get(context or "", all_types)
 
     # Collect all benefits across all accounts
     all_benefits: list[dict] = []
@@ -1328,12 +1253,10 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
                 continue
             # ────────────────────────────────────────────────────────────────
 
-            ctype, ctype_conf = _canonical_benefit_type(fk, fl, source=src)
-            if ctype == "OTHER":
+            btype = f.get("_type") or classify_benefit(fl, fv, src)
+            if btype in ("other", "progress_toward", "expiry_date", "reservation"):
                 continue
-            if ctype_conf < 0.65:
-                continue
-            if ctype not in relevant_canonicals:
+            if btype not in relevant_types:
                 continue
 
             # Expiration parsing — try multiple formats
@@ -1413,7 +1336,7 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
                 "field_key":   fk,
                 "label":       fl,
                 "value":       fv,
-                "canonical":   ctype,
+                "canonical":   btype,
                 "urgency":     urgency,
                 "exp_days":    exp_days,
                 "exp_label":   exp_label,
