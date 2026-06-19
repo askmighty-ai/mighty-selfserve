@@ -6852,6 +6852,17 @@ def dashboard():
             continue
         _btype_tb = classify_benefit(_lbl, _vk)
         if _btype_tb != "elite_status": continue  # Status section: elite_status only
+        # Skip utility/telecom sources — they're not loyalty programs
+        _STATUS_SKIP_SOURCES = {
+            "xfinity","comcast","spectrum","cox","centurylink","att_internet",
+            "pge","sdge","palo_alto_utilities","verizon","tmobile","att_wireless",
+        }
+        if any(s in _disp.lower().replace(" ","_") for s in _STATUS_SKIP_SOURCES) or \
+           any(_disp.lower().startswith(s.replace("_"," ")) for s in _STATUS_SKIP_SOURCES):
+            continue
+        # Skip values that look like sentences, not tier names (>5 words)
+        if len(_vk.split()) > 5:
+            continue
         _dedup = (_disp, _lbl[:35])
         if _dedup in _tb_seen: continue
         _tb_seen.add(_dedup)
@@ -6910,24 +6921,19 @@ def dashboard():
     import json as _tb_json
     _tb_html = ""
     for _pri, _, _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status in _top_benefit_cards[:8]:
-        _disp_lc = _disp.lower()
-        if any(k in _disp_lc for k in ['delta','united','american','alaska','southwest','jetblue','spirit','frontier','hawaiian']): _ic = '✈'
-        elif any(k in _disp_lc for k in ['marriott','hilton','hyatt','ihg','wyndham','choice','best western','radisson']): _ic = '🏨'
-        elif any(k in _disp_lc for k in ['hertz','avis','enterprise','national','alamo']): _ic = '🚗'
-        else: _ic = '⭐'
         # Tier: use value if it's a real tier name, else fall back to label
         _tier = _val.strip() if _val.strip() and _val.strip().lower() not in {'active','yes','enabled','true','','member'} else _lbl
         _tb_bd_data = _tb_json.dumps({
             "label": _lbl, "account": _disp,
-            "value": _val, "icon": _ic, "expDays": _exp
+            "value": _val, "icon": "", "expDays": _exp
         }).replace("'", "&#39;")
         _tb_html += (
-            f'<div style="display:flex;align-items:center;gap:10px;padding:8px 4px;'
+            f'<div style="display:flex;align-items:center;gap:12px;padding:8px 4px;'
             f'cursor:pointer;border-radius:7px;transition:background 0.1s" '
             f'onmouseover="this.style.background=\'#ede9f8\'" '
             f'onmouseout="this.style.background=\'\'" '
             f'onclick="openBenefitDrawer(this)" data-benefit=\'{_tb_bd_data}\'>'
-            f'<span style="font-size:18px;flex-shrink:0;line-height:1.3">{_ic}</span>'
+            f'<div style="width:6px;height:6px;border-radius:50%;background:#6c47ff;flex-shrink:0;margin-top:2px"></div>'
             f'<div style="flex:1;min-width:0">'
             f'<div style="font-size:14px;font-weight:600;color:#4c1d95;line-height:1.3;'
             f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{he(_tier)}</div>'
