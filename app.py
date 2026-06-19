@@ -3737,11 +3737,11 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 
     <div id="fview-accounts">
       {hero_section_html}
-      {value_center_html}
-      {opportunities_html}
+      {top_benefits_html}
       {action_center_html}
-      {relevant_now_html}
       {recently_found_html}
+      {value_center_html}
+      {relevant_now_html}
       <script>
       (function() {
         var TYPE_ICONS = {
@@ -6470,6 +6470,12 @@ def dashboard():
                         f'<span class="exp-val" title="{he(i["value"])}">{he(i["value"])}{why_html}</span>'
                         f'</div>'
                     )
+                # Add edit button at bottom of expanded section
+                exp_row_parts.append(
+                    f'<div style="padding-top:8px;margin-top:4px;border-top:1px solid #f3f4f6">'
+                    f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')">Edit fields</button>'
+                    f'</div>'
+                )
                 expanded_html = f'<div class="acct-expanded">{"".join(exp_row_parts)}</div>'
 
             # Build alert row
@@ -6519,12 +6525,14 @@ def dashboard():
                     f'</button>'
                 )
             else:
-                expand_btn = '<span style="flex:1"></span>'
+                expand_btn = (
+                    f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')" '
+                    f'style="font-size:10px;color:#d1d5db;border-color:#f0ede9">Edit fields</button>'
+                )
 
             card_footer = (
                 f'<div class="acct-footer">'
                 f'{expand_btn}'
-                f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')">Edit fields</button>'
                 f'</div>'
             )
 
@@ -6636,14 +6644,17 @@ def dashboard():
                 gaps = []
                 coverage_face = ""
 
+            # Simplified health footer — no "Sync health" label, just a subtle details expander
             health_footer = (
-                f'<div class="card-health-footer" style="margin-top:8px;border-top:1px solid #f3f4f6;padding-top:6px;padding:6px 14px 8px">'
-                f'{gaps_inline}'
-                f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;padding:0;display:flex;align-items:center;gap:3px">'
-                f'<span class="health-chevron">&#9656;</span> Sync health'
-                f'</button>'
-                f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}">{coverage_block}</div>'
-                f'</div>'
+                f'<div class="card-health-footer" style="padding:4px 14px 8px">'
+                + (
+                    f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:10px;color:#d1d5db;padding:0;display:flex;align-items:center;gap:2px;margin-top:2px">'
+                    f'<span class="health-chevron" style="font-size:9px">&#9656;</span> details'
+                    f'</button>'
+                    f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}">{coverage_block}</div>'
+                    if coverage_block else ""
+                )
+                + f'</div>'
             )
 
             grid_cards += (
@@ -6793,56 +6804,118 @@ def dashboard():
             f'</div>'
         )
     else:
-        _focus_html = (
-            '<div style="margin-top:12px;font-size:13px;color:#22c55e">✓ Nothing urgent today</div>'
-        )
+        _focus_html = ""  # nothing urgent — shown compactly in action center
 
-    # Compute aggregate opportunity summary for hero
+    # Build named benefit bullets for hero — lead with actual value, not aggregate stats
     import re as _re_hero
-    _credit_total = 0.0
-    _cert_count = 0
-    _points_total = 0
-    for _vi in value_items:
-        _vk = (_vi[1] if isinstance(_vi, tuple) else (_vi.get("key") or "")).lower()
-        _vv = _vi[2] if isinstance(_vi, tuple) else (_vi.get("value") or "")
-        _vv = str(_vv)
-        if "credit" in _vk or "credit" in _vv.lower():
-            _nums = _re_hero.findall(r'\d+(?:\.\d+)?', _vv)
-            if _nums:
-                _credit_total += float(_nums[0])
-        elif "cert" in _vk or "free_night" in _vk or "award_night" in _vk:
-            _cert_count += 1
-        elif "point" in _vk or "mile" in _vk:
-            _nums2 = _re_hero.findall(r'[\d,]+', _vv)
-            if _nums2:
-                try:
-                    _points_total += int(_nums2[0].replace(',', ''))
-                except Exception:
-                    pass
+    import datetime as _re_hero_dt
 
-    _value_parts = []
-    if _credit_total > 0:
-        _value_parts.append(f"${_credit_total:,.0f} in credits")
-    if _cert_count > 0:
-        _value_parts.append(f"{_cert_count} certificate{'s' if _cert_count > 1 else ''}")
-    if _points_total > 0:
-        _value_parts.append(f"{_points_total:,} pts/miles")
-    if _value_parts:
-        _value_summary = " · ".join(_value_parts) + " available to use"
-    else:
-        _value_summary = ""
+    def _parse_exp_days_hero(label_str, val_str):
+        """Quick expiry parser for hero bullets."""
+        combined = f"{label_str} {val_str}"
+        # MM/DD/YYYY
+        m = _re_hero.search(r'\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b', combined)
+        if m:
+            try:
+                mo, da, yr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if yr < 100: yr += 2000
+                return (_re_hero_dt.date(yr, mo, da) - _re_hero_dt.date.today()).days
+            except Exception: pass
+        # "expires/exp Jan 2027" style
+        m2 = _re_hero.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+(\d{4})',
+                              combined, _re_hero.I)
+        if m2:
+            _mm = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+                   'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+            try:
+                mo = _mm[m2.group(1)[:3].lower()]
+                yr = int(m2.group(2))
+                return (_re_hero_dt.date(yr, mo, 1) - _re_hero_dt.date.today()).days
+            except Exception: pass
+        return None
 
-    _value_summary_html = ""
-    if _value_summary:
-        _value_summary_html = (
-            f'<div style="margin-top:10px;font-size:13px;color:#374151;'
-            f'font-weight:500">{he(_value_summary)}</div>'
+    def _hero_icon(label_lc):
+        if any(k in label_lc for k in ['companion', 'certificate', 'cert', 'free night', 'award night']): return '🎫'
+        if any(k in label_lc for k in ['upgrade', 'global upgrade']): return '⬆'
+        if any(k in label_lc for k in ['miles', 'points', 'rapid rewards', 'skypass', 'mileage']): return '✈'
+        if any(k in label_lc for k in ['credit', 'voucher', 'ecredit']): return '💳'
+        if any(k in label_lc for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium']): return '⭐'
+        if any(k in label_lc for k in ['night', 'hotel']): return '🏨'
+        return '•'
+
+    # Priority: 1) expiring certs/credits, 2) certs/credits no expiry, 3) status, 4) large pts
+    _hero_candidates = []
+    for _disp, _lbl, _val, *_ in value_items:
+        _lk = _lbl.lower()
+        _vk = _val.strip()
+        if not _vk or _vk in {'0', '—', '-', 'N/A', 'None', 'TBD'}: continue
+        _exp = _parse_exp_days_hero(_lbl, _val)
+        _is_cert    = any(k in _lk for k in ['companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade'])
+        _is_credit  = any(k in _lk for k in ['credit', 'voucher', 'ecredit'])
+        _is_status  = any(k in _lk for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium', 'senator'])
+        _is_pts     = any(k in _lk for k in ['miles', 'points', 'rewards', 'balance']) and not _is_cert and not _is_credit
+        if not (_is_cert or _is_credit or _is_status or _is_pts): continue
+        # Score for ordering
+        _priority = 0
+        if _is_cert and _exp is not None and _exp < 120:   _priority = 10
+        elif _is_cert:                                      _priority = 9
+        elif _is_credit and _exp is not None and _exp < 60: _priority = 8
+        elif _is_credit:                                    _priority = 7
+        elif _is_status:                                    _priority = 6
+        elif _is_pts:
+            _nums_pts = _re_hero.findall(r'[\d,]+', _val)
+            _pt_val = int(_nums_pts[0].replace(',','')) if _nums_pts else 0
+            if _pt_val < 10000: continue  # skip trivial balances in hero
+            _priority = 3
+        _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp))
+    _hero_candidates.sort(key=lambda x: (-x[0], x[1]))
+
+    _hero_bullets_html = ""
+    _seen_hero = set()
+    for _pr, _, _hdisp, _hlbl, _hval, _hexp in _hero_candidates[:4]:
+        _dedup_key = (_hdisp, _hlbl[:30])
+        if _dedup_key in _seen_hero: continue
+        _seen_hero.add(_dedup_key)
+        _icon = _hero_icon(_hlbl.lower())
+        # Expiry label
+        _exp_str = ""
+        if _hexp is not None and _hexp >= 0:
+            if _hexp <= 30:
+                _exp_str = f' <span style="color:#dc2626;font-size:11px;font-weight:600">expires in {_hexp}d</span>'
+            elif _hexp <= 120:
+                import datetime as _hdt
+                _exp_date = _hdt.date.today() + _hdt.timedelta(days=_hexp)
+                _exp_str = f' <span style="color:#d97706;font-size:11px">exp {_exp_date.strftime("%b %Y")}</span>'
+        # Color by type
+        _lk2 = _hlbl.lower()
+        if any(k in _lk2 for k in ['credit', 'voucher']): _bullet_color = "#059669"
+        elif any(k in _lk2 for k in ['cert', 'companion', 'upgrade', 'free night']): _bullet_color = "#2563eb"
+        elif any(k in _lk2 for k in ['status', 'medallion', 'elite', 'globalist']): _bullet_color = "#7c3aed"
+        else: _bullet_color = "#374151"
+        _hero_bullets_html += (
+            f'<div style="display:flex;align-items:baseline;gap:8px;padding:3px 0">'
+            f'<span style="font-size:14px;flex-shrink:0">{_icon}</span>'
+            f'<span style="font-size:13px;color:{_bullet_color};font-weight:500">'
+            f'{he(_hdisp)}: {he(_hlbl)}{_exp_str}'
+            f'</span>'
+            f'</div>'
         )
+
+    if _hero_bullets_html:
+        _available_label = '<div style="font-size:11px;font-weight:600;color:#9ca3af;'
+        _available_label += 'text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">'
+        _available_label += 'Available right now</div>'
+        _hero_value_block = (
+            f'<div style="margin-top:12px;padding:12px 14px;background:#f9fafb;border-radius:8px">'
+            + _available_label + _hero_bullets_html +
+            f'</div>'
+        )
+    else:
+        _hero_value_block = ''
 
     hero_section_html = (
         f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
-        # Greeting — placeholder replaced immediately by inline JS using local browser time
-        f'<div style="font-size:22px;font-weight:700;color:#111;margin-bottom:12px" id="hero-greeting">'
+        f'<div style="font-size:22px;font-weight:700;color:#111;margin-bottom:4px" id="hero-greeting">'
         f'Hello, {he(_first_name)} \U0001f44b'
         f'</div>'
         f'<script>'
@@ -6853,10 +6926,7 @@ def dashboard():
         f'  if(el) el.innerHTML=g+", {he(_first_name)} \U0001f44b";'
         f'}})();'
         f'</script>'
-        # Accounts count — de-emphasised; certs/value line leads
-        f'<div style="font-size:13px;color:#9ca3af;margin-bottom:4px">'
-        f'{_account_count} account{"s" if _account_count != 1 else ""} connected</div>'
-        + _value_summary_html
+        + _hero_value_block
         + _focus_html +
         f'</div>'
     )
@@ -6887,20 +6957,29 @@ def dashboard():
     else:
         _inline_reminder_html = '<div style="color:#6b7280;font-size:13px;padding:8px 0">✓ Nothing needs attention right now</div>'
 
-    _has_reminders = bool(active_reminders if 'active_reminders' in dir() else False) or \
-        ('<div class="reminder-item' in _inline_reminder_html)
-    _attn_border = '#dc2626' if _has_reminders else '#e5e7eb'
-    _attn_heading_color = '#dc2626' if _has_reminders else '#6b7280'
-    action_center_html = (
-        '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;margin-bottom:28px">'
-        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
-        f'<h2 style="font-size:15px;font-weight:700;color:{_attn_heading_color};margin:0;text-transform:uppercase;'
-        f'letter-spacing:.05em;border-left:3px solid {_attn_border};padding-left:10px">Needs Attention</h2>'
-        '<span style="font-size:12px;color:#9ca3af" id="action-center-meta"></span>'
-        '</div>'
-        f'<div id="action-center-panel">{_inline_reminder_html}</div>'
-        '</div>'
-    )
+    _has_reminders = bool(_inline_reminders)
+    if _has_reminders:
+        _attn_border = '#dc2626' if any(r.get("urgency")=="urgent" for r in _inline_reminders) else '#f59e0b'
+        _attn_heading_color = '#dc2626' if any(r.get("urgency")=="urgent" for r in _inline_reminders) else '#d97706'
+        action_center_html = (
+            '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:16px 18px;margin-bottom:28px">'
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+            f'<h2 style="font-size:14px;font-weight:700;color:{_attn_heading_color};margin:0;text-transform:uppercase;'
+            f'letter-spacing:.05em;border-left:3px solid {_attn_border};padding-left:10px">Needs Attention</h2>'
+            '<span style="font-size:12px;color:#9ca3af" id="action-center-meta"></span>'
+            '</div>'
+            f'<div id="action-center-panel">{_inline_reminder_html}</div>'
+            '</div>'
+        )
+    else:
+        # Nothing needs attention — compact single-line, don't waste card real estate
+        action_center_html = (
+            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:20px;'
+            'padding:0 2px;font-size:13px;color:#6b7280">'
+            '<span style="color:#22c55e;font-size:14px">✓</span>'
+            'Nothing needs attention right now'
+            '</div>'
+        )
 
     # ── LAYER 2b: Recently Discovered feed ───────────────────────────────────
     import datetime as _dtrd
@@ -7085,6 +7164,125 @@ def dashboard():
     else:
         value_center_html = ""
         value_banner = ""
+
+    # ── TOP BENEFITS: curated named benefit cards (replaces weak Opportunities) ─
+    import re as _tb_re
+    import datetime as _tb_dt
+
+    def _tb_exp_days(label, val):
+        combined = f"{label} {val}"
+        m = _tb_re.search(r'\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b', combined)
+        if m:
+            try:
+                mo, da, yr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if yr < 100: yr += 2000
+                return (_tb_dt.date(yr, mo, da) - _tb_dt.date.today()).days
+            except Exception: pass
+        m2 = _tb_re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+(\d{4})',
+                            combined, _tb_re.I)
+        if m2:
+            _mm = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+                   'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+            try:
+                mo = _mm[m2.group(1)[:3].lower()]
+                yr = int(m2.group(2))
+                return (_tb_dt.date(yr, mo, 1) - _tb_dt.date.today()).days
+            except Exception: pass
+        return None
+
+    _top_benefit_cards = []
+    _tb_seen = set()
+    for _disp, _lbl, _val, *_ in value_items:
+        _lk = _lbl.lower()
+        _vk = _val.strip()
+        if not _vk or _vk in {'0', '—', '-', 'N/A', 'None', 'TBD'}: continue
+        _is_cert    = any(k in _lk for k in ['companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade cert'])
+        _is_credit  = any(k in _lk for k in ['credit', 'voucher', 'ecredit'])
+        _is_status  = any(k in _lk for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium', 'senator'])
+        if not (_is_cert or _is_credit or _is_status): continue
+        _dedup = (_disp, _lbl[:35])
+        if _dedup in _tb_seen: continue
+        _tb_seen.add(_dedup)
+        _exp = _tb_exp_days(_lbl, _val)
+        # Priority sort key
+        _pri = 0
+        if _is_cert and _exp is not None and 0 <= _exp < 90:   _pri = 10
+        elif _is_cert:                                          _pri = 9
+        elif _is_credit and _exp is not None and 0 <= _exp < 60: _pri = 8
+        elif _is_credit:                                        _pri = 7
+        elif _is_status:                                        _pri = 5
+        _top_benefit_cards.append((_pri, _exp if _exp is not None else 9999,
+                                   _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status))
+    _top_benefit_cards.sort(key=lambda x: (-x[0], x[1]))
+
+    _tb_html = ""
+    for _pri, _, _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status in _top_benefit_cards[:6]:
+        # Icon
+        _lk = _lbl.lower()
+        if 'companion' in _lk or 'companion cert' in _lk: _ic = '✈'
+        elif 'upgrade' in _lk:                              _ic = '⬆'
+        elif 'free night' in _lk or 'award night' in _lk: _ic = '🏨'
+        elif _is_cert:                                       _ic = '🎫'
+        elif _is_credit:                                     _ic = '💳'
+        elif _is_status:                                     _ic = '⭐'
+        else:                                                _ic = '•'
+        # Colors
+        if _exp is not None and 0 <= _exp < 30:
+            _card_border = '#fca5a5'; _card_bg = '#fff5f5'
+            _label_color = '#dc2626'
+        elif _exp is not None and 0 <= _exp < 90:
+            _card_border = '#fde68a'; _card_bg = '#fffbeb'
+            _label_color = '#d97706'
+        elif _is_credit:
+            _card_border = '#bbf7d0'; _card_bg = '#f0fdf4'
+            _label_color = '#059669'
+        elif _is_cert:
+            _card_border = '#bfdbfe'; _card_bg = '#eff6ff'
+            _label_color = '#2563eb'
+        else:  # status
+            _card_border = '#ddd6fe'; _card_bg = '#f5f3ff'
+            _label_color = '#7c3aed'
+        # Expiry label
+        _exp_html = ""
+        if _exp is not None and 0 <= _exp < 365:
+            _exp_date = _tb_dt.date.today() + _tb_dt.timedelta(days=_exp)
+            if _exp < 30:
+                _exp_html = f'<span style="font-size:11px;color:#dc2626;font-weight:600;margin-left:8px">expires in {_exp}d</span>'
+            else:
+                _exp_html = f'<span style="font-size:11px;color:#9ca3af;margin-left:8px">exp {_exp_date.strftime("%b %Y")}</span>'
+        # Value display (for certs: show count; for credits: show amount)
+        _val_html = ""
+        if _vk := _val.strip():
+            _nums = _tb_re.findall(r'[\d,]+', _vk)
+            if _is_cert and _nums:
+                _count = _nums[0]
+                if _count not in {'1', '0'}:
+                    _val_html = f'<span style="font-size:12px;color:#6b7280;margin-left:4px">({_count})</span>'
+            elif _is_credit:
+                _val_html = f'<span style="font-size:12px;color:#6b7280;margin-left:4px">{he(_val)}</span>'
+            elif _is_status:
+                _val_html = f'<span style="font-size:12px;color:{_label_color};margin-left:4px;font-weight:600">{he(_val)}</span>'
+        _tb_html += (
+            f'<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
+            f'background:{_card_bg};border:1px solid {_card_border};border-radius:8px;margin-bottom:8px">'
+            f'<span style="font-size:16px;flex-shrink:0">{_ic}</span>'
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="font-size:12px;color:#9ca3af;font-weight:500">{he(_disp)}</div>'
+            f'<div style="font-size:13px;font-weight:600;color:{_label_color}">'
+            f'{he(_lbl)}{_val_html}{_exp_html}'
+            f'</div></div></div>'
+        )
+
+    if _tb_html:
+        top_benefits_html = (
+            '<div style="margin-bottom:28px">'
+            '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
+            'text-transform:uppercase;letter-spacing:.05em">Top Benefits</h2>'
+            + _tb_html +
+            '</div>'
+        )
+    else:
+        top_benefits_html = ""
 
     opportunities_html = """
 <style>
@@ -7300,7 +7498,8 @@ function dismissOnboarding() {
             .replace("{recently_found_html}",     recently_found_html)
             .replace("{relevant_now_html}",      relevant_now_html)
             .replace("{value_center_html}",       value_center_html)
-            .replace("{opportunities_html}",      opportunities_html)
+            .replace("{top_benefits_html}",       top_benefits_html)
+            .replace("{opportunities_html}",      "")
             .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{dash_modals}",             _build_dash_modals(configured, _csrf))
             .replace("{csrf_token}",              _csrf))
