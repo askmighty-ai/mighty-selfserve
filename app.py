@@ -6857,8 +6857,8 @@ def dashboard():
 
     if _hero_bullets_html:
         _available_label = (
-            '<div style="font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;'
-            'letter-spacing:.06em;margin-bottom:4px;margin-top:16px">Available now</div>'
+            '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
+            'text-transform:uppercase;letter-spacing:.06em">Available Now</h2>'
         )
         _hero_value_block = _available_label + _hero_bullets_html
     else:
@@ -6888,8 +6888,8 @@ def dashboard():
         )
 
     hero_section_html = (
-        f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
-        f'<div style="font-size:22px;font-weight:700;color:#111" id="hero-greeting">'
+        f'<div style="padding:12px 0 18px;border-bottom:1px solid #e5e7eb;margin-bottom:20px">'
+        f'<div style="font-size:17px;font-weight:700;color:#111" id="hero-greeting">'
         f'Hello, {he(_first_name)} \U0001f44b'
         f'</div>'
         f'<script>'
@@ -6973,91 +6973,60 @@ def dashboard():
     def _source_display_name(src):
         return _src_display_lookup.get(src) or src.replace("_", " ").title()
 
+    # ── RECENTLY CHANGED: account-level activity feed (compact, insight-focused) ──
     recently_found_html = ""
     if _recent_rows:
-        # Detect first-sync flood: if most rows share the same minute, it's a bulk insert
-        _ts_counts: dict = {}
-        for _rr in _recent_rows:
-            _ts_min = (_rr["changed_at"] or "")[:16]  # "YYYY-MM-DDTHH:MM"
-            _ts_counts[_ts_min] = _ts_counts.get(_ts_min, 0) + 1
-        _max_ts_count = max(_ts_counts.values()) if _ts_counts else 0
-        _is_bulk = _max_ts_count >= 6 and _max_ts_count >= len(_recent_rows) * 0.6
-
-        if _is_bulk:
-            # Summarise the flood: how many fields across how many accounts
-            _bulk_sources = len({_rr["source"] for _rr in _recent_rows})
-            _bulk_total   = len(_recent_rows)
-            # Determine the day label for when the bulk insert happened
+        _now_dt = _dtrd.datetime.utcnow()
+        def _rel_time(ts_str):
             try:
-                _bulk_dt   = _dtrd.datetime.fromisoformat(_recent_rows[0]["changed_at"]).date()
-                _bulk_delta = (_dtrd.datetime.utcnow().date() - _bulk_dt).days
-                _bulk_day  = "today" if _bulk_delta == 0 else ("yesterday" if _bulk_delta == 1 else f"{_bulk_delta} days ago")
-            except Exception:
-                _bulk_day = "recently"
-            recently_found_html = (
-                '<div style="margin-bottom:28px">'
-                '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
-                'text-transform:uppercase;letter-spacing:.05em">\U0001f50d Recently Found</h2>'
-                f'<div style="font-size:13px;color:#374151;padding:6px 0">'
-                f'Synced {_bulk_day}: found <strong>{_bulk_total} fields</strong> across '
-                f'<strong>{_bulk_sources} account{"s" if _bulk_sources != 1 else ""}</strong>.'
+                _dt = _dtrd.datetime.fromisoformat(ts_str.replace("Z",""))
+                _h  = int((_now_dt - _dt).total_seconds() / 3600)
+                if _h < 1:  return "just now"
+                if _h < 24: return f"{_h}h ago"
+                _d  = _h // 24
+                if _d == 1: return "yesterday"
+                return f"{_d} days ago"
+            except Exception: return ""
+
+        # Group rows by source — keep the most-recent change per source
+        _src_latest: dict = {}
+        for _rr in _recent_rows:
+            _s = _rr["source"]
+            if _s not in _src_latest:
+                _src_latest[_s] = _rr
+
+        # Build compact lines: "Delta — Companion Certificate found 9h ago"
+        # Prefer high-value labels (certs, credits, status) over generic fields
+        _VALUE_KEYWORDS = ('certificate', 'cert', 'companion', 'free night', 'credit',
+                           'ecredit', 'voucher', 'upgrade', 'status', 'medallion',
+                           'elite', 'diamond', 'platinum', 'gold', 'globalist', 'miles', 'points')
+        _rc_lines = []
+        for _s, _rr in list(_src_latest.items())[:5]:
+            _disp_rc = _source_display_name(_s)
+            _lbl_rc  = _rr.get("field_label", "")
+            _ago_rc  = _rel_time(_rr.get("changed_at", ""))
+            _is_new  = not _rr.get("old_value")   # first-time discovery vs update
+            _verb    = "found" if _is_new else "updated"
+            _is_valuable = any(k in _lbl_rc.lower() for k in _VALUE_KEYWORDS)
+            # Show the label only if it's a high-value field; otherwise say "synced"
+            if _is_valuable and _lbl_rc:
+                _line_text = f'{he(_disp_rc)} — {he(_lbl_rc)} {_verb}'
+            else:
+                _line_text = f'{he(_disp_rc)} synced'
+            _rc_lines.append(
+                f'<div style="padding:6px 0;border-bottom:1px solid #f3f4f6;display:flex;'
+                f'align-items:baseline;justify-content:space-between;gap:8px">'
+                f'<div style="font-size:13px;color:#374151;line-height:1.4">{_line_text}</div>'
+                f'<div style="font-size:11px;color:#9ca3af;flex-shrink:0">{_ago_rc}</div>'
                 f'</div>'
-                '</div>'
             )
-        else:
-            _MAX_ITEMS = 8
-            _day_groups: dict = {}
-            _now_date = _dtrd.datetime.utcnow().date()
-            _shown = 0
-            for _rrow in _recent_rows:
-                if _shown >= _MAX_ITEMS:
-                    break
-                try:
-                    _row_date = _dtrd.datetime.fromisoformat(_rrow["changed_at"]).date()
-                except Exception:
-                    continue
-                _delta = (_now_date - _row_date).days
-                if _delta == 0:
-                    _day_label = "Today"
-                elif _delta == 1:
-                    _day_label = "Yesterday"
-                elif _delta <= 7:
-                    _day_label = f"{_delta} days ago"
-                else:
-                    _day_label = _row_date.strftime("%b %-d")
-                _day_groups.setdefault(_day_label, []).append(_rrow)
-                _shown += 1
 
-            _overflow = max(0, len(_recent_rows) - _shown)
-            _feed_html = ""
-            for _day_label, _rows in list(_day_groups.items()):
-                _items_html = "".join(
-                    f'<div style="font-size:13px;color:#374151;padding:2px 0">'
-                    f'• <strong>{he(_source_display_name(_r["source"]))}</strong>'
-                    f' {he(_r["field_label"])}'
-                    + (f': <span style="color:#6b7280">{he(str(_r["new_value"])[:40])}</span>'
-                       if _r["new_value"] else "") +
-                    f'</div>'
-                    for _r in _rows
-                )
-                _feed_html += (
-                    f'<div style="margin-bottom:10px">'
-                    f'<div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;'
-                    f'letter-spacing:.05em;margin-bottom:4px">{he(_day_label)}</div>'
-                    + _items_html +
-                    f'</div>'
-                )
-            if _overflow > 0:
-                _feed_html += (
-                    f'<div style="font-size:12px;color:#9ca3af;padding-top:4px">'
-                    f'and {_overflow} more…</div>'
-                )
-
+        if _rc_lines:
             recently_found_html = (
-                '<div style="margin-bottom:28px">'
-                '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
-                'text-transform:uppercase;letter-spacing:.05em">\U0001f50d Recently Found</h2>'
-                + _feed_html +
+                '<div style="margin-bottom:20px">'
+                '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
+                'text-transform:uppercase;letter-spacing:.06em">Recently Changed</h2>'
+                + "".join(_rc_lines) +
                 '</div>'
             )
 
@@ -7099,9 +7068,25 @@ def dashboard():
             if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])
             and _use_soon_eligible(label, val_str)
         ]
+        # Membership metadata labels — these are not balances
+        _META_LABELS = ('member since', 'member number', 'account number', 'account opened',
+                        'joined', 'enrollment', 'loyalty number', 'member id', 'account id',
+                        'member date', 'since ', 'since:')
+        def _is_balance_label(lbl, val):
+            lbl_lc = lbl.lower()
+            # Exclude metadata
+            if any(lbl_lc.startswith(m) or m in lbl_lc for m in _META_LABELS):
+                return False
+            # Exclude values that look like years or pure dates
+            import re as _re_bal
+            if _re_bal.match(r'^(19|20)\d{2}$', val.strip()):
+                return False
+            return True
+
         points_items = [(disp, label, val_str) for disp, label, val_str, dval, method, *_ in value_items
-                        if any(k in label.lower() for k in ['points', 'miles', 'rewards', 'balance'])
+                        if any(k in label.lower() for k in ['points', 'miles', 'rewards', 'balance', 'skymiles', 'rapid rewards', 'mileageplus', 'bonvoy', 'honors'])
                         and not any(k in label.lower() for k in ['credit', 'voucher', 'ecredit', 'certificate', 'free night', 'companion'])
+                        and _is_balance_label(label, val_str)
                         and _use_soon_eligible(label, val_str)]
 
         forgotten_lines = []
@@ -7129,18 +7114,11 @@ def dashboard():
                                   if forgotten_lines else "")
                 _points_section = _points_header + "".join(points_lines)
             value_center_html = (
-                '<div style="margin-bottom:28px;background:#ffffff;border:1px solid #e5e7eb;'
-                'border-radius:10px;padding:16px 18px">'
-                '<h2 style="font-size:14px;font-weight:700;color:#374151;margin:0 0 10px;'
-                'text-transform:uppercase;letter-spacing:.05em">\u23f3 '
+                '<div style="margin-bottom:20px">'
+                '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
+                'text-transform:uppercase;letter-spacing:.06em">'
                 + ('Balances' if _will_have_top_benefits else 'Use Soon') +
                 '</h2>'
-                + (
-                    '<p style="font-size:12px;color:#78716c;margin:0 0 10px">'
-                    'Credits and certificates to use before they expire:'
-                    '</p>'
-                    if forgotten_lines else ''
-                )
                 + "".join(forgotten_lines)
                 + _points_section
                 + '</div>'
@@ -7222,7 +7200,7 @@ def dashboard():
                                    _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status))
     _top_benefit_cards.sort(key=lambda x: (-x[0], x[1]))
 
-    # ── PROGRESS SECTION: status-earning metrics with progress bars ───────────
+    # ── PROGRESS SECTION: only show meaningful progress (≥10% or within 20% of goal) ──
     _prog_html = ""
     for _pdisp, _plbl, _pval, _pexp in _progress_cards[:4]:
         _pm = _tb_re2.search(r'(\d[\d,]*)\s*(?:of|/)\s*(\d[\d,]*)', _pval)
@@ -7230,6 +7208,10 @@ def dashboard():
             _pcur = int(_pm.group(1).replace(',', ''))
             _ptgt = int(_pm.group(2).replace(',', ''))
             _ppct = int(100 * _pcur / _ptgt) if _ptgt else 0
+            # Skip empty/near-zero progress — it's just noise
+            _near_goal = _ptgt > 0 and (_ptgt - _pcur) <= _ptgt * 0.20
+            if _ppct < 10 and not _near_goal:
+                continue
             _pbar = (
                 f'<div style="margin-top:6px;height:3px;background:#e5e7eb;border-radius:3px">'
                 f'<div style="height:3px;width:{min(_ppct,100)}%;background:#6366f1;border-radius:3px"></div>'
@@ -7254,12 +7236,10 @@ def dashboard():
         )
     if _prog_html:
         progress_section_html = (
-            '<div style="margin-bottom:28px">'
-            '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
-            'text-transform:uppercase;letter-spacing:.05em">Progress</h2>'
-            '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:0 12px">'
+            '<div style="margin-bottom:20px">'
+            '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
+            'text-transform:uppercase;letter-spacing:.06em">Progress</h2>'
             + _prog_html +
-            '</div>'
             '</div>'
         )
     else:
@@ -7275,17 +7255,25 @@ def dashboard():
             "label": _lbl, "account": _disp,
             "value": _val, "icon": "", "expDays": _exp
         }).replace("'", "&#39;")
+        # Pick diamond color by rough tier level
+        _tier_lc = _tier.lower()
+        if any(k in _tier_lc for k in ['diamond','globalist','titanium','executive','chairman','1k','executive platinum']):
+            _diamond_color = "#b45309"  # gold-amber for top tier
+        elif any(k in _tier_lc for k in ['platinum','gold','sapphire','status']):
+            _diamond_color = "#6c47ff"  # purple for mid-high
+        else:
+            _diamond_color = "#6b7280"  # grey for base/silver
         _tb_html += (
-            f'<div style="display:flex;align-items:center;gap:12px;padding:8px 4px;'
+            f'<div style="display:flex;align-items:center;gap:10px;padding:7px 4px;'
             f'cursor:pointer;border-radius:7px;transition:background 0.1s" '
             f'onmouseover="this.style.background=\'#ede9f8\'" '
             f'onmouseout="this.style.background=\'\'" '
             f'onclick="openBenefitDrawer(this)" data-benefit=\'{_tb_bd_data}\'>'
-            f'<div style="width:6px;height:6px;border-radius:50%;background:#6c47ff;flex-shrink:0;margin-top:2px"></div>'
+            f'<div style="font-size:13px;color:{_diamond_color};flex-shrink:0;line-height:1">◆</div>'
             f'<div style="flex:1;min-width:0">'
-            f'<div style="font-size:14px;font-weight:600;color:#4c1d95;line-height:1.3;'
+            f'<div style="font-size:14px;font-weight:700;color:#1c1917;line-height:1.3;'
             f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{he(_tier)}</div>'
-            f'<div style="font-size:12px;color:#9ca3af;margin-top:1px">{he(_disp)}</div>'
+            f'<div style="font-size:11px;color:#9ca3af;margin-top:1px">{he(_disp)}</div>'
             f'</div></div>'
         )
     _tb_overflow = max(0, len(_top_benefit_cards) - 6)
@@ -7295,9 +7283,9 @@ def dashboard():
             f' onclick="document.getElementById(\'accounts-section\').scrollIntoView({{behavior:\'smooth\'}})">View remaining benefits →</div>'
         ) if _tb_overflow > 0 else ""
         top_benefits_html = (
-            '<div style="margin-bottom:28px">'
-            '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
-            'text-transform:uppercase;letter-spacing:.05em">Status</h2>'
+            '<div style="margin-bottom:20px">'
+            '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
+            'text-transform:uppercase;letter-spacing:.06em">Status</h2>'
             + _tb_html + _tb_more_html +
             '</div>'
         )
