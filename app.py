@@ -515,7 +515,7 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         '<div class="sidebar-footer">'
         f'<form method="POST" action="/logout" style="margin:0;display:flex;justify-content:center">'
         f'<input type="hidden" name="_csrf" value="{he(csrf)}">'
-        f'<button class="sidebar-avatar" type="submit">{av}<span class="sidebar-tip">Sign out</span></button>'
+        f'<button class="sidebar-avatar" type="submit" title="Sign out" onclick="return confirm(\'Sign out of Mighty?\')">{av}<span class="sidebar-tip">Sign out</span></button>'
         '</form>'
         '</div>'
         '</aside>'
@@ -1394,13 +1394,22 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
                 why_parts = [f"Benefit available in your {SOURCE_CAPABILITIES.get(src, {}).get('display_name', src.title())} account"]
         why_str = ". ".join(why_parts[:3]) + "."
 
-        # Title: "Marriott Stay" / "Delta Flight" / generic
-        ctx_noun = {"hotel": "Stay", "flight": "Flight", "car": "Rental",
-                    "shopping": "Purchase", "dining": "Meal"}.get(context or "", "Opportunity")
+        # Title: describe the insight, not the category it came from
+        # "Southwest — 24,617 Rapid Rewards" is more useful than "Southwest Opportunity"
         caps_name = SOURCE_CAPABILITIES.get(src, {}).get("display_name", src.title())
-        # Shorten display name for title
         short_name = caps_name.split()[0]  # "Marriott" from "Marriott Bonvoy"
-        title = f"{short_name} {ctx_noun}"
+        ctx_noun = {"hotel": "Stay", "flight": "Flight", "car": "Rental",
+                    "shopping": "Purchase", "dining": "Meal"}.get(context or "", "")
+        # Pick the anchor component's value for the title if short and meaningful
+        _anchor = components[0]
+        _anchor_val = _anchor.get("value", "")
+        _anchor_label = _anchor.get("label", "")
+        if ctx_noun:
+            title = f"{short_name} {ctx_noun}"
+        elif _anchor_val and len(_anchor_val) <= 20 and not _anchor_val.startswith("0"):
+            title = f"{short_name} — {_anchor_val} {_anchor_label}"[:60]
+        else:
+            title = f"{short_name} — {_anchor_label}"[:60]
 
         opportunities.append({
             "id":           f"{context}_{src}_{_dop.date.today().isoformat()}",
@@ -3557,9 +3566,9 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
-    <button id="rediscover-btn" onclick="rediscoverAll()" class="btn-sync" title="Re-extract fields from existing account data">
+    <button id="rediscover-btn" onclick="rediscoverAll()" class="btn-sync" title="Scan your stored page data again to find any fields that may have been missed">
       <svg id="rediscover-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <span id="rediscover-label">Re-discover</span>
+      <span id="rediscover-label">Find new fields</span>
     </button>
     <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Refresh all account data">
       <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
@@ -3979,7 +3988,7 @@ function rediscoverAll() {
   if (!btn || btn.disabled) return;
   btn.disabled = true;
   btn.classList.add('rediscovering');
-  lbl.textContent = 'Re-discovering…';
+  lbl.textContent = 'Scanning…';
   fetch('/api/data/rediscover-all', {method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},
     body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
@@ -3989,20 +3998,20 @@ function rediscoverAll() {
       _showToast('Re-discovering fields across ' + d.sources + ' account' + (d.sources !== 1 ? 's' : '') + '…', 4000);
       setTimeout(function(){
         btn.classList.remove('rediscovering');
-        lbl.textContent = 'Re-discover';
+        lbl.textContent = 'Find new fields';
         btn.disabled = false;
         reloadWithScroll();
       }, 20000);
     } else {
       _showToast('Re-discover failed — try again', 3000);
       btn.classList.remove('rediscovering');
-      lbl.textContent = 'Re-discover';
+      lbl.textContent = 'Find new fields';
       btn.disabled = false;
     }
   }).catch(function(){
     _showToast('Re-discover failed — try again', 3000);
     btn.classList.remove('rediscovering');
-    lbl.textContent = 'Re-discover';
+    lbl.textContent = 'Find new fields';
     btn.disabled = false;
   });
 }
@@ -4573,7 +4582,7 @@ body{display:flex;flex-direction:row}
     </div>
     <div style="font-size:11px;color:#9ca3af;margin-top:8px">Anyone with this key can submit actions on your behalf.</div>
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f5f2ed;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <a href="/onboarding" style="display:inline-block;padding:8px 14px;background:#f5f2ed;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">↺ Re-run setup</a>
+      <a href="/onboarding" style="display:inline-block;padding:8px 14px;background:#f5f2ed;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">Re-run setup</a>
       <a href="/extension-setup" target="_blank" style="display:inline-block;padding:8px 14px;background:#f0fdf4;color:#059669;border:1px solid #bbf7d0;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">🔌 Setup Chrome Extension</a>
       <span style="font-size:11px;color:#9ca3af">Opens a page the extension reads to auto-configure itself</span>
     </div>
@@ -5851,7 +5860,8 @@ def dashboard():
         # Active state
         if is_connected:
             agent_status_indicator = (
-                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#34d399">'
+                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#34d399"'
+                ' title="Mighty agent is connected and active">'
                 '<div style="width:7px;height:7px;border-radius:50%;background:#34d399;flex-shrink:0"></div>'
                 'Active</div>'
             )
@@ -6588,9 +6598,8 @@ def dashboard():
     )[0])
 
     # ── LAYER 1: Hero section ─────────────────────────────────────────────────
-    import datetime as _dth
-    _hour = _dth.datetime.now().hour
-    _greeting = "Good morning" if _hour < 12 else "Good afternoon" if _hour < 17 else "Good evening"
+    # Greeting is resolved client-side so it matches the user's local timezone
+    _greeting = "Good day"   # placeholder — JS will overwrite immediately
     _first_name = ((user["email"] or "").split("@")[0].split(".")[0] or "").capitalize() or "there"
     _account_count = len(connected_sources)
 
@@ -6683,17 +6692,23 @@ def dashboard():
 
     hero_section_html = (
         f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
-        f'<div style="font-size:22px;font-weight:700;color:#111;margin-bottom:12px">'
-        f'{_greeting}, {he(_first_name)} \U0001f44b'
+        # Greeting — placeholder replaced immediately by inline JS using local browser time
+        f'<div style="font-size:22px;font-weight:700;color:#111;margin-bottom:12px" id="hero-greeting">'
+        f'Hello, {he(_first_name)} \U0001f44b'
         f'</div>'
-        f'<div style="display:flex;gap:24px;flex-wrap:wrap">'
-        f'<div style="display:flex;flex-direction:column">'
-        f'<span style="font-size:26px;font-weight:700;color:#111" id="hero-account-count">{_account_count}</span>'
-        f'<span style="font-size:12px;color:#6b7280">accounts connected</span>'
-        f'</div>'
-        f'</div>'
-        + _focus_html
-        + _value_summary_html +
+        f'<script>'
+        f'(function(){{'
+        f'  var h=new Date().getHours();'
+        f'  var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";'
+        f'  var el=document.getElementById("hero-greeting");'
+        f'  if(el) el.innerHTML=g+", {he(_first_name)} \U0001f44b";'
+        f'}})();'
+        f'</script>'
+        # Accounts count — de-emphasised; certs/value line leads
+        f'<div style="font-size:13px;color:#9ca3af;margin-bottom:4px">'
+        f'{_account_count} account{"s" if _account_count != 1 else ""} connected</div>'
+        + _value_summary_html
+        + _focus_html +
         f'</div>'
     )
 
@@ -6723,11 +6738,15 @@ def dashboard():
     else:
         _inline_reminder_html = '<div style="color:#6b7280;font-size:13px;padding:8px 0">✓ Nothing needs attention right now</div>'
 
+    _has_reminders = bool(active_reminders if 'active_reminders' in dir() else False) or \
+        ('<div class="reminder-item' in _inline_reminder_html)
+    _attn_border = '#dc2626' if _has_reminders else '#e5e7eb'
+    _attn_heading_color = '#dc2626' if _has_reminders else '#6b7280'
     action_center_html = (
         '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;margin-bottom:28px">'
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
-        '<h2 style="font-size:15px;font-weight:700;color:#111;margin:0;text-transform:uppercase;'
-        'letter-spacing:.05em;border-left:3px solid #dc2626;padding-left:10px">Needs Attention</h2>'
+        f'<h2 style="font-size:15px;font-weight:700;color:{_attn_heading_color};margin:0;text-transform:uppercase;'
+        f'letter-spacing:.05em;border-left:3px solid {_attn_border};padding-left:10px">Needs Attention</h2>'
         '<span style="font-size:12px;color:#9ca3af" id="action-center-meta"></span>'
         '</div>'
         f'<div id="action-center-panel">{_inline_reminder_html}</div>'
@@ -8440,10 +8459,12 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
                 f'<span style="flex:1">{flbl}{new_pill}</span>'
                 f'<span style="color:#9ca3af;font-size:11px">{fval}</span></label>'
             )
+        # Only count new keys that are still present in discovered fields
+        _new_present = [f for f in discovered if f.get("key") in new_keys]
         new_count_badge = (
             f'<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:99px;'
-            f'background:#7c3aed;color:#fff;margin-left:6px">{len(new_keys)} new</span>'
-            if new_keys else ""
+            f'background:#7c3aed;color:#fff;margin-left:6px">{len(_new_present)} new</span>'
+            if _new_present else ""
         )
         return (
             f'<div id="fields-panel-{src}" style="display:none">'
@@ -10460,7 +10481,7 @@ def api_sync_health(source):
         return jsonify({"error": "not found"}), 404
 
     data   = decrypt_account_data(uid, ad_row["data_enc"] or "")
-    items  = data.get("items", [])
+    items  = data.get("items") or data.get("ai_items") or []
     confidences = [i["confidence"] for i in items if isinstance(i.get("confidence"), (int, float))]
     sources_breakdown = {
         "api":   sum(1 for i in items if i.get("from_api")),
