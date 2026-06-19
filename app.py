@@ -3622,7 +3622,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .acct-alert-red .alert-lbl{color:#991b1b}
 .acct-alert-red .alert-sub{color:#b91c1c}
 /* States */
-.acct-card.is-stale{opacity:0.55}
+.acct-card.is-stale{opacity:0.65}
 .acct-card.is-expiring{border-color:rgba(217,119,6,0.35) !important;box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(217,119,6,0.1) !important}
 .acct-card.highlight-off{opacity:0.28;filter:grayscale(0.3)}
 .acct-card.highlight-on{box-shadow:0 4px 20px rgba(0,0,0,0.12),0 0 0 2.5px rgba(37,99,235,0.7) !important;transform:translateY(-2px);background:#fff !important}
@@ -3677,7 +3677,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}}
+@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}#rediscover-btn{display:none!important}.pending-pill{font-size:10px;padding:3px 8px}}
 </style>
 </head>
 <body>
@@ -3704,10 +3704,10 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       {pending_count} awaiting decision
     </div>
     <button id="rediscover-btn" onclick="rediscoverAll()" class="btn-sync" title="Scan your stored page data again to find any fields that may have been missed">
-      <svg id="rediscover-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <span id="rediscover-label">Find new fields</span>
+      <svg id="rediscover-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+      <span id="rediscover-label">Re-scan</span>
     </button>
-    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Refresh all account data">
+    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Sync all accounts — fetches live data from connected sites">
       <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
       <span id="sync-label">Sync All</span>
     </button>
@@ -3791,9 +3791,6 @@ body{display:flex;flex-direction:row;background:#eee9e2}
             var reminders = remData.reminders || [];
 
             // Update hero attention count
-            var heroCount = document.getElementById('hero-attention-count');
-            if (heroCount) heroCount.textContent = summary.total || (summary.urgent > 0 ? summary.urgent : '✓');
-
             // Update action center meta
             var meta = document.getElementById('action-center-meta');
             if (meta) meta.textContent = summary.total > 0 ? summary.total + ' items' : 'All clear';
@@ -5697,7 +5694,7 @@ def _get_reminders(uid: str) -> list:
         name   = row["display_name"]
         try:
             data  = decrypt_account_data(uid, row["data_enc"] or "")
-            items = data.get("items", [])
+            items = data.get("items") or data.get("ai_items") or []
         except Exception:
             continue
 
@@ -5950,7 +5947,7 @@ def dashboard():
         onboarding_banner = (
             '<div style="background:rgba(129,140,248,0.08);border:1px solid rgba(129,140,248,0.2);'
             'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
-            'justify-content:space-between;gap:16px;margin:0 32px 8px">'
+            'justify-content:space-between;gap:16px;margin:0 16px 8px">'
             '<div style="font-size:13px;color:#4338ca">'
             'Finish setting up Mighty to connect your first agent.</div>'
             '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#6366f1;white-space:nowrap">'
@@ -6400,7 +6397,7 @@ def dashboard():
                     )
                     why_html = (
                         f'<span class="why-link" onclick="toggleSnippet(this)" '
-                        f'style="font-size:10px;color:#93c5fd;cursor:pointer;margin-left:6px;user-select:none" '
+                        f'style="font-size:10px;color:#60a5fa;cursor:pointer;margin-left:6px;user-select:none" '
                         f'title="Show discovery details">Why?</span>'
                         f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#374151;'
                         f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
@@ -6457,7 +6454,7 @@ def dashboard():
                     )
                     why_html = (
                         f'<span class="why-link" onclick="toggleSnippet(this)" '
-                        f'style="font-size:10px;color:#93c5fd;cursor:pointer;margin-left:6px;user-select:none" '
+                        f'style="font-size:10px;color:#60a5fa;cursor:pointer;margin-left:6px;user-select:none" '
                         f'title="Show discovery details">Why?</span>'
                         f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#374151;'
                         f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
@@ -6620,20 +6617,19 @@ def dashboard():
                 if missing_lines:
                     searching_html = (
                         '<div style="font-size:10px;color:#9ca3af;margin-top:2px">'
-                        f'Still checking: ' + " &nbsp;".join(missing_lines[:3]) +
+                        f'Not yet found: ' + " &nbsp;".join(missing_lines[:3]) +
                         ('…' if len(missing_lines) > 3 else '') +
                         '</div>'
                     )
 
                 coverage_face = (
                     f'<div style="margin-top:5px;padding-top:5px;border-top:1px solid #f3f4f6">'
-                    f'<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">'
+                    f'<div style="display:flex;align-items:center;gap:4px">'
                     f'<div style="flex:1;height:2px;background:#e5e7eb;border-radius:2px">'
                     f'<div style="height:2px;width:{completeness_pct}%;background:{cov_color};border-radius:2px"></div>'
                     f'</div>'
                     f'<span style="font-size:10px;color:{cov_color};font-weight:600;flex-shrink:0">{completeness_pct}%</span>'
                     f'</div>'
-                    + found_html + searching_html +
                     f'</div>'
                 )
             else:
@@ -6648,7 +6644,7 @@ def dashboard():
             health_footer = (
                 f'<div class="card-health-footer" style="padding:4px 14px 8px">'
                 + (
-                    f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:10px;color:#d1d5db;padding:0;display:flex;align-items:center;gap:2px;margin-top:2px">'
+                    f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:10px;color:#9ca3af;padding:0;display:flex;align-items:center;gap:2px;margin-top:2px">'
                     f'<span class="health-chevron" style="font-size:9px">&#9656;</span> details'
                     f'</button>'
                     f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}">{coverage_block}</div>'
@@ -6895,9 +6891,10 @@ def dashboard():
         _hero_bullets_html += (
             f'<div style="display:flex;align-items:baseline;gap:8px;padding:3px 0">'
             f'<span style="font-size:14px;flex-shrink:0">{_icon}</span>'
-            f'<span style="font-size:13px;color:{_bullet_color};font-weight:500">'
-            f'{he(_hdisp)}: {he(_hlbl)}{_exp_str}'
-            f'</span>'
+            f'<div style="flex:1;min-width:0">'
+            f'<span style="font-size:13px;color:{_bullet_color};font-weight:500">{he(_hdisp)}: {he(_hlbl)}</span>'
+            f'<span style="font-size:12px;color:#6b7280;margin-left:6px">{he(_hval)}{_exp_str}</span>'
+            f'</div>'
             f'</div>'
         )
 
@@ -6911,7 +6908,15 @@ def dashboard():
             f'</div>'
         )
     else:
-        _hero_value_block = ''
+        # No benefit data yet — show a soft prompt
+        if _account_count > 0:
+            _hero_value_block = (
+                f'<div style="margin-top:10px;font-size:13px;color:#9ca3af">'
+                f'Watching {_account_count} account{"s" if _account_count != 1 else ""} — '
+                f'sync to see your benefits.</div>'
+            )
+        else:
+            _hero_value_block = ''
 
     hero_section_html = (
         f'<div style="padding:20px 0 24px;border-bottom:1px solid #e5e7eb;margin-bottom:24px">'
@@ -6975,7 +6980,7 @@ def dashboard():
         # Nothing needs attention — compact single-line, don't waste card real estate
         action_center_html = (
             '<div style="display:flex;align-items:center;gap:6px;margin-bottom:20px;'
-            'padding:0 2px;font-size:13px;color:#6b7280">'
+            'padding:0 2px;font-size:13px;color:#6b7280" id="action-center-panel">'
             '<span style="color:#22c55e;font-size:14px">✓</span>'
             'Nothing needs attention right now'
             '</div>'
@@ -7030,7 +7035,7 @@ def dashboard():
                 '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
                 'text-transform:uppercase;letter-spacing:.05em">\U0001f50d Recently Found</h2>'
                 f'<div style="font-size:13px;color:#374151;padding:6px 0">'
-                f'Initial sync {_bulk_day}: found <strong>{_bulk_total} fields</strong> across '
+                f'Synced {_bulk_day}: found <strong>{_bulk_total} fields</strong> across '
                 f'<strong>{_bulk_sources} account{"s" if _bulk_sources != 1 else ""}</strong>.'
                 f'</div>'
                 '</div>'
@@ -7061,7 +7066,7 @@ def dashboard():
 
             _overflow = max(0, len(_recent_rows) - _shown)
             _feed_html = ""
-            for _day_label, _rows in list(_day_groups.items())[:4]:
+            for _day_label, _rows in list(_day_groups.items()):
                 _items_html = "".join(
                     f'<div style="font-size:13px;color:#374151;padding:2px 0">'
                     f'• <strong>{he(_source_display_name(_r["source"]))}</strong>'
@@ -7092,6 +7097,18 @@ def dashboard():
                 '</div>'
             )
 
+    # Pre-check whether TOP BENEFITS will render — avoids duplicating certs/credits in Use Soon
+    _will_have_top_benefits = any(
+        any(k in _lbl_q.lower() for k in [
+            'companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade cert',
+            'credit', 'voucher', 'ecredit',
+            'status', 'medallion', 'elite', 'gold', 'platinum', 'diamond',
+            'globalist', 'sapphire', 'titanium', 'senator',
+        ])
+        and _val_q.strip() and _val_q.strip() not in {'0', '—', '-', 'N/A', 'None', 'TBD'}
+        for _, _lbl_q, _val_q, *_ in value_items
+    )
+
     # ── LAYER 3: Don't forget section (no dollar amounts) ────────────────────
     if value_items:
         import re as _vc_re
@@ -7107,12 +7124,17 @@ def dashboard():
             return True
 
         # Group by type without showing amounts
-        credit_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
-                        if any(k in label.lower() for k in ['credit', 'voucher', 'ecredit'])
-                        and _use_soon_eligible(label, val_str)]
-        cert_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
-                      if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])
-                      and _use_soon_eligible(label, val_str)]
+        # Skip certs/credits in Use Soon when TOP BENEFITS already shows them above
+        credit_items = [] if _will_have_top_benefits else [
+            (disp, label, val_str) for disp, label, val_str, dval, method in value_items
+            if any(k in label.lower() for k in ['credit', 'voucher', 'ecredit'])
+            and _use_soon_eligible(label, val_str)
+        ]
+        cert_items = [] if _will_have_top_benefits else [
+            (disp, label, val_str) for disp, label, val_str, dval, method in value_items
+            if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])
+            and _use_soon_eligible(label, val_str)
+        ]
         points_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
                         if any(k in label.lower() for k in ['points', 'miles', 'rewards', 'balance'])
                         and not any(k in label.lower() for k in ['credit', 'voucher', 'ecredit', 'certificate', 'free night', 'companion'])
@@ -7137,18 +7159,20 @@ def dashboard():
         if forgotten_lines or points_lines:
             _points_section = ""
             if points_lines:
-                _points_header = ('<div style="font-size:11px;font-weight:600;color:#92400e;'
+                _points_header = ('<div style="font-size:11px;font-weight:600;color:#9ca3af;'
                                   'text-transform:uppercase;letter-spacing:.05em;'
                                   'margin-top:10px;margin-bottom:4px">Points &amp; Miles</div>'
                                   if forgotten_lines else "")
                 _points_section = _points_header + "".join(points_lines)
             value_center_html = (
-                '<div style="margin-bottom:28px;background:#fffbeb;border:1px solid #fde68a;'
+                '<div style="margin-bottom:28px;background:#ffffff;border:1px solid #e5e7eb;'
                 'border-radius:10px;padding:16px 18px">'
-                '<h2 style="font-size:14px;font-weight:700;color:#92400e;margin:0 0 10px;'
-                'text-transform:uppercase;letter-spacing:.05em">\u23f3 Use Soon</h2>'
+                '<h2 style="font-size:14px;font-weight:700;color:#374151;margin:0 0 10px;'
+                'text-transform:uppercase;letter-spacing:.05em">\u23f3 '
+                + ('Points \u0026 Miles' if _will_have_top_benefits else 'Use Soon') +
+                '</h2>'
                 + (
-                    '<p style="font-size:12px;color:#92400e;margin:0 0 10px">'
+                    '<p style="font-size:12px;color:#78716c;margin:0 0 10px">'
                     'Credits and certificates to use before they expire:'
                     '</p>'
                     if forgotten_lines else ''
@@ -7268,17 +7292,23 @@ def dashboard():
             f'<span style="font-size:16px;flex-shrink:0">{_ic}</span>'
             f'<div style="flex:1;min-width:0">'
             f'<div style="font-size:12px;color:#9ca3af;font-weight:500">{he(_disp)}</div>'
-            f'<div style="font-size:13px;font-weight:600;color:{_label_color}">'
+            f'<div style="font-size:13px;font-weight:600;color:{_label_color};'
+            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
             f'{he(_lbl)}{_val_html}{_exp_html}'
             f'</div></div></div>'
         )
 
+    _tb_overflow = max(0, len(_top_benefit_cards) - 6)
     if _tb_html:
+        _tb_more_html = (
+            f'<div style="font-size:12px;color:#9ca3af;padding:4px 2px">'
+            f'+ {_tb_overflow} more benefit{"s" if _tb_overflow != 1 else ""} in your accounts</div>'
+        ) if _tb_overflow > 0 else ""
         top_benefits_html = (
             '<div style="margin-bottom:28px">'
             '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
             'text-transform:uppercase;letter-spacing:.05em">Top Benefits</h2>'
-            + _tb_html +
+            + _tb_html + _tb_more_html +
             '</div>'
         )
     else:
@@ -7449,7 +7479,7 @@ def dashboard():
     if not user["onboarded"]:
         onboarding_modal = """
 <div id="onboarding-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px">
-  <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+  <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:28px 28px 24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
     <div style="font-size:28px;text-align:center;margin-bottom:12px">&#128272;</div>
     <h2 style="font-size:20px;font-weight:700;text-align:center;color:#111;margin:0 0 8px">How Mighty works</h2>
     <p style="font-size:14px;color:#4b5563;text-align:center;margin:0 0 20px;line-height:1.6">
