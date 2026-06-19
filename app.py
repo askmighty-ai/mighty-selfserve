@@ -6921,7 +6921,7 @@ def dashboard():
     if _hero_bullets_html:
         _available_label = (
             '<div style="font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;'
-            'letter-spacing:.06em;margin-bottom:4px;margin-top:16px">Available right now</div>'
+            'letter-spacing:.06em;margin-bottom:4px;margin-top:16px">Available now</div>'
         )
         _hero_value_block = _available_label + _hero_bullets_html
     else:
@@ -7263,19 +7263,14 @@ def dashboard():
                 _tb_seen.add(_prog_dedup)
                 _progress_cards.append((_disp, _lbl, _vk, _tb_exp_days(_lbl, _vk)))
             continue
-        if not (_is_cert or _is_credit or _is_status): continue
+        if not _is_status: continue  # Status section shows durable standing only; certs/credits shown in Available Now
         _dedup = (_disp, _lbl[:35])
         if _dedup in _tb_seen: continue
         _tb_seen.add(_dedup)
         _exp = _tb_exp_days(_lbl, _val)
         # Priority sort key
         _pri = 0
-        # Status ranks highly — it's your permanent standing, worth more than individual certs
-        if _is_status:                                              _pri = 10
-        elif _is_cert and _exp is not None and 0 <= _exp < 90:     _pri = 8
-        elif _is_cert:                                              _pri = 7
-        elif _is_credit and _exp is not None and 0 <= _exp < 60:   _pri = 6
-        elif _is_credit:                                            _pri = 5
+        _pri = 10  # all status items shown equally; sort by account name as tiebreaker
         _top_benefit_cards.append((_pri, _exp if _exp is not None else 9999,
                                    _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status))
     _top_benefit_cards.sort(key=lambda x: (-x[0], x[1]))
@@ -7323,74 +7318,34 @@ def dashboard():
     else:
         progress_section_html = ""
 
+    # Status section: identity rows — tier name prominent, account below
+    import json as _tb_json
     _tb_html = ""
-    for _pri, _, _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status in _top_benefit_cards[:6]:
-        # Icon
-        _lk = _lbl.lower()
-        if 'companion' in _lk or 'companion cert' in _lk: _ic = '✈'
-        elif 'upgrade' in _lk:                              _ic = '⬆'
-        elif 'free night' in _lk or 'award night' in _lk: _ic = '🏨'
-        elif _is_cert:                                       _ic = '🎫'
-        elif _is_credit:                                     _ic = '💳'
-        elif _is_status:                                     _ic = '⭐'
-        else:                                                _ic = '•'
-        # Colors
-        if _exp is not None and 0 <= _exp < 30:
-            _card_border = '#fca5a5'; _card_bg = '#fff5f5'
-            _label_color = '#dc2626'
-        elif _exp is not None and 0 <= _exp < 90:
-            _card_border = '#fde68a'; _card_bg = '#fffbeb'
-            _label_color = '#d97706'
-        elif _is_credit:
-            _card_border = '#bbf7d0'; _card_bg = '#f0fdf4'
-            _label_color = '#059669'
-        elif _is_cert:
-            _card_border = '#bfdbfe'; _card_bg = '#eff6ff'
-            _label_color = '#2563eb'
-        else:  # status
-            _card_border = '#ddd6fe'; _card_bg = '#f5f3ff'
-            _label_color = '#7c3aed'
-        # Expiry label
-        _exp_html = ""
-        if _exp is not None and 0 <= _exp < 365:
-            _exp_date = _tb_dt.date.today() + _tb_dt.timedelta(days=_exp)
-            if _exp < 30:
-                _exp_html = f'<span style="font-size:11px;color:#dc2626;font-weight:600;margin-left:8px">expires in {_exp}d</span>'
-            else:
-                _exp_html = f'<span style="font-size:11px;color:#9ca3af;margin-left:8px">exp {_exp_date.strftime("%b %Y")}</span>'
-        # Value display (for certs: show count; for credits: show amount)
-        _val_html = ""
-        if _vk := _val.strip():
-            _nums = _tb_re.findall(r'[\d,]+', _vk)
-            if _is_cert and _nums:
-                _count = _nums[0]
-                if _count not in {'1', '0'}:
-                    _val_html = f'<span style="font-size:12px;color:#6b7280;margin-left:4px">({_count})</span>'
-            elif _is_credit:
-                _val_html = f'<span style="font-size:12px;color:#6b7280;margin-left:4px">{he(_val)}</span>'
-            elif _is_status:
-                _val_html = f'<span style="font-size:12px;color:{_label_color};margin-left:4px;font-weight:600">{he(_val)}</span>'
-        import json as _tb_json
+    for _pri, _, _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status in _top_benefit_cards[:8]:
+        _disp_lc = _disp.lower()
+        if any(k in _disp_lc for k in ['delta','united','american','alaska','southwest','jetblue','spirit','frontier','hawaiian']): _ic = '✈'
+        elif any(k in _disp_lc for k in ['marriott','hilton','hyatt','ihg','wyndham','choice','best western','radisson']): _ic = '🏨'
+        elif any(k in _disp_lc for k in ['hertz','avis','enterprise','national','alamo']): _ic = '🚗'
+        else: _ic = '⭐'
+        # Tier: use value if it's a real tier name, else fall back to label
+        _tier = _val.strip() if _val.strip() and _val.strip().lower() not in {'active','yes','enabled','true','','member'} else _lbl
         _tb_bd_data = _tb_json.dumps({
             "label": _lbl, "account": _disp,
             "value": _val, "icon": _ic, "expDays": _exp
         }).replace("'", "&#39;")
         _tb_html += (
-            f'<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
-            f'background:{_card_bg};border:1px solid {_card_border};border-radius:8px;margin-bottom:8px;'
-            f'cursor:pointer;transition:filter 0.1s" '
-            f'onmouseover="this.style.filter=\'brightness(0.97)\'" '
-            f'onmouseout="this.style.filter=\'\'" '
+            f'<div style="display:flex;align-items:center;gap:10px;padding:8px 4px;'
+            f'cursor:pointer;border-radius:7px;transition:background 0.1s" '
+            f'onmouseover="this.style.background=\'#ede9f8\'" '
+            f'onmouseout="this.style.background=\'\'" '
             f'onclick="openBenefitDrawer(this)" data-benefit=\'{_tb_bd_data}\'>'
-            f'<span style="font-size:16px;flex-shrink:0">{_ic}</span>'
+            f'<span style="font-size:18px;flex-shrink:0;line-height:1.3">{_ic}</span>'
             f'<div style="flex:1;min-width:0">'
-            f'<div style="font-size:12px;color:#9ca3af;font-weight:500">{he(_disp)}</div>'
-            f'<div style="font-size:13px;font-weight:600;color:{_label_color};'
-            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
-            f'{he(_lbl)}{_val_html}{_exp_html}'
-            f'</div></div></div>'
+            f'<div style="font-size:14px;font-weight:600;color:#4c1d95;line-height:1.3;'
+            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{he(_tier)}</div>'
+            f'<div style="font-size:12px;color:#9ca3af;margin-top:1px">{he(_disp)}</div>'
+            f'</div></div>'
         )
-
     _tb_overflow = max(0, len(_top_benefit_cards) - 6)
     if _tb_html:
         _tb_more_html = (
@@ -7400,7 +7355,7 @@ def dashboard():
         top_benefits_html = (
             '<div style="margin-bottom:28px">'
             '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
-            'text-transform:uppercase;letter-spacing:.05em">Your Portfolio</h2>'
+            'text-transform:uppercase;letter-spacing:.05em">Status</h2>'
             + _tb_html + _tb_more_html +
             '</div>'
         )
