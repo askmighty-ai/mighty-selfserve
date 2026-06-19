@@ -1616,11 +1616,51 @@ def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
     return list(additional)
 
 
-# mighty/ package lives in the same repo root as app.py and is deployed to Railway
-# alongside it. These imports work because Railway deploys the full repo, not just
-# this file. See mighty/__init__.py, classify.py, scoring.py.
-from mighty.classify import classify_benefit, BENEFIT_TYPES  # noqa: E402
-from mighty.scoring import _relevance_score, _confidence_label, _BENEFIT_APPLICABILITY  # noqa: E402
+# mighty/ package lives alongside app.py in the repo root. If the package is missing
+# (e.g. partial deploy), we fall back to inline stubs so the app still starts.
+try:
+    from mighty.classify import classify_benefit, BENEFIT_TYPES          # noqa: E402
+    from mighty.scoring import _relevance_score, _confidence_label, _BENEFIT_APPLICABILITY  # noqa: E402
+except ImportError:
+    import re as _cb_re
+    _BT_RULES_INLINE = [
+        ("progress_toward", ["progress", "of ", "earned", "qualifying", "toward"],
+         [r"\d+\s*(?:of|/)\s*\d+", r"\d+%"], []),
+        ("elite_status",    ["status", "tier", "medallion", "elite", "platinum", "gold", "diamond", "premier", "globalist"],
+         [], ["autopay", "payment", "bill", "subscription", "enrolled", "enabled", "active", "loyalty number", "member id"]),
+        ("certificate",     ["certificate", "cert", "companion", "free night", "award night", "upgrade cert", "buddy pass"],
+         [], ["progress", "of "]),
+        ("cash_credit",     ["annual credit", "annual fee credit", "cash back", "statement credit", "dining credit", "hotel credit"],
+         [r"\$\d"], ["ecredit", "flight credit", "travel credit"]),
+        ("travel_credit",   ["travel credit", "flight credit", "ecredit", "trip credit", "airline credit"], [r"\$\d"], []),
+        ("membership",      ["membership", "lounge", "global entry", "clear", "tsa pre"], [], []),
+        ("points_balance",  ["points", "miles", "rewards", "skymiles", "bonvoy", "honors"], [r"\d{3,}"], []),
+        ("elite_status",    ["status", "tier"], [], []),
+    ]
+    def classify_benefit(label: str, value: str, source: str = "") -> str:
+        combined = (label + " " + value).lower()
+        lbl = label.lower(); val = value.lower()
+        for btype, lkws, vpats, excl in _BT_RULES_INLINE:
+            if any(e in combined for e in excl): continue
+            if any(k in lbl for k in lkws) or any(_cb_re.search(p, val) for p in vpats):
+                return btype
+        return "other"
+    BENEFIT_TYPES = ["elite_status","certificate","travel_credit","cash_credit",
+                     "points_balance","progress_toward","membership","reservation",
+                     "expiry_date","other"]
+    _BENEFIT_APPLICABILITY: dict = {
+        "flight":   ["companion","ecredit","miles","travel_credit","upgrade","certificate"],
+        "hotel":    ["free_night","award_night","points","hotel_credit","travel_credit","certificate"],
+        "car":      ["rental","insurance","coverage"],
+        "shopping": ["cash_back","credit"],
+        "dining":   ["dining_credit","cash_back","credit"],
+    }
+    def _relevance_score(field_key="", field_label="", field_value="",  # type: ignore[misc]
+                         confidence=0.85, context=None, expiry_date_str=None):
+        return 0.5, {}
+    def _confidence_label(score: float) -> str:
+        return "High" if score >= 0.85 else "Medium" if score >= 0.60 else "Needs review"
+    print("[Mighty] WARNING: mighty/ package not found — using inline fallbacks", flush=True)
 
 def _post_filter_fields(fields: list, source: str = "") -> list:
     """Remove fields that are clearly noise regardless of what the AI returned.
