@@ -136,7 +136,14 @@ function showBenefits(context, benefits, count) {
       const row = document.createElement('div');
       row.setAttribute('data-mighty-benefit', '1');
       row.style.cssText = 'font-size:13px;color:#374151;padding:2px 0;display:flex;justify-content:space-between;align-items:baseline;gap:8px;';
-      var benefitHtml = `<span>• ${item.label}</span><span style="color:#6b7280;font-size:12px;flex-shrink:0">${item.value.length > 20 ? item.value.slice(0,20)+'…' : item.value}</span>`;
+      var derivedBadge = item.derived
+        ? `<span style="font-size:10px;background:#ede9fe;color:#6d28d9;border-radius:3px;padding:1px 5px;margin-left:5px;flex-shrink:0">via ${escapeHtml(item.account)}</span>`
+        : '';
+      var displayVal = item.derived
+        ? (item.detail ? item.detail.slice(0, 48) + (item.detail.length > 48 ? '…' : '') : item.benefit)
+        : (item.value.length > 20 ? item.value.slice(0, 20) + '…' : item.value);
+      var labelText = item.derived ? escapeHtml(item.program + ' — ' + item.benefit) : escapeHtml(item.label);
+      var benefitHtml = `<span style="display:flex;align-items:center;gap:0;flex-wrap:wrap">• ${labelText}${derivedBadge}</span><span style="color:#6b7280;font-size:12px;flex-shrink:0">${escapeHtml(displayVal)}</span>`;
       if (item._why) {
         var whyId = 'mighty-why-' + Math.random().toString(36).slice(2);
         benefitHtml += '<span style="margin-left:6px;font-size:10px;color:#a5b4fc;cursor:pointer;' +

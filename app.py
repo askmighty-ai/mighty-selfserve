@@ -1667,6 +1667,16 @@ except ImportError:
         return "High" if score >= 0.85 else "Medium" if score >= 0.60 else "Needs review"
     print("[Mighty] WARNING: mighty/ package not found — using inline fallbacks", flush=True)
 
+# Partnership graph — cross-program perks + card recommendations
+try:
+    from mighty.partnerships import get_derived_benefits, get_card_recommendations  # noqa: E402
+except ImportError:
+    def get_derived_benefits(items, connected_sources, context):  # type: ignore[misc]
+        return []
+    def get_card_recommendations(connected_sources):  # type: ignore[misc]
+        return []
+    print("[Mighty] WARNING: mighty/partnerships.py not found — derived benefits disabled", flush=True)
+
 def _post_filter_fields(fields: list, source: str = "") -> list:
     """Remove fields that are clearly noise regardless of what the AI returned.
 
@@ -3305,6 +3315,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       {action_center_html}
       {recently_found_html}
       {value_center_html}
+      {wallet_insights_html}
       {relevant_now_html}
       <script>
       (function() {
@@ -7029,6 +7040,53 @@ def dashboard():
 </script>
 """
 
+    # ── Wallet Insights: cross-program perks + card recommendations ───────────
+    wallet_insights_html = """
+<div id="wallet-insights-section" style="display:none;margin-bottom:28px">
+  <!-- Populated by JS below -->
+</div>
+<script>
+(function() {
+  function esc(s) {
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function buildWalletInsights(data) {
+    var recs = data.recommendations || [];
+    if (!recs.length) return;
+    var section = document.getElementById('wallet-insights-section');
+    if (!section) return;
+
+    var html = '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
+             + 'text-transform:uppercase;letter-spacing:.05em">&#10022; Worth Knowing About</h2>';
+
+    recs.forEach(function(rec) {
+      html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;'
+            + 'padding:14px 16px;margin-bottom:10px">';
+      html += '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:8px">';
+      html += '<div style="font-size:13px;font-weight:600;color:#111">' + esc(rec.card_name) + '</div>';
+      html += '<div style="font-size:11px;color:#9ca3af;flex-shrink:0">' + esc(rec.issuer) + '</div>';
+      html += '</div>';
+      html += '<ul style="margin:0;padding:0 0 0 14px;list-style:disc">';
+      (rec.benefits || []).forEach(function(b) {
+        html += '<li style="font-size:12px;color:#374151;margin-bottom:3px;line-height:1.45">'
+              + esc(b) + '</li>';
+      });
+      html += '</ul>';
+      html += '</div>';
+    });
+
+    section.innerHTML = html;
+    section.style.display = 'block';
+  }
+
+  fetch('/api/benefits/discover')
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(d) { if (d) buildWalletInsights(d); })
+    .catch(function() {});
+})();
+</script>
+"""
+
     relevant_now_html = """
 <div id="relevant-now-section" style="margin-bottom:28px;display:none">
   <h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;
@@ -7180,6 +7238,7 @@ function dismissOnboarding() {
             .replace("{action_center_html}",      action_center_html)
             .replace("{recently_found_html}",     recently_found_html)
             .replace("{relevant_now_html}",      relevant_now_html)
+            .replace("{wallet_insights_html}",    wallet_insights_html)
             .replace("{value_center_html}",       value_center_html)
             .replace("{top_benefits_html}",       top_benefits_html)
             .replace("{progress_section_html}",   progress_section_html)
@@ -12735,11 +12794,49 @@ def api_benefits_relevant():
         if (b.get("source",""), b.get("field_key","")) not in _suppressed
     ]
 
+    # ── Derived benefits from cross-program partnerships ───────────────────
+    # Collect all items across all accounts to check for status fields
+    _all_items: list[dict] = []
+    _connected_srcs: list[str] = []
+    for _row in rows:
+        _connected_srcs.append(_row["source"])
+        try:
+            _d = decrypt_account_data(uid, _row["data_enc"] or "")
+            _its = _d.get("items", []) or _d.get("ai_items", []) or []
+            for _it in _its:
+                _all_items.append({**_it, "source": _row["source"],
+                                   "display_name": _row["display_name"]})
+        except Exception:
+            pass
+
+    _derived = get_derived_benefits(_all_items, _connected_srcs, context)
+    # Append derived items that aren't already covered by a direct match
+    _direct_programs = {b.get("label", "").lower() for b in unique_benefits}
+    for _db in _derived:
+        if _db["label"].lower() not in _direct_programs:
+            unique_benefits.append(_db)
+
     return jsonify({
         "context": context,
         "benefits": unique_benefits,
         "count": len(unique_benefits),
     })
+
+
+@app.route("/api/benefits/discover")
+@require_login_or_key
+def api_benefits_discover():
+    """
+    Returns card/account recommendations the user may not have,
+    based on their connected accounts.  No dollar-value estimates — factual only.
+    """
+    uid  = get_current_user_id()
+    rows = get_db().execute(
+        "SELECT source FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+    connected = [r["source"] for r in rows]
+    recs = get_card_recommendations(connected)
+    return jsonify({"recommendations": recs, "count": len(recs)})
 
 
 @app.route("/api/settings/notifications", methods=["GET", "POST"])
