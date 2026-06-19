@@ -393,6 +393,29 @@ def init_db():
             db.commit()
         except Exception:
             pass  # column already exists
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS action_items (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id       TEXT NOT NULL,
+                    source        TEXT NOT NULL,
+                    field_key     TEXT NOT NULL,
+                    label         TEXT NOT NULL,
+                    value         TEXT NOT NULL,
+                    btype         TEXT NOT NULL,
+                    urgency       TEXT NOT NULL,
+                    days_left     INTEGER,
+                    exp_date      TEXT,
+                    created_at    TEXT NOT NULL,
+                    dismissed_at  TEXT,
+                    snoozed_until TEXT,
+                    UNIQUE(user_id, field_key)
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_ai_user ON action_items(user_id, dismissed_at)")
+            db.commit()
+        except Exception:
+            pass
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -438,6 +461,134 @@ def _parse_expiry_days(label, val):
     return None
 
 _ALERT_THRESHOLDS = [7, 14, 30]  # send at each crossing, closest first
+
+# ── Action Center persistence ──────────────────────────────────────────────────
+
+def populate_action_items(uid: str, source: str, data: dict):
+    """Upsert action_items rows from freshly-synced data for one source.
+
+    Called immediately after account_data is written so items are persistent and
+    dismiss/snooze state survives re-syncs.  The UNIQUE constraint on
+    (user_id, field_key) means ON CONFLICT updates the content columns while
+    preserving dismissed_at / snoozed_until set by the user.
+    """
+    try:
+        from mighty.classify import classify_benefit, is_actionable, is_needs_attention
+    except Exception:
+        return
+
+    import datetime as _dt_ai
+
+    items = (data.get("items") or []) + (data.get("ai_items") or [])
+    now   = _dt_ai.datetime.utcnow().isoformat()
+    today = _dt_ai.date.today()
+
+    # Collect field_keys we'll upsert so we can cull stale rows afterward
+    live_keys: list[str] = []
+
+    db = get_db()
+    for item in items:
+        label = item.get("label", "").strip()
+        value = str(item.get("value", "")).strip()
+        if not label or not value or value in {"—", "-", "N/A", "None", "TBD", "0"}:
+            continue
+
+        # Use stored _type if available; otherwise classify on-the-fly
+        btype = item.get("_type") or classify_benefit(label, value, source)
+
+        # Only persist items worth acting on
+        days_left = _parse_expiry_days(label, value)
+
+        should_add = False
+        urgency    = "info"
+        exp_date   = None
+
+        if days_left is not None and days_left >= 0:
+            exp_date = (today + _dt_ai.timedelta(days=days_left)).isoformat()
+
+        if is_needs_attention(btype):
+            # payment_due / renewal — always surface
+            should_add = True
+            if days_left is not None:
+                if days_left <= 7:  urgency = "urgent"
+                elif days_left <= 14: urgency = "soon"
+                else: urgency = "info"
+            else:
+                urgency = "info"
+
+        elif is_actionable(btype):
+            # certificate: always worth surfacing
+            if btype == "certificate":
+                should_add = True
+                if days_left is not None:
+                    if days_left <= 14:   urgency = "urgent"
+                    elif days_left <= 60: urgency = "soon"
+                    else: urgency = "info"
+            # credits: only if expiring within 60 days
+            elif days_left is not None and days_left <= 60:
+                should_add = True
+                urgency = "urgent" if days_left <= 14 else "soon"
+
+        if not should_add:
+            continue
+
+        field_key = f"{source}::{label}"
+        live_keys.append(field_key)
+
+        db.execute(
+            """
+            INSERT INTO action_items
+                (user_id, source, field_key, label, value, btype, urgency, days_left,
+                 exp_date, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(user_id, field_key) DO UPDATE SET
+                label       = excluded.label,
+                value       = excluded.value,
+                btype       = excluded.btype,
+                urgency     = excluded.urgency,
+                days_left   = excluded.days_left,
+                exp_date    = excluded.exp_date
+            """,
+            (uid, source, field_key, label, value, btype, urgency, days_left,
+             exp_date, now)
+        )
+
+    # Remove stale rows for this source that no longer appear in the data
+    if live_keys:
+        placeholders = ",".join("?" * len(live_keys))
+        db.execute(
+            f"DELETE FROM action_items WHERE user_id=? AND source=? AND field_key NOT IN ({placeholders})",
+            [uid, source] + live_keys
+        )
+    else:
+        # Source returned no actionable items — clear any old rows
+        db.execute(
+            "DELETE FROM action_items WHERE user_id=? AND source=?",
+            (uid, source)
+        )
+
+    db.commit()
+
+
+def _open_action_items(uid: str) -> list[dict]:
+    """Return open (not dismissed, not snoozed) action items for uid, ordered by urgency."""
+    import datetime as _dt_ai2
+    now = _dt_ai2.datetime.utcnow().isoformat()
+    rows = get_db().execute(
+        """
+        SELECT id, source, label, value, btype, urgency, days_left, exp_date
+        FROM action_items
+        WHERE user_id = ?
+          AND dismissed_at IS NULL
+          AND (snoozed_until IS NULL OR snoozed_until < ?)
+        ORDER BY
+            CASE urgency WHEN 'urgent' THEN 0 WHEN 'soon' THEN 1 ELSE 2 END,
+            CASE WHEN days_left IS NULL THEN 9999 ELSE days_left END
+        """,
+        (uid, now)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
 
 def _find_expiring_for_user(uid):
     """Return list of expiring benefit dicts for a user. Only certs+credits within 30d."""
@@ -6685,50 +6836,46 @@ def dashboard():
                   ((user["email"] or "").split("@")[0].split(".")[0] or "").capitalize() or "there"
     _account_count = len(connected_sources)
 
-    # Top attention item for hero
-    _top_reminder = None
-    _inline_reminders = []
+    # ── Action items: persistent, from action_items table + login_required accounts ──
+    _open_items = []
     try:
-        import datetime as _dthero
-        _now_hero = _dthero.datetime.utcnow().isoformat()
-        _snoozed_keys = {r["reminder_key"] for r in get_db().execute(
-            "SELECT reminder_key FROM reminder_snoozes WHERE user_id=? AND snoozed_until > ?",
-            (uid, _now_hero)
-        ).fetchall()}
-        _all_reminders = _get_reminders(uid) + _get_change_alerts(uid)
-        # Inject login-required accounts as top-priority reminders
-        for _src, _dname, _ic, _cl in [
-            item for cat in _cat_order for item in _cat_map[cat]
-            if synced_map.get(item[0]) and
-               (synced_map[item[0]]["sync_status"] or "") == "login_required"
-        ]:
-            _all_reminders.insert(0, {
-                "type": "login_required", "source": _src,
-                "account_name": _dname, "source_display": _dname,
-                "message": f"{_dname} — login required to re-sync",
-                "urgency": "urgent",
-            })
-        _unsnoozed = [r for r in _all_reminders
-                      if f"{r.get('type','')}::{r.get('source','')}" not in _snoozed_keys]
-        _urgent = [r for r in _unsnoozed if r.get("urgency") == "urgent"]
-        _soon   = [r for r in _unsnoozed if r.get("urgency") in ("soon", "warning", "info")]
-        _ordered = _urgent + _soon
-        _top_reminder = _ordered[0] if _ordered else None
-        _inline_reminders = _ordered[:5]
+        _open_items = _open_action_items(uid)
     except Exception:
         pass
+    # Inject login-required accounts as top-priority (transient — not persisted)
+    _lr_items = []
+    for _src, _dname, _ic, _cl in [
+        item for cat in _cat_order for item in _cat_map[cat]
+        if synced_map.get(item[0]) and
+           (synced_map[item[0]]["sync_status"] or "") == "login_required"
+    ]:
+        _lr_items.append({
+            "id": None, "source": _src, "label": "Login required",
+            "value": f"{_dname} — log in to re-sync",
+            "btype": "login_required", "urgency": "urgent", "days_left": None,
+        })
+    _all_action_items = _lr_items + _open_items
 
-    if _top_reminder:
+    # Hero "Today's focus" line — use first urgent item
+    _top_action = next((i for i in _all_action_items if i.get("urgency") == "urgent"), None) \
+               or ((_all_action_items or [None])[0])
+    if _top_action:
+        _focus_label = _top_action.get("label", "")
+        _focus_val   = _top_action.get("value", "")
+        _focus_msg   = f"{_focus_label}: {_focus_val}" if _focus_label else _focus_val
         _focus_html = (
             f'<div style="margin-top:12px;background:#fef3c7;border-left:3px solid #f59e0b;'
             f'border-radius:0 6px 6px 0;padding:8px 12px">'
             f'<div style="font-size:11px;font-weight:600;color:#92400e;text-transform:uppercase;'
             f'letter-spacing:.05em;margin-bottom:2px">Today\'s focus</div>'
-            f'<div style="font-size:13px;color:#78350f">{he(_top_reminder.get("message",""))}</div>'
+            f'<div style="font-size:13px;color:#78350f">{he(_focus_msg)}</div>'
             f'</div>'
         )
     else:
-        _focus_html = ""  # nothing urgent — shown compactly in action center
+        _focus_html = ""
+
+    # Keep _inline_reminders alias for the attention status line in greeting
+    _inline_reminders = _all_action_items[:5]
 
     # Build named benefit bullets for hero — lead with actual value, not aggregate stats
     import re as _re_hero
@@ -6915,48 +7062,97 @@ def dashboard():
         f'</div>'
     )
 
-    # ── LAYER 2: Action Center ────────────────────────────────────────────────
-    if _inline_reminders:
-        _inline_items = ""
-        for _r in _inline_reminders:
-            _is_urgent = _r.get("urgency") == "urgent"
-            _urgency_color = "#dc2626" if _is_urgent else "#d97706"
-            # Action-oriented message: inject days_left context if available
-            _msg = _r.get("message", "")
-            _days = _r.get("days_left")
-            if _days is not None and "expires" not in _msg.lower() and "due" not in _msg.lower():
-                _msg += f" — {_days} day{'s' if _days != 1 else ''} left"
-            _inline_items += (
-                f'<div style="padding:10px 0;border-bottom:1px solid #f3f4f6;display:flex;'
-                f'align-items:flex-start;gap:10px">'
-                f'<span style="color:{_urgency_color};font-size:15px;flex-shrink:0;margin-top:1px">'
-                f'{"🔴" if _is_urgent else "🟡"}</span>'
-                f'<div style="flex:1">'
-                f'<div style="font-size:13px;font-weight:500;color:#111">{he(_msg)}</div>'
-                f'<div style="font-size:11px;color:#9ca3af;margin-top:2px">{he(_r.get("source_display","") or _r.get("account_name",""))}</div>'
-                f'</div>'
+    # ── LAYER 2: Action Center (persistent, dismissible) ─────────────────────
+    def _ai_urgency_icon(urgency):
+        return "🔴" if urgency == "urgent" else "🟡"
+
+    def _ai_why_now(item):
+        """Short "why now" line shown under the label."""
+        days = item.get("days_left")
+        btype = item.get("btype", "")
+        label = item.get("label", "")
+        if btype == "login_required":
+            return "Re-authenticate to continue syncing"
+        if days is not None:
+            if days == 0:   return "Expires today"
+            if days < 0:    return "Expired"
+            if days == 1:   return "Expires tomorrow"
+            if days <= 7:   return f"Expires in {days} days"
+            if days <= 30:  return f"Expires in {days} days"
+            if "due" in label.lower() or "payment" in label.lower():
+                return f"Due in {days} days"
+        if btype in ("payment_due",):  return "Payment coming up"
+        if btype == "renewal":          return "Renewal coming up"
+        return ""
+
+    _csrf_tok = get_csrf_token()
+    _ac_items_html = ""
+    for _ai in _all_action_items[:6]:
+        _ai_id       = _ai.get("id")          # None for login_required
+        _ai_urgency  = _ai.get("urgency", "info")
+        _ai_urg_clr  = "#dc2626" if _ai_urgency == "urgent" else "#d97706"
+        _ai_icon     = _ai_urgency_icon(_ai_urgency)
+        _ai_label    = _ai.get("label", "")
+        _ai_val      = _ai.get("value", "")
+        _ai_why      = _ai_why_now(_ai)
+        _ai_disp_lbl = _ai_val if not _ai_label or _ai_label == "Login required" else f"{_ai_label}: {_ai_val}"
+
+        # Dismiss/snooze buttons — only for persisted items
+        if _ai_id is not None:
+            _dismiss_js = (
+                f"fetch('/api/action-items/{_ai_id}/dismiss',{{"
+                f"method:'POST',headers:{{'X-CSRF-Token':'{_csrf_tok}','Content-Type':'application/json'}},"
+                f"credentials:'same-origin'}}).then(()=>document.getElementById('ai-{_ai_id}').remove())"
+                f".then(()=>{{ if(!document.querySelector('[id^=ai-]'))document.getElementById('action-center-wrap').remove() }})"
+            )
+            _snooze_js = (
+                f"fetch('/api/action-items/{_ai_id}/snooze',{{"
+                f"method:'POST',headers:{{'X-CSRF-Token':'{_csrf_tok}','Content-Type':'application/json'}},"
+                f"body:JSON.stringify({{days:7}}),credentials:'same-origin'}})"
+                f".then(()=>document.getElementById('ai-{_ai_id}').remove())"
+                f".then(()=>{{ if(!document.querySelector('[id^=ai-]'))document.getElementById('action-center-wrap').remove() }})"
+            )
+            _action_btns = (
+                f'<div style="display:flex;gap:8px;margin-top:5px">'
+                f'<button onclick="{_dismiss_js}" style="font-size:11px;color:#6b7280;background:none;border:1px solid #e5e7eb;'
+                f'border-radius:4px;padding:2px 8px;cursor:pointer;line-height:1.5" title="Dismiss permanently">Dismiss</button>'
+                f'<button onclick="{_snooze_js}" style="font-size:11px;color:#6b7280;background:none;border:1px solid #e5e7eb;'
+                f'border-radius:4px;padding:2px 8px;cursor:pointer;line-height:1.5" title="Hide for 7 days">Snooze 7d</button>'
                 f'</div>'
             )
-        _inline_reminder_html = _inline_items
-    else:
-        _inline_reminder_html = '<div style="color:#6b7280;font-size:13px;padding:8px 0">✓ Nothing needs attention right now</div>'
+            _item_id_attr = f'id="ai-{_ai_id}"'
+        else:
+            _action_btns  = ""
+            _item_id_attr = ""
 
-    _has_reminders = bool(_inline_reminders)
-    if _has_reminders:
-        _attn_border = '#dc2626' if any(r.get("urgency")=="urgent" for r in _inline_reminders) else '#f59e0b'
-        _attn_heading_color = '#dc2626' if any(r.get("urgency")=="urgent" for r in _inline_reminders) else '#d97706'
+        _ac_items_html += (
+            f'<div {_item_id_attr} style="padding:10px 0;border-bottom:1px solid #fef3c7;'
+            f'display:flex;align-items:flex-start;gap:10px">'
+            f'<span style="font-size:15px;flex-shrink:0;margin-top:2px">{_ai_icon}</span>'
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="font-size:13px;font-weight:500;color:#111;line-height:1.35">{he(_ai_disp_lbl)}</div>'
+            + (f'<div style="font-size:11px;color:{_ai_urg_clr};margin-top:1px">{he(_ai_why)}</div>' if _ai_why else '')
+            + _action_btns
+            + f'</div>'
+            f'</div>'
+        )
+
+    if _all_action_items:
+        _ac_any_urgent = any(i.get("urgency") == "urgent" for i in _all_action_items)
+        _ac_border_clr  = "#dc2626" if _ac_any_urgent else "#f59e0b"
+        _ac_heading_clr = "#dc2626" if _ac_any_urgent else "#d97706"
         action_center_html = (
-            '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:16px 18px;margin-bottom:28px">'
-            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
-            f'<h2 style="font-size:14px;font-weight:700;color:{_attn_heading_color};margin:0;text-transform:uppercase;'
-            f'letter-spacing:.05em;border-left:3px solid {_attn_border};padding-left:10px">Needs Attention</h2>'
-            '<span style="font-size:12px;color:#9ca3af" id="action-center-meta"></span>'
+            '<div id="action-center-wrap" style="background:#fffbeb;border:1px solid #fde68a;'
+            'border-radius:10px;padding:14px 16px;margin-bottom:24px">'
+            '<div style="display:flex;align-items:center;margin-bottom:10px">'
+            f'<h2 style="font-size:11px;font-weight:700;color:{_ac_heading_clr};margin:0;'
+            f'text-transform:uppercase;letter-spacing:.06em;border-left:3px solid {_ac_border_clr};'
+            f'padding-left:10px">Needs Action</h2>'
             '</div>'
-            f'<div id="action-center-panel">{_inline_reminder_html}</div>'
+            + _ac_items_html +
             '</div>'
         )
     else:
-        # Nothing needs attention — status already shown in the greeting, no separate row needed
         action_center_html = ""
 
     # ── LAYER 2b: Recently Discovered feed ───────────────────────────────────
@@ -11569,6 +11765,12 @@ def api_data_sync():
     db.commit()
     _log_privacy_event(user["id"], "data_synced", source=source, detail=f"{len(raw_text)} chars")
 
+    # Persist action items from this sync so they survive re-renders
+    try:
+        populate_action_items(user["id"], source, data)
+    except Exception as _pai_err:
+        print(f"[Mighty] populate_action_items error: {_pai_err}", flush=True)
+
     # Auto-trigger field discovery if no field prefs exist yet for this source
     cred_row = db.execute(
         "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
@@ -12249,6 +12451,44 @@ def api_reminders_snooze():
     return jsonify({"ok": True, "snoozed_until": snoozed_until})
 
 
+@app.route("/api/action-items/<int:item_id>/dismiss", methods=["POST"])
+@require_login
+def api_action_item_dismiss(item_id):
+    check_csrf()
+    uid = session["user_id"]
+    import datetime as _dt_dim
+    now = _dt_dim.datetime.utcnow().isoformat()
+    db = get_db()
+    rowcount = db.execute(
+        "UPDATE action_items SET dismissed_at=? WHERE id=? AND user_id=?",
+        (now, item_id, uid)
+    ).rowcount
+    db.commit()
+    if rowcount == 0:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/action-items/<int:item_id>/snooze", methods=["POST"])
+@require_login
+def api_action_item_snooze(item_id):
+    check_csrf()
+    uid = session["user_id"]
+    body = request.get_json(silent=True) or {}
+    days = min(int(body.get("days", 7)), 365)
+    import datetime as _dt_snz
+    snoozed_until = (_dt_snz.datetime.utcnow() + _dt_snz.timedelta(days=days)).isoformat()
+    db = get_db()
+    rowcount = db.execute(
+        "UPDATE action_items SET snoozed_until=? WHERE id=? AND user_id=?",
+        (snoozed_until, item_id, uid)
+    ).rowcount
+    db.commit()
+    if rowcount == 0:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, "snoozed_until": snoozed_until})
+
+
 @app.route("/candidates/<source>")
 @require_login
 def candidates_page(source):
@@ -12636,6 +12876,12 @@ def api_extension_capture():
             (uid, source, name, "", "", enc, synced_at)
         )
     db.commit()
+
+    # Persist action items from this extension capture
+    try:
+        populate_action_items(uid, source, data_payload)
+    except Exception as _pai_cap_err:
+        print(f"[Mighty] populate_action_items (capture) error: {_pai_cap_err}", flush=True)
 
     # Trigger AI field discovery in background
     if raw_text and _claude:
