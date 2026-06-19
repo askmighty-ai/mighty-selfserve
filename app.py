@@ -1937,7 +1937,9 @@ def _apply_inference_rules(found_fields: list[dict]) -> list[str]:
 # mighty/ package lives alongside app.py in the repo root. If the package is missing
 # (e.g. partial deploy), we fall back to inline stubs so the app still starts.
 try:
-    from mighty.classify import classify_benefit, BENEFIT_TYPES          # noqa: E402
+    from mighty.classify import (classify_benefit, BENEFIT_TYPES,         # noqa: E402
+                                  is_actionable, is_balance, is_status,
+                                  is_needs_attention)
     from mighty.scoring import _relevance_score, _confidence_label, _BENEFIT_APPLICABILITY  # noqa: E402
 except ImportError:
     import re as _cb_re
@@ -1965,7 +1967,11 @@ except ImportError:
         return "other"
     BENEFIT_TYPES = ["elite_status","certificate","travel_credit","cash_credit",
                      "points_balance","progress_toward","membership","reservation",
-                     "expiry_date","other"]
+                     "payment_due","renewal","partner_benefit","expiry_date","other"]
+    def is_actionable(btype): return btype in {"certificate","travel_credit","cash_credit"}
+    def is_balance(btype):    return btype == "points_balance"
+    def is_status(btype):     return btype == "elite_status"
+    def is_needs_attention(btype): return btype in {"payment_due","renewal"}
     _BENEFIT_APPLICABILITY: dict = {
         "flight":   ["companion","ecredit","miles","travel_credit","upgrade","certificate"],
         "hotel":    ["free_night","award_night","points","hotel_credit","travel_credit","certificate"],
@@ -6761,19 +6767,14 @@ def dashboard():
         if any(k in label_lc for k in ['night', 'hotel']): return '🏨'
         return '•'
 
-    # Priority: 1) expiring certs/credits, 2) certs/credits no expiry, 3) status, 4) large pts
+    # Priority: 1) expiring certs/credits, 2) certs/credits no expiry
     _hero_candidates = []
-    for _disp, _lbl, _val, *_ in value_items:
-        _lk = _lbl.lower()
+    for _disp, _lbl, _val, _rs_v, _meth_v, _btype in value_items:
         _vk = _val.strip()
         if not _vk or _vk in {'0', '—', '-', 'N/A', 'None', 'TBD'}: continue
         _exp = _parse_exp_days_hero(_lbl, _val)
-        _is_cert    = any(k in _lk for k in ['companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade'])
-        _is_credit  = any(k in _lk for k in ['credit', 'voucher', 'ecredit'])
-        _is_status  = any(k in _lk for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium', 'senator'])
-        # Route by canonical type — no keyword regex needed
-        _btype = classify_benefit(_lbl, _vk)
-        if _btype not in ("certificate","travel_credit","cash_credit"): continue
+        # Use canonical type from tuple — no keyword re-scan
+        if not is_actionable(_btype): continue
         # Skip zero-value items
         import re as _re_prog_hero
         _lead_nums = _re_prog_hero.findall(r'[\d,]+', _vk)
@@ -7040,14 +7041,9 @@ def dashboard():
 
     # Pre-check whether TOP BENEFITS will render — avoids duplicating certs/credits in Use Soon
     _will_have_top_benefits = any(
-        any(k in _lbl_q.lower() for k in [
-            'companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade cert',
-            'credit', 'voucher', 'ecredit',
-            'status', 'medallion', 'elite', 'gold', 'platinum', 'diamond',
-            'globalist', 'sapphire', 'titanium', 'senator',
-        ])
+        _btype_q in ("certificate", "travel_credit", "cash_credit", "elite_status")
         and _val_q.strip() and _val_q.strip() not in {'0', '—', '-', 'N/A', 'None', 'TBD'}
-        for _, _lbl_q, _val_q, *_ in value_items
+        for _, _lbl_q, _val_q, _rs_q, _meth_q, _btype_q in value_items
     )
 
     # ── LAYER 3: Don't forget section (no dollar amounts) ────────────────────
@@ -7064,38 +7060,23 @@ def dashboard():
             if _vc_re.match(r'^\d{7,}$', vs.replace(',', '')): return False  # bare account number
             return True
 
-        # Group by type without showing amounts
+        # Group by canonical _type — no keyword re-scan
         # Skip certs/credits in Use Soon when TOP BENEFITS already shows them above
         credit_items = [] if _will_have_top_benefits else [
-            (disp, label, val_str) for disp, label, val_str, dval, method, *_ in value_items
-            if any(k in label.lower() for k in ['credit', 'voucher', 'ecredit'])
-            and _use_soon_eligible(label, val_str)
+            (disp, label, val_str)
+            for disp, label, val_str, dval, method, btype_vs in value_items
+            if btype_vs in ("travel_credit", "cash_credit") and _use_soon_eligible(label, val_str)
         ]
         cert_items = [] if _will_have_top_benefits else [
-            (disp, label, val_str) for disp, label, val_str, dval, method, *_ in value_items
-            if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])
-            and _use_soon_eligible(label, val_str)
+            (disp, label, val_str)
+            for disp, label, val_str, dval, method, btype_vs in value_items
+            if btype_vs == "certificate" and _use_soon_eligible(label, val_str)
         ]
-        # Membership metadata labels — these are not balances
-        _META_LABELS = ('member since', 'member number', 'account number', 'account opened',
-                        'joined', 'enrollment', 'loyalty number', 'member id', 'account id',
-                        'member date', 'since ', 'since:')
-        def _is_balance_label(lbl, val):
-            lbl_lc = lbl.lower()
-            # Exclude metadata
-            if any(lbl_lc.startswith(m) or m in lbl_lc for m in _META_LABELS):
-                return False
-            # Exclude values that look like years or pure dates
-            import re as _re_bal
-            if _re_bal.match(r'^(19|20)\d{2}$', val.strip()):
-                return False
-            return True
-
-        points_items = [(disp, label, val_str) for disp, label, val_str, dval, method, *_ in value_items
-                        if any(k in label.lower() for k in ['points', 'miles', 'rewards', 'balance', 'skymiles', 'rapid rewards', 'mileageplus', 'bonvoy', 'honors'])
-                        and not any(k in label.lower() for k in ['credit', 'voucher', 'ecredit', 'certificate', 'free night', 'companion'])
-                        and _is_balance_label(label, val_str)
-                        and _use_soon_eligible(label, val_str)]
+        points_items = [
+            (disp, label, val_str)
+            for disp, label, val_str, dval, method, btype_vs in value_items
+            if btype_vs == "points_balance" and _use_soon_eligible(label, val_str)
+        ]
 
         forgotten_lines = []
         for disp, label, val_str in (credit_items + cert_items)[:6]:
@@ -7168,24 +7149,17 @@ def dashboard():
     _progress_cards = []
     _tb_seen = set()
     import re as _tb_re2
-    for _disp, _lbl, _val, *_ in value_items:
-        _lk = _lbl.lower()
+    for _disp, _lbl, _val, _rs_tb, _meth_tb, _btype_tb in value_items:
         _vk = _val.strip()
         if not _vk or _vk in {'0', '—', '-', 'N/A', 'None', 'TBD'}: continue
-        _is_cert    = any(k in _lk for k in ['companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade cert'])
-        _is_credit  = any(k in _lk for k in ['credit', 'voucher', 'ecredit'])
-        _is_status  = any(k in _lk for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium', 'senator'])
-        # Route by canonical type
-        _btype_v = classify_benefit(_lbl, _vk)
-        _is_progress = (_btype_v == "progress_toward")
-        if _is_progress:
+        # Use canonical type from tuple — no keyword re-scan
+        if _btype_tb == "progress_toward":
             _prog_dedup = (_disp, _lbl[:35])
             if _prog_dedup not in _tb_seen:
                 _tb_seen.add(_prog_dedup)
                 _progress_cards.append((_disp, _lbl, _vk, _tb_exp_days(_lbl, _vk)))
             continue
-        _btype_tb = classify_benefit(_lbl, _vk)
-        if _btype_tb != "elite_status": continue  # Status section: elite_status only
+        if not is_status(_btype_tb): continue  # Status section: elite_status only
         # Skip utility/telecom sources — they're not loyalty programs
         _STATUS_SKIP_SOURCES = {
             "xfinity","comcast","spectrum","cox","centurylink","att_internet",
@@ -7205,7 +7179,7 @@ def dashboard():
         _pri = 0
         _pri = 10  # all status items shown equally; sort by account name as tiebreaker
         _top_benefit_cards.append((_pri, _exp if _exp is not None else 9999,
-                                   _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status))
+                                   _disp, _lbl, _val, _exp))
     _top_benefit_cards.sort(key=lambda x: (-x[0], x[1]))
 
     # ── PROGRESS SECTION: only show meaningful progress (≥10% or within 20% of goal) ──
@@ -7256,7 +7230,7 @@ def dashboard():
     # Status section: identity rows — tier name prominent, account below
     import json as _tb_json
     _tb_html = ""
-    for _pri, _, _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status in _top_benefit_cards[:8]:
+    for _pri, _, _disp, _lbl, _val, _exp in _top_benefit_cards[:8]:
         # Tier: use value if it's a real tier name, else fall back to label
         _tier = _val.strip() if _val.strip() and _val.strip().lower() not in {'active','yes','enabled','true','','member'} else _lbl
         _tb_bd_data = _tb_json.dumps({

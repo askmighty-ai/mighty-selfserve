@@ -32,9 +32,21 @@ BENEFIT_TYPES = {
     "progress_toward": "Tracking metric toward a goal (X of Y)",
     "membership":      "Access / lounge / club membership",
     "reservation":     "Upcoming booking or itinerary item",
-    "expiry_date":     "A date or validity field",
+    "payment_due":     "A bill, balance due, or upcoming payment",
+    "renewal":         "Subscription renewal, annual fee, or membership renewal",
+    "partner_benefit": "Benefit derived from a cross-program partnership",
+    "expiry_date":     "A date or validity field (not a redeemable benefit)",
     "other":           "Does not fit a canonical bucket",
 }
+
+# Convenience sets for routing logic
+_ACTIONABLE_TYPES   = {"certificate", "travel_credit", "cash_credit"}
+_BALANCE_TYPES      = {"points_balance"}
+_STATUS_TYPES       = {"elite_status"}
+_PROGRESS_TYPES     = {"progress_toward"}
+_ATTENTION_TYPES    = {"payment_due", "renewal"}
+_MEMBERSHIP_TYPES   = {"membership"}
+_PARTNER_TYPES      = {"partner_benefit"}
 
 _BT_RULES = [
     ("progress_toward",
@@ -56,12 +68,26 @@ _BT_RULES = [
       "e-certificate","ecertificate","reward night","travel reward"],
      [],
      ["progress","qualifying","toward","balance","points","miles","credit","ecredit"]),
+    ("payment_due",
+     ["amount due","balance due","payment due","due date","next payment","autopay",
+      "auto-pay","auto pay","bill amount","monthly bill","minimum payment",
+      "statement balance","past due","current charges"],
+     [], ["credit card reward","cashback","ecredit","points"]),
+    ("renewal",
+     ["renewal","renews","renewal date","next renewal","annual fee",
+      "membership fee","membership renewal","plan renews","plan renewal"],
+     [], ["progress","points","miles","status","certificate"]),
+    ("partner_benefit",
+     ["partner benefit","derived benefit","partnership","via status","unlocked by",
+      "because of your","through your"],
+     [], []),
     ("cash_credit",
      ["statement credit","annual credit","annual travel credit","cashback","cash back",
       "reward credit","hotel credit","dining credit","entertainment credit","streaming credit",
       "wireless credit","global entry credit","tsa precheck credit","annual"],
      [r"\$\d"],
-     ["ecredit","e-credit","flight credit","voucher","certificate","points","miles"]),
+     ["ecredit","e-credit","flight credit","voucher","certificate","points","miles",
+      "renewal","fee","subscription"]),
     ("travel_credit",
      ["ecredit","e-credit","travel credit","flight credit","airline credit",
       "transportation credit","travel voucher","residual credit"],
@@ -84,6 +110,21 @@ _BT_RULES = [
       "wallet","coins","cash rewards"],
      [], ["progress","toward","status","certificate","cert","credit","ecredit"]),
 ]
+
+def is_actionable(btype: str) -> bool:
+    """True for types users can redeem: certificates, credits."""
+    return btype in _ACTIONABLE_TYPES
+
+def is_balance(btype: str) -> bool:
+    return btype in _BALANCE_TYPES
+
+def is_status(btype: str) -> bool:
+    return btype in _STATUS_TYPES
+
+def is_needs_attention(btype: str) -> bool:
+    """True for payment_due and renewal — surface in Action Center."""
+    return btype in _ATTENTION_TYPES
+
 
 def classify_benefit(label: str, value: str, source: str = "") -> str:
     """Return a canonical BENEFIT_TYPES key. First matching rule wins."""
