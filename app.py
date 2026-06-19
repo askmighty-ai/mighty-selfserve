@@ -2,7 +2,7 @@
 Mighty Self-Serve
 =================
 Personal authorization layer for AI agents.
-Self-contained Flask app — SQLite, no external dependencies.
+Self-contained Flask app — SQLite. Requires: flask, cryptography, bcrypt, py_vapid, pywebpush (push notifications optional).
 
 Local:   python3 app.py  →  http://localhost:5004
 Railway: set start command to  python3 app.py
@@ -373,13 +373,16 @@ init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
 
 
-# ── VAPID key management ──────────────────────────────────────────────────────
+# ── VAPID key management (push notifications — optional) ─────────────────────
 
 def get_vapid_keys():
-    """Return (private_key_base64url, public_key_base64url) — generating once and caching in DB."""
-    import base64
-    from py_vapid import Vapid
-    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    """Return (private_key_base64url, public_key_base64url) or (None, None) if py_vapid unavailable."""
+    try:
+        import base64
+        from py_vapid import Vapid
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    except ImportError:
+        return None, None
 
     def _generate(db):
         v = Vapid()
@@ -395,19 +398,26 @@ def get_vapid_keys():
         db.commit()
         return priv, pub
 
-    with sqlite3.connect(DATABASE) as db:
-        db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        row = db.execute("SELECT value FROM settings WHERE key='vapid_private'").fetchone()
-        if row and not row[0].startswith('-----BEGIN'):
-            # Already stored in correct raw base64url format
-            priv = row[0]
-            pub  = db.execute("SELECT value FROM settings WHERE key='vapid_public'").fetchone()[0]
-            return priv, pub
-        # First run, or old PEM format — generate fresh keys
-        return _generate(db)
+    try:
+        with sqlite3.connect(DATABASE) as db:
+            db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            row = db.execute("SELECT value FROM settings WHERE key='vapid_private'").fetchone()
+            if row and not row[0].startswith('-----BEGIN'):
+                # Already stored in correct raw base64url format
+                priv = row[0]
+                pub  = db.execute("SELECT value FROM settings WHERE key='vapid_public'").fetchone()[0]
+                return priv, pub
+            # First run, or old PEM format — generate fresh keys
+            return _generate(db)
+    except Exception as _ve:
+        print(f"[Mighty] VAPID key init failed: {_ve} — push notifications disabled", flush=True)
+        return None, None
 
 VAPID_PRIVATE, VAPID_PUBLIC = get_vapid_keys()
-print(f"[Mighty] VAPID public key: {VAPID_PUBLIC[:20]}...", flush=True)
+if VAPID_PUBLIC:
+    print(f"[Mighty] VAPID public key: {VAPID_PUBLIC[:20]}...", flush=True)
+else:
+    print("[Mighty] Push notifications disabled (py_vapid not available)", flush=True)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -971,6 +981,64 @@ SOURCE_CAPABILITIES: dict[str, dict] = {
         "key_pages": ["/m/menu"],
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Source → expected URL hostname fragments for domain enforcement
+# ---------------------------------------------------------------------------
+SOURCE_DOMAINS: dict[str, list[str]] = {
+    "amex":          ["americanexpress.com"],
+    "chase":         ["chase.com"],
+    "sfcu":          ["sfcu.org"],
+    "wells_fargo":   ["wellsfargo.com"],
+    "bofa":          ["bankofamerica.com"],
+    "capital_one":   ["capitalone.com"],
+    "discover":      ["discover.com"],
+    "citi":          ["citi.com", "citibank.com"],
+    "paypal":        ["paypal.com"],
+    "fidelity":      ["fidelity.com"],
+    "schwab":        ["schwab.com"],
+    "delta":         ["delta.com"],
+    "united":        ["united.com"],
+    "southwest":     ["southwest.com"],
+    "american_air":  ["aa.com", "americanairlines.com"],
+    "alaska_air":    ["alaskaair.com"],
+    "hertz":         ["hertz.com"],
+    "avis":          ["avis.com"],
+    "marriott":      ["marriott.com", "bonvoy.marriott.com"],
+    "hilton":        ["hilton.com"],
+    "hyatt":         ["hyatt.com"],
+    "ihg":           ["ihg.com"],
+    "wyndham":       ["wyndham.com"],
+    "airbnb":        ["airbnb.com"],
+    "amazon":        ["amazon.com"],
+    "target":        ["target.com"],
+    "costco":        ["costco.com"],
+    "kroger":        ["kroger.com"],
+    "walgreens":     ["walgreens.com"],
+    "cvs":           ["cvs.com"],
+    "starbucks":     ["starbucks.com"],
+}
+
+
+def _url_allowed_for_source(source: str, url: str) -> bool:
+    """Return True if the URL's hostname looks like it belongs to the given source."""
+    if not url:
+        return True  # no URL = locally generated, allow
+    try:
+        from urllib.parse import urlparse as _urlparse
+        hostname = _urlparse(url).hostname or ""
+    except Exception:
+        return False
+    # Block obviously bad URLs
+    if not hostname or hostname in ("localhost", "127.0.0.1", "0.0.0.0"):
+        return False
+    if hostname.startswith("192.168.") or hostname.startswith("10.") or hostname.startswith("172."):
+        return False
+    allowed = SOURCE_DOMAINS.get(source)
+    if not allowed:
+        return True  # unknown source — can't validate, allow through
+    return any(hostname == d or hostname.endswith("." + d) for d in allowed)
 
 
 # ---------------------------------------------------------------------------
@@ -2698,6 +2766,9 @@ def send_password_reset_email(to_email, reset_url):
 
 def send_web_push(user_id, title, body, url, action_id=None):
     """Send a Web Push notification to all subscriptions for a user."""
+    if not VAPID_PRIVATE or not VAPID_PUBLIC:
+        print("[Mighty] Push skipped — VAPID keys not available", flush=True)
+        return
     rows = get_db().execute(
         "SELECT id, subscription FROM push_subscriptions WHERE user_id=?", (user_id,)
     ).fetchall()
@@ -4600,6 +4671,7 @@ body{display:flex;flex-direction:row}
         <div class="toggle-hint">Receive an email when your agent requests approval.</div>
         <div id="email-notif-warn" style="display:{postmark_warn};margin-top:6px;font-size:12px;color:#fbbf24;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:6px;padding:6px 10px;line-height:1.5">Email alerts require the POSTMARK_API_KEY environment variable to be set on your server.</div>
       </div>
+    </div>
     <div style="display:flex;align-items:center;justify-content:flex-end;margin-top:4px">
       <span id="save-ind" style="font-size:11px;color:#34d399;display:none">Saved ✓</span>
     </div>
@@ -8123,6 +8195,8 @@ def push_unsubscribe():
 
 @app.route("/api/push/vapid-public-key")
 def vapid_public_key():
+    if not VAPID_PUBLIC:
+        return jsonify({"key": None, "disabled": True}), 503
     return jsonify({"key": VAPID_PUBLIC})
 
 
@@ -10455,6 +10529,12 @@ def api_extension_intercept():
     if not existing:
         return jsonify({"ok": False, "error": "Account not connected"}), 404
 
+    # Domain enforcement — truncate data from unexpected hostnames
+    if not _url_allowed_for_source(source, url):
+        json_data = json_data[:500]
+        _log_privacy_event(uid, "domain_rejected", source=source, domain=url[:80])
+        print(f"[Intercept] Domain mismatch for {source}: {url[:80]} — truncated", flush=True)
+
     ad      = decrypt_account_data(uid, existing["data_enc"] or "")
     old_raw = ad.get("raw_text", "")
 
@@ -10515,6 +10595,12 @@ def api_extension_supplement():
     ).fetchone()
     if not existing:
         return jsonify({"ok": False, "error": "Account not found"}), 404
+
+    # Domain enforcement — truncate data from unexpected hostnames
+    if not _url_allowed_for_source(source, url):
+        new_text = new_text[:500]
+        _log_privacy_event(uid, "domain_rejected", source=source, domain=url[:80])
+        print(f"[Supplement] Domain mismatch for {source}: {url[:80]} — truncated", flush=True)
 
     ad = decrypt_account_data(uid, existing["data_enc"] or "")
     old_raw = ad.get("raw_text", "")
@@ -11638,13 +11724,14 @@ def sync_now_cloud():
     _api_key = user["api_key"]
 
     def _do():
-        try:
-            _cloud_sync_user(uid, _api_key, url, force=True)
-            _auto_discover_missing(uid)  # discover fields for any account that needs it
-        except Exception as e:
-            print(f"[SyncNow] {e}", flush=True)
-        finally:
-            _sync_status[uid] = {"running": False, "last": iso()}
+        with app.app_context():
+            try:
+                _cloud_sync_user(uid, _api_key, url, force=True)
+                _auto_discover_missing(uid)  # discover fields for any account that needs it
+            except Exception as e:
+                print(f"[SyncNow] {e}", flush=True)
+            finally:
+                _sync_status[uid] = {"running": False, "last": iso()}
     threading.Thread(target=_do, daemon=True).start()
     return jsonify({"ok": True, "message": "Sync started"})
 
@@ -11661,43 +11748,44 @@ def sync_account_cloud(source):
     _api_key = user["api_key"]  # snapshot before thread to avoid stale sqlite3.Row
 
     def _do():
-        try:
-            import scrape as _scrape
-            result = _scrape.run_sync(
-                api_key=_api_key,
-                mighty_url=url,
-                log=lambda m: print(f"[SyncAccount:{source}] {m}", flush=True),
-                only_source=source,
-            )
-            # Auto-discover fields after sync — no manual step needed
-            if result.get("synced", 0) > 0 and _claude:
-                try:
-                    _sync_status[uid] = {"running": True, "step": "discovering fields"}
-                    ad = get_db().execute(
-                        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
-                        (uid, source)
-                    ).fetchone()
-                    if ad:
-                        ad_data = decrypt_account_data(uid, ad["data_enc"] or "")
-                        raw_text = ad_data.get("raw_text", "")
-                        site_name = next(
-                            (n for k, n, *_ in SUPPORTED_SITES if k == source), source
-                        )
-                        if raw_text:
-                            # Single discovery call (LLM is deterministic at temp=0; 3x was redundant)
-                            fields = list(claude_discover_fields(raw_text, site_name, source=source))
-                            if fields:
-                                _save_discovered_fields(uid, source, fields)
-                except Exception as de:
-                    print(f"[AutoDiscover:{source}] {de}", flush=True)
-            _sync_status[uid] = {
-                "running": False, "last": iso(),
-                "synced": result.get("synced", 0),
-                "errors": result.get("errors", 0),
-            }
-        except Exception as e:
-            _sync_status[uid] = {"running": False, "last": iso(), "error": str(e)[:120]}
-            print(f"[SyncAccount] {e}", flush=True)
+        with app.app_context():
+            try:
+                import scrape as _scrape
+                result = _scrape.run_sync(
+                    api_key=_api_key,
+                    mighty_url=url,
+                    log=lambda m: print(f"[SyncAccount:{source}] {m}", flush=True),
+                    only_source=source,
+                )
+                # Auto-discover fields after sync — no manual step needed
+                if result.get("synced", 0) > 0 and _claude:
+                    try:
+                        _sync_status[uid] = {"running": True, "step": "discovering fields"}
+                        ad = get_db().execute(
+                            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                            (uid, source)
+                        ).fetchone()
+                        if ad:
+                            ad_data = decrypt_account_data(uid, ad["data_enc"] or "")
+                            raw_text = ad_data.get("raw_text", "")
+                            site_name = next(
+                                (n for k, n, *_ in SUPPORTED_SITES if k == source), source
+                            )
+                            if raw_text:
+                                # Single discovery call (LLM is deterministic at temp=0; 3x was redundant)
+                                fields = list(claude_discover_fields(raw_text, site_name, source=source))
+                                if fields:
+                                    _save_discovered_fields(uid, source, fields)
+                    except Exception as de:
+                        print(f"[AutoDiscover:{source}] {de}", flush=True)
+                _sync_status[uid] = {
+                    "running": False, "last": iso(),
+                    "synced": result.get("synced", 0),
+                    "errors": result.get("errors", 0),
+                }
+            except Exception as e:
+                _sync_status[uid] = {"running": False, "last": iso(), "error": str(e)[:120]}
+                print(f"[SyncAccount] {e}", flush=True)
     threading.Thread(target=_do, daemon=True).start()
     return jsonify({"ok": True})
 
