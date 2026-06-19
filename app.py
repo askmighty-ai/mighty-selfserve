@@ -9732,7 +9732,7 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
       <input type="text" name="totp" placeholder="TOTP secret key" style="margin-top:6px" id="t-{he(key)}">
       <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
     </details>
-    <button class="btn-save" onclick="saveCred('{he(key)}')">Save & Sync</button>
+    <button class="btn-save" onclick="saveCred('{he(key)}', '{he(name)}')">Save & Sync</button>
   </div>
   {_field_config_html(key, configured, extra_by_source.get(key, {}))}
 </div>"""
@@ -10183,20 +10183,139 @@ function toast(msg, ok) {{
   setTimeout(function() {{ t.classList.remove('show'); }}, 2500);
 }}
 
-function saveCred(key) {{
+/* ── First-sync progress overlay ─────────────────────────────────── */
+function _showSyncOverlay(siteName) {{
+  if (document.getElementById('sync-overlay')) return;
+  var ol = document.createElement('div');
+  ol.id = 'sync-overlay';
+  ol.innerHTML = `
+    <div id="sync-overlay-box">
+      <div id="sync-ol-title">Connecting to <strong id="sync-ol-site"></strong></div>
+      <div id="sync-ol-steps">
+        <div class="sync-step sync-step-active" id="sync-step-connecting">
+          <span class="sync-step-icon">⟳</span>
+          <span class="sync-step-label">Logging in&hellip;</span>
+        </div>
+        <div class="sync-step sync-step-pending" id="sync-step-scraping">
+          <span class="sync-step-icon">·</span>
+          <span class="sync-step-label">Scanning your account&hellip;</span>
+        </div>
+        <div class="sync-step sync-step-pending" id="sync-step-discovering">
+          <span class="sync-step-icon">·</span>
+          <span class="sync-step-label">Finding your benefits&hellip;</span>
+        </div>
+      </div>
+      <div id="sync-ol-result" style="display:none"></div>
+      <a id="sync-ol-btn" href="/" style="display:none" class="btn-primary">View Dashboard →</a>
+    </div>`;
+  ol.querySelector('#sync-ol-site').textContent = siteName;
+  document.body.appendChild(ol);
+  /* inject styles once */
+  if (!document.getElementById('sync-overlay-css')) {{
+    var s = document.createElement('style');
+    s.id = 'sync-overlay-css';
+    s.textContent = `
+      #sync-overlay {{
+        position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;
+        display:flex;align-items:center;justify-content:center;
+      }}
+      #sync-overlay-box {{
+        background:#fff;border-radius:14px;padding:36px 40px;width:340px;
+        box-shadow:0 8px 40px rgba(0,0,0,.18);font-family:inherit;
+      }}
+      #sync-ol-title {{
+        font-size:16px;font-weight:600;color:#1a1a1a;margin-bottom:24px;
+        text-align:center;
+      }}
+      .sync-step {{
+        display:flex;align-items:center;gap:10px;padding:8px 0;
+        border-bottom:1px solid #f0f0f0;font-size:14px;color:#333;
+      }}
+      .sync-step:last-of-type {{ border-bottom:none; }}
+      .sync-step-pending {{ opacity:.35; }}
+      .sync-step-done .sync-step-icon {{ color:#22a05a;font-style:normal; }}
+      .sync-step-active .sync-step-icon {{ display:inline-block;animation:spin .8s linear infinite; }}
+      .sync-step-error .sync-step-icon {{ color:#d04040; }}
+      @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+      #sync-ol-result {{
+        margin-top:20px;text-align:center;font-size:15px;font-weight:600;color:#1a1a1a;
+      }}
+      #sync-ol-btn {{
+        display:block;margin-top:16px;text-align:center;padding:10px 0;
+        background:#6c47ff;color:#fff;border-radius:8px;font-weight:600;
+        font-size:14px;text-decoration:none;
+      }}
+      #sync-ol-btn:hover {{ background:#5535e0; }}
+    `;
+    document.head.appendChild(s);
+  }}
+}}
+
+function _updateSyncOverlay(step, fieldsFound, error) {{
+  var stepOrder = ['connecting','scraping','discovering'];
+  var labels = {{
+    'connecting': 'Logging in…',
+    'scraping':   'Scanning your account…',
+    'discovering':'Finding your benefits…',
+  }};
+  stepOrder.forEach(function(s) {{
+    var el = document.getElementById('sync-step-' + s);
+    if (!el) return;
+    var icon = el.querySelector('.sync-step-icon');
+    var label = el.querySelector('.sync-step-label');
+    el.className = 'sync-step';
+    var stepIdx = stepOrder.indexOf(s);
+    var curIdx  = stepOrder.indexOf(step);
+    if (step === 'done' || stepIdx < curIdx) {{
+      el.classList.add('sync-step-done');
+      icon.textContent = '✓';
+    }} else if (s === step) {{
+      el.classList.add('sync-step-active');
+      icon.textContent = '⟳';
+      label.textContent = labels[s] || s;
+    }} else {{
+      el.classList.add('sync-step-pending');
+      icon.textContent = '·';
+    }}
+  }});
+  if (step === 'done') {{
+    var resultEl = document.getElementById('sync-ol-result');
+    var btn = document.getElementById('sync-ol-btn');
+    var msg = fieldsFound > 0
+      ? '🎉 Found ' + fieldsFound + ' benefit' + (fieldsFound !== 1 ? 's' : '')
+      : 'Sync complete';
+    resultEl.textContent = msg;
+    resultEl.style.display = 'block';
+    btn.style.display = 'block';
+  }} else if (step === 'error') {{
+    var resultEl = document.getElementById('sync-ol-result');
+    resultEl.textContent = error || 'Sync failed — try again';
+    resultEl.style.color = '#d04040';
+    resultEl.style.display = 'block';
+    var btn = document.getElementById('sync-ol-btn');
+    btn.textContent = 'Back';
+    btn.href = '#';
+    btn.style.display = 'block';
+    btn.onclick = function() {{ document.getElementById('sync-overlay').remove(); return false; }};
+  }}
+}}
+
+function saveCred(key, siteName) {{
+  siteName = siteName || key;
   var u = document.getElementById('u-' + key).value.trim();
   var p = document.getElementById('p-' + key).value;
   var t = document.getElementById('t-' + key) ? document.getElementById('t-' + key).value.trim() : '';
   if (!u || !p) {{ toast('Username and password required', false); return; }}
   var saveBtn = document.querySelector('#form-' + key + ' .btn-save');
-  if (saveBtn) {{ saveBtn.textContent = 'Saving & syncing...'; saveBtn.disabled = true; }}
+  if (saveBtn) {{ saveBtn.textContent = 'Saving...'; saveBtn.disabled = true; }}
   fetch('/credentials/save', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
     body: new URLSearchParams({{_csrf: CSRF, source: key, username: u, password: p, totp_secret: t}})
   }}).then(r => r.json()).then(d => {{
     if (d.ok) {{
-      toast('Saved — syncing ' + key + '...');
+      /* Show the progress overlay */
+      _showSyncOverlay(siteName);
       fetch('/sync/account/' + key, {{
         method: 'POST',
         headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
@@ -10204,9 +10323,11 @@ function saveCred(key) {{
       }}).then(function() {{
         var poll = setInterval(function() {{
           fetch('/sync/status').then(r => r.json()).then(function(s) {{
-            if (!s.running) {{ clearInterval(poll); location.reload(); }}
+            var step = s.step || (s.running ? 'connecting' : 'done');
+            _updateSyncOverlay(step, s.fields_found || 0, s.error);
+            if (!s.running) {{ clearInterval(poll); }}
           }});
-        }}, 3000);
+        }}, 2000);
       }});
     }} else {{
       toast(d.error || 'Error', false);
@@ -12441,13 +12562,14 @@ def sync_account_cloud(source):
     uid  = session["user_id"]
     user = get_db().execute("SELECT api_key FROM users WHERE id=?", (uid,)).fetchone()
     url  = os.environ.get("BASE_URL", "https://mighty-selfserve-production.up.railway.app")
-    _sync_status[uid] = {"running": True}
+    _sync_status[uid] = {"running": True, "step": "connecting", "source": source}
     _api_key = user["api_key"]  # snapshot before thread to avoid stale sqlite3.Row
 
     def _do():
         with app.app_context():
             try:
                 import scrape as _scrape
+                _sync_status[uid] = {"running": True, "step": "scraping", "source": source}
                 result = _scrape.run_sync(
                     api_key=_api_key,
                     mighty_url=url,
@@ -12455,9 +12577,10 @@ def sync_account_cloud(source):
                     only_source=source,
                 )
                 # Auto-discover fields after sync — no manual step needed
+                fields_found = 0
                 if result.get("synced", 0) > 0 and _claude:
                     try:
-                        _sync_status[uid] = {"running": True, "step": "discovering fields"}
+                        _sync_status[uid] = {"running": True, "step": "discovering", "source": source}
                         ad = get_db().execute(
                             "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
                             (uid, source)
@@ -12473,15 +12596,20 @@ def sync_account_cloud(source):
                                 fields = list(claude_discover_fields(raw_text, site_name, source=source))
                                 if fields:
                                     _save_discovered_fields(uid, source, fields)
+                                    fields_found = len(fields)
                     except Exception as de:
                         print(f"[AutoDiscover:{source}] {de}", flush=True)
                 _sync_status[uid] = {
                     "running": False, "last": iso(),
+                    "step": "done",
+                    "source": source,
                     "synced": result.get("synced", 0),
                     "errors": result.get("errors", 0),
+                    "fields_found": fields_found,
                 }
             except Exception as e:
-                _sync_status[uid] = {"running": False, "last": iso(), "error": str(e)[:120]}
+                _sync_status[uid] = {"running": False, "last": iso(), "step": "error",
+                                     "source": source, "error": str(e)[:120]}
                 print(f"[SyncAccount] {e}", flush=True)
     threading.Thread(target=_do, daemon=True).start()
     return jsonify({"ok": True})
