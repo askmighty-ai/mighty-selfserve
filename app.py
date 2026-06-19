@@ -500,25 +500,72 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
     icon_acct = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>'
     icon_sett = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>'
     av = (email[0] if email else "?").upper()
+    _nav_links = (
+        _nav('/dashboard', 'Dashboard', icon_dash, 'dashboard')
+        + _nav('/credentials', 'Accounts', icon_acct, 'accounts')
+        + _nav('/settings', 'Settings', icon_sett, 'settings')
+    )
+    _logout_form = (
+        f'<form method="POST" action="/logout" style="margin:0;display:flex;justify-content:center">'
+        f'<input type="hidden" name="_csrf" value="{he(csrf)}">'
+        f'<button class="sidebar-avatar" type="submit" title="Sign out" onclick="return confirm(\'Sign out of Mighty?\')">{av}<span class="sidebar-tip">Sign out</span></button>'
+        f'</form>'
+    )
     return (
-        '<aside class="sidebar">'
+        # Desktop sidebar
+        '<aside class="sidebar" id="desktop-sidebar">'
         '<div class="sidebar-header">'
         '<a href="/dashboard" class="sidebar-logo">'
         '<img src="/logo-icon.png" alt="Mighty" class="sidebar-logo-img">'
         '<span class="sidebar-tip">Mighty</span>'
         '</a></div>'
-        '<nav class="sidebar-nav">'
-        + _nav('/dashboard', 'Dashboard', icon_dash, 'dashboard')
-        + _nav('/credentials', 'Accounts', icon_acct, 'accounts')
-        + _nav('/settings', 'Settings', icon_sett, 'settings')
-        + '</nav>'
-        '<div class="sidebar-footer">'
-        f'<form method="POST" action="/logout" style="margin:0;display:flex;justify-content:center">'
-        f'<input type="hidden" name="_csrf" value="{he(csrf)}">'
-        f'<button class="sidebar-avatar" type="submit" title="Sign out" onclick="return confirm(\'Sign out of Mighty?\')">{av}<span class="sidebar-tip">Sign out</span></button>'
-        '</form>'
+        '<nav class="sidebar-nav">' + _nav_links + '</nav>'
+        '<div class="sidebar-footer">' + _logout_form + '</div>'
+        '</aside>'
+
+        # Mobile drawer overlay — hidden by default
+        '<div id="mobile-drawer-overlay" onclick="closeMobileDrawer()" '
+        'style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:199"></div>'
+        '<aside id="mobile-drawer" '
+        'style="display:none;position:fixed;top:0;left:0;width:220px;height:100vh;'
+        'background:#0a0c12;z-index:200;flex-direction:column;padding:16px 12px;box-sizing:border-box">'
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">'
+        '<a href="/dashboard" style="display:flex;align-items:center;gap:8px;text-decoration:none">'
+        '<img src="/logo-icon.png" alt="Mighty" style="width:28px;height:28px">'
+        '<span style="font-size:15px;font-weight:700;color:#fff">Mighty</span>'
+        '</a>'
+        '<button onclick="closeMobileDrawer()" style="background:none;border:none;color:#9ca3af;'
+        'cursor:pointer;font-size:20px;line-height:1;padding:4px">✕</button>'
+        '</div>'
+        '<nav style="display:flex;flex-direction:column;gap:4px">'
+        '<a href="/dashboard" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
+        'border-radius:8px;text-decoration:none;color:#d1d5db;font-size:14px;font-weight:500">'
+        + icon_dash + ' Dashboard</a>'
+        '<a href="/credentials" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
+        'border-radius:8px;text-decoration:none;color:#d1d5db;font-size:14px;font-weight:500">'
+        + icon_acct + ' Accounts</a>'
+        '<a href="/settings" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
+        'border-radius:8px;text-decoration:none;color:#d1d5db;font-size:14px;font-weight:500">'
+        + icon_sett + ' Settings</a>'
+        '</nav>'
+        '<div style="margin-top:auto;padding-top:16px;border-top:1px solid rgba(255,255,255,0.08)">'
+        + _logout_form.replace('justify-content:center', 'justify-content:flex-start') +
         '</div>'
         '</aside>'
+
+        # Hamburger JS
+        '<script>'
+        'function openMobileDrawer(){'
+        '  document.getElementById("mobile-drawer").style.display="flex";'
+        '  document.getElementById("mobile-drawer-overlay").style.display="block";'
+        '  document.body.style.overflow="hidden";'
+        '}'
+        'function closeMobileDrawer(){'
+        '  document.getElementById("mobile-drawer").style.display="none";'
+        '  document.getElementById("mobile-drawer-overlay").style.display="none";'
+        '  document.body.style.overflow="";'
+        '}'
+        '</script>'
     )
 
 # ── Per-user data encryption ───────────────────────────────────────────────────
@@ -3543,7 +3590,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible}}
+@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}}
 </style>
 </head>
 <body>
@@ -3557,6 +3604,9 @@ body{display:flex;flex-direction:row;background:#eee9e2}
   {welcome_state}
 
   <div class="topbar">
+    <button class="nav-hamburger" onclick="openMobileDrawer()" aria-label="Open menu" style="display:none">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
     <div class="topbar-search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       <input type="text" placeholder="Search accounts…" oninput="filterCards(this.value)" id="card-search">
@@ -3588,7 +3638,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         {agent_cta_button}
-        <a href="/credentials" class="btn-connect">+ Connect account</a>
+        <button class="btn-connect" onclick="openDashConnectModal()">+ Connect account</button>
       </div>
     </div>
 
@@ -4026,6 +4076,7 @@ function _finishSync() {
   document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
   if (btn) { btn.classList.remove('syncing'); btn.disabled = false; }
   _setSyncLabel('Sync All');
+  sessionStorage.setItem('mighty-post-sync', '1');
   reloadWithScroll();
 }
 
@@ -4312,6 +4363,7 @@ function toggleSnippet(el) {
 }
 </script>
 {onboarding_modal}
+{dash_modals}
 </body>
 </html>"""
 
@@ -4488,7 +4540,7 @@ body{display:flex;flex-direction:row}
 .settings-input:focus{border-color:#6366f1}
 .settings-input::placeholder{color:#c0bbb5}
 .settings-label{display:block;font-size:11px;font-weight:600;color:#9ca3af;margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible}}
+@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}}
 </style>
 </head>
 <body>
@@ -6377,7 +6429,7 @@ def dashboard():
             card_footer = (
                 f'<div class="acct-footer">'
                 f'{expand_btn}'
-                f'<a href="/credentials#card-{he(src)}" class="acct-edit-btn">Edit fields</a>'
+                f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')">Edit fields</button>'
                 f'</div>'
             )
 
@@ -6880,41 +6932,46 @@ def dashboard():
 </div>
 <script>
 (function(){
-  // Determine context from latest intent
-  fetch('/api/intent/recent').then(function(r){return r.json();}).then(function(intents){
-    var ctx = (intents && intents.length) ? intents[0].intent_type : null;
-    var url = '/api/opportunities' + (ctx ? '?context=' + ctx : '');
-    return fetch(url).then(function(r){return r.json();});
-  }).then(function(data){
-    if(!data || !data.opportunities || !data.opportunities.length) return;
-    var section = document.getElementById('opportunities-section');
-    var panel   = document.getElementById('opportunities-panel');
-    var html = '';
-    data.opportunities.forEach(function(opp){
-      var urgStyle = opp.urgency==='urgent' ? 'border-left:3px solid #dc2626' :
-                     opp.urgency==='soon'   ? 'border-left:3px solid #f59e0b' :
-                                              'border-left:3px solid #e5e7eb';
-      var rows = opp.components.slice(0,4).map(function(c){
-        var txBadge = c.is_transfer ? '<span style="font-size:9px;color:#6366f1;margin-left:4px;'
-          +'font-weight:600;letter-spacing:.04em">TRANSFER</span>' : '';
-        var expBadge = c.exp_label ? '<span style="font-size:10px;color:#dc2626;margin-left:6px">'
-          +escO(c.exp_label)+'</span>' : '';
-        return '<div style="display:flex;align-items:baseline;justify-content:space-between;'
-          +'padding:3px 0;font-size:12px">'
-          +'<span style="color:#374151">'+escO(c.label)+txBadge+'</span>'
-          +'<span style="color:#6b7280">'+escO(c.value)+expBadge+'</span></div>';
-      }).join('');
-      var whyHtml = '<div style="margin-top:6px;font-size:11px;color:#9ca3af;font-style:italic">'
-        +escO(opp.why)+'</div>';
-      html += '<div style="padding:12px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;'
-        +'margin-bottom:10px;'+urgStyle+'">'
-        +'<div style="font-size:13px;font-weight:600;color:#111;margin-bottom:6px">'+escO(opp.title)+'</div>'
-        +rows+whyHtml
-        +'</div>';
-    });
-    if(html){panel.innerHTML=html; section.style.display='block';}
-  }).catch(function(){});
   function escO(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  function loadOpportunities(){
+    fetch('/api/intent/recent').then(function(r){return r.json();}).then(function(intents){
+      var ctx = (intents && intents.length) ? intents[0].intent_type : null;
+      var url = '/api/opportunities' + (ctx ? '?context=' + ctx : '');
+      return fetch(url).then(function(r){return r.json();});
+    }).then(function(data){
+      if(!data || !data.opportunities || !data.opportunities.length) return;
+      var section = document.getElementById('opportunities-section');
+      var panel   = document.getElementById('opportunities-panel');
+      var html = '';
+      data.opportunities.forEach(function(opp){
+        var urgStyle = opp.urgency==='urgent' ? 'border-left:3px solid #dc2626' :
+                       opp.urgency==='soon'   ? 'border-left:3px solid #f59e0b' :
+                                                'border-left:3px solid #e5e7eb';
+        var rows = opp.components.slice(0,4).map(function(c){
+          var txBadge = c.is_transfer ? '<span style="font-size:9px;color:#6366f1;margin-left:4px;'
+            +'font-weight:600;letter-spacing:.04em">TRANSFER</span>' : '';
+          var expBadge = c.exp_label ? '<span style="font-size:10px;color:#dc2626;margin-left:6px">'
+            +escO(c.exp_label)+'</span>' : '';
+          return '<div style="display:flex;align-items:baseline;justify-content:space-between;'
+            +'padding:3px 0;font-size:12px">'
+            +'<span style="color:#374151">'+escO(c.label)+txBadge+'</span>'
+            +'<span style="color:#6b7280">'+escO(c.value)+expBadge+'</span></div>';
+        }).join('');
+        var whyHtml = '<div style="margin-top:6px;font-size:11px;color:#9ca3af;font-style:italic">'
+          +escO(opp.why)+'</div>';
+        html += '<div style="padding:12px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;'
+          +'margin-bottom:10px;'+urgStyle+'">'
+          +'<div style="font-size:13px;font-weight:600;color:#111;margin-bottom:6px">'+escO(opp.title)+'</div>'
+          +rows+whyHtml
+          +'</div>';
+      });
+      if(html){panel.innerHTML=html; section.style.display='block';}
+    }).catch(function(){});
+  }
+  // After a Sync All, wait 2s for the server to finish committing data before querying
+  var postSync = sessionStorage.getItem('mighty-post-sync');
+  if(postSync){ sessionStorage.removeItem('mighty-post-sync'); setTimeout(loadOpportunities, 2000); }
+  else { loadOpportunities(); }
 })();
 </script>
 """
@@ -7073,6 +7130,7 @@ function dismissOnboarding() {
             .replace("{value_center_html}",       value_center_html)
             .replace("{opportunities_html}",      opportunities_html)
             .replace("{onboarding_modal}",        onboarding_modal)
+            .replace("{dash_modals}",             _build_dash_modals(configured, _csrf))
             .replace("{csrf_token}",              _csrf))
 
 @app.route("/settings")
@@ -8498,6 +8556,287 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
         )
 
 
+def _build_dash_modals(configured: set, csrf: str) -> str:
+    """Inject the Connect-account modal + field-edit modal into the dashboard page."""
+    # ── Build site picker HTML (same logic as credentials page) ──────────────
+    modal_categories: dict = {}
+    for key, name, icon, color, cat in SUPPORTED_SITES:
+        modal_categories.setdefault(cat, []).append((key, name, icon, color))
+
+    modal_sections = ""
+    for cat, sites in modal_categories.items():
+        site_rows = ""
+        for key, name, icon, color in sites:
+            already = key in configured
+            if already:
+                action = (
+                    '<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;'
+                    'background:rgba(52,211,153,0.1);color:#34d399;border:1px solid rgba(52,211,153,0.25)">Connected</span>'
+                )
+            else:
+                action = (
+                    f'<button class="dash-modal-connect-btn" '
+                    f'onclick="dashOpenCredForm(\'{he(key)}\',\'{he(name)}\',\'{icon}\',\'{he(color)}\')">'
+                    f'Connect</button>'
+                )
+            site_rows += (
+                f'<div class="dash-modal-site-row" data-name="{he(name.lower())}">'
+                f'<div style="width:30px;height:30px;border-radius:7px;background:{he(color)};'
+                f'display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">{icon}</div>'
+                f'<div style="flex:1;font-size:13px;font-weight:500;color:#1c1917">{he(name)}</div>'
+                f'{action}</div>'
+            )
+        modal_sections += (
+            f'<div class="dash-modal-cat-group">'
+            f'<div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;'
+            f'color:#9ca3af;margin:16px 0 6px">{he(cat)}</div>'
+            f'{site_rows}</div>'
+        )
+
+    csrf_esc = csrf.replace("'", "\\'")
+    return f"""
+<style>
+/* Dashboard modals */
+.dash-modal-overlay{{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:150;display:none;align-items:flex-start;justify-content:center;padding-top:64px;backdrop-filter:blur(2px)}}
+.dash-modal-overlay.open{{display:flex}}
+.dash-modal{{background:#ffffff;border:1px solid #e8e4de;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.15)}}
+.dash-modal-head{{padding:20px 20px 12px;border-bottom:1px solid #f5f2ed;flex-shrink:0}}
+.dash-modal-title{{font-size:16px;font-weight:700;color:#1c1917;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}}
+.dash-modal-search{{width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #e8e4de;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#f5f2ed;transition:border-color .12s}}
+.dash-modal-search:focus{{border-color:#6366f1}}
+.dash-modal-body{{overflow-y:auto;padding:0 20px 20px;flex:1;min-height:0}}
+.dash-modal-site-row{{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f5f2ed}}
+.dash-modal-site-row:last-child{{border-bottom:none}}
+.dash-modal-connect-btn{{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;flex-shrink:0;transition:all 0.12s}}
+.dash-modal-connect-btn:hover{{border-color:#6366f1;background:#eef2ff}}
+.dash-field-modal-overlay{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:160;align-items:center;justify-content:center}}
+.dash-field-modal-box{{background:#fff;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.18);margin:0 16px}}
+@keyframes spin{{to{{transform:rotate(360deg)}}}}
+</style>
+
+<!-- Connect account modal -->
+<div class="dash-modal-overlay" id="dash-modal-overlay" onclick="dashOverlayClick(event)">
+  <div class="dash-modal">
+    <div id="dash-screen-picker" style="display:flex;flex-direction:column;flex:1;min-height:0">
+      <div class="dash-modal-head">
+        <div class="dash-modal-title">
+          <span>Connect an account</span>
+          <button onclick="closeDashConnectModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px">✕</button>
+        </div>
+        <input class="dash-modal-search" id="dash-modal-search" placeholder="Search sites…"
+               autocomplete="off" oninput="dashFilterModal(this.value)">
+      </div>
+      <div class="dash-modal-body">
+        {modal_sections}
+        <div id="dash-modal-no-results" style="display:none;text-align:center;padding:32px;color:#9ca3af;font-size:14px">No matching sites.</div>
+      </div>
+    </div>
+    <div id="dash-screen-cred" style="display:none;flex-direction:column;flex:1;min-height:0">
+      <div style="padding:16px 20px 12px;border-bottom:1px solid #f5f2ed;display:flex;align-items:center;gap:10px;flex-shrink:0">
+        <button onclick="dashBackToPicker()" style="background:none;border:none;color:#6366f1;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">← Back</button>
+        <div id="dash-cred-icon" style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px"></div>
+        <div style="font-size:15px;font-weight:700" id="dash-cred-name"></div>
+        <button onclick="closeDashConnectModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;margin-left:auto;line-height:1;padding:2px 6px">✕</button>
+      </div>
+      <div style="padding:24px 20px;text-align:center">
+        <div style="font-size:32px;margin-bottom:12px" id="dash-ext-icon-lg"></div>
+        <div style="font-size:14px;font-weight:600;color:#1c1917;margin-bottom:8px">Connect via Chrome</div>
+        <div style="font-size:13px;color:#6b7280;line-height:1.6;margin-bottom:20px">
+          Make sure you're <strong>logged into <span id="dash-ext-site-name"></span></strong> in Chrome,
+          then click the button below.
+        </div>
+        <a id="dash-open-chrome-btn" href="#" target="_blank"
+           style="display:inline-block;padding:11px 22px;background:#059669;color:#fff;font-size:14px;font-weight:600;border-radius:9px;text-decoration:none"
+           onmouseenter="this.style.background='#047857'" onmouseleave="this.style.background='#059669'">
+          Open in Chrome →
+        </a>
+        <div id="dash-ext-waiting" style="display:none;margin-top:20px;font-size:13px;color:#6b7280">
+          <span style="display:inline-block;width:14px;height:14px;border:2px solid #d1fae5;border-top-color:#059669;border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:middle;margin-right:6px"></span>
+          Waiting for extension…
+        </div>
+        <div id="dash-ext-no-ext" style="display:none;margin-top:16px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:#92400e;text-align:left">
+          💡 <strong>Extension not installed?</strong> Visit <a href="/extension-setup" target="_blank" style="color:#b45309">Settings → Setup Chrome Extension</a> first.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Field edit modal (dashboard) -->
+<div class="dash-field-modal-overlay" id="dash-field-overlay" onclick="if(event.target===this)closeDashFieldModal()">
+  <div class="dash-field-modal-box">
+    <div style="padding:20px 20px 14px;border-bottom:1px solid #f0ede8;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+      <div style="font-size:16px;font-weight:700" id="dash-field-title">Edit fields</div>
+      <button onclick="closeDashFieldModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px">✕</button>
+    </div>
+    <div id="dash-field-body" style="overflow-y:auto;padding:16px 20px 20px;flex:1;min-height:0">
+      <div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+var _DASH_CSRF = '{csrf_esc}';
+var _dashModalPollInterval = null;
+var _dashCurrentSource = '';
+var _DASH_SOURCE_URLS = {{
+  southwest:'https://www.southwest.com/loyalty/myaccount/',delta:'https://www.delta.com/myprofile/',
+  united:'https://www.united.com/en/us/myaccount/mileageplus',american_air:'https://www.aa.com/aadvantage-program/overview',
+  alaska_air:'https://www.alaskaair.com/account/dashboard',amex:'https://www.americanexpress.com/en-us/account/',
+  chase:'https://secure.chase.com/web/auth/dashboard',wells_fargo:'https://connect.secure.wellsfargo.com/auth/login/present',
+  bofa:'https://www.bankofamerica.com/myaccounts/brain/render.go',capital_one:'https://myaccounts.capitalone.com/accountSummary',
+  discover:'https://portal.discover.com/customer/en/portal/account-home',citi:'https://online.citi.com/US/login.do',
+  paypal:'https://www.paypal.com/myaccount/summary',fidelity:'https://digital.fidelity.com/ftgw/digital/portfolio/summary',
+  marriott:'https://www.marriott.com/loyalty/myAccount/default.mi',hilton:'https://www.hilton.com/en/hilton-honors/guest/my-account/',
+  hyatt:'https://www.hyatt.com/en-US/my-account/home',ihg:'https://www.ihg.com/rewardsclub/content/us/en/member-home',
+  amazon:'https://www.amazon.com/gp/css/order-history',target:'https://www.target.com/account',
+  starbucks:'https://www.starbucks.com/rewards/',netflix:'https://www.netflix.com/YourAccount',
+  spotify:'https://www.spotify.com/us/account/overview/',att:'https://www.att.com/my/#/',
+  verizon:'https://www.verizon.com/myverizon/',tmobile:'https://account.t-mobile.com/overview',
+  hertz:'https://www.hertz.com/rentacar/member/profile/myprofile'
+}};
+
+function openDashConnectModal() {{
+  document.getElementById('dash-modal-overlay').classList.add('open');
+  document.getElementById('dash-screen-picker').style.display = 'flex';
+  document.getElementById('dash-screen-cred').style.display = 'none';
+  setTimeout(function(){{ var s=document.getElementById('dash-modal-search'); if(s) s.focus(); }}, 50);
+}}
+function closeDashConnectModal() {{
+  document.getElementById('dash-modal-overlay').classList.remove('open');
+  if (_dashModalPollInterval) {{ clearInterval(_dashModalPollInterval); _dashModalPollInterval = null; }}
+}}
+function dashOverlayClick(e) {{
+  if (e.target === document.getElementById('dash-modal-overlay')) closeDashConnectModal();
+}}
+function dashFilterModal(q) {{
+  q = (q || '').toLowerCase().trim();
+  var anyVisible = false;
+  document.querySelectorAll('.dash-modal-site-row').forEach(function(row) {{
+    var show = !q || (row.dataset.name || '').includes(q);
+    row.style.display = show ? '' : 'none';
+    if (show) anyVisible = true;
+  }});
+  document.querySelectorAll('.dash-modal-cat-group').forEach(function(grp) {{
+    var vis = Array.from(grp.querySelectorAll('.dash-modal-site-row')).some(r => r.style.display !== 'none');
+    grp.style.display = vis ? '' : 'none';
+  }});
+  var nr = document.getElementById('dash-modal-no-results');
+  if (nr) nr.style.display = (q && !anyVisible) ? '' : 'none';
+}}
+function dashBackToPicker() {{
+  document.getElementById('dash-screen-picker').style.display = 'flex';
+  document.getElementById('dash-screen-cred').style.display = 'none';
+  if (_dashModalPollInterval) {{ clearInterval(_dashModalPollInterval); _dashModalPollInterval = null; }}
+}}
+function dashOpenCredForm(key, name, icon, color) {{
+  _dashCurrentSource = key;
+  if (_dashModalPollInterval) {{ clearInterval(_dashModalPollInterval); _dashModalPollInterval = null; }}
+  document.getElementById('dash-cred-name').textContent = name;
+  var ic = document.getElementById('dash-cred-icon');
+  ic.textContent = icon; ic.style.background = color;
+  var lg = document.getElementById('dash-ext-icon-lg');
+  if (lg) {{ lg.textContent = icon; }}
+  var sn = document.getElementById('dash-ext-site-name');
+  if (sn) {{ sn.textContent = name; }}
+  var openBtn = document.getElementById('dash-open-chrome-btn');
+  var siteUrl = _DASH_SOURCE_URLS[key] || 'https://google.com/search?q=' + encodeURIComponent(name + ' login');
+  if (openBtn) {{
+    openBtn.href = siteUrl;
+    openBtn.onclick = function() {{ _dashStartExtPoll(key); }};
+  }}
+  var waiting = document.getElementById('dash-ext-waiting');
+  var noExt = document.getElementById('dash-ext-no-ext');
+  if (waiting) waiting.style.display = 'none';
+  if (noExt) noExt.style.display = 'none';
+  document.getElementById('dash-screen-picker').style.display = 'none';
+  document.getElementById('dash-screen-cred').style.display = 'flex';
+}}
+function _dashStartExtPoll(source) {{
+  var waiting = document.getElementById('dash-ext-waiting');
+  var noExt = document.getElementById('dash-ext-no-ext');
+  if (waiting) waiting.style.display = 'block';
+  fetch('/credentials/register', {{
+    method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: _DASH_CSRF, source: source}})
+  }});
+  var attempts = 0;
+  _dashModalPollInterval = setInterval(function() {{
+    attempts++;
+    fetch('/api/extension/poll/' + source).then(function(r){{return r.json();}}).then(function(d){{
+      if (d.captured) {{
+        clearInterval(_dashModalPollInterval); _dashModalPollInterval = null;
+        if (waiting) waiting.innerHTML = '<span style="color:#16a34a">✓ Account connected!</span>';
+        setTimeout(function() {{ closeDashConnectModal(); location.reload(); }}, 800);
+      }}
+    }}).catch(function(){{}});
+    if (attempts >= 40) {{
+      clearInterval(_dashModalPollInterval); _dashModalPollInterval = null;
+      if (waiting) waiting.style.display = 'none';
+      if (noExt) noExt.style.display = 'block';
+    }}
+  }}, 3000);
+}}
+
+/* Field edit modal */
+function openDashFieldModal(source, displayName) {{
+  document.getElementById('dash-field-title').textContent = (displayName || source) + ' — Edit fields';
+  document.getElementById('dash-field-body').innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px">Loading…</div>';
+  document.getElementById('dash-field-overlay').style.display = 'flex';
+  fetch('/api/fields-panel/' + encodeURIComponent(source)).then(function(r){{return r.json();}}).then(function(d){{
+    if (d.html) {{
+      document.getElementById('dash-field-body').innerHTML = d.html;
+    }} else {{
+      document.getElementById('dash-field-body').innerHTML = '<p style="font-size:13px;color:#9ca3af">No fields yet. Sync this account first.</p>';
+    }}
+  }}).catch(function(){{
+    document.getElementById('dash-field-body').innerHTML = '<p style="font-size:13px;color:#ef4444">Error loading fields.</p>';
+  }});
+}}
+function closeDashFieldModal() {{
+  document.getElementById('dash-field-overlay').style.display = 'none';
+}}
+function saveDashFields(source) {{
+  var body = document.getElementById('dash-field-body');
+  var boxes = body.querySelectorAll('[data-source="' + source + '"]');
+  var enabled = Array.from(boxes).filter(b => b.checked).map(b => b.dataset.key);
+  fetch('/credentials/fields', {{
+    method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: _DASH_CSRF, source: source, enabled_fields: JSON.stringify(enabled)}})
+  }}).then(r => r.json()).then(function(d) {{
+    if (d.ok) {{
+      closeDashFieldModal();
+      var t = document.getElementById('mighty-toast');
+      if (t) {{ t.textContent = 'Saved ✓'; t.classList.add('show'); setTimeout(function(){{t.classList.remove('show');}}, 2000); }}
+    }}
+  }});
+}}
+function clearAndRediscoverDash(source) {{
+  if (!confirm('Clear all fields and rediscover from the latest sync data?')) return;
+  fetch('/credentials/fields/reset/' + source, {{
+    method:'POST', headers:{{'X-CSRF-Token': _DASH_CSRF}}
+  }}).then(r => r.json()).then(function(d) {{
+    if (!d.ok) {{ alert('Reset failed'); return; }}
+    fetch('/credentials/discover/' + source, {{
+      method:'POST', headers:{{'X-CSRF-Token': _DASH_CSRF}}
+    }}).then(r => r.json()).then(function(d2) {{
+      closeDashFieldModal();
+      var t = document.getElementById('mighty-toast');
+      if (t) {{ t.textContent = d2.ok ? 'Fields rediscovered ✓' : 'Reset done — fields will appear after next sync'; t.classList.add('show'); setTimeout(function(){{t.classList.remove('show');}}, 2500); }}
+    }});
+  }});
+}}
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape') {{
+    var co = document.getElementById('dash-modal-overlay');
+    if (co && co.classList.contains('open')) closeDashConnectModal();
+    var fo = document.getElementById('dash-field-overlay');
+    if (fo && fo.style.display !== 'none') closeDashFieldModal();
+  }}
+}});
+</script>"""
+
+
 def _build_credentials_page(user, configured: set, extra_by_source: dict = None, synced_at_by_source: dict = None) -> str:
     """Generate the credentials management page HTML."""
     extra_by_source = extra_by_source or {}
@@ -8664,7 +9003,7 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
 .modal-cred-body input::placeholder{{color:#c0bbb5}}
 .toast{{position:fixed;bottom:24px;right:24px;background:#1c1917;color:#f5f2ed;border:1px solid #333;padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,0.15)}}
 .toast.show{{opacity:1}}
-@media(max-width:768px){{html,body{{height:auto;overflow:auto}}.sidebar{{display:none}}.main-content{{height:auto;overflow:visible}}}}
+@media(max-width:768px){{html,body{{height:auto;overflow:auto}}.sidebar{{display:none}}.main-content{{height:auto;overflow:visible;padding-left:0!important}}.nav-hamburger{{display:flex!important}}.topbar-search{{flex:1;min-width:0}}}}
 </style>
 </head>
 <body>
@@ -9492,6 +9831,45 @@ def api_rediscover_all():
         return jsonify({"ok": True, "sources": len(rows)})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:120]}), 500
+
+
+@app.route("/api/fields-panel/<source>")
+@require_login
+def api_fields_panel(source):
+    """Return the field-config panel HTML for a given source (used by dashboard modal)."""
+    uid = session["user_id"]
+    row = get_db().execute(
+        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not row:
+        return jsonify({"ok": False, "html": ""})
+    configured = {source}
+    extra_data = {}
+    if row["extra_enc"]:
+        try:
+            extra_data = json.loads(decrypt_cred(uid, row["extra_enc"]))
+        except Exception:
+            pass
+    # Build inner HTML of the panel — strip the outer hidden div wrapper since we inline it
+    raw = _field_config_html(source, configured, extra_data)
+    # raw looks like: <div id="fields-panel-{src}" style="display:none">...content...</div>
+    # Strip outer div so we can use content directly in the modal body
+    inner = _re_mod.sub(r'^<div[^>]*>', '', raw.strip(), count=1)
+    inner = _re_mod.sub(r'</div>$', '', inner.strip(), count=1)
+    # Replace Save/Cancel/Clear buttons to use dashboard JS functions
+    src_esc = source.replace("'", "\\'")
+    inner = inner.replace(
+        f"onclick=\"saveFieldsModal('{source}')\"",
+        f"onclick=\"saveDashFields('{src_esc}')\""
+    ).replace(
+        "onclick=\"closeFieldModal()\"",
+        "onclick=\"closeDashFieldModal()\""
+    ).replace(
+        f"onclick=\"clearAndRediscover('{source}')\"",
+        f"onclick=\"clearAndRediscoverDash('{src_esc}')\""
+    )
+    return jsonify({"ok": True, "html": inner})
 
 
 @app.route("/credentials/fields/load")
