@@ -354,6 +354,11 @@ def init_db():
         except Exception:
             pass  # column already exists
         try:
+            db.execute("ALTER TABLE users ADD COLUMN preferred_name TEXT")
+            db.commit()
+        except Exception:
+            pass  # column already exists
+        try:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS benefit_feedback (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4232,6 +4237,12 @@ body{display:flex;flex-direction:row}
   <div class="card">
     <div class="section-title">Account</div>
     <div style="font-size:13px;color:#8892a4;margin-bottom:16px">Signed in as <span style="color:#1c1917;font-weight:600">{email}</span></div>
+    <label class="settings-label">What should we call you?</label>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+      <input type="text" id="preferred-name" placeholder="Your first name" class="settings-input" style="margin-bottom:0;flex:1" value="{preferred_name}" maxlength="40">
+      <button class="btn-settings-primary" onclick="saveName()" style="white-space:nowrap">Save name</button>
+      <span id="name-msg" style="font-size:12px;color:#34d399;display:none">Saved ✓</span>
+    </div>
     <label class="settings-label">Change email address</label>
     <input type="email" id="email-new" placeholder="New email address" class="settings-input" style="margin-bottom:10px">
     <input type="password" id="email-pw" placeholder="Confirm with current password" class="settings-input" style="margin-bottom:10px">
@@ -4455,6 +4466,20 @@ function initNotifPref() {
   });
 }
 initNotifPref();
+function saveName() {
+  var name = (document.getElementById('preferred-name').value || '').trim();
+  var msg = document.getElementById('name-msg');
+  fetch('/settings/name', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({_csrf: CSRF, preferred_name: name})
+  }).then(r => r.json()).then(d => {
+    msg.style.display = 'inline';
+    msg.style.color = d.ok ? '#34d399' : '#f87171';
+    msg.textContent = d.ok ? 'Saved ✓' : (d.error || 'Error');
+    if (d.ok) setTimeout(() => { msg.style.display = 'none'; }, 2500);
+  });
+}
 function changeEmail() {
   var newEmail = (document.getElementById('email-new').value || '').trim();
   var pw = document.getElementById('email-pw').value;
@@ -6322,7 +6347,8 @@ def dashboard():
     # ── LAYER 1: Hero section ─────────────────────────────────────────────────
     # Greeting is resolved client-side so it matches the user's local timezone
     _greeting = "Good day"   # placeholder — JS will overwrite immediately
-    _first_name = ((user["email"] or "").split("@")[0].split(".")[0] or "").capitalize() or "there"
+    _first_name = (user["preferred_name"] or "").strip() or \
+                  ((user["email"] or "").split("@")[0].split(".")[0] or "").capitalize() or "there"
     _account_count = len(connected_sources)
 
     # Top attention item for hero
@@ -7187,6 +7213,7 @@ def settings():
             .replace("{postmark_warn}",           postmark_warn)
             .replace("{postmark_js}",             "true" if postmark_ok else "false")
             .replace("{notification_pref}",       notif_pref)
+            .replace("{preferred_name}",          he(user["preferred_name"] or ""))
             .replace("{csrf_token}",              _csrf))
 
 @app.route("/extension-setup")
@@ -7316,6 +7343,16 @@ def change_password():
     db.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(new_pw), session["user_id"]))
     db.commit()
     return jsonify({"ok": True})
+
+@app.route("/settings/name", methods=["POST"])
+@require_login
+def save_preferred_name():
+    check_csrf()
+    name = (request.form.get("preferred_name") or "").strip()[:40]
+    get_db().execute("UPDATE users SET preferred_name=? WHERE id=?", (name or None, session["user_id"]))
+    get_db().commit()
+    return jsonify({"ok": True})
+
 
 @app.route("/settings/change-email", methods=["POST"])
 @require_login
