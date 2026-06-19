@@ -484,17 +484,37 @@ def populate_action_items(uid: str, source: str, data: dict):
     dismiss/snooze state survives re-syncs.  The UNIQUE constraint on
     (user_id, field_key) means ON CONFLICT updates the content columns while
     preserving dismissed_at / snoozed_until set by the user.
+
+    Urgency is now driven by score_opportunity() — a composite of expiration,
+    literal value, user intent, and type rarity — so high-value items (e.g. a
+    $600 flight credit with no expiry) surface even without time pressure.
     """
     try:
         from mighty.classify import classify_benefit, is_actionable, is_needs_attention
+        from mighty.scoring import score_opportunity, urgency_from_score, urgency_for_attention
     except Exception:
         return
 
     import datetime as _dt_ai
+    import json as _json_ai
 
     items = (data.get("items") or []) + (data.get("ai_items") or [])
     now   = _dt_ai.datetime.utcnow().isoformat()
     today = _dt_ai.date.today()
+
+    # Load user's intent summary for scoring (non-fatal if missing)
+    user_intent: dict = {}
+    try:
+        _ui_row = get_db().execute(
+            "SELECT intent_summary FROM users WHERE id=?", (uid,)
+        ).fetchone()
+        if _ui_row and _ui_row["intent_summary"]:
+            user_intent = _json_ai.loads(_ui_row["intent_summary"])
+    except Exception:
+        pass
+
+    # Action center entry threshold: score ≥ 30 (filters pure noise)
+    _ENTRY_THRESHOLD = 30
 
     # Collect field_keys we'll upsert so we can cull stale rows afterward
     live_keys: list[str] = []
@@ -509,38 +529,26 @@ def populate_action_items(uid: str, source: str, data: dict):
         # Use stored _type if available; otherwise classify on-the-fly
         btype = item.get("_type") or classify_benefit(label, value, source)
 
-        # Only persist items worth acting on
+        # Only persist actionable or attention types
+        if not (is_actionable(btype) or is_needs_attention(btype)):
+            continue
+
         days_left = _parse_expiry_days(label, value)
-
-        should_add = False
-        urgency    = "info"
-        exp_date   = None
-
+        exp_date  = None
         if days_left is not None and days_left >= 0:
             exp_date = (today + _dt_ai.timedelta(days=days_left)).isoformat()
 
+        # Attention types (payment_due, renewal) use time-based urgency — their
+        # urgency IS the time pressure, not composite value/intent.
+        # Actionable types use the composite score engine.
         if is_needs_attention(btype):
-            # payment_due / renewal — always surface
             should_add = True
-            if days_left is not None:
-                if days_left <= 7:  urgency = "urgent"
-                elif days_left <= 14: urgency = "soon"
-                else: urgency = "info"
-            else:
-                urgency = "info"
-
-        elif is_actionable(btype):
-            # certificate: always worth surfacing
-            if btype == "certificate":
-                should_add = True
-                if days_left is not None:
-                    if days_left <= 14:   urgency = "urgent"
-                    elif days_left <= 60: urgency = "soon"
-                    else: urgency = "info"
-            # credits: only if expiring within 60 days
-            elif days_left is not None and days_left <= 60:
-                should_add = True
-                urgency = "urgent" if days_left <= 14 else "soon"
+            urgency    = urgency_for_attention(days_left)
+        else:
+            _score_item = {"label": label, "value": value, "btype": btype, "days_left": days_left}
+            score   = score_opportunity(_score_item, user_intent=user_intent, source=source)
+            urgency = urgency_from_score(score)
+            should_add = score >= _ENTRY_THRESHOLD
 
         if not should_add:
             continue
@@ -2184,7 +2192,9 @@ try:
     from mighty.classify import (classify_benefit, BENEFIT_TYPES,         # noqa: E402
                                   is_actionable, is_balance, is_status,
                                   is_needs_attention, is_upcoming)
-    from mighty.scoring import _relevance_score, _confidence_label, _BENEFIT_APPLICABILITY  # noqa: E402
+    from mighty.scoring import (_relevance_score, _confidence_label,          # noqa: E402
+                                _BENEFIT_APPLICABILITY,
+                                score_opportunity, urgency_from_score)
 except ImportError:
     import re as _cb_re
     _BT_RULES_INLINE = [
@@ -2227,6 +2237,16 @@ except ImportError:
     def _relevance_score(field_key="", field_label="", field_value="",  # type: ignore[misc]
                          confidence=0.85, context=None, expiry_date_str=None):
         return 0.5, {}
+    def score_opportunity(item, user_intent=None, source=""):  # type: ignore[misc]
+        d = item.get("days_left")
+        if d is not None and d <= 7:  return 70
+        if d is not None and d <= 30: return 45
+        if d is not None and d <= 60: return 35
+        return 20
+    def urgency_from_score(score):  # type: ignore[misc]
+        if score >= 65: return "urgent"
+        if score >= 38: return "soon"
+        return "info"
     def _confidence_label(score: float) -> str:
         return "High" if score >= 0.85 else "Medium" if score >= 0.60 else "Needs review"
     print("[Mighty] WARNING: mighty/ package not found — using inline fallbacks", flush=True)
@@ -6913,12 +6933,22 @@ def dashboard():
                 if _raw_val > 0:
                     total_value += _raw_val
                     value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), _rs, "relevance", it.get("_type","other")))
-    # Get latest intent for context-aware sorting
+    # Get latest intent for context-aware sorting + load 30-day intent summary
     _latest_intent = get_db().execute(
         "SELECT intent_type FROM intent_history WHERE user_id=? ORDER BY detected_at DESC LIMIT 1",
         (session["user_id"],)
     ).fetchone()
     _sort_context = _latest_intent["intent_type"] if _latest_intent else None
+    _dash_user_intent: dict = {}
+    try:
+        import json as _json_dui
+        _ui_r = get_db().execute(
+            "SELECT intent_summary FROM users WHERE id=?", (session["user_id"],)
+        ).fetchone()
+        if _ui_r and _ui_r["intent_summary"]:
+            _dash_user_intent = _json_dui.loads(_ui_r["intent_summary"])
+    except Exception:
+        pass
     value_items.sort(key=lambda x: -_relevance_score(
         "", x[1], x[2], context=_sort_context
     )[0])
@@ -7020,12 +7050,9 @@ def dashboard():
         import re as _re_prog_hero
         _lead_nums = _re_prog_hero.findall(r'[\d,]+', _vk)
         if _lead_nums and int(_lead_nums[0].replace(',','')) == 0: continue
-        # Score: expiring first, then by type
-        _priority = 0
-        if _btype == "certificate" and _exp is not None and _exp < 120:    _priority = 10
-        elif _btype == "certificate":                                       _priority = 9
-        elif _btype == "travel_credit" and _exp is not None and _exp < 60: _priority = 8
-        elif _btype in ("travel_credit","cash_credit"):                     _priority = 7
+        # Score via unified opportunity engine (value + expiry + intent + rarity)
+        _h_score_item = {"label": _lbl, "value": _val, "btype": _btype, "days_left": _exp}
+        _priority = score_opportunity(_h_score_item, user_intent=_dash_user_intent, source=_disp)
         _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp))
     _hero_candidates.sort(key=lambda x: (-x[0], x[1]))
 
@@ -7473,9 +7500,8 @@ def dashboard():
         if _dedup in _tb_seen: continue
         _tb_seen.add(_dedup)
         _exp = _tb_exp_days(_lbl, _val)
-        # Priority sort key
-        _pri = 0
-        _pri = 10  # all status items shown equally; sort by account name as tiebreaker
+        _tb_score_item = {"label": _lbl, "value": _val, "btype": _btype_tb, "days_left": _exp}
+        _pri = score_opportunity(_tb_score_item, user_intent=_dash_user_intent, source=_disp)
         _top_benefit_cards.append((_pri, _exp if _exp is not None else 9999,
                                    _disp, _lbl, _val, _exp))
     _top_benefit_cards.sort(key=lambda x: (-x[0], x[1]))
