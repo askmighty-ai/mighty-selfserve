@@ -429,6 +429,22 @@ def init_db():
             db.commit()
         except Exception:
             pass  # column already exists
+        # Benefit type corrections — user-supplied overrides for misclassified items
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS benefit_corrections (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id        TEXT NOT NULL,
+                    field_key      TEXT NOT NULL,
+                    corrected_type TEXT NOT NULL,
+                    corrected_at   TEXT NOT NULL,
+                    UNIQUE(user_id, field_key)
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_bc_user ON benefit_corrections(user_id)")
+            db.commit()
+        except Exception:
+            pass
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -513,6 +529,9 @@ def populate_action_items(uid: str, source: str, data: dict):
     except Exception:
         pass
 
+    # Load user corrections: {field_key → corrected_type}
+    corrections = _get_user_corrections(uid)
+
     # Action center entry threshold: score ≥ 30 (filters pure noise)
     _ENTRY_THRESHOLD = 30
 
@@ -526,8 +545,13 @@ def populate_action_items(uid: str, source: str, data: dict):
         if not label or not value or value in {"—", "-", "N/A", "None", "TBD", "0"}:
             continue
 
-        # Use stored _type if available; otherwise classify on-the-fly
-        btype = item.get("_type") or classify_benefit(label, value, source)
+        field_key = f"{source}::{label}"
+
+        # Priority: user correction > stored _type > on-the-fly classify
+        if field_key in corrections:
+            btype = corrections[field_key]
+        else:
+            btype = item.get("_type") or classify_benefit(label, value, source)
 
         # Only persist actionable or attention types
         if not (is_actionable(btype) or is_needs_attention(btype)):
@@ -553,7 +577,6 @@ def populate_action_items(uid: str, source: str, data: dict):
         if not should_add:
             continue
 
-        field_key = f"{source}::{label}"
         live_keys.append(field_key)
 
         db.execute(
@@ -611,6 +634,23 @@ def _open_action_items(uid: str) -> list[dict]:
         (uid, now)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _get_user_corrections(uid: str) -> dict[str, str]:
+    """Return a dict of {field_key: corrected_type} for a user.
+
+    Loaded once per request and used to override classifier output on any
+    surface that reads _type — hero bullets, top benefits, action center.
+    Returns empty dict on any error so callers can treat it as optional.
+    """
+    try:
+        rows = get_db().execute(
+            "SELECT field_key, corrected_type FROM benefit_corrections WHERE user_id=?",
+            (uid,)
+        ).fetchall()
+        return {r["field_key"]: r["corrected_type"] for r in rows}
+    except Exception:
+        return {}
 
 
 def _recompute_intent_summary(uid: str) -> dict:
@@ -6949,6 +6989,8 @@ def dashboard():
             _dash_user_intent = _json_dui.loads(_ui_r["intent_summary"])
     except Exception:
         pass
+    # Load user type corrections for dashboard surfaces
+    _dash_corrections = _get_user_corrections(session["user_id"])
     value_items.sort(key=lambda x: -_relevance_score(
         "", x[1], x[2], context=_sort_context
     )[0])
@@ -7044,6 +7086,9 @@ def dashboard():
         _vk = _val.strip()
         if not _vk or _vk in {'0', '—', '-', 'N/A', 'None', 'TBD'}: continue
         _exp = _parse_exp_days_hero(_lbl, _val)
+        # Apply user correction if one exists for this field
+        _fk_hero = f"{_disp}::{_lbl}"
+        _btype = _dash_corrections.get(_fk_hero, _btype)
         # Use canonical type from tuple — no keyword re-scan
         if not is_actionable(_btype): continue
         # Skip zero-value items
@@ -7119,10 +7164,15 @@ def dashboard():
             '</div>'
         )
         # JSON data for benefit detail drawer
+        _fk_hero_bd = f"{_hdisp}::{_hlbl}"
+        _btype_hero_bd = _dash_corrections.get(_fk_hero_bd, _btype)
+        _corrected_hero = _fk_hero_bd in _dash_corrections
         _bd_data = _json_hero.dumps({
             "label": _hlbl, "account": _hdisp,
             "value": _hval, "icon": _icon, "expDays": _hexp,
-            "synced_ago": _hsynced_ago, "confidence": "High"
+            "synced_ago": _hsynced_ago, "confidence": "High",
+            "field_key": _fk_hero_bd, "btype": _btype_hero_bd,
+            "corrected": _corrected_hero
         }).replace("'", "&#39;")
         _hero_bullets_html += (
             f'<div style="display:flex;gap:10px;padding:8px 4px;cursor:pointer;border-radius:7px;'
@@ -7477,6 +7527,9 @@ def dashboard():
     for _disp, _lbl, _val, _rs_tb, _meth_tb, _btype_tb in value_items:
         _vk = _val.strip()
         if not _vk or _vk in {'0', '—', '-', 'N/A', 'None', 'TBD'}: continue
+        # Apply user correction if one exists for this field
+        _fk_tb = f"{_disp}::{_lbl}"
+        _btype_tb = _dash_corrections.get(_fk_tb, _btype_tb)
         # Use canonical type from tuple — no keyword re-scan
         if _btype_tb == "progress_toward":
             _prog_dedup = (_disp, _lbl[:35])
@@ -7557,9 +7610,14 @@ def dashboard():
     for _pri, _, _disp, _lbl, _val, _exp in _top_benefit_cards[:8]:
         # Tier: use value if it's a real tier name, else fall back to label
         _tier = _val.strip() if _val.strip() and _val.strip().lower() not in {'active','yes','enabled','true','','member'} else _lbl
+        _fk_tb_bd = f"{_disp}::{_lbl}"
+        _btype_tb_bd = _dash_corrections.get(_fk_tb_bd, "elite_status")
+        _corrected_tb = _fk_tb_bd in _dash_corrections
         _tb_bd_data = _tb_json.dumps({
             "label": _lbl, "account": _disp,
-            "value": _val, "icon": "", "expDays": _exp
+            "value": _val, "icon": "", "expDays": _exp,
+            "field_key": _fk_tb_bd, "btype": _btype_tb_bd,
+            "corrected": _corrected_tb
         }).replace("'", "&#39;")
         # Pick diamond color by rough tier level
         _tier_lc = _tier.lower()
@@ -10420,6 +10478,43 @@ document.addEventListener('keydown', function(e) {{
         <span id="bd-verified-text"></span>
       </div>
     </div>
+
+    <!-- Correction UI: "Wrong type?" -->
+    <div id="bd-correction-row" style="display:none;margin-top:16px;border-top:1px solid #f5f2ed;padding-top:14px">
+      <div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">
+        Wrong category?
+      </div>
+      <div id="bd-corrected-badge" style="display:none;font-size:11px;color:#7c3aed;margin-bottom:8px">
+        ✓ You corrected this
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="bd-type-select"
+          style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #e5e7eb;border-radius:6px;
+                 background:#f9fafb;color:#374151;cursor:pointer">
+          <option value="">— select correct type —</option>
+          <option value="certificate">Certificate / Award</option>
+          <option value="travel_credit">Travel Credit</option>
+          <option value="cash_credit">Cash Credit</option>
+          <option value="points_balance">Points / Miles Balance</option>
+          <option value="elite_status">Elite Status</option>
+          <option value="membership">Membership / Access</option>
+          <option value="progress_toward">Progress Toward Goal</option>
+          <option value="upcoming_event">Upcoming Event</option>
+          <option value="reservation">Reservation / Booking</option>
+          <option value="payment_due">Payment Due</option>
+          <option value="renewal">Renewal / Annual Fee</option>
+          <option value="partner_benefit">Partner Benefit</option>
+          <option value="expiry_date">Expiry Date Only</option>
+          <option value="other">Other</option>
+        </select>
+        <button id="bd-correct-btn" onclick="submitBenefitCorrection()"
+          style="font-size:12px;padding:6px 12px;background:#6c47ff;color:#fff;border:none;
+                 border-radius:6px;cursor:pointer;font-weight:600;white-space:nowrap">
+          Save
+        </button>
+      </div>
+      <div id="bd-correct-status" style="font-size:11px;color:#6b7280;margin-top:6px;display:none"></div>
+    </div>
   </div>
 </div>
 
@@ -10535,10 +10630,67 @@ function openBenefitDrawer(el) {{
     verRow.style.display = 'block';
   }} else {{ verRow.style.display = 'none'; }}
 
+  // Correction UI
+  var corrRow  = document.getElementById('bd-correction-row');
+  var corrBadge = document.getElementById('bd-corrected-badge');
+  var corrSel  = document.getElementById('bd-type-select');
+  var corrStat = document.getElementById('bd-correct-status');
+  if (d.field_key) {{
+    corrRow.style.display = 'block';
+    corrRow.dataset.fieldKey = d.field_key;
+    corrRow.dataset.btype    = d.btype || '';
+    corrSel.value = d.btype || '';
+    corrBadge.style.display = d.corrected ? 'block' : 'none';
+    corrStat.style.display = 'none';
+  }} else {{
+    corrRow.style.display = 'none';
+  }}
+
   // Open
   document.getElementById('benefit-drawer').style.transform = 'translateX(0)';
   document.getElementById('benefit-drawer-overlay').style.display = 'block';
   document.body.style.overflow = 'hidden';
+}}
+function submitBenefitCorrection() {{
+  var corrRow = document.getElementById('bd-correction-row');
+  var sel     = document.getElementById('bd-type-select');
+  var stat    = document.getElementById('bd-correct-status');
+  var badge   = document.getElementById('bd-corrected-badge');
+  var btn     = document.getElementById('bd-correct-btn');
+  var fieldKey = corrRow.dataset.fieldKey;
+  var newType  = sel.value;
+  if (!fieldKey || !newType) return;
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch('/api/benefits/correct', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json', 'X-CSRF-Token': (typeof CSRF !== 'undefined' ? CSRF : '')}},
+    body: JSON.stringify({{field_key: fieldKey, corrected_type: newType}})
+  }})
+  .then(function(r) {{ return r.json(); }})
+  .then(function(j) {{
+    if (j.ok) {{
+      stat.textContent = 'Saved — page will refresh to apply.';
+      stat.style.color = '#059669';
+      stat.style.display = 'block';
+      badge.style.display = 'block';
+      btn.textContent = '✓';
+      setTimeout(function() {{ location.reload(); }}, 1200);
+    }} else {{
+      stat.textContent = j.error || 'Error saving correction.';
+      stat.style.color = '#dc2626';
+      stat.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Save';
+    }}
+  }})
+  .catch(function() {{
+    stat.textContent = 'Network error — try again.';
+    stat.style.color = '#dc2626';
+    stat.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }});
 }}
 function closeBenefitDrawer() {{
   var dr = document.getElementById('benefit-drawer');
@@ -13823,6 +13975,70 @@ def api_benefits_feedback():
     )
     get_db().commit()
     return jsonify({"ok": True, "action": feedback})
+
+
+@app.route("/api/benefits/correct", methods=["POST"])
+@require_login
+def api_benefits_correct():
+    """Record a user correction for a misclassified benefit type.
+
+    Body: { "field_key": "delta::Companion Certificate", "corrected_type": "certificate" }
+
+    Writes to benefit_corrections (UNIQUE per user+field_key, so corrections
+    can be updated).  Then re-runs populate_action_items for the affected
+    source so urgency tiers reflect the corrected type immediately.
+    """
+    check_csrf()
+    uid  = get_current_user_id()
+    data = request.get_json(silent=True) or {}
+    field_key      = str(data.get("field_key", ""))[:300]
+    corrected_type = str(data.get("corrected_type", ""))[:50]
+
+    # Validate
+    try:
+        from mighty.classify import BENEFIT_TYPES
+        valid_types = set(BENEFIT_TYPES.keys())
+    except Exception:
+        valid_types = set()
+
+    if not field_key:
+        return jsonify({"error": "field_key required"}), 400
+    if valid_types and corrected_type not in valid_types:
+        return jsonify({"error": f"unknown type: {corrected_type}"}), 400
+
+    import datetime as _dt_bc
+    now = _dt_bc.datetime.utcnow().isoformat()
+
+    get_db().execute(
+        """
+        INSERT INTO benefit_corrections (user_id, field_key, corrected_type, corrected_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, field_key) DO UPDATE SET
+            corrected_type = excluded.corrected_type,
+            corrected_at   = excluded.corrected_at
+        """,
+        (uid, field_key, corrected_type, now)
+    )
+    get_db().commit()
+
+    # Re-populate action_items for the affected source so the corrected type
+    # flows through urgency/scoring immediately.
+    source = field_key.split("::")[0] if "::" in field_key else None
+    if source:
+        try:
+            row = get_db().execute(
+                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                (uid, source)
+            ).fetchone()
+            if row and row["data_enc"]:
+                import json as _jbc
+                _dec = decrypt_data(row["data_enc"])
+                _acct_data = _jbc.loads(_dec)
+                populate_action_items(uid, source, _acct_data)
+        except Exception:
+            pass  # best-effort; correction is already persisted
+
+    return jsonify({"ok": True, "field_key": field_key, "corrected_type": corrected_type})
 
 
 @app.route("/api/csrf-token")
