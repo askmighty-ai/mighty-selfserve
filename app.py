@@ -374,9 +374,298 @@ def init_db():
             db.commit()
         except Exception:
             pass
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS notifications_sent (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id       TEXT NOT NULL,
+                    benefit_key   TEXT NOT NULL,
+                    threshold_days INTEGER NOT NULL,
+                    sent_at       TEXT NOT NULL,
+                    UNIQUE(user_id, benefit_key, threshold_days)
+                )
+            """)
+            db.commit()
+        except Exception:
+            pass
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN alert_expiry_emails INTEGER DEFAULT 1")
+            db.commit()
+        except Exception:
+            pass  # column already exists
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
+
+
+# ── Expiry alert helpers ───────────────────────────────────────────────────────
+
+def _parse_expiry_days(label, val):
+    """Return days until expiry from a label+value string, or None."""
+    import re as _re_exp
+    import datetime as _dt_exp
+    combined = f"{label} {val}"
+    m = _re_exp.search(r'\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b', combined)
+    if m:
+        try:
+            mo, da, yr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if yr < 100: yr += 2000
+            return (_dt_exp.date(yr, mo, da) - _dt_exp.date.today()).days
+        except Exception: pass
+    m2 = _re_exp.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+(\d{4})',
+                         combined, _re_exp.I)
+    if m2:
+        _mm = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+               'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+        try:
+            mo = _mm[m2.group(1)[:3].lower()]
+            yr = int(m2.group(2))
+            return (_dt_exp.date(yr, mo, 1) - _dt_exp.date.today()).days
+        except Exception: pass
+    return None
+
+_ALERT_THRESHOLDS = [7, 14, 30]  # send at each crossing, closest first
+
+def _find_expiring_for_user(uid):
+    """Return list of expiring benefit dicts for a user. Only certs+credits within 30d."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT source, display_name, ai_items, scraped_items FROM account_data WHERE user_id=?",
+        (uid,)
+    ).fetchall()
+    results = []
+    for row in rows:
+        display = row["display_name"] or row["source"]
+        for col in ("ai_items", "scraped_items"):
+            try:
+                items = json.loads(row[col] or "[]")
+            except Exception:
+                continue
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                lbl = item.get("label", "")
+                val = str(item.get("value", "")).strip()
+                if not val or val.lower() in {"0", "—", "-", "n/a", "none", "tbd", ""}:
+                    continue
+                btype = classify_benefit(lbl, val)
+                if btype not in ("certificate", "travel_credit", "cash_credit"):
+                    continue
+                exp = _parse_expiry_days(lbl, val)
+                if exp is None or exp < 0 or exp > 30:
+                    continue
+                field_key = item.get("field_key") or item.get("key") or lbl[:40]
+                results.append({
+                    "source": row["source"],
+                    "display": display,
+                    "label": lbl,
+                    "value": val,
+                    "exp_days": exp,
+                    "field_key": field_key,
+                    "benefit_key": f"{row['source']}:{field_key}",
+                })
+    # De-duplicate by benefit_key, keep shortest exp_days
+    seen = {}
+    for r in results:
+        k = r["benefit_key"]
+        if k not in seen or r["exp_days"] < seen[k]["exp_days"]:
+            seen[k] = r
+    return list(seen.values())
+
+def _build_expiry_email_html(name, items, base_url, user_id):
+    """Build HTML for expiry alert email."""
+    import html as _html_mod
+    greeting = f"Hi {name}," if name else "Hi,"
+    rows_html = ""
+    for it in items:
+        exp = it["exp_days"]
+        if exp <= 7:
+            badge_bg, badge_color, badge_txt = "#fef2f2", "#dc2626", f"Expires in {exp} day{'s' if exp!=1 else ''}"
+        elif exp <= 14:
+            badge_bg, badge_color, badge_txt = "#fffbeb", "#d97706", f"Expires in {exp} days"
+        else:
+            badge_bg, badge_color, badge_txt = "#f0fdf4", "#059669", f"Expires in {exp} days"
+
+        lbl_e = _html_mod.escape(it["label"])
+        val_e = _html_mod.escape(it["value"])
+        disp_e = _html_mod.escape(it["display"])
+        rows_html += f"""
+        <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin-bottom:12px;background:#fff">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+            <div>
+              <div style="font-size:14px;font-weight:600;color:#111;line-height:1.35">{lbl_e}</div>
+              <div style="font-size:12px;color:#6b7280;margin-top:2px">{disp_e} · {val_e}</div>
+            </div>
+            <div style="flex-shrink:0;background:{badge_bg};color:{badge_color};
+                        font-size:11px;font-weight:700;border-radius:20px;
+                        padding:3px 10px;white-space:nowrap;margin-top:2px">{badge_txt}</div>
+          </div>
+        </div>"""
+
+    settings_url = f"{base_url}/settings"
+    dashboard_url = f"{base_url}/dashboard"
+    count = len(items)
+    subject_preview = f"{count} benefit{'s' if count!=1 else ''} expiring soon"
+
+    return f"""<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#f8f7f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+  <div style="max-width:480px;margin:40px auto;padding:0 16px">
+    <div style="margin-bottom:20px">
+      <span style="font-size:18px;font-weight:700;color:#1a1a1a">⚡ Mighty</span>
+    </div>
+    <div style="background:#fff;border:1px solid #e5e3df;border-radius:16px;overflow:hidden">
+      <div style="background:#fff7ed;border-bottom:1px solid #fed7aa;padding:12px 20px">
+        <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#c2410c">Use it or lose it</span>
+      </div>
+      <div style="padding:20px">
+        <div style="font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:4px">{greeting}</div>
+        <div style="font-size:14px;color:#6b7280;margin-bottom:20px;line-height:1.5">
+          You have <strong style="color:#1a1a1a">{subject_preview}</strong>. Here's what to use before time runs out:
+        </div>
+        {rows_html}
+        <a href="{dashboard_url}" style="display:block;padding:13px;background:#111;color:#fff;
+           text-decoration:none;border-radius:10px;font-size:14px;font-weight:700;
+           text-align:center;margin-top:8px">View in Mighty →</a>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:16px;font-size:11px;color:#9ca3af">
+      <a href="{settings_url}" style="color:#9ca3af">Turn off expiry emails in Settings</a>
+    </div>
+  </div>
+</body>
+</html>"""
+
+def send_expiry_alert_email(to_email, name, items, base_url, user_id):
+    """Send expiry alert via Postmark. Non-blocking."""
+    if not POSTMARK_API_KEY:
+        print("[Alerts] Skipped — POSTMARK_API_KEY not set", flush=True)
+        return
+    count = len(items)
+    if count == 1:
+        first = items[0]
+        subject = f"Your {first['label']} expires in {first['exp_days']} days — {first['display']}"
+    else:
+        subject = f"{count} benefits expiring soon — time to use them"
+
+    html = _build_expiry_email_html(name, items, base_url, user_id)
+    payload = json.dumps({
+        "From":      POSTMARK_FROM,
+        "To":        to_email,
+        "Subject":   subject,
+        "HtmlBody":  html,
+        "Tag":       "expiry-alert",
+        "TrackOpens": False,
+    }).encode()
+
+    def _send():
+        try:
+            req = urllib.request.Request(
+                "https://api.postmarkapp.com/email",
+                data=payload,
+                headers={
+                    "X-Postmark-Server-Token": POSTMARK_API_KEY,
+                    "Content-Type":            "application/json",
+                    "Accept":                  "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                print(f"[Alerts] Sent expiry email to {to_email}: {resp.status}", flush=True)
+        except Exception as e:
+            print(f"[Alerts] Email send failed: {e}", flush=True)
+
+    threading.Thread(target=_send, daemon=True).start()
+
+def run_expiry_alerts(dry_run=False):
+    """Check all opted-in users for expiring benefits and send alerts as needed."""
+    import datetime as _dt_alert
+    db = get_db()
+    users = db.execute(
+        "SELECT id, email, preferred_name, alert_expiry_emails FROM users"
+    ).fetchall()
+    base_url = os.environ.get("BASE_URL", "https://mighty-selfserve-production.up.railway.app")
+    sent_count = 0
+    for user in users:
+        if not user["alert_expiry_emails"]:
+            continue
+        uid      = user["id"]
+        to_email = user["email"]
+        name     = user["preferred_name"] or ""
+        items    = _find_expiring_for_user(uid)
+        if not items:
+            continue
+        # Decide which threshold each item crosses today
+        to_send = []
+        for item in items:
+            exp = item["exp_days"]
+            # Find the tightest threshold this item is within
+            threshold = None
+            for t in sorted(_ALERT_THRESHOLDS):  # [7, 14, 30]
+                if exp <= t:
+                    threshold = t
+                    break
+            if threshold is None:
+                continue
+            bkey = item["benefit_key"]
+            already = db.execute(
+                "SELECT 1 FROM notifications_sent WHERE user_id=? AND benefit_key=? AND threshold_days=?",
+                (uid, bkey, threshold)
+            ).fetchone()
+            if already:
+                continue
+            to_send.append((item, threshold))
+
+        if not to_send:
+            continue
+
+        if dry_run:
+            print(f"[Alerts][DRY] Would send to {to_email}: {[i['label'] for i,_ in to_send]}", flush=True)
+            continue
+
+        send_expiry_alert_email(to_email, name, [i for i, _ in to_send], base_url, uid)
+        sent_count += 1
+
+        # Record sent notifications
+        now = _dt_alert.datetime.utcnow().isoformat()
+        for item, threshold in to_send:
+            try:
+                db.execute(
+                    "INSERT OR IGNORE INTO notifications_sent "
+                    "(user_id, benefit_key, threshold_days, sent_at) VALUES (?,?,?,?)",
+                    (uid, item["benefit_key"], threshold, now)
+                )
+            except Exception:
+                pass
+        db.commit()
+
+    print(f"[Alerts] run_expiry_alerts complete — {sent_count} email(s) sent", flush=True)
+    return sent_count
+
+def _start_alert_scheduler():
+    """Run expiry alerts daily at 08:00 UTC."""
+    import time as _time_sched
+    import datetime as _dt_sched
+    def _loop():
+        _time_sched.sleep(60)  # short startup delay
+        while True:
+            now = _dt_sched.datetime.utcnow()
+            # Compute seconds until next 08:00 UTC
+            target = now.replace(hour=8, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += _dt_sched.timedelta(days=1)
+            wait = (target - now).total_seconds()
+            print(f"[Alerts] Next expiry check at {target.isoformat()}Z ({wait/3600:.1f}h away)", flush=True)
+            _time_sched.sleep(wait)
+            try:
+                run_expiry_alerts()
+            except Exception as e:
+                print(f"[Alerts] run_expiry_alerts error: {e}", flush=True)
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    print("[Mighty] Expiry alert scheduler started (daily at 08:00 UTC)", flush=True)
 
 
 # ── VAPID key management (push notifications — optional) ─────────────────────
@@ -4241,6 +4530,13 @@ body{display:flex;flex-direction:row}
         <div id="email-notif-warn" style="display:{postmark_warn};margin-top:6px;font-size:12px;color:#fbbf24;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:6px;padding:6px 10px;line-height:1.5">Email alerts require the POSTMARK_API_KEY environment variable to be set on your server.</div>
       </div>
     </div>
+    <div class="toggle-row">
+      <input type="checkbox" id="notif-expiry" {alert_expiry_checked} onchange="saveExpiryPref()">
+      <div>
+        <div class="toggle-label">Benefit expiry alerts</div>
+        <div class="toggle-hint">Get an email before certificates or credits are about to expire — at 30, 14, and 7 days.</div>
+      </div>
+    </div>
     <div style="display:flex;align-items:center;justify-content:flex-end;margin-top:4px">
       <span id="save-ind" style="font-size:11px;color:#34d399;display:none">Saved ✓</span>
     </div>
@@ -4431,6 +4727,17 @@ function save() {
       push: document.getElementById('notif-push').checked,
       email: document.getElementById('notif-email').checked
     })
+  }).then(function() {
+    var ind = document.getElementById('save-ind');
+    if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
+  }).catch(function() {});
+}
+function saveExpiryPref() {
+  var enabled = document.getElementById('notif-expiry').checked;
+  fetch('/settings/alert-expiry', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF},
+    body: JSON.stringify({enabled: enabled})
   }).then(function() {
     var ind = document.getElementById('save-ind');
     if (ind) { ind.style.display = 'inline'; setTimeout(function() { ind.style.display = 'none'; }, 2000); }
@@ -7368,6 +7675,7 @@ def settings():
             .replace("{push_checked}",            "checked" if user["notify_push"]    else "")
             .replace("{ntfy_checked}",            "checked" if user["notify_ntfy"]    else "")
             .replace("{email_checked}",           "checked" if user["notify_email"]   else "")
+            .replace("{alert_expiry_checked}",    "checked" if user["alert_expiry_emails"] else "")
             .replace("{minimal_logging_checked}", "checked" if user["minimal_logging"] else "")
             .replace("{delete_raw_checked}",      "checked" if user["delete_raw_after_extract"] else "")
             .replace("{postmark_warn}",           postmark_warn)
@@ -7634,6 +7942,19 @@ def update_notifications():
          session["user_id"])
     )
     db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/settings/alert-expiry", methods=["POST"])
+@require_login
+def update_alert_expiry():
+    check_csrf()
+    data = request.get_json(force=True)
+    get_db().execute(
+        "UPDATE users SET alert_expiry_emails=? WHERE id=?",
+        (1 if data.get("enabled") else 0, session["user_id"])
+    )
+    get_db().commit()
     return jsonify({"ok": True})
 
 
@@ -13085,6 +13406,22 @@ def api_settings_notifications():
     return jsonify({"ok": True, "pref": pref})
 
 
+@app.route("/api/internal/trigger-alerts", methods=["POST"])
+@require_login
+def api_trigger_alerts():
+    """Admin/debug endpoint — trigger expiry alerts immediately for all users."""
+    check_csrf()
+    # Only allow admins (email ends in @anthropic.com or ADMIN_EMAIL env var matches)
+    uid = session["user_id"]
+    user = get_db().execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+    admin_email = os.environ.get("ADMIN_EMAIL", "jmanson@anthropic.com")
+    if not user or user["email"] not in (admin_email,):
+        return jsonify({"error": "forbidden"}), 403
+    dry = request.args.get("dry") == "1"
+    sent = run_expiry_alerts(dry_run=dry)
+    return jsonify({"ok": True, "sent": sent, "dry_run": dry})
+
+
 @app.route("/api/benefits/feedback", methods=["POST"])
 @require_login_or_key
 def api_benefits_feedback():
@@ -13223,4 +13560,6 @@ if __name__ == "__main__":
     # Start cloud sync scheduler if running on Railway
     if os.environ.get("ENABLE_CLOUD_SYNC", "").lower() == "true":
         _start_cloud_scheduler()
+    # Always start expiry alert scheduler (emails only send if POSTMARK_API_KEY is set)
+    _start_alert_scheduler()
     app.run(host="0.0.0.0", port=PORT, debug=False)
