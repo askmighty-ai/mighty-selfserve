@@ -5951,22 +5951,7 @@ def dashboard():
         feed_col_hidden = ''
 
     # ── Account data tab ──────────────────────────────────────────────────────
-    def _fmt_sync(ts):
-        try:
-            clean = ts.replace('Z', '+00:00') if ts and ts.endswith('Z') else ts
-            dt = datetime.fromisoformat(clean)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            secs = int((utcnow() - dt).total_seconds())
-            if secs < 60:   return "just now"
-            mins = secs // 60
-            if mins < 60:   return f"{mins} minute{'s' if mins != 1 else ''} ago"
-            hrs = mins // 60
-            if hrs < 24:    return f"{hrs} hour{'s' if hrs != 1 else ''} ago"
-            days = hrs // 24
-            return f"{days} day{'s' if days != 1 else ''} ago"
-        except Exception:
-            return ts[:10] if ts else "—"
+    # _fmt_sync is defined at module level (line ~762) — no local redefinition needed
 
     import re as _re
     from datetime import date as _date, datetime as _datetime
@@ -13571,6 +13556,7 @@ if __name__ == "__main__":
     # Start cloud sync scheduler if running on Railway
     if os.environ.get("ENABLE_CLOUD_SYNC", "").lower() == "true":
         _start_cloud_scheduler()
-    # Always start expiry alert scheduler (emails only send if POSTMARK_API_KEY is set)
-    _start_alert_scheduler()
+    # Start expiry alert scheduler (opt-out via ENABLE_EXPIRY_ALERTS=false)
+    if os.environ.get("ENABLE_EXPIRY_ALERTS", "true").lower() == "true":
+        _start_alert_scheduler()
     app.run(host="0.0.0.0", port=PORT, debug=False)
