@@ -3573,9 +3573,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 """ + BASE_CSS + """
 html,body{height:100%;overflow:hidden}
 body{display:flex;flex-direction:row;background:#eee9e2}
-.main-content{flex:1;min-width:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
+.main-content{flex:1;min-width:0;height:100vh;overflow:hidden;display:flex;flex-direction:column}
 /* Top bar */
-.topbar{padding:14px 24px;display:flex;align-items:center;gap:10px;flex-shrink:0;background:#eee9e2;position:sticky;top:0;z-index:2;border-bottom:0.5px solid rgba(0,0,0,0.07)}
+.topbar{padding:14px 24px;display:flex;align-items:center;gap:10px;flex-shrink:0;background:#eee9e2;z-index:2;border-bottom:0.5px solid rgba(0,0,0,0.07)}
 .topbar-search{flex:1;display:flex;align-items:center;gap:8px;background:#fff;border:0.5px solid rgba(0,0,0,0.1);border-radius:9px;padding:8px 14px;cursor:text;max-width:340px}
 .topbar-search input{border:none;outline:none;font-size:13px;color:#1c1917;background:transparent;width:100%;font-family:inherit}
 .topbar-search input::placeholder{color:#c0bab4}
@@ -3595,8 +3595,11 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .feed-tabs{display:flex;gap:0;background:#e4dfd8;border:0.5px solid #d5cfc8;border-radius:9px;padding:3px;width:fit-content}
 .feed-tab{padding:5px 18px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:600;color:#7d7670;cursor:pointer;transition:all 0.12s;font-family:inherit}
 .feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10)}
-/* Page body */
-.page-body{flex:1;padding:20px 24px 32px;box-sizing:border-box}
+/* Page body — two-panel layout */
+.page-body{flex:1;display:flex;min-height:0;overflow:hidden;padding:0}
+.insight-panel{width:340px;flex-shrink:0;overflow-y:auto;padding:20px 20px 32px;border-right:1px solid #ece8e2;background:#f7f4f0}
+.cards-panel{flex:1;min-width:0;overflow-y:auto;padding:20px 24px 32px}
+.cards-panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 /* Category groups */
 .cat-group{margin-bottom:22px}
 .cat-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -3692,7 +3695,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}#rediscover-btn{display:none!important}.pending-pill{font-size:10px;padding:3px 8px}}
+@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}#rediscover-btn{display:none!important}.pending-pill{font-size:10px;padding:3px 8px}.page-body{flex-direction:column;overflow:visible}.insight-panel{width:100%;border-right:none;border-bottom:1px solid #ece8e2;overflow-y:visible}.cards-panel{overflow-y:visible}}
 </style>
 </head>
 <body>
@@ -3733,24 +3736,8 @@ body{display:flex;flex-direction:row;background:#eee9e2}
   <div class="page-body" {feed_col_hidden}>
     <input type="hidden" name="_csrf" value="{csrf_token}">
 
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:12px">
-      <div class="feed-tabs">
-        <button class="feed-tab active" id="ftab-accounts" onclick="switchFeedTab('accounts',this)">Account Data</button>
-        <button class="feed-tab" id="ftab-activity" onclick="switchFeedTab('activity',this)">Activity Log</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        {agent_cta_button}
-        <button class="btn-connect" onclick="openDashConnectModal()">+ Connect account</button>
-      </div>
-    </div>
-
-    <div id="expiring-banner" style="display:{expiring_display};align-items:center;gap:10px;background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;cursor:pointer" data-base-display="{expiring_display}" onclick="toggleExpiringFilter(this)">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-      <span style="font-size:13px;font-weight:600;color:#92400e"><span id="expiring-count">{expiring_count}</span> account{expiring_plural} with expiring benefits or upcoming due dates</span>
-      <span style="font-size:11px;color:#b45309;margin-left:auto" id="expiring-filter-label">Click to highlight</span>
-    </div>
-
-    <div id="fview-accounts">
+    <!-- Intelligence panel: summary, benefits, insights -->
+    <div class="insight-panel">
       {hero_section_html}
       {top_benefits_html}
       {progress_section_html}
@@ -3842,32 +3829,27 @@ body{display:flex;flex-direction:row;background:#eee9e2}
         loadActionCenter();
       })();
       </script>
-      <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
-        <h2 style="font-size:14px;font-weight:700;color:#111;margin:0;text-transform:uppercase;
-           letter-spacing:.05em">Your Accounts</h2>
-        <button onclick="toggleAccounts()" id="accounts-toggle-btn"
-          style="font-size:11px;color:#6b7280;background:none;border:none;cursor:pointer;
-          padding:2px 6px">Hide ▲</button>
-      </div>
-      <div id="accounts-grid-wrapper">
-        {account_data_html}
-      </div>
-      <script>
-      function toggleAccounts() {
-        var w = document.getElementById('accounts-grid-wrapper');
-        var b = document.getElementById('accounts-toggle-btn');
-        if (w.style.display === 'none') {
-          w.style.display = '';
-          b.textContent = 'Hide ▲';
-        } else {
-          w.style.display = 'none';
-          b.textContent = 'Show ▼';
-        }
-      }
-      </script>
-    </div>
+    </div><!-- /insight-panel -->
 
-    <div id="fview-activity" style="display:none">
+    <!-- Cards panel: account grid -->
+    <div class="cards-panel">
+      <div class="cards-panel-header">
+        <span style="font-size:13px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.05em">Accounts</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          {agent_cta_button}
+          <button class="btn-connect" onclick="openDashConnectModal()">+ Connect</button>
+        </div>
+      </div>
+
+      <div id="expiring-banner" style="display:{expiring_display};align-items:center;gap:10px;background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;cursor:pointer" data-base-display="{expiring_display}" onclick="toggleExpiringFilter(this)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span style="font-size:13px;font-weight:600;color:#92400e"><span id="expiring-count">{expiring_count}</span> account{expiring_plural} with expiring benefits or upcoming due dates</span>
+        <span style="font-size:11px;color:#b45309;margin-left:auto" id="expiring-filter-label">Click to highlight</span>
+      </div>
+
+      {account_data_html}
+
+      <div id="fview-activity" style="display:none">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
         <input type="text" class="feed-search" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)" style="flex:1;min-width:160px;margin-bottom:0">
         <div style="display:flex;gap:6px;flex-shrink:0" id="status-filters">
@@ -3882,9 +3864,10 @@ body{display:flex;flex-direction:row;background:#eee9e2}
         {feed_html}
         <div id="feed-no-results" style="display:none;padding:40px 0;text-align:center;color:#b8b2ac;font-size:13px">No matching actions</div>
       </div>
-    </div>
-  </div>
-</div>
+      </div><!-- /fview-activity -->
+    </div><!-- /cards-panel -->
+  </div><!-- /page-body -->
+</div><!-- /main-content -->
 
 
 <script>
