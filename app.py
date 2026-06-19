@@ -537,8 +537,9 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         '<div id="mobile-drawer-overlay" onclick="closeMobileDrawer()" '
         'style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:199"></div>'
         '<aside id="mobile-drawer" '
-        'style="display:none;position:fixed;top:0;left:0;width:220px;height:100vh;'
-        'background:#0a0c12;z-index:200;flex-direction:column;padding:16px 12px;box-sizing:border-box">'
+        'style="display:flex;flex-direction:column;position:fixed;top:0;left:0;width:220px;height:100vh;'
+        'background:#0a0c12;z-index:200;padding:16px 12px;box-sizing:border-box;'
+        'transform:translateX(-100%);transition:transform 0.25s cubic-bezier(.4,0,.2,1)">'
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">'
         '<a href="/dashboard" style="display:flex;align-items:center;gap:8px;text-decoration:none">'
         '<img src="/logo-icon.png" alt="Mighty" style="width:28px;height:28px">'
@@ -566,15 +567,29 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         # Hamburger JS
         '<script>'
         'function openMobileDrawer(){'
-        '  document.getElementById("mobile-drawer").style.display="flex";'
+        '  document.getElementById("mobile-drawer").style.transform="translateX(0)";'
         '  document.getElementById("mobile-drawer-overlay").style.display="block";'
         '  document.body.style.overflow="hidden";'
         '}'
         'function closeMobileDrawer(){'
-        '  document.getElementById("mobile-drawer").style.display="none";'
+        '  document.getElementById("mobile-drawer").style.transform="translateX(-100%)";'
         '  document.getElementById("mobile-drawer-overlay").style.display="none";'
         '  document.body.style.overflow="";'
         '}'
+        # Highlight active nav link in drawer based on current path
+        '(function(){'
+        '  var p=window.location.pathname;'
+        '  document.querySelectorAll("#mobile-drawer nav a").forEach(function(a){'
+        '    var href=a.getAttribute("href");'
+        '    if(href&&(p===href||p.startsWith(href+"/")&&href!="/")){'
+        '      a.style.background="rgba(255,255,255,0.08)";a.style.color="#fff";'
+        '    }'
+        '  });'
+        '})();'
+        # ESC key closes drawer
+        'document.addEventListener("keydown",function(e){'
+        '  if(e.key==="Escape")closeMobileDrawer();'
+        '});'
         '</script>'
     )
 
@@ -7331,7 +7346,7 @@ def dashboard():
 <script>
 (function(){
   function escO(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-  function loadOpportunities(){
+  function loadOpportunities(retrying){
     fetch('/api/intent/recent').then(function(r){return r.json();}).then(function(intents){
       var ctx = (intents && intents.length) ? intents[0].intent_type : null;
       var url = '/api/opportunities' + (ctx ? '?context=' + ctx : '');
@@ -7340,8 +7355,15 @@ def dashboard():
       var section = document.getElementById('opportunities-section');
       var panel   = document.getElementById('opportunities-panel');
       if(!data || !data.opportunities || !data.opportunities.length){
+        // Post-sync: give accounts extra time to finish writing, then retry once
+        if(!retrying && sessionStorage.getItem('mighty-opp-retry')){
+          sessionStorage.removeItem('mighty-opp-retry');
+          setTimeout(function(){ loadOpportunities(true); }, 4000);
+          return;
+        }
         section.style.display='none'; return;
       }
+      sessionStorage.removeItem('mighty-opp-retry');
       var html = '';
       data.opportunities.forEach(function(opp){
         var urgStyle = opp.urgency==='urgent' ? 'border-left:3px solid #dc2626' :
@@ -7368,10 +7390,13 @@ def dashboard():
       panel.innerHTML=html;
     }).catch(function(){ document.getElementById('opportunities-section').style.display='none'; });
   }
-  // After a Sync All, wait 2s for the server to finish committing data before querying
+  // After a Sync All, wait 5s for the server to finish committing all account data before querying
   var postSync = sessionStorage.getItem('mighty-post-sync');
-  if(postSync){ sessionStorage.removeItem('mighty-post-sync'); setTimeout(loadOpportunities, 2000); }
-  else { loadOpportunities(); }
+  if(postSync){
+    sessionStorage.removeItem('mighty-post-sync');
+    sessionStorage.setItem('mighty-opp-retry','1');  // enable one extra retry if still empty
+    setTimeout(loadOpportunities, 5000);
+  } else { loadOpportunities(); }
 })();
 </script>
 """
@@ -9152,14 +9177,22 @@ function dashOpenCredForm(key, name, icon, color) {{
   if (sn) {{ sn.textContent = name; }}
   var openBtn = document.getElementById('dash-open-chrome-btn');
   var siteUrl = _DASH_SOURCE_URLS[key] || 'https://google.com/search?q=' + encodeURIComponent(name + ' login');
-  if (openBtn) {{
-    openBtn.href = siteUrl;
-    openBtn.onclick = function() {{ _dashStartExtPoll(key); }};
-  }}
   var waiting = document.getElementById('dash-ext-waiting');
   var noExt = document.getElementById('dash-ext-no-ext');
   if (waiting) waiting.style.display = 'none';
-  if (noExt) noExt.style.display = 'none';
+  if (!_extPresent) {{
+    // Extension not detected — show install prompt immediately, hide "Open in Chrome" button
+    if (openBtn) openBtn.style.display = 'none';
+    if (noExt) noExt.style.display = 'block';
+  }} else {{
+    // Extension present — wire up the button and hide the no-ext notice
+    if (openBtn) {{
+      openBtn.style.display = '';
+      openBtn.href = siteUrl;
+      openBtn.onclick = function() {{ _dashStartExtPoll(key); }};
+    }}
+    if (noExt) noExt.style.display = 'none';
+  }}
   document.getElementById('dash-screen-picker').style.display = 'none';
   document.getElementById('dash-screen-cred').style.display = 'flex';
 }}
@@ -9181,7 +9214,7 @@ function _dashStartExtPoll(source) {{
         setTimeout(function() {{ closeDashConnectModal(); location.reload(); }}, 800);
       }}
     }}).catch(function(){{}});
-    if (attempts >= 40) {{
+    if (attempts >= 20) {{
       clearInterval(_dashModalPollInterval); _dashModalPollInterval = null;
       if (waiting) waiting.style.display = 'none';
       if (noExt) noExt.style.display = 'block';
