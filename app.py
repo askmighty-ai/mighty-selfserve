@@ -1129,7 +1129,7 @@ def _get_transferable_points(uid: str, dest_source: str) -> list[dict]:
             # Parse fields
             try:
                 raw = decrypt_account_data(uid, row["data_enc"] or "")
-                fields = raw.get("items", [])
+                fields = raw.get("items") or raw.get("ai_items") or []
                 if not isinstance(fields, list):
                     continue
             except Exception:
@@ -1205,7 +1205,7 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
         src = row["source"]
         try:
             raw = decrypt_account_data(uid, row["data_enc"] or "")
-            fields = raw.get("items", [])
+            fields = raw.get("items") or raw.get("ai_items") or []
             if not isinstance(fields, list):
                 fields = []
         except Exception:
@@ -1379,22 +1379,20 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
         # Check for transferable points from other sources
         transferable = _get_transferable_points(uid, src)
         for tx in transferable:
-            tk = (tx["source"], tx.get("partner_key", "tx"))
-            if tk not in seen_keys:
-                components.append({
-                    "source":         tx["source"],
-                    "source_display": SOURCE_CAPABILITIES.get(tx["source"], {}).get("display_name", tx["source"].title()),
-                    "label":          tx["label"] + " (transferable)",
-                    "value":          f"{tx['balance']:,} pts",
-                    "canonical":      "MILES_POINTS",
-                    "urgency":        "none",
-                    "exp_label":      "",
-                    "confidence":     0.9,
-                    "score":          0.4,
-                    "factors":        {},
-                    "is_transfer":    True,
-                })
-                seen_keys.add(tk)
+            # Transferable points can complement multiple opportunities — don't lock them to one
+            components.append({
+                "source":         tx["source"],
+                "source_display": SOURCE_CAPABILITIES.get(tx["source"], {}).get("display_name", tx["source"].title()),
+                "label":          tx["label"] + " (transferable)",
+                "value":          f"{tx['balance']:,} pts",
+                "canonical":      "MILES_POINTS",
+                "urgency":        "none",
+                "exp_label":      "",
+                "confidence":     0.9,
+                "score":          0.4,
+                "factors":        {},
+                "is_transfer":    True,
+            })
 
         if len(components) < 1:
             continue
@@ -1453,7 +1451,8 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
         _anchor_label = _anchor.get("label", "")
         if ctx_noun:
             title = f"{short_name} {ctx_noun}"
-        elif _anchor_val and len(_anchor_val) <= 20 and not _anchor_val.startswith("0"):
+        elif _anchor_val and len(_anchor_val) <= 20 and not _anchor_val.startswith("0") \
+                and _anchor.get("canonical") != "MILES_POINTS":
             title = f"{short_name} — {_anchor_val} {_anchor_label}"[:60]
         else:
             title = f"{short_name} — {_anchor_label}"[:60]
@@ -6737,6 +6736,8 @@ def dashboard():
         _value_parts.append(f"${_credit_total:,.0f} in credits")
     if _cert_count > 0:
         _value_parts.append(f"{_cert_count} certificate{'s' if _cert_count > 1 else ''}")
+    if _points_total > 0:
+        _value_parts.append(f"{_points_total:,} pts/miles")
     if _value_parts:
         _value_summary = " · ".join(_value_parts) + " available to use"
     else:
@@ -6816,10 +6817,11 @@ def dashboard():
     import datetime as _dtrd
     _cutoff = (_dtrd.datetime.utcnow() - _dtrd.timedelta(days=14)).isoformat()
     try:
+        # Fetch extra rows so we can detect first-sync floods
         _recent_rows = get_db().execute(
             "SELECT source, field_label, new_value, changed_at FROM field_history "
             "WHERE user_id=? AND old_value IS NULL AND changed_at > ? "
-            "ORDER BY changed_at DESC LIMIT 10",
+            "ORDER BY changed_at DESC LIMIT 50",
             (uid, _cutoff)
         ).fetchall()
     except Exception:
@@ -6836,50 +6838,91 @@ def dashboard():
 
     recently_found_html = ""
     if _recent_rows:
-        _day_groups: dict = {}
-        _now_date = _dtrd.datetime.utcnow().date()
-        for _rrow in _recent_rows:
+        # Detect first-sync flood: if most rows share the same minute, it's a bulk insert
+        _ts_counts: dict = {}
+        for _rr in _recent_rows:
+            _ts_min = (_rr["changed_at"] or "")[:16]  # "YYYY-MM-DDTHH:MM"
+            _ts_counts[_ts_min] = _ts_counts.get(_ts_min, 0) + 1
+        _max_ts_count = max(_ts_counts.values()) if _ts_counts else 0
+        _is_bulk = _max_ts_count >= 6 and _max_ts_count >= len(_recent_rows) * 0.6
+
+        if _is_bulk:
+            # Summarise the flood: how many fields across how many accounts
+            _bulk_sources = len({_rr["source"] for _rr in _recent_rows})
+            _bulk_total   = len(_recent_rows)
+            # Determine the day label for when the bulk insert happened
             try:
-                _row_date = _dtrd.datetime.fromisoformat(_rrow["changed_at"]).date()
+                _bulk_dt   = _dtrd.datetime.fromisoformat(_recent_rows[0]["changed_at"]).date()
+                _bulk_delta = (_dtrd.datetime.utcnow().date() - _bulk_dt).days
+                _bulk_day  = "today" if _bulk_delta == 0 else ("yesterday" if _bulk_delta == 1 else f"{_bulk_delta} days ago")
             except Exception:
-                continue
-            _delta = (_now_date - _row_date).days
-            if _delta == 0:
-                _day_label = "Today"
-            elif _delta == 1:
-                _day_label = "Yesterday"
-            elif _delta <= 7:
-                _day_label = f"{_delta} days ago"
-            else:
-                _day_label = _row_date.strftime("%b %-d")
-            _day_groups.setdefault(_day_label, []).append(_rrow)
-
-        _feed_html = ""
-        for _day_label, _rows in list(_day_groups.items())[:4]:
-            _items_html = "".join(
-                f'<div style="font-size:13px;color:#374151;padding:2px 0">'
-                f'• <strong>{he(_source_display_name(_r["source"]))}</strong>'
-                f' {he(_r["field_label"])}'
-                + (f': <span style="color:#6b7280">{he(str(_r["new_value"])[:40])}</span>'
-                   if _r["new_value"] else "") +
+                _bulk_day = "recently"
+            recently_found_html = (
+                '<div style="margin-bottom:28px">'
+                '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
+                'text-transform:uppercase;letter-spacing:.05em">\U0001f50d Recently Found</h2>'
+                f'<div style="font-size:13px;color:#374151;padding:6px 0">'
+                f'Initial sync {_bulk_day}: found <strong>{_bulk_total} fields</strong> across '
+                f'<strong>{_bulk_sources} account{"s" if _bulk_sources != 1 else ""}</strong>.'
                 f'</div>'
-                for _r in _rows
+                '</div>'
             )
-            _feed_html += (
-                f'<div style="margin-bottom:10px">'
-                f'<div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;'
-                f'letter-spacing:.05em;margin-bottom:4px">{he(_day_label)}</div>'
-                + _items_html +
-                f'</div>'
-            )
+        else:
+            _MAX_ITEMS = 8
+            _day_groups: dict = {}
+            _now_date = _dtrd.datetime.utcnow().date()
+            _shown = 0
+            for _rrow in _recent_rows:
+                if _shown >= _MAX_ITEMS:
+                    break
+                try:
+                    _row_date = _dtrd.datetime.fromisoformat(_rrow["changed_at"]).date()
+                except Exception:
+                    continue
+                _delta = (_now_date - _row_date).days
+                if _delta == 0:
+                    _day_label = "Today"
+                elif _delta == 1:
+                    _day_label = "Yesterday"
+                elif _delta <= 7:
+                    _day_label = f"{_delta} days ago"
+                else:
+                    _day_label = _row_date.strftime("%b %-d")
+                _day_groups.setdefault(_day_label, []).append(_rrow)
+                _shown += 1
 
-        recently_found_html = (
-            '<div style="margin-bottom:28px">'
-            '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
-            'text-transform:uppercase;letter-spacing:.05em">\U0001f50d Recently Found</h2>'
-            + _feed_html +
-            '</div>'
-        )
+            _overflow = max(0, len(_recent_rows) - _shown)
+            _feed_html = ""
+            for _day_label, _rows in list(_day_groups.items())[:4]:
+                _items_html = "".join(
+                    f'<div style="font-size:13px;color:#374151;padding:2px 0">'
+                    f'• <strong>{he(_source_display_name(_r["source"]))}</strong>'
+                    f' {he(_r["field_label"])}'
+                    + (f': <span style="color:#6b7280">{he(str(_r["new_value"])[:40])}</span>'
+                       if _r["new_value"] else "") +
+                    f'</div>'
+                    for _r in _rows
+                )
+                _feed_html += (
+                    f'<div style="margin-bottom:10px">'
+                    f'<div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;'
+                    f'letter-spacing:.05em;margin-bottom:4px">{he(_day_label)}</div>'
+                    + _items_html +
+                    f'</div>'
+                )
+            if _overflow > 0:
+                _feed_html += (
+                    f'<div style="font-size:12px;color:#9ca3af;padding-top:4px">'
+                    f'and {_overflow} more…</div>'
+                )
+
+            recently_found_html = (
+                '<div style="margin-bottom:28px">'
+                '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
+                'text-transform:uppercase;letter-spacing:.05em">\U0001f50d Recently Found</h2>'
+                + _feed_html +
+                '</div>'
+            )
 
     # ── LAYER 3: Don't forget section (no dollar amounts) ────────────────────
     if value_items:
@@ -6902,6 +6945,10 @@ def dashboard():
         cert_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
                       if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])
                       and _use_soon_eligible(label, val_str)]
+        points_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
+                        if any(k in label.lower() for k in ['points', 'miles', 'rewards', 'balance'])
+                        and not any(k in label.lower() for k in ['credit', 'voucher', 'ecredit', 'certificate', 'free night', 'companion'])
+                        and _use_soon_eligible(label, val_str)]
 
         forgotten_lines = []
         for disp, label, val_str in (credit_items + cert_items)[:6]:
@@ -6911,17 +6958,36 @@ def dashboard():
                 f'<span style="color:#6b7280;margin-left:6px">{he(val_str)}</span></div>'
             )
 
-        if forgotten_lines:
+        points_lines = []
+        for disp, label, val_str in points_items[:4]:
+            points_lines.append(
+                f'<div style="font-size:13px;color:#374151;padding:4px 0;'
+                f'border-bottom:1px solid #f3f4f6">• {he(disp)}: {he(label)}'
+                f'<span style="color:#6b7280;margin-left:6px">{he(val_str)}</span></div>'
+            )
+
+        if forgotten_lines or points_lines:
+            _points_section = ""
+            if points_lines:
+                _points_header = ('<div style="font-size:11px;font-weight:600;color:#92400e;'
+                                  'text-transform:uppercase;letter-spacing:.05em;'
+                                  'margin-top:10px;margin-bottom:4px">Points &amp; Miles</div>'
+                                  if forgotten_lines else "")
+                _points_section = _points_header + "".join(points_lines)
             value_center_html = (
                 '<div style="margin-bottom:28px;background:#fffbeb;border:1px solid #fde68a;'
                 'border-radius:10px;padding:16px 18px">'
                 '<h2 style="font-size:14px;font-weight:700;color:#92400e;margin:0 0 10px;'
                 'text-transform:uppercase;letter-spacing:.05em">\u23f3 Use Soon</h2>'
-                '<p style="font-size:12px;color:#92400e;margin:0 0 10px">'
-                'Benefits worth using before they expire:'
-                '</p>'
-                + "".join(forgotten_lines) +
-                '</div>'
+                + (
+                    '<p style="font-size:12px;color:#92400e;margin:0 0 10px">'
+                    'Credits and certificates to use before they expire:'
+                    '</p>'
+                    if forgotten_lines else ''
+                )
+                + "".join(forgotten_lines)
+                + _points_section
+                + '</div>'
             )
         else:
             value_center_html = ""
@@ -6932,10 +6998,18 @@ def dashboard():
         value_banner = ""
 
     opportunities_html = """
-<div id="opportunities-section" style="margin-bottom:28px;display:none">
+<style>
+@keyframes opp-shimmer{0%{background-position:-400px 0}100%{background-position:400px 0}}
+.opp-skeleton{background:linear-gradient(90deg,#f0ece8 25%,#e8e4e0 50%,#f0ece8 75%);
+  background-size:400px 100%;animation:opp-shimmer 1.4s infinite;border-radius:4px}
+</style>
+<div id="opportunities-section" style="margin-bottom:28px">
   <h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;
      text-transform:uppercase;letter-spacing:.05em">Opportunities</h2>
-  <div id="opportunities-panel"></div>
+  <div id="opportunities-panel">
+    <div class="opp-skeleton" style="height:70px;margin-bottom:10px"></div>
+    <div class="opp-skeleton" style="height:70px;margin-bottom:10px"></div>
+  </div>
 </div>
 <script>
 (function(){
@@ -6946,9 +7020,11 @@ def dashboard():
       var url = '/api/opportunities' + (ctx ? '?context=' + ctx : '');
       return fetch(url).then(function(r){return r.json();});
     }).then(function(data){
-      if(!data || !data.opportunities || !data.opportunities.length) return;
       var section = document.getElementById('opportunities-section');
       var panel   = document.getElementById('opportunities-panel');
+      if(!data || !data.opportunities || !data.opportunities.length){
+        section.style.display='none'; return;
+      }
       var html = '';
       data.opportunities.forEach(function(opp){
         var urgStyle = opp.urgency==='urgent' ? 'border-left:3px solid #dc2626' :
@@ -6972,8 +7048,8 @@ def dashboard():
           +rows+whyHtml
           +'</div>';
       });
-      if(html){panel.innerHTML=html; section.style.display='block';}
-    }).catch(function(){});
+      panel.innerHTML=html;
+    }).catch(function(){ document.getElementById('opportunities-section').style.display='none'; });
   }
   // After a Sync All, wait 2s for the server to finish committing data before querying
   var postSync = sessionStorage.getItem('mighty-post-sync');
