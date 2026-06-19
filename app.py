@@ -1673,7 +1673,7 @@ try:
 except ImportError:
     def get_derived_benefits(items, connected_sources, context):  # type: ignore[misc]
         return []
-    def get_card_recommendations(connected_sources):  # type: ignore[misc]
+    def get_card_recommendations(connected_sources, context=None):  # type: ignore[misc]
         return []
     print("[Mighty] WARNING: mighty/partnerships.py not found — derived benefits disabled", flush=True)
 
