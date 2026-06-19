@@ -7040,29 +7040,56 @@ def dashboard():
 </script>
 """
 
-    # ── Wallet Insights: cross-program perks + card recommendations ───────────
+    # ── Wallet Insights: card descriptions relevant to connected accounts ─────
+    # Collapsed by default. Only expands if there are matching recommendations.
+    # Context-gated: when the extension fires a contextual intent (stored in
+    # sessionStorage by the relevant_now section), only cards for that context
+    # are shown; otherwise all are shown in the collapsed shell.
     wallet_insights_html = """
-<div id="wallet-insights-section" style="display:none;margin-bottom:28px">
-  <!-- Populated by JS below -->
+<div id="wallet-insights-wrap" style="margin-bottom:28px;display:none">
+  <button id="wallet-insights-toggle"
+    onclick="toggleWalletInsights()"
+    style="display:flex;align-items:center;gap:6px;background:none;border:none;
+           cursor:pointer;padding:0;font-family:inherit">
+    <h2 style="font-size:14px;font-weight:700;color:#111;margin:0;
+               text-transform:uppercase;letter-spacing:.05em">&#10022; Worth Knowing About</h2>
+    <span id="wallet-insights-count"
+      style="font-size:11px;background:#f3f4f6;color:#6b7280;border-radius:10px;
+             padding:1px 7px;font-weight:500"></span>
+    <span id="wallet-insights-chevron"
+      style="font-size:11px;color:#9ca3af;margin-left:2px">&#9660;</span>
+  </button>
+  <div id="wallet-insights-body" style="display:none;margin-top:12px">
+    <!-- Populated by JS -->
+  </div>
 </div>
 <script>
 (function() {
+  var _wiOpen = false;
+  window.toggleWalletInsights = function() {
+    _wiOpen = !_wiOpen;
+    document.getElementById('wallet-insights-body').style.display = _wiOpen ? 'block' : 'none';
+    document.getElementById('wallet-insights-chevron').innerHTML = _wiOpen ? '&#9650;' : '&#9660;';
+  };
+
   function esc(s) {
-    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
-  function buildWalletInsights(data) {
-    var recs = data.recommendations || [];
+
+  function buildWalletInsights(recs) {
     if (!recs.length) return;
-    var section = document.getElementById('wallet-insights-section');
-    if (!section) return;
+    var wrap = document.getElementById('wallet-insights-wrap');
+    var body = document.getElementById('wallet-insights-body');
+    var countEl = document.getElementById('wallet-insights-count');
+    if (!wrap || !body) return;
 
-    var html = '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
-             + 'text-transform:uppercase;letter-spacing:.05em">&#10022; Worth Knowing About</h2>';
-
+    countEl.textContent = recs.length;
+    var html = '';
     recs.forEach(function(rec) {
       html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;'
             + 'padding:14px 16px;margin-bottom:10px">';
-      html += '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:8px">';
+      html += '<div style="display:flex;align-items:baseline;justify-content:space-between;'
+            + 'gap:8px;margin-bottom:8px">';
       html += '<div style="font-size:13px;font-weight:600;color:#111">' + esc(rec.card_name) + '</div>';
       html += '<div style="font-size:11px;color:#9ca3af;flex-shrink:0">' + esc(rec.issuer) + '</div>';
       html += '</div>';
@@ -7072,16 +7099,28 @@ def dashboard():
               + esc(b) + '</li>';
       });
       html += '</ul>';
+      if (rec.last_verified) {
+        html += '<div style="font-size:10px;color:#d1d5db;margin-top:8px">'
+              + 'Benefits verified ' + esc(rec.last_verified) + ' · confirm current terms at '
+              + esc(rec.issuer) + '</div>';
+      }
       html += '</div>';
     });
 
-    section.innerHTML = html;
-    section.style.display = 'block';
+    body.innerHTML = html;
+    wrap.style.display = 'block';
   }
 
-  fetch('/api/benefits/discover')
+  // Check if a contextual intent was recently fired by the extension
+  var recentContext = null;
+  try { recentContext = sessionStorage.getItem('mighty_last_context'); } catch(e) {}
+
+  var url = '/api/benefits/discover';
+  if (recentContext) url += '?context=' + encodeURIComponent(recentContext);
+
+  fetch(url)
     .then(function(r) { return r.ok ? r.json() : null; })
-    .then(function(d) { if (d) buildWalletInsights(d); })
+    .then(function(d) { if (d && d.recommendations) buildWalletInsights(d.recommendations); })
     .catch(function() {});
 })();
 </script>
@@ -7120,6 +7159,12 @@ def dashboard():
     if(html){
       panel.innerHTML = html;
       section.style.display = 'block';
+      // Store most recent context so wallet-insights can filter by it
+      try {
+        if (items[0] && items[0].intent_type) {
+          sessionStorage.setItem('mighty_last_context', items[0].intent_type);
+        }
+      } catch(e) {}
     }
   }).catch(function(){});
   function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -12827,16 +12872,21 @@ def api_benefits_relevant():
 @require_login_or_key
 def api_benefits_discover():
     """
-    Returns card/account recommendations the user may not have,
-    based on their connected accounts.  No dollar-value estimates — factual only.
+    Returns factual card/account descriptions for accounts the user may not have,
+    based on their connected accounts.  No dollar-value estimates.
+
+    Query params:
+      context  – optional: 'flight' | 'hotel' | 'car' | 'shopping' | 'dining'
+                 When provided, only cards matching that context are returned.
     """
-    uid  = get_current_user_id()
-    rows = get_db().execute(
+    uid     = get_current_user_id()
+    context = request.args.get("context", "").lower().strip() or None
+    rows    = get_db().execute(
         "SELECT source FROM account_data WHERE user_id=?", (uid,)
     ).fetchall()
     connected = [r["source"] for r in rows]
-    recs = get_card_recommendations(connected)
-    return jsonify({"recommendations": recs, "count": len(recs)})
+    recs = get_card_recommendations(connected, context=context)
+    return jsonify({"recommendations": recs, "count": len(recs), "context": context})
 
 
 @app.route("/api/settings/notifications", methods=["GET", "POST"])
