@@ -6472,6 +6472,19 @@ def dashboard():
         _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp))
     _hero_candidates.sort(key=lambda x: (-x[0], x[1]))
 
+    # Build display_name → synced_ago lookup for evidence lines
+    import datetime as _hdt_ev
+    def _hero_synced_ago(synced_at_str):
+        if not synced_at_str: return ""
+        try:
+            _dt2 = _hdt_ev.datetime.fromisoformat(synced_at_str.replace("Z",""))
+            _h2  = int((_hdt_ev.datetime.utcnow() - _dt2).total_seconds() / 3600)
+            if _h2 < 1:  return "just now"
+            if _h2 < 24: return f"{_h2}h ago"
+            return f"{_h2 // 24}d ago"
+        except Exception: return ""
+    _synced_ago_by_disp = {r["display_name"]: _hero_synced_ago(r["synced_at"]) for r in acct_rows}
+
     _hero_bullets_html = ""
     _seen_hero = set()
     import json as _json_hero
@@ -6501,10 +6514,24 @@ def dashboard():
         _show_val = ""
         if _hval and _hval.lower().strip() not in _skip_vals:
             _show_val = f'<span style="font-size:13px;color:#6b7280;margin-left:6px">{he(_hval)}</span>'
+        # Evidence line — always visible, answers "why is this here?"
+        _hsynced_ago = _synced_ago_by_disp.get(_hdisp, "")
+        _hstale = bool(_hsynced_ago and "d" in _hsynced_ago and int(_hsynced_ago.split("d")[0].strip() or 0) >= 2)
+        _ev_parts = [f'Found in {he(_hdisp)}']
+        if _hsynced_ago:
+            _ev_color = "#f97316" if _hstale else "#d1d5db"
+            _ev_parts.append(f'<span style="color:{_ev_color}">{he(_hsynced_ago)}</span>')
+        _ev_parts.append('<span style="color:#d1d5db">High confidence</span>')
+        _evidence_line = (
+            '<div style="font-size:10px;color:#d1d5db;margin-top:3px;line-height:1.5">'
+            + ' · '.join(_ev_parts) +
+            '</div>'
+        )
         # JSON data for benefit detail drawer
         _bd_data = _json_hero.dumps({
             "label": _hlbl, "account": _hdisp,
-            "value": _hval, "icon": _icon, "expDays": _hexp
+            "value": _hval, "icon": _icon, "expDays": _hexp,
+            "synced_ago": _hsynced_ago, "confidence": "High"
         }).replace("'", "&#39;")
         _hero_bullets_html += (
             f'<div style="display:flex;gap:10px;padding:8px 4px;cursor:pointer;border-radius:7px;'
@@ -6516,6 +6543,7 @@ def dashboard():
             f'<div style="font-size:14px;font-weight:600;color:{_bullet_color};line-height:1.3">'
             f'{he(_hlbl)}{_show_val}</div>'
             f'<div style="font-size:12px;margin-top:2px;line-height:1.4">{_sub_html}</div>'
+            f'{_evidence_line}'
             f'</div>'
             f'</div>'
         )
@@ -9875,14 +9903,18 @@ function openBenefitDrawer(el) {{
     srcRow.style.display = 'block';
   }} else {{ srcRow.style.display = 'none'; }}
 
-  // "Last verified"
+  // "Last verified / data freshness"
   var verRow  = document.getElementById('bd-verified-row');
   var verText = document.getElementById('bd-verified-text');
+  var verParts = [];
+  if (d.synced_ago) verParts.push('Last synced ' + d.synced_ago);
+  if (d.confidence)  verParts.push(d.confidence + ' confidence');
   if (d.last_verified) {{
-    var verMsg = 'Partnership verified ' + d.last_verified;
-    if (d.source_url) verMsg += ' · confirm current terms: ' + d.source_url;
-    if (d.confidence && d.confidence !== 'high') verMsg += ' · ' + d.confidence + ' confidence';
-    verText.textContent = verMsg;
+    verParts.push('Partnership verified ' + d.last_verified);
+    if (d.source_url) verParts.push('Confirm current terms: ' + d.source_url);
+  }}
+  if (verParts.length) {{
+    verText.textContent = verParts.join(' · ');
     verRow.style.display = 'block';
   }} else {{ verRow.style.display = 'none'; }}
 
@@ -12874,8 +12906,33 @@ def api_benefits_relevant():
 
     # Scan all account data for matching fields
     rows = get_db().execute(
-        "SELECT source, display_name, data_enc FROM account_data WHERE user_id=?", (uid,)
+        "SELECT source, display_name, data_enc, synced_at FROM account_data WHERE user_id=?", (uid,)
     ).fetchall()
+
+    # Build synced_ago lookup per source
+    import datetime as _dt_ev
+    def _synced_ago(synced_at_str):
+        if not synced_at_str:
+            return ""
+        try:
+            _dt = _dt_ev.datetime.fromisoformat(synced_at_str.replace("Z",""))
+            _delta = _dt_ev.datetime.utcnow() - _dt
+            _h = int(_delta.total_seconds() / 3600)
+            if _h < 1:   return "just now"
+            if _h < 24:  return f"{_h}h ago"
+            return f"{_h // 24}d ago"
+        except Exception:
+            return ""
+
+    # Why this item was surfaced (context-based)
+    _WHY_SHOWN = {
+        "flight":   "You're viewing flights",
+        "hotel":    "You're viewing hotels",
+        "car":      "You're renting a car",
+        "shopping": "You're shopping",
+        "dining":   "You're browsing dining",
+    }
+    _why_shown = _WHY_SHOWN.get(context, "Relevant to your current activity")
 
     benefits = []
     for row in rows:
@@ -12903,14 +12960,21 @@ def api_benefits_relevant():
                 score, factors = _relevance_score(
                     it.get("key", ""), it.get("label", ""), fv, context=context
                 )
+                # Confidence from score: items directly scraped are inherently high confidence
+                _src_type = "ai_items" if "ai_items" in data and it in data.get("ai_items",[]) else "scraped"
+                _conf = "high" if (score >= 0.65 and _src_type == "scraped") else \
+                        "medium" if score >= 0.40 else "low"
                 benefits.append({
-                    "account": row["display_name"],
-                    "source": row["source"],
-                    "field_key": it.get("key", ""),
-                    "label": it.get("label", ""),
-                    "value": fv,
-                    "_score": score,
-                    "_why": factors,
+                    "account":    row["display_name"],
+                    "source":     row["source"],
+                    "field_key":  it.get("key", ""),
+                    "label":      it.get("label", ""),
+                    "value":      fv,
+                    "synced_ago": _synced_ago(row["synced_at"] if "synced_at" in row.keys() else ""),
+                    "confidence": _conf,
+                    "why_shown":  _why_shown,
+                    "_score":     score,
+                    "_why":       factors,
                 })
 
     # Deduplicate by (account, label), sort by relevance score, cap at 8
@@ -12962,10 +13026,11 @@ def api_benefits_relevant():
             pass
 
     _derived = get_derived_benefits(_all_items, _connected_srcs, context)
-    # Append derived items that aren't already covered by a direct match
+    # Append derived items, stamping why_shown, not already covered by a direct match
     _direct_programs = {b.get("label", "").lower() for b in unique_benefits}
     for _db in _derived:
         if _db["label"].lower() not in _direct_programs:
+            _db.setdefault("why_shown", _why_shown)
             unique_benefits.append(_db)
 
     return jsonify({
