@@ -6716,16 +6716,16 @@ def dashboard():
         # Group by type without showing amounts
         # Skip certs/credits in Use Soon when TOP BENEFITS already shows them above
         credit_items = [] if _will_have_top_benefits else [
-            (disp, label, val_str) for disp, label, val_str, dval, method in value_items
+            (disp, label, val_str) for disp, label, val_str, dval, method, *_ in value_items
             if any(k in label.lower() for k in ['credit', 'voucher', 'ecredit'])
             and _use_soon_eligible(label, val_str)
         ]
         cert_items = [] if _will_have_top_benefits else [
-            (disp, label, val_str) for disp, label, val_str, dval, method in value_items
+            (disp, label, val_str) for disp, label, val_str, dval, method, *_ in value_items
             if any(k in label.lower() for k in ['certificate', 'free night', 'companion'])
             and _use_soon_eligible(label, val_str)
         ]
-        points_items = [(disp, label, val_str) for disp, label, val_str, dval, method in value_items
+        points_items = [(disp, label, val_str) for disp, label, val_str, dval, method, *_ in value_items
                         if any(k in label.lower() for k in ['points', 'miles', 'rewards', 'balance'])
                         and not any(k in label.lower() for k in ['credit', 'voucher', 'ecredit', 'certificate', 'free night', 'companion'])
                         and _use_soon_eligible(label, val_str)]
