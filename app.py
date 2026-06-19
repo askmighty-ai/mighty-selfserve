@@ -6848,30 +6848,25 @@ def dashboard():
         _is_cert    = any(k in _lk for k in ['companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade'])
         _is_credit  = any(k in _lk for k in ['credit', 'voucher', 'ecredit'])
         _is_status  = any(k in _lk for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium', 'senator'])
-        _is_pts     = any(k in _lk for k in ['miles', 'points', 'rewards', 'balance']) and not _is_cert and not _is_credit
-        if not (_is_cert or _is_credit or _is_status or _is_pts): continue
-        # Skip progress items (X of Y) — those belong in the progress section, not hero
+        # Hero = certs + credits only (actionable, redeemable items)
+        # Status + points go to Top Benefits / Balances respectively
+        if not (_is_cert or _is_credit): continue
+        # Skip progress items (X of Y) — those belong in the progress section
         import re as _re_prog_hero
         _is_prog_hero = (
             any(k in _lk for k in ['progress', 'qualifying', 'toward', 'threshold', 'requalif', 'earned toward'])
             or bool(_re_prog_hero.search(r'\b\d+\s*(?:of|/)\s*\d+\b', _vk))
         )
         if _is_prog_hero: continue
-        # Also skip zero-value items (e.g. "0 of 100")
+        # Skip zero-value items
         _lead_nums = _re_prog_hero.findall(r'[\d,]+', _vk)
         if _lead_nums and int(_lead_nums[0].replace(',','')) == 0: continue
-        # Score for ordering
+        # Score: expiring items first, then by type
         _priority = 0
         if _is_cert and _exp is not None and _exp < 120:   _priority = 10
         elif _is_cert:                                      _priority = 9
         elif _is_credit and _exp is not None and _exp < 60: _priority = 8
         elif _is_credit:                                    _priority = 7
-        elif _is_status:                                    _priority = 6
-        elif _is_pts:
-            _nums_pts = _re_hero.findall(r'[\d,]+', _val)
-            _pt_val = int(_nums_pts[0].replace(',','')) if _nums_pts else 0
-            if _pt_val < 10000: continue  # skip trivial balances in hero
-            _priority = 3
         _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp))
     _hero_candidates.sort(key=lambda x: (-x[0], x[1]))
 
@@ -7201,7 +7196,7 @@ def dashboard():
                 'border-radius:10px;padding:16px 18px">'
                 '<h2 style="font-size:14px;font-weight:700;color:#374151;margin:0 0 10px;'
                 'text-transform:uppercase;letter-spacing:.05em">\u23f3 '
-                + ('Points \u0026 Miles' if _will_have_top_benefits else 'Use Soon') +
+                + ('Balances' if _will_have_top_benefits else 'Use Soon') +
                 '</h2>'
                 + (
                     '<p style="font-size:12px;color:#78716c;margin:0 0 10px">'
@@ -7275,11 +7270,12 @@ def dashboard():
         _exp = _tb_exp_days(_lbl, _val)
         # Priority sort key
         _pri = 0
-        if _is_cert and _exp is not None and 0 <= _exp < 90:   _pri = 10
-        elif _is_cert:                                          _pri = 9
-        elif _is_credit and _exp is not None and 0 <= _exp < 60: _pri = 8
-        elif _is_credit:                                        _pri = 7
-        elif _is_status:                                        _pri = 5
+        # Status ranks highly — it's your permanent standing, worth more than individual certs
+        if _is_status:                                              _pri = 10
+        elif _is_cert and _exp is not None and 0 <= _exp < 90:     _pri = 8
+        elif _is_cert:                                              _pri = 7
+        elif _is_credit and _exp is not None and 0 <= _exp < 60:   _pri = 6
+        elif _is_credit:                                            _pri = 5
         _top_benefit_cards.append((_pri, _exp if _exp is not None else 9999,
                                    _disp, _lbl, _val, _exp, _is_cert, _is_credit, _is_status))
     _top_benefit_cards.sort(key=lambda x: (-x[0], x[1]))
@@ -7398,13 +7394,13 @@ def dashboard():
     _tb_overflow = max(0, len(_top_benefit_cards) - 6)
     if _tb_html:
         _tb_more_html = (
-            f'<div style="font-size:12px;color:#9ca3af;padding:4px 2px">'
-            f'+ {_tb_overflow} more benefit{"s" if _tb_overflow != 1 else ""} in your accounts</div>'
+            f'<div style="font-size:13px;color:#6366f1;padding:6px 2px 2px;font-weight:500;cursor:pointer"'
+            f' onclick="document.getElementById(\'accounts-section\').scrollIntoView({{behavior:\'smooth\'}})">View remaining benefits →</div>'
         ) if _tb_overflow > 0 else ""
         top_benefits_html = (
             '<div style="margin-bottom:28px">'
             '<h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;'
-            'text-transform:uppercase;letter-spacing:.05em">Top Benefits</h2>'
+            'text-transform:uppercase;letter-spacing:.05em">Your Portfolio</h2>'
             + _tb_html + _tb_more_html +
             '</div>'
         )
