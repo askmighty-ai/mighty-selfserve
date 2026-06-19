@@ -2106,6 +2106,84 @@ CRITICAL: Member numbers, account IDs, and loyalty IDs must NEVER be first. Stat
 CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included — only include named tiers with real meaning.
 CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
+# ── Canonical benefit type taxonomy ─────────────────────────────────────────
+BENEFIT_TYPES = {
+    "elite_status":    "Earned status tier at an airline, hotel, or program",
+    "certificate":     "Redeemable award: companion cert, free night, upgrade cert",
+    "travel_credit":   "Non-cash airline/hotel credit or voucher",
+    "cash_credit":     "Dollar-denominated statement or account credit",
+    "points_balance":  "Loyalty points, miles, or rewards balance",
+    "progress_toward": "Tracking metric toward a goal (X of Y)",
+    "membership":      "Access / lounge / club membership",
+    "reservation":     "Upcoming booking or itinerary item",
+    "expiry_date":     "A date or validity field",
+    "other":           "Does not fit a canonical bucket",
+}
+
+_BT_RULES = [
+    ("progress_toward",
+     ["progress","qualifying","segment","toward","threshold","requalif","earned toward",
+      "flights required","nights required","stays required","spend required"],
+     [r"\b\d[\d,]*\s*(?:of|/)\s*\d[\d,]*\b"], []),
+    ("elite_status",
+     ["status","medallion","tier","elite","level","diamond","platinum","gold","silver",
+      "globalist","titanium","sapphire","senator","chairman","premier","executive",
+      "ambassador","rouge","velocity","bronze"],
+     [],
+     ["progress","qualifying","toward","credit","certificate","cert","voucher",
+      "upgrade","award","free night","points","miles","balance","reservation","booking",
+      "autopay","auto-pay","payment","bill","subscription","service","account status",
+      "paperless","enrolled","enabled","active","loyalty number","member id"]),
+    ("certificate",
+     ["certificate","cert","companion","free night","award night","upgrade",
+      "systemwide upgrade","global upgrade","regional upgrade","suite upgrade",
+      "e-certificate","ecertificate","reward night","travel reward"],
+     [],
+     ["progress","qualifying","toward","balance","points","miles","credit","ecredit"]),
+    ("cash_credit",
+     ["statement credit","annual credit","annual travel credit","cashback","cash back",
+      "reward credit","hotel credit","dining credit","entertainment credit","streaming credit",
+      "wireless credit","global entry credit","tsa precheck credit","annual"],
+     [r"\$\d"],
+     ["ecredit","e-credit","flight credit","voucher","certificate","points","miles"]),
+    ("travel_credit",
+     ["ecredit","e-credit","travel credit","flight credit","airline credit",
+      "transportation credit","travel voucher","residual credit"],
+     [], ["statement","cashback","cash back","reward credit","hotel credit"]),
+    ("membership",
+     ["priority pass","lounge","club access","admirals club","centurion lounge",
+      "skyclub","united club","clear","global entry","nexus","tsa precheck",
+      "precheck","membership","access"],
+     [], ["progress","status","balance","points","miles"]),
+    ("reservation",
+     ["upcoming","reservation","booking","itinerary","check-in","check-out",
+      "arrival","departure","stay","trip","hotel stay","car rental"],
+     [], ["progress","balance","points","miles","status","credit","certificate"]),
+    ("expiry_date",
+     ["expir","valid until","valid through","valid thru","use by","good through","expires"],
+     [], []),
+    ("points_balance",
+     ["miles","points","rewards","balance","skypass","rapid rewards","mileageplus",
+      "aadvantage","skymiles","thankyou","membership rewards","cashback balance",
+      "wallet","coins","cash rewards"],
+     [], ["progress","toward","status","certificate","cert","credit","ecredit"]),
+]
+
+def classify_benefit(label: str, value: str, source: str = "") -> str:
+    """Return a canonical BENEFIT_TYPES key. First matching rule wins."""
+    import re as _bt_re
+    combined = (label + " " + value).lower()
+    lbl_lc   = label.lower()
+    val_lc   = value.lower()
+    for btype, label_kws, val_patterns, excludes in _BT_RULES:
+        if any(ex in combined for ex in excludes):
+            continue
+        lbl_match = any(kw in lbl_lc for kw in label_kws)
+        val_match  = any(_bt_re.search(p, val_lc) for p in val_patterns) if val_patterns else False
+        if lbl_match or (val_patterns and val_match):
+            return btype
+    return "other"
+
 def _post_filter_fields(fields: list, source: str = "") -> list:
     """Remove fields that are clearly noise regardless of what the AI returned.
 
@@ -6727,6 +6805,19 @@ def dashboard():
                 continue
             data_v = decrypt_account_data(user["id"], row_v["data_enc"] or "")
             items_v = data_v.get("items", []) or data_v.get("ai_items", []) or []
+            _bf_dirty = False
+            for _bi in items_v:
+                if "_type" not in _bi:
+                    _bi["_type"] = classify_benefit(_bi.get("label",""), str(_bi.get("value","")), row_v["source"])
+                    _bf_dirty = True
+            if _bf_dirty:
+                data_v["items"] = items_v
+                try:
+                    _bfdb = get_db()
+                    _bfdb.execute("UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                        (encrypt_account_data(user["id"], data_v), user["id"], row_v["source"]))
+                    _bfdb.commit()
+                except Exception: pass
             if src in discovered_by_source:
                 disc_v = discovered_by_source[src]
                 items_v = [
@@ -6739,7 +6830,7 @@ def dashboard():
                 _raw_val = _rf["value_factor"] * 300.0
                 if _raw_val > 0:
                     total_value += _raw_val
-                    value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), _rs, "relevance"))
+                    value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), _rs, "relevance", it.get("_type","other")))
     # Get latest intent for context-aware sorting
     _latest_intent = get_db().execute(
         "SELECT intent_type FROM intent_history WHERE user_id=? ORDER BY detected_at DESC LIMIT 1",
@@ -6848,25 +6939,19 @@ def dashboard():
         _is_cert    = any(k in _lk for k in ['companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade'])
         _is_credit  = any(k in _lk for k in ['credit', 'voucher', 'ecredit'])
         _is_status  = any(k in _lk for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium', 'senator'])
-        # Hero = certs + credits only (actionable, redeemable items)
-        # Status + points go to Top Benefits / Balances respectively
-        if not (_is_cert or _is_credit): continue
-        # Skip progress items (X of Y) — those belong in the progress section
-        import re as _re_prog_hero
-        _is_prog_hero = (
-            any(k in _lk for k in ['progress', 'qualifying', 'toward', 'threshold', 'requalif', 'earned toward'])
-            or bool(_re_prog_hero.search(r'\b\d+\s*(?:of|/)\s*\d+\b', _vk))
-        )
-        if _is_prog_hero: continue
+        # Route by canonical type — no keyword regex needed
+        _btype = classify_benefit(_lbl, _vk)
+        if _btype not in ("certificate","travel_credit","cash_credit"): continue
         # Skip zero-value items
+        import re as _re_prog_hero
         _lead_nums = _re_prog_hero.findall(r'[\d,]+', _vk)
         if _lead_nums and int(_lead_nums[0].replace(',','')) == 0: continue
-        # Score: expiring items first, then by type
+        # Score: expiring first, then by type
         _priority = 0
-        if _is_cert and _exp is not None and _exp < 120:   _priority = 10
-        elif _is_cert:                                      _priority = 9
-        elif _is_credit and _exp is not None and _exp < 60: _priority = 8
-        elif _is_credit:                                    _priority = 7
+        if _btype == "certificate" and _exp is not None and _exp < 120:    _priority = 10
+        elif _btype == "certificate":                                       _priority = 9
+        elif _btype == "travel_credit" and _exp is not None and _exp < 60: _priority = 8
+        elif _btype in ("travel_credit","cash_credit"):                     _priority = 7
         _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp))
     _hero_candidates.sort(key=lambda x: (-x[0], x[1]))
 
@@ -7252,18 +7337,17 @@ def dashboard():
         _is_cert    = any(k in _lk for k in ['companion', 'certificate', 'cert', 'free night', 'award night', 'upgrade cert'])
         _is_credit  = any(k in _lk for k in ['credit', 'voucher', 'ecredit'])
         _is_status  = any(k in _lk for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium', 'senator'])
-        # Detect progress/tracking metrics — e.g. "0 of 100 flights toward Companion Pass"
-        _is_progress = (
-            any(k in _lk for k in ['progress', 'qualifying', 'segment', 'toward', 'threshold', 'required', 'requalif', 'earned toward'])
-            or bool(_tb_re2.search(r'\b\d+\s*(?:of|/)\s*\d+\b', _vk))
-        )
-        if _is_progress and (_is_cert or _is_status):
+        # Route by canonical type
+        _btype_v = classify_benefit(_lbl, _vk)
+        _is_progress = (_btype_v == "progress_toward")
+        if _is_progress:
             _prog_dedup = (_disp, _lbl[:35])
             if _prog_dedup not in _tb_seen:
                 _tb_seen.add(_prog_dedup)
                 _progress_cards.append((_disp, _lbl, _vk, _tb_exp_days(_lbl, _vk)))
             continue
-        if not _is_status: continue  # Status section shows durable standing only; certs/credits shown in Available Now
+        _btype_tb = classify_benefit(_lbl, _vk)
+        if _btype_tb != "elite_status": continue  # Status section: elite_status only
         _dedup = (_disp, _lbl[:35])
         if _dedup in _tb_seen: continue
         _tb_seen.add(_dedup)
@@ -9477,6 +9561,7 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
             item["source_snippet"] = f["source_snippet"]
         if f.get("from_api"):
             item["from_api"] = True
+        item["_type"] = classify_benefit(f.get("label",""), str(f.get("value","")), source)
         ai_items.append(item)
     ad = db.execute(
         "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
@@ -12098,6 +12183,7 @@ def api_candidate_approve(cid):
             "value": row["field_value"],
             "confidence": row["confidence"],
             "source_snippet": row["source_snippet"],
+            "_type": classify_benefit(row["field_label"], str(row["field_value"]), row["source"]),
         }
         existing_keys = {item.get("key") for item in items}
         if row["field_key"] in existing_keys:
@@ -12290,6 +12376,31 @@ def api_sync_finalize():
     print(f"[Finalize] Unified {result.rowcount} accounts to session_ts={session_ts[:19]}", flush=True)
     return jsonify({"ok": True, "updated": result.rowcount})
 
+
+
+@app.route("/api/reclassify", methods=["POST"])
+@require_login
+def api_reclassify():
+    """Backfill _type on all existing account_data items for this user."""
+    uid  = session["user_id"]
+    db   = get_db()
+    rows = db.execute("SELECT source, data_enc FROM account_data WHERE user_id=?", (uid,)).fetchall()
+    updated = 0
+    for row in rows:
+        data  = decrypt_account_data(uid, row["data_enc"] or "")
+        items = data.get("items") or data.get("ai_items") or []
+        changed = False
+        for item in items:
+            t = classify_benefit(item.get("label",""), str(item.get("value","")), row["source"])
+            if item.get("_type") != t:
+                item["_type"] = t; changed = True
+        if changed:
+            data["items"] = items
+            db.execute("UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                       (encrypt_account_data(uid, data), uid, row["source"]))
+            updated += 1
+    db.commit()
+    return jsonify({"ok": True, "accounts_updated": updated})
 
 @app.route("/api/extension/capture", methods=["POST"])
 def api_extension_capture():
