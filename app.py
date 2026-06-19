@@ -1402,6 +1402,23 @@ def _generate_opportunities(uid: str, context: str | None = None) -> list[dict]:
         if not _non_status:
             continue
 
+        # Skip lone points balances with no expiry — a balance is account data, not an insight.
+        # Opportunities need either urgency, or multiple actionable components, or a cross-account angle.
+        _non_transfer = [c for c in components if not c.get("is_transfer")]
+        _actionable_canonicals = {"FREE_NIGHT", "FLIGHT_CREDIT", "COMPANION_CERT",
+                                  "UPGRADE_CERT", "STATEMENT_CREDIT", "PURCHASE_PROTECTION",
+                                  "TRIP_PROTECTION"}
+        _has_actionable = any(c.get("canonical") in _actionable_canonicals for c in _non_transfer)
+        _has_urgency    = any(c.get("urgency") in ("urgent", "soon") for c in components)
+        _is_solo_points = (
+            len(_non_transfer) == 1
+            and _non_transfer[0].get("canonical") == "MILES_POINTS"
+            and not _has_urgency
+            and not _has_actionable
+        )
+        if _is_solo_points:
+            continue
+
         # Compute opportunity-level urgency and score
         opp_urgency = "none"
         for c in components:
