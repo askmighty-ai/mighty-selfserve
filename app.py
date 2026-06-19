@@ -405,6 +405,9 @@ def _parse_expiry_days(label, val):
     import re as _re_exp
     import datetime as _dt_exp
     combined = f"{label} {val}"
+    _mm_map = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+               'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+    # MM/DD/YYYY
     m = _re_exp.search(r'\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b', combined)
     if m:
         try:
@@ -412,13 +415,23 @@ def _parse_expiry_days(label, val):
             if yr < 100: yr += 2000
             return (_dt_exp.date(yr, mo, da) - _dt_exp.date.today()).days
         except Exception: pass
+    # "Aug 31, 2026" or "August 31, 2026" (day present)
+    m3 = _re_exp.search(
+        r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+(\d{1,2}),?\s+(\d{4})',
+        combined, _re_exp.I)
+    if m3:
+        try:
+            mo = _mm_map[m3.group(1)[:3].lower()]
+            da = int(m3.group(2))
+            yr = int(m3.group(3))
+            return (_dt_exp.date(yr, mo, da) - _dt_exp.date.today()).days
+        except Exception: pass
+    # "Aug 2026" (no day — use 1st of month)
     m2 = _re_exp.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+(\d{4})',
                          combined, _re_exp.I)
     if m2:
-        _mm = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
-               'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
         try:
-            mo = _mm[m2.group(1)[:3].lower()]
+            mo = _mm_map[m2.group(1)[:3].lower()]
             yr = int(m2.group(2))
             return (_dt_exp.date(yr, mo, 1) - _dt_exp.date.today()).days
         except Exception: pass
@@ -430,42 +443,45 @@ def _find_expiring_for_user(uid):
     """Return list of expiring benefit dicts for a user. Only certs+credits within 30d."""
     db = get_db()
     rows = db.execute(
-        "SELECT source, display_name, ai_items, scraped_items FROM account_data WHERE user_id=?",
+        "SELECT source, display_name, data_enc FROM account_data WHERE user_id=?",
         (uid,)
     ).fetchall()
     results = []
     for row in rows:
         display = row["display_name"] or row["source"]
-        for col in ("ai_items", "scraped_items"):
-            try:
-                items = json.loads(row[col] or "[]")
-            except Exception:
+        try:
+            data = decrypt_account_data(uid, row["data_enc"] or "")
+        except Exception:
+            continue
+        # Items are stored under "items" (scraped) and "ai_items" (AI-extracted)
+        all_items = []
+        for key in ("items", "ai_items"):
+            chunk = data.get(key)
+            if isinstance(chunk, list):
+                all_items.extend(chunk)
+        for item in all_items:
+            if not isinstance(item, dict):
                 continue
-            if not isinstance(items, list):
+            lbl = item.get("label", "")
+            val = str(item.get("value", "")).strip()
+            if not val or val.lower() in {"0", "—", "-", "n/a", "none", "tbd", ""}:
                 continue
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                lbl = item.get("label", "")
-                val = str(item.get("value", "")).strip()
-                if not val or val.lower() in {"0", "—", "-", "n/a", "none", "tbd", ""}:
-                    continue
-                btype = classify_benefit(lbl, val)
-                if btype not in ("certificate", "travel_credit", "cash_credit"):
-                    continue
-                exp = _parse_expiry_days(lbl, val)
-                if exp is None or exp < 0 or exp > 30:
-                    continue
-                field_key = item.get("field_key") or item.get("key") or lbl[:40]
-                results.append({
-                    "source": row["source"],
-                    "display": display,
-                    "label": lbl,
-                    "value": val,
-                    "exp_days": exp,
-                    "field_key": field_key,
-                    "benefit_key": f"{row['source']}:{field_key}",
-                })
+            btype = classify_benefit(lbl, val)
+            if btype not in ("certificate", "travel_credit", "cash_credit"):
+                continue
+            exp = _parse_expiry_days(lbl, val)
+            if exp is None or exp < 0 or exp > 30:
+                continue
+            field_key = item.get("field_key") or item.get("key") or lbl[:40]
+            results.append({
+                "source": row["source"],
+                "display": display,
+                "label": lbl,
+                "value": val,
+                "exp_days": exp,
+                "field_key": field_key,
+                "benefit_key": f"{row['source']}:{field_key}",
+            })
     # De-duplicate by benefit_key, keep shortest exp_days
     seen = {}
     for r in results:
@@ -645,7 +661,12 @@ def run_expiry_alerts(dry_run=False):
     return sent_count
 
 def _start_alert_scheduler():
-    """Run expiry alerts daily at 08:00 UTC."""
+    """Run expiry alerts daily at 08:00 UTC.
+
+    NOTE: This in-process scheduler is fine for a single Railway instance.
+    If you scale to multiple instances, move this to a Railway cron job calling
+    POST /api/internal/trigger-alerts instead, to avoid duplicate sends.
+    """
     import time as _time_sched
     import datetime as _dt_sched
     def _loop():
@@ -660,7 +681,9 @@ def _start_alert_scheduler():
             print(f"[Alerts] Next expiry check at {target.isoformat()}Z ({wait/3600:.1f}h away)", flush=True)
             _time_sched.sleep(wait)
             try:
-                run_expiry_alerts()
+                # get_db() requires Flask app context outside a request
+                with app.app_context():
+                    run_expiry_alerts()
             except Exception as e:
                 print(f"[Alerts] run_expiry_alerts error: {e}", flush=True)
     t = threading.Thread(target=_loop, daemon=True)
