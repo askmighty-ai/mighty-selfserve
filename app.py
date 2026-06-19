@@ -6850,6 +6850,16 @@ def dashboard():
         _is_status  = any(k in _lk for k in ['status', 'medallion', 'elite', 'gold', 'platinum', 'diamond', 'globalist', 'sapphire', 'titanium', 'senator'])
         _is_pts     = any(k in _lk for k in ['miles', 'points', 'rewards', 'balance']) and not _is_cert and not _is_credit
         if not (_is_cert or _is_credit or _is_status or _is_pts): continue
+        # Skip progress items (X of Y) — those belong in the progress section, not hero
+        import re as _re_prog_hero
+        _is_prog_hero = (
+            any(k in _lk for k in ['progress', 'qualifying', 'toward', 'threshold', 'requalif', 'earned toward'])
+            or bool(_re_prog_hero.search(r'\b\d+\s*(?:of|/)\s*\d+\b', _vk))
+        )
+        if _is_prog_hero: continue
+        # Also skip zero-value items (e.g. "0 of 100")
+        _lead_nums = _re_prog_hero.findall(r'[\d,]+', _vk)
+        if _lead_nums and int(_lead_nums[0].replace(',','')) == 0: continue
         # Score for ordering
         _priority = 0
         if _is_cert and _exp is not None and _exp < 120:   _priority = 10
