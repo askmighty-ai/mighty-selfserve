@@ -4050,13 +4050,18 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .feed-tabs{display:flex;gap:0;background:#e4dfd8;border:0.5px solid #d5cfc8;border-radius:9px;padding:3px;width:fit-content}
 .feed-tab{padding:5px 18px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:600;color:#7d7670;cursor:pointer;transition:all 0.12s;font-family:inherit}
 .feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10)}
-/* Page body — single-column, information hierarchy */
+/* Page body — single-column, intelligence top + accounts below */
 .page-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:0}
-.insight-panel{width:100%;padding:24px 32px 20px;background:#f7f4f0;border-bottom:1px solid #e5e0da;flex-shrink:0}
-.insight-inner{max-width:900px;margin:0 auto}
-.cards-panel{flex:1;min-width:0;padding:20px 32px 40px}
-.cards-panel-inner{max-width:900px;margin:0 auto}
+/* Insight panel: two-column row — main content + right Available Benefits rail */
+.insight-panel{width:100%;display:flex;flex-direction:row;background:#f7f4f0;border-bottom:1px solid #e5e0da;flex-shrink:0}
+.insight-main{flex:1;min-width:0;padding:24px 28px 22px}
+.insight-rail{width:264px;flex-shrink:0;padding:22px 18px 22px;border-left:1px solid #e0dbd4;background:#efebe5}
+/* Cards panel fills full width — no max-width cap */
+.cards-panel{flex:1;min-width:0;padding:20px 28px 40px}
+.cards-panel-inner{max-width:1600px;margin:0 auto}
 .cards-panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+/* Mobile: stack insight-panel columns */
+@media(max-width:700px){.insight-panel{flex-direction:column}.insight-rail{width:100%;border-left:none;border-top:1px solid #e0dbd4}}
 /* Category groups */
 .cat-group{margin-bottom:22px}
 .cat-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -4193,18 +4198,16 @@ body{display:flex;flex-direction:row;background:#eee9e2}
   <div class="page-body" {feed_col_hidden}>
     <input type="hidden" name="_csrf" value="{csrf_token}">
 
-    <!-- Intelligence panel: greeting, relevant now, status -->
+    <!-- Intelligence panel: main column (greeting + intent + status) + right rail (available benefits) -->
     <div class="insight-panel">
-      <div class="insight-inner">
+      <div class="insight-main">
       {hero_section_html}
       {relevant_now_html}
-      {top_benefits_html}
       {progress_section_html}
-      {action_center_html}
-      {recently_found_html}
-      {value_center_html}
-      {wallet_insights_html}
-      </div><!-- /insight-inner -->
+      </div><!-- /insight-main -->
+      <div class="insight-rail">
+      {available_rail_html}
+      </div><!-- /insight-rail -->
       <script>
       (function() {
         var TYPE_ICONS = {
@@ -7415,7 +7418,7 @@ def dashboard():
         _h_score_item = {"label": _lbl, "value": _val, "btype": _btype, "days_left": _exp}
         _priority = score_opportunity(_h_score_item, user_intent=_dash_user_intent, source=_disp,
                                       user_type_affinity=_dash_type_affinity)
-        _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp))
+        _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp, _btype))
     _hero_candidates.sort(key=lambda x: (-x[0], x[1]))
 
     # Build display_name → synced_ago lookup for evidence lines
@@ -7435,7 +7438,7 @@ def dashboard():
     _seen_hero = set()
     import json as _json_hero
     import datetime as _hdt
-    for _pr, _, _hdisp, _hlbl, _hval, _hexp in _hero_candidates[:5]:
+    for _pr, _, _hdisp, _hlbl, _hval, _hexp, _btype in _hero_candidates[:5]:
         _dedup_key = (_hdisp, _hlbl[:30])
         if _dedup_key in _seen_hero: continue
         _seen_hero.add(_dedup_key)
@@ -8017,56 +8020,133 @@ def dashboard():
             f'<div id="avail-attn-section" style="margin-bottom:10px">{_avail_attn_html}</div>'
         )
 
-    _avail_body = _avail_attn_html + _hero_bullets_html
-    if _avail_body:
-        top_benefits_html = (
-            '<div style="margin-bottom:24px">'
-            '<h2 style="font-size:11px;font-weight:700;color:#6b7280;margin:0 0 12px;'
-            'text-transform:uppercase;letter-spacing:.07em">Relevant Now</h2>'
-            + _avail_body +
-            '</div>'
-        )
-    else:
-        # Nothing urgent — but always show something if we have value_items
-        _fallback_items = [
-            (bt, disp, lbl, val)
-            for disp, lbl, val, _, _, bt in value_items
-            if bt in ("certificate","travel_credit","cash_credit","elite_status","points_balance")
-            and val.strip() and val.strip() not in {'0','—','-','N/A','None','TBD',''}
-        ][:4]
-        if _fallback_items:
-            _fb_html = ""
-            for _fbt, _fdisp, _flbl, _fval in _fallback_items:
-                _ficon = {"certificate":"🎫","travel_credit":"✈","cash_credit":"💳",
-                          "elite_status":"◆","points_balance":"✈"}.get(_fbt,"•")
-                _skip_vals_fb = {'available','active','yes','enabled','valid','earned',''}
-                _fshow = _fval if _fval.lower().strip() not in _skip_vals_fb else ""
-                _fb_html += (
-                    f'<div style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;'
-                    f'border-bottom:1px solid #f0ece8">'
-                    f'<span style="font-size:16px;flex-shrink:0">{_ficon}</span>'
-                    f'<div style="flex:1;min-width:0">'
-                    f'<div style="font-size:13.5px;font-weight:600;color:#1c1917">{he(_flbl)}'
-                    + (f'<span style="font-size:12px;font-weight:400;color:#6b7280;margin-left:6px">{he(_fshow)}</span>' if _fshow else '')
-                    + f'</div>'
-                    f'<div style="font-size:11px;color:#9ca3af;margin-top:1px">{he(_fdisp)}</div>'
-                    f'</div></div>'
-                )
-            top_benefits_html = (
-                '<div style="margin-bottom:24px">'
-                '<h2 style="font-size:11px;font-weight:700;color:#6b7280;margin:0 0 12px;'
-                'text-transform:uppercase;letter-spacing:.07em">Top Assets</h2>'
-                + _fb_html +
-                '<div style="font-size:11px;color:#9ca3af;margin-top:8px;padding-top:4px">✓ Nothing urgent right now</div>'
-                '</div>'
-            )
-        elif _account_count > 0:
-            top_benefits_html = (
-                '<div style="margin-bottom:24px;color:#9ca3af;font-size:13px">'
-                '✓ Nothing urgent right now</div>'
-            )
+    # ── RIGHT RAIL: Available Benefits ──────────────────────────────────────
+    # Build the right-rail panel: urgent action items at top, then all
+    # actionable benefit assets (certificates, travel/cash credits) sorted
+    # by score.  This replaces the old top_benefits_html centre section.
+    _rail_html = ""
+
+    # 1. Urgent / login-required action items (compact, with dismiss)
+    _rail_attn_html = ""
+    for _rai in _all_action_items[:4]:
+        _rai_id      = _rai.get("id")
+        _rai_urgency = _rai.get("urgency", "info")
+        _rai_label   = _rai.get("label", "")
+        _rai_val     = _rai.get("value", "")
+        _rai_btype   = _rai.get("btype", "")
+        _rai_days    = _rai.get("days_left")
+        _rai_disp    = _rai_val if not _rai_label or _rai_label == "Login required" else f"{_rai_label}: {_rai_val}"
+        if _rai_btype == "login_required":
+            _rai_why = "Re-authenticate to continue syncing"
+        elif _rai_days is not None and _rai_days < 0:
+            _rai_why = "Expired"
         else:
-            top_benefits_html = ""
+            _rai_why = _why_shown(_rai_btype, _rai_days)
+        _rai_urg_clr = "#dc2626" if _rai_urgency == "urgent" else "#d97706"
+        _rai_icon    = "🔴" if _rai_urgency == "urgent" else "🟡"
+        # Dismiss button (only for persisted items)
+        _rai_dismiss = ""
+        if _rai_id is not None:
+            _rai_rm_js = (
+                f"document.getElementById('rail-ai-{_rai_id}').remove();"
+                f"if(!document.querySelector('[id^=\"rail-ai-\"]'))document.getElementById('rail-attn-wrap').remove();"
+            )
+            _rai_dismiss_js = (
+                f"fetch('/api/action-items/{_rai_id}/dismiss',{{"
+                f"method:'POST',headers:{{'X-CSRF-Token':'{get_csrf_token()}','Content-Type':'application/json'}},"
+                f"credentials:'same-origin'}}).then(r=>r.ok&&({_rai_rm_js}))"
+            )
+            _rai_dismiss = (
+                f'<button onclick="{_rai_dismiss_js}" style="font-size:10px;color:#9ca3af;'
+                f'background:none;border:none;padding:0;cursor:pointer;margin-left:auto;flex-shrink:0">✕</button>'
+            )
+        _rai_id_attr = f' id="rail-ai-{_rai_id}"' if _rai_id is not None else ""
+        _rail_attn_html += (
+            f'<div{_rai_id_attr} style="display:flex;align-items:flex-start;gap:8px;'
+            f'padding:7px 0;border-bottom:1px solid #e0dbd4">'
+            f'<span style="font-size:13px;flex-shrink:0;margin-top:1px">{_rai_icon}</span>'
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="font-size:12px;font-weight:500;color:#111;line-height:1.35;'
+            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{he(_rai_disp)}</div>'
+            + (f'<div style="font-size:10.5px;color:{_rai_urg_clr};margin-top:1px">{he(_rai_why)}</div>' if _rai_why else '')
+            + f'</div>{_rai_dismiss}</div>'
+        )
+    if _rail_attn_html:
+        _rail_html += f'<div id="rail-attn-wrap" style="margin-bottom:12px">{_rail_attn_html}</div>'
+
+    # 2. Benefit assets: certificates first, then travel/cash credits
+    # Pull from scored hero_candidates which are already sorted by score.
+    # Show up to 8 items so the rail is always rich on wide monitors.
+    _rail_assets_html = ""
+    import json as _json_rail
+    for _rpr, _, _rhdisp, _rhlbl, _rhval, _rhexp, _rhbtype in _hero_candidates[:8]:
+        _ricon = _hero_icon(_rhlbl.lower())
+        # Color: blue for certs, green for credits
+        if _rhbtype == "certificate":
+            _rlbl_color = "#1d4ed8"
+        elif _rhbtype in ("travel_credit", "cash_credit"):
+            _rlbl_color = "#059669"
+        else:
+            _rlbl_color = "#374151"
+        # Skip-val filter
+        _skip_vals_r = {'available','active','yes','enabled','valid','earned',''}
+        _rshow_val   = _rhval if _rhval.lower().strip() not in _skip_vals_r else ""
+        # Expiry sub-line
+        _rsub_parts = [f'<span style="color:#9ca3af;font-size:10.5px">{he(_rhdisp)}</span>']
+        if _rhexp is not None and _rhexp >= 0:
+            import datetime as _rdt
+            if _rhexp <= 30:
+                _rsub_parts.append(f'<span style="color:#dc2626;font-weight:600;font-size:10px">Exp {_rhexp}d</span>')
+            else:
+                _rexp_d = _rdt.date.today() + _rdt.timedelta(days=_rhexp)
+                _rsub_parts.append(f'<span style="color:#d97706;font-size:10px">Exp {_rexp_d.strftime("%b %Y")}</span>')
+        _rsub_html = ' · '.join(_rsub_parts)
+        # Why-shown copy (now correct because _rhbtype comes from the tuple)
+        _rwhy = _why_shown(_rhbtype, _rhexp, _rhdisp)
+        # Drawer data
+        _rfk = f"{_rhdisp}::{_rhlbl}"
+        _rbtype_draw = _dash_corrections.get(_rfk, _rhbtype)
+        _rbd_data = _json_rail.dumps({
+            "label": _rhlbl, "account": _rhdisp,
+            "value": _rhval, "icon": _ricon, "expDays": _rhexp,
+            "field_key": _rfk, "btype": _rbtype_draw,
+            "corrected": _rfk in _dash_corrections
+        }).replace("'", "&#39;")
+        _rail_assets_html += (
+            f'<div style="display:flex;gap:9px;padding:8px 4px;cursor:pointer;'
+            f'border-radius:7px;transition:background 0.1s" '
+            f'onmouseover="this.style.background=\'#e8e2db\'" '
+            f'onmouseout="this.style.background=\'\'" '
+            f'onclick="openBenefitDrawer(this)" data-benefit=\'{_rbd_data}\'>'
+            f'<span style="font-size:17px;flex-shrink:0;margin-top:1px;line-height:1.3">{_ricon}</span>'
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="font-size:13px;font-weight:600;color:{_rlbl_color};line-height:1.3;'
+            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{he(_rhlbl)}'
+            + (f'<span style="font-size:11.5px;font-weight:400;color:#6b7280;margin-left:5px">{he(_rshow_val)}</span>' if _rshow_val else '')
+            + f'</div>'
+            f'<div style="margin-top:2px;line-height:1.4">{_rsub_html}</div>'
+            + (f'<div style="font-size:10.5px;color:#6b7280;margin-top:1px">{he(_rwhy)}</div>' if _rwhy else '')
+            + f'</div></div>'
+        )
+
+    if _rail_assets_html:
+        _rail_html += (
+            '<h2 style="font-size:10px;font-weight:700;color:#8b7d6b;margin:0 0 8px;'
+            'text-transform:uppercase;letter-spacing:.07em">Available</h2>'
+            + _rail_assets_html
+        )
+    elif _account_count > 0:
+        _rail_html += (
+            '<div style="font-size:12px;color:#9ca3af;margin-top:8px">✓ Nothing to redeem right now</div>'
+        )
+
+    if _rail_html:
+        available_rail_html = _rail_html
+    else:
+        available_rail_html = ""
+
+    # Keep stub for any legacy references
+    top_benefits_html = ""
 
     opportunities_html = """
 <style>
@@ -8438,9 +8518,10 @@ function dismissOnboarding() {
             .replace("{new_accounts_banner}",     new_accounts_banner)
             .replace("{account_data_html}",       account_data_html)
             .replace("{hero_section_html}",       hero_section_html)
+            .replace("{available_rail_html}",     available_rail_html)
             .replace("{action_center_html}",      action_center_html)
             .replace("{recently_found_html}",     recently_found_html)
-            .replace("{relevant_now_html}",      relevant_now_html)
+            .replace("{relevant_now_html}",       relevant_now_html)
             .replace("{wallet_insights_html}",    wallet_insights_html)
             .replace("{value_center_html}",       value_center_html)
             .replace("{top_benefits_html}",       top_benefits_html)
