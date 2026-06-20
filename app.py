@@ -4183,7 +4183,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}#rediscover-btn{display:none!important}.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:16px 16px 16px}.cards-panel{padding:16px 16px 32px}}
+@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:16px 16px 16px}.cards-panel{padding:16px 16px 32px}}
 </style>
 </head>
 <body>
@@ -4209,13 +4209,9 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
-    <button id="rediscover-btn" onclick="rediscoverAll()" class="btn-sync" title="Scan your stored page data again to find any fields that may have been missed">
-      <svg id="rediscover-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
-      <span id="rediscover-label">Re-scan</span>
-    </button>
-    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Sync all accounts — fetches live data from connected sites">
+    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Sync all accounts — fetches live data from connected sites, then re-extracts fields">
       <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
-      <span id="sync-label">Sync All</span>
+      <span id="sync-label">Sync</span>
     </button>
   </div>
 
@@ -4596,6 +4592,15 @@ function _setSyncLabel(text) {
   var lbl = document.getElementById('sync-label');
   if (lbl) lbl.textContent = text;
 }
+function _triggerRescan(onDone) {
+  fetch('/api/data/rediscover-all', {method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
+      document.querySelector('input[name="_csrf"]').value : '')
+  }).then(function(r){return r.json();}).catch(function(){}).finally(function(){
+    if (onDone) onDone();
+  });
+}
 function _showToast(msg, duration) {
   var t = document.getElementById('mighty-toast');
   if (!t) return;
@@ -4603,39 +4608,6 @@ function _showToast(msg, duration) {
   t.className = 'show';
   setTimeout(function(){ t.className = 'hide'; }, (duration || 3000) - 200);
   setTimeout(function(){ t.className = ''; }, duration || 3000);
-}
-function rediscoverAll() {
-  var btn = document.getElementById('rediscover-btn');
-  var lbl = document.getElementById('rediscover-label');
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  btn.classList.add('rediscovering');
-  lbl.textContent = 'Scanning…';
-  fetch('/api/data/rediscover-all', {method:'POST',
-    headers:{'Content-Type':'application/x-www-form-urlencoded'},
-    body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
-      document.querySelector('input[name="_csrf"]').value : '')
-  }).then(function(r){return r.json();}).then(function(d){
-    if (d.ok) {
-      _showToast('Re-discovering fields across ' + d.sources + ' account' + (d.sources !== 1 ? 's' : '') + '…', 4000);
-      setTimeout(function(){
-        btn.classList.remove('rediscovering');
-        lbl.textContent = 'Find new fields';
-        btn.disabled = false;
-        reloadWithScroll();
-      }, 20000);
-    } else {
-      _showToast('Re-discover failed — try again', 3000);
-      btn.classList.remove('rediscovering');
-      lbl.textContent = 'Find new fields';
-      btn.disabled = false;
-    }
-  }).catch(function(){
-    _showToast('Re-discover failed — try again', 3000);
-    btn.classList.remove('rediscovering');
-    lbl.textContent = 'Find new fields';
-    btn.disabled = false;
-  });
 }
 // Extension presence detection — dashboard_relay.js sends this on load
 var _extPresent = false;
@@ -4646,10 +4618,13 @@ window.addEventListener('message', function(e) {
 function _finishSync() {
   var btn = document.getElementById('cloud-sync-btn');
   document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
-  if (btn) { btn.classList.remove('syncing'); btn.disabled = false; }
-  _setSyncLabel('Sync All');
-  sessionStorage.setItem('mighty-post-sync', '1');
-  reloadWithScroll();
+  _setSyncLabel('Extracting…');
+  _triggerRescan(function() {
+    if (btn) { btn.classList.remove('syncing'); btn.disabled = false; }
+    _setSyncLabel('Sync');
+    sessionStorage.setItem('mighty-post-sync', '1');
+    reloadWithScroll();
+  });
 }
 
 // Server-side polling: fetch /api/latest-sync every 8s; when the timestamp changes
@@ -4682,6 +4657,7 @@ function cloudSync() {
   btn.classList.add('syncing');
   _setSyncLabel('Syncing…');
   btn.disabled = true;
+
   document.querySelectorAll('.acct-card').forEach(function(c) { c.classList.add('is-syncing'); });
 
   // Fetch current latest-sync baseline before triggering, so we can detect the change
