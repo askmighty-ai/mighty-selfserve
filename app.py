@@ -12818,14 +12818,10 @@ def api_force_discover(source):
         return jsonify({"ok": False, "error": f"Server error: {str(e)[:100]}"}), 500
 
 
-@app.route("/api/data/rediscover-all", methods=["POST"])
+@app.route("/api/data/rediscover-all", methods=["POST", "GET"])
 @require_login
 def api_rediscover_all():
     """Re-run field discovery on ALL accounts' existing raw_text in a background thread."""
-    try:
-        check_csrf()
-    except Exception:
-        return jsonify({"ok": False, "error": "Session expired"}), 403
     try:
         uid = session["user_id"]
         db  = get_db()
