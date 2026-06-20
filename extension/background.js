@@ -329,9 +329,10 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
       type: 'popup',
       width: 800,
       height: 600,
-      state: 'minimized',
       focused: false,
     });
+    // 'minimized' is not valid in create() — must call update() separately
+    try { await chrome.windows.update(win.id, { state: 'minimized' }); } catch (_) {}
     return { win, tabId: win.tabs[0].id };
   } catch (e) {
     console.warn('[Mighty] Could not create sync window:', e.message);
