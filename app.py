@@ -13504,7 +13504,7 @@ def api_debug_fields(source):
     try:
         uid = get_current_user_id()
         row = get_db().execute(
-            "SELECT data_enc, synced_at, sync_source FROM account_data WHERE user_id=? AND source=?",
+            "SELECT data_enc, synced_at FROM account_data WHERE user_id=? AND source=?",
             (uid, source)
         ).fetchone()
         if not row:
@@ -13524,7 +13524,7 @@ def api_debug_fields(source):
         return jsonify({
             "source": source,
             "synced_at": row["synced_at"],
-            "sync_source": row["sync_source"],
+            "sync_source": data.get("sync_source", "unknown"),
             "item_count": len(out),
             "items": out,
             "raw_text_chars": len(data.get("raw_text", "")),
