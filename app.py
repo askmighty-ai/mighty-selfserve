@@ -13521,13 +13521,25 @@ def api_debug_fields(source):
             btype = it.get("_type") or classify_benefit(lbl, val, source)
             out.append({"label": lbl, "value": val, "type": btype, "key": it.get("key", "")})
         out.sort(key=lambda x: x["type"])
+        raw = data.get("raw_text", "")
+        # Find sections that look like account data (contain numbers, status words)
+        import re as _dbg_re
+        _status_words = ["gold","silver","platinum","diamond","points","miles","balance",
+                         "certificate","credit","upgrade","companion","status","tier","member"]
+        _relevant_chunks = []
+        for _chunk in raw.split("\n\n"):
+            _cl = _chunk.lower()
+            if any(w in _cl for w in _status_words) and len(_chunk.strip()) > 20:
+                _relevant_chunks.append(_chunk.strip()[:300])
         return jsonify({
             "source": source,
             "synced_at": row["synced_at"],
             "sync_source": data.get("sync_source", "unknown"),
             "item_count": len(out),
             "items": out,
-            "raw_text_chars": len(data.get("raw_text", "")),
+            "raw_text_chars": len(raw),
+            "raw_text_start": raw[:500],
+            "relevant_chunks": _relevant_chunks[:10],
         })
     except Exception as e:
         import traceback
