@@ -10,6 +10,15 @@
 - Deploy: `cd ~/Desktop/mighty-selfserve && git add -A && git commit -m "..." && git push origin main`
 - Railway auto-deploys on push (takes ~2 min)
 
+## ⚠️ Two-machine workflow
+- **This machine (work)** — code edits happen here, git push goes from here
+- **Personal computer** — Chrome extension lives here; after any push that touches `extension/`, must:
+  1. `cd ~/Desktop/mighty-selfserve && git pull`
+  2. Chrome → Extensions → Mighty Sync → Reload
+
+**Extension files** (require personal computer pull + reload): anything under `extension/`
+**Server files** (Railway auto-deploys, no personal computer action): `app.py`, `mighty/`, templates
+
 ## Your API Key
 - On Settings page → "Reveal" to see full key (format: `mk_...`)
 - Required for `X-Mighty-Key` header on all `/api/*` endpoints

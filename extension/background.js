@@ -155,21 +155,69 @@ const ACCOUNT_BASE_DOMAIN_OVERRIDE = {
 
 // Domain → source for passive supplement capture when user naturally browses.
 // Any account-looking path on these domains gets captured — no hardcoded path list needed.
+// All known account domains — full DOM supplement capture (no truncation).
+// Matches INTERCEPT_DOMAIN_MAP plus utility/local sites.
+// Add new sites here so they're pre-approved without a per-site dialog.
 const SUPPLEMENT_DOMAINS = {
+  // Airlines
   'delta.com':                    'delta',
-  'marriott.com':                 'marriott',
-  'hilton.com':                   'hilton',
-  'hyatt.com':                    'hyatt',
   'united.com':                   'united',
   'southwest.com':                'southwest',
   'aa.com':                       'american_air',
+  'americanairlines.com':         'american_air',
   'alaskaair.com':                'alaska_air',
+  // Hotels
+  'marriott.com':                 'marriott',
+  'hilton.com':                   'hilton',
+  'hyatt.com':                    'hyatt',
+  'ihg.com':                      'ihg',
+  'wyndham.com':                  'wyndham',
+  'wyndhamhotels.com':            'wyndham',
+  // Car rental
+  'hertz.com':                    'hertz',
+  'avis.com':                     'avis',
+  // Banking & finance
   'americanexpress.com':          'amex',
   'chase.com':                    'chase',
+  'wellsfargo.com':               'wells_fargo',
+  'bankofamerica.com':            'bofa',
+  'capitalone.com':               'capital_one',
+  'discover.com':                 'discover',
+  'discovercard.com':             'discover',
+  'citi.com':                     'citi',
+  'citibank.com':                 'citi',
+  'paypal.com':                   'paypal',
+  'fidelity.com':                 'fidelity',
+  'schwab.com':                   'schwab',
+  'sfcu.org':                     'sfcu',
+  // Telecom & utilities
+  'xfinity.com':                  'xfinity',
+  'comcast.com':                  'xfinity',
   'customer.xfinity.com':         'xfinity',
-  'cityofpaloalto.org':           'pa_utilities',  // covers utilities. and myaccount. subdomains
-  'ihg.com':                      'ihg',
-  'wyndhamhotels.com':            'wyndham',
+  'att.com':                      'att',
+  'verizon.com':                  'verizon',
+  't-mobile.com':                 'tmobile',
+  'cityofpaloalto.org':           'pa_utilities',
+  // Shopping
+  'amazon.com':                   'amazon',
+  'target.com':                   'target',
+  'walmart.com':                  'walmart',
+  'costco.com':                   'costco',
+  'starbucks.com':                'starbucks',
+  'cvs.com':                      'cvs',
+  'walgreens.com':                'walgreens',
+  // Entertainment & streaming
+  'disneyplus.com':               'disney_plus',
+  'netflix.com':                  'netflix',
+  'hulu.com':                     'hulu',
+  'spotify.com':                  'spotify',
+  'max.com':                      'max',
+  'peacocktv.com':                'peacock',
+  'paramountplus.com':            'paramount_plus',
+  'ticketmaster.com':             'ticketmaster',
+  // Health & insurance
+  'kp.org':                       'kaiser',
+  'statefarm.com':                'state_farm',
 };
 
 // Sources that must be synced via a regular foreground tab.
