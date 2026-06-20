@@ -320,6 +320,25 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 
 // ── Sync orchestration ───────────────────────────────────────────────────────
 
+/** Create a minimized, non-focused popup window for background sync work.
+ *  Returns { win, tabId } or null if window creation fails. */
+async function _createSyncWindow(initialUrl = 'about:blank') {
+  try {
+    const win = await chrome.windows.create({
+      url: initialUrl,
+      type: 'popup',
+      width: 800,
+      height: 600,
+      state: 'minimized',
+      focused: false,
+    });
+    return { win, tabId: win.tabs[0].id };
+  } catch (e) {
+    console.warn('[Mighty] Could not create sync window:', e.message);
+    return null;
+  }
+}
+
 async function runSync() {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) {
@@ -358,28 +377,47 @@ async function runSync() {
   console.log(`[Mighty] Syncing ${accounts.length} accounts + ${capturedList.length} captured…`);
   let ok = 0, failed = 0;
 
+  // Create ONE shared minimized window for the entire sync run.
+  // All per-account crawls reuse this single tab — no new windows appear mid-sync.
+  // TAB_SYNC_SOURCES (xfinity etc.) are excluded: they rely on the supplement watcher
+  // which needs a real tab in the user's main window.
+  const crawlAccounts = accounts.filter(a => ACCOUNT_ENTRY[a.source] && !TAB_SYNC_SOURCES.has(a.source));
+  const tabAccounts   = accounts.filter(a => ACCOUNT_ENTRY[a.source] &&  TAB_SYNC_SOURCES.has(a.source));
+
+  let sharedSync = null;
+  if (crawlAccounts.length || capturedList.length) {
+    sharedSync = await _createSyncWindow();
+    if (sharedSync) console.log('[Mighty] Shared sync window ready (1 window for all accounts)');
+  }
+
+  const sharedTabId = sharedSync?.tabId ?? null;
   const ACCOUNT_TIMEOUT_MS = 90_000; // hard cap per account
-  for (const account of accounts) {
-    if (!ACCOUNT_ENTRY[account.source]) {
-      console.log(`[Mighty] No entry URL for ${account.source} — skipping`);
-      continue;
-    }
+
+  // Tab-based accounts (xfinity etc.) — still use their own tab mechanism
+  for (const account of tabAccounts) {
     try {
-      let syncFn;
-      if (TAB_SYNC_SOURCES.has(account.source)) {
-        // Xfinity / PA Utilities: use a real tab to bypass Akamai popup-window detection
-        syncFn = syncAccountViaTab(api_key, account, [ACCOUNT_ENTRY[account.source]], syncSessionTime);
-      } else {
-        syncFn = crawlAccount(api_key, account, syncSessionTime);
-      }
       await Promise.race([
-        syncFn,
+        syncAccountViaTab(api_key, account, [ACCOUNT_ENTRY[account.source]], syncSessionTime),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ACCOUNT_TIMEOUT_MS)),
+      ]);
+      ok++;
+    } catch (e) {
+      console.error(`[Mighty] Failed: ${account.name}:`, e.message);
+      failed++;
+    }
+  }
+
+  // Crawl-based accounts — all share the same minimized window
+  for (const account of crawlAccounts) {
+    try {
+      await Promise.race([
+        crawlAccount(api_key, account, syncSessionTime, sharedTabId),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ACCOUNT_TIMEOUT_MS)),
       ]);
       ok++;
       // Autonomous gap-filling: after successful sync, check coverage and visit missing pages
       try {
-        await gapFillAccount(api_key, account, syncSessionTime);
+        await gapFillAccount(api_key, account, syncSessionTime, 2, sharedTabId);
       } catch(gfe) {
         console.log(`[Mighty] ${account.name}: gap-fill skipped: ${gfe.message}`);
       }
@@ -394,12 +432,18 @@ async function runSync() {
     if (!info.urls || !info.urls.length) continue;
     console.log(`[Mighty] Re-syncing captured: ${info.name} (${info.urls.length} URL(s))`);
     try {
-      await resyncCaptured(api_key, source, info, syncSessionTime);
+      await resyncCaptured(api_key, source, info, syncSessionTime, sharedTabId);
       ok++;
     } catch (e) {
       console.error(`[Mighty] Failed captured ${info.name}:`, e.message);
       failed++;
     }
+  }
+
+  // Close the one shared window now that all accounts are done
+  if (sharedSync?.win) {
+    try { await chrome.windows.remove(sharedSync.win.id); } catch {}
+    console.log('[Mighty] Shared sync window closed');
   }
 
   const ts = new Date(syncSessionTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -442,22 +486,22 @@ async function captureCurrentTab(tabId, name, category) {
   return { source };
 }
 
-async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date().toISOString()) {
+async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date().toISOString(), sharedTabId = null) {
   const allTexts = [];
-  const win = await chrome.windows.create({
-    url: info.urls[0],
-    type: 'popup',
-    width: 800,
-    height: 600,
-  });
-  chrome.windows.update(win.id, { state: 'minimized' });
-  const tabId = win.tabs[0].id;
+  const useShared = !!sharedTabId;
+  let win = null;
+  let tabId = sharedTabId;
+
+  if (!useShared) {
+    const created = await _createSyncWindow(info.urls[0]);
+    if (!created) throw new Error('Could not create sync window');
+    win = created.win;
+    tabId = created.tabId;
+  }
 
   try {
     for (let i = 0; i < info.urls.length; i++) {
-      if (i > 0) {
-        await chrome.tabs.update(tabId, { url: info.urls[i] });
-      }
+      await chrome.tabs.update(tabId, { url: info.urls[i] });
       await waitForTabLoad(tabId, 20_000);
       await sleep(SETTLE_MS.default);
 
@@ -476,7 +520,8 @@ async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date()
       }
     }
   } finally {
-    chrome.windows.remove(win.id).catch(() => {});
+    if (!useShared && win) chrome.windows.remove(win.id).catch(() => {});
+    else if (useShared) chrome.tabs.update(tabId, { url: 'about:blank' }).catch(() => {});
   }
 
   if (!allTexts.length) throw new Error('No page text captured');
@@ -887,7 +932,7 @@ async function syncAccountViaTab(apiKey, account, urls, syncSessionTime) {
  * No hardcoded sub-paths — the crawler finds benefit/certificate/wallet pages automatically.
  */
 // Autonomous gap-filling: check coverage and visit missing-field pages
-async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 2) {
+async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 2, sharedTabId = null) {
   const source = account.source;
   const entry = ACCOUNT_ENTRY[source];
   if (!entry) return;
@@ -940,18 +985,21 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
 
       console.log(`[Mighty] ${source}: gap-filling ${targetPaths.length} pages for missing: ${cov.gaps.map(g => g.key).join(', ')}`);
 
-      // Open a popup window to visit gap-fill pages (reuses the crawlAccount pattern)
-      const win = await chrome.windows.create({
-        url: entry,
-        type: 'popup',
-        width: 800,
-        height: 600,
-      });
-      chrome.windows.update(win.id, { state: 'minimized' });
-      const tabId = win.tabs[0].id;
+      // Reuse the shared sync tab if available; otherwise create a temporary window
+      const useShared = !!sharedTabId;
+      let gfWin = null;
+      let tabId = sharedTabId;
+      if (!useShared) {
+        const created = await _createSyncWindow(entry);
+        if (!created) break;
+        gfWin = created.win;
+        tabId = created.tabId;
+      }
 
       let newText = '';
       try {
+        // Navigate to entry URL to establish session context
+        await chrome.tabs.update(tabId, { url: entry });
         await waitForTabLoad(tabId, 15_000);
         await sleep(3_000);
 
@@ -984,7 +1032,7 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
           }
         }
       } finally {
-        chrome.windows.remove(win.id).catch(() => {});
+        if (!useShared && gfWin) chrome.windows.remove(gfWin.id).catch(() => {});
       }
 
       if (newText.trim().length < 200) break;
@@ -1019,7 +1067,7 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
   }
 }
 
-async function crawlAccount(apiKey, account, syncSessionTime) {
+async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null) {
   const entry = ACCOUNT_ENTRY[account.source];
   if (!entry) {
     console.log(`[Mighty] No entry URL for ${account.source} — skipping`);
@@ -1044,16 +1092,20 @@ async function crawlAccount(apiKey, account, syncSessionTime) {
   const allText        = [];
   const visitedNorm    = new Set();
 
-  const win = await chrome.windows.create({
-    url: warmup || entry,
-    type: 'popup',
-    width: 800,
-    height: 600,
-  });
-  chrome.windows.update(win.id, { state: 'minimized' });
-  const tabId = win.tabs[0].id;
+  // Use shared tab if provided; otherwise create a dedicated minimized window
+  const useShared = !!sharedTabId;
+  let win = null;
+  let tabId = sharedTabId;
+  if (!useShared) {
+    const created = await _createSyncWindow(warmup || entry);
+    if (!created) throw new Error('Could not create sync window');
+    win = created.win;
+    tabId = created.tabId;
+  }
 
   try {
+    // Navigate to the entry URL (always — shared tab may be on a different domain)
+    await chrome.tabs.update(tabId, { url: warmup || entry });
     await waitForTabLoad(tabId, 15_000);
 
     if (warmup) {
@@ -1235,7 +1287,13 @@ async function crawlAccount(apiKey, account, syncSessionTime) {
     console.log(`[Mighty] ${account.name}: ✓`);
 
   } finally {
-    chrome.windows.remove(win.id).catch(() => {});
+    if (!useShared && win) {
+      chrome.windows.remove(win.id).catch(() => {});
+    } else if (useShared) {
+      // Leave the tab open for the next account; navigate to blank to clear state
+      chrome.tabs.update(tabId, { url: 'about:blank' }).catch(() => {});
+      await sleep(500); // brief pause before next account
+    }
   }
 }
 
