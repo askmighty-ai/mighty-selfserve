@@ -2608,6 +2608,8 @@ def _post_filter_fields(fields: list, source: str = "") -> list:
         "eticket", "e-ticket", "ticket number", "confirmation number",
         "loyalty id", "member id", "membership id", "account number",
         "record locator", "pnr",
+        "honors number", "honors #", "member number", "rewards number",
+        "membership number", "frequent flyer number", "ff number",
     )
 
     # Patterns for values that are pure long numeric IDs (>12 consecutive digits)
