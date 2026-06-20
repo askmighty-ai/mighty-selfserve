@@ -11237,12 +11237,12 @@ function restoreArchivedBenefit(idx) {{
     <button onclick="closeCredModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:2px 6px">&times;</button>
   </div>
   <div style="margin-bottom:12px">
-    <label style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Username or email</label>
-    <input id="dash-cred-username" type="text" autocomplete="off" placeholder="username@example.com"
+    <label for-field="dash-cred-username" style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Username or email</label>
+    <input id="dash-cred-username" type="text" autocomplete="off" placeholder="Username or email"
            style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:9px 11px;font-size:14px;color:#1c1917;outline:none">
   </div>
   <div style="margin-bottom:12px">
-    <label style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Password</label>
+    <label for-field="dash-cred-password" style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Password</label>
     <input id="dash-cred-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"
            style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:9px 11px;font-size:14px;color:#1c1917;outline:none">
   </div>
@@ -11266,7 +11266,17 @@ function openCredModal(src, displayName) {{
   document.getElementById('dash-cred-password').value = '';
   document.getElementById('dash-cred-totp').value = '';
   document.getElementById('dash-cred-error').style.display = 'none';
-  document.getElementById('dash-cred-username').value = 'Loading…';
+  // Apply per-site credential labels from LOGIN_HINTS
+  var hints = (typeof _LOGIN_HINTS !== 'undefined' && _LOGIN_HINTS[src]) || {{}};
+  var uLabel = hints.u || 'Username or email';
+  var pLabel = hints.p || 'Password';
+  var uType  = hints.u_type || 'text';
+  document.querySelector('label[for-field="dash-cred-username"]').textContent = uLabel.toUpperCase();
+  document.querySelector('label[for-field="dash-cred-password"]').textContent = pLabel.toUpperCase();
+  var uInput = document.getElementById('dash-cred-username');
+  uInput.type = uType;
+  uInput.placeholder = uLabel;
+  uInput.value = 'Loading…';
   document.getElementById('dash-cred-overlay').style.display = 'flex';
   document.getElementById('dash-cred-modal').style.display = 'block';
   fetch('/api/credentials/' + encodeURIComponent(src) + '/username')
