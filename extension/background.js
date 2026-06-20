@@ -172,10 +172,11 @@ const SUPPLEMENT_DOMAINS = {
   'wyndhamhotels.com':            'wyndham',
 };
 
-// Sources that must be synced via a regular tab (not a popup window).
-// Akamai and similar bot-detection layers block popup windows; a regular tab
-// using the user's existing session passes through cleanly.
-const TAB_SYNC_SOURCES = new Set(['xfinity', 'pa_utilities']);
+// Sources that must be synced via a regular foreground tab.
+// Previously: xfinity, pa_utilities — but silent fetch (credentials: 'include')
+// is tried first for ALL sources now; tab fallback handles bot-gated SPAs.
+// Supplement capture (passive) still fires when the user naturally browses these sites.
+const TAB_SYNC_SOURCES = new Set([]);
 
 // Domain → source mapping for API interception
 const INTERCEPT_DOMAIN_MAP = {
