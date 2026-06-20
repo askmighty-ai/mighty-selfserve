@@ -8031,7 +8031,7 @@ def dashboard():
         )
     # STATUS section: elite_status chips ("◆ Delta Diamond · ◆ Marriott Gold")
     _status_chips_html = ""
-    for _pri_sc, _, _disp_sc, _lbl_sc, _val_sc, _exp_sc in _top_benefit_cards[:6]:
+    for _pri_sc, _, _disp_sc, _lbl_sc, _val_sc, _exp_sc in _top_benefit_cards[:12]:
         _tier_sc = _val_sc.strip() if _val_sc.strip() and _val_sc.strip().lower() not in {
             'active','yes','enabled','true','','member'} else _lbl_sc
         _tier_lc_sc = _tier_sc.lower()
@@ -8051,12 +8051,13 @@ def dashboard():
             "corrected": _fk_sc in _dash_corrections,
         }).replace("'", "&#39;")
         _status_chips_html += (
-            f'<span style="display:inline-flex;align-items:center;gap:4px;'
+            f'<span style="display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;'
             f'background:{_chip_bg};color:{_chip_color};font-size:12px;font-weight:600;'
-            f'border-radius:20px;padding:4px 10px;cursor:pointer;white-space:nowrap" '
-            f'onclick="openBenefitDrawer(this)" data-benefit=\'{_sc_bd}\' '
-            f'title="{he(_disp_sc)}">'
-            f'◆ {he(_tier_sc)}</span>'
+            f'border-radius:12px;padding:5px 11px;cursor:pointer;white-space:nowrap" '
+            f'onclick="openBenefitDrawer(this)" data-benefit=\'{_sc_bd}\'>'
+            f'<span>◆ {he(_tier_sc)}</span>'
+            f'<span style="font-size:10px;font-weight:400;opacity:0.65;letter-spacing:0">{he(_disp_sc)}</span>'
+            f'</span>'
         )
     if _status_chips_html:
         progress_section_html = (
@@ -13997,6 +13998,46 @@ def api_latest_sync():
         (uid,)
     ).fetchone()
     return jsonify({"latest": row["ts"] if row else None})
+
+
+@app.route("/api/debug/fields")
+@require_login
+def api_debug_fields():
+    """Return every extracted field for a given source, with its classified type.
+    Used to diagnose why a field isn't appearing on the dashboard.
+    Query param: ?source=delta  (or marriott, hilton, etc.)
+    """
+    import json as _dbg_json
+    uid = session["user_id"]
+    source = request.args.get("source", "")
+    db = get_db()
+    rows = db.execute(
+        "SELECT source, display_name, data_enc, synced_at FROM account_data WHERE user_id=?",
+        (uid,)
+    ).fetchall()
+    out = []
+    for row in rows:
+        if source and row["source"] != source:
+            continue
+        try:
+            data = decrypt_account_data(uid, row["data_enc"] or "")
+        except Exception:
+            data = {}
+        items = data.get("ai_items") or data.get("items") or []
+        for it in items:
+            lbl = it.get("label", "")
+            val = str(it.get("value", ""))
+            btype = it.get("_type") or classify_benefit(lbl, val, row["source"])
+            out.append({
+                "source": row["source"],
+                "display": row["display_name"],
+                "label": lbl,
+                "value": val,
+                "type": btype,
+                "synced_at": row["synced_at"],
+            })
+    out.sort(key=lambda x: (x["source"], x["label"]))
+    return jsonify({"fields": out, "count": len(out)})
 
 
 @app.route("/api/sync/finalize", methods=["POST"])
