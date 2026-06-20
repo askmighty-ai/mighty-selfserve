@@ -1236,6 +1236,85 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
       break;
     }
   }
+
+  // ── Unconditional certificate/wallet pass ──────────────────────────────────
+  // Coverage-based gap-fill stops early (>=85%) and may skip certificate pages
+  // even when no certificates have been captured.  Always fetch registry paths
+  // whose names suggest redeemable benefits, regardless of coverage score.
+  try {
+    const certKeywords = ['certificate', 'cert', 'companion', 'wallet', 'award', 'ecredit', 'voucher', 'upgrade', 'free-night', 'reward'];
+    const allPaths = await fetchRegistryPaths(source);
+    const certPaths = allPaths.filter(p =>
+      certKeywords.some(kw => p.toLowerCase().includes(kw))
+    ).slice(0, 4);
+
+    if (certPaths.length > 0) {
+      console.log(`[Mighty] ${source}: unconditional cert pass — ${certPaths.length} path(s): ${certPaths.join(', ')}`);
+      const tabId = sharedTabId || null;
+      if (!tabId) {
+        console.log(`[Mighty] ${source}: no shared tab for cert pass, skipping`);
+      } else {
+        let certText = '';
+        await chrome.tabs.update(tabId, { url: entry });
+        await waitForTabLoad(tabId, 15_000);
+        await sleep(2_000);
+
+        for (const path of certPaths) {
+          const fullUrl = entryOrigin + path;
+          await randomDelay(800, 1500);
+          try {
+            await chrome.tabs.update(tabId, { url: fullUrl });
+            await waitForTabLoad(tabId, 15_000);
+            await sleep(4_000); // extra settle time for SPAs
+
+            const [r] = await chrome.scripting.executeScript({
+              target: { tabId },
+              func: async function waitForContent() {
+                for (let i = 0; i < 14; i++) {
+                  const text = document.body ? document.body.innerText : '';
+                  if (text && text.trim().length > 300) return text;
+                  await new Promise(res => setTimeout(res, 500));
+                }
+                return document.body ? document.body.innerText : '';
+              },
+            });
+            const pageText = r?.result || '';
+            if (pageText && pageText.length > 200) {
+              certText += `\n\n--- ${fullUrl} ---\n${pageText}`;
+              reportPathToRegistry(source, fullUrl);
+            }
+          } catch(e) {
+            console.log(`[Mighty] cert pass visit failed: ${fullUrl}: ${e.message}`);
+          }
+        }
+
+        if (certText.trim().length > 200) {
+          await fetch(`${MIGHTY_URL}/api/data/sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              api_key:     apiKey,
+              source:      source,
+              sync_source: 'extension',
+              gap_fill:    true,
+              data: {
+                name:     account.name,
+                icon:     account.icon,
+                color:    account.color,
+                status:   'ok',
+                items:    [],
+                raw_text: certText.slice(0, 20_000),
+              },
+              synced_at: syncSessionTime,
+            }),
+          }).catch(() => {});
+          console.log(`[Mighty] ${source}: cert pass complete — ${certText.length} chars`);
+        }
+      }
+    }
+  } catch(e) {
+    console.log(`[Mighty] ${source}: cert pass error: ${e.message}`);
+  }
 }
 
 async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null, _lazySharedTab = null) {
