@@ -11268,30 +11268,52 @@ function closeCredModal() {{
   document.getElementById('dash-cred-modal').style.display = 'none';
 }}
 function saveCredModal() {{
-  var src  = document.getElementById('dash-cred-source').value;
-  var user = document.getElementById('dash-cred-username').value.trim();
-  var pass = document.getElementById('dash-cred-password').value;
-  var totp = document.getElementById('dash-cred-totp').value.trim();
-  var err  = document.getElementById('dash-cred-error');
-  if (!user) {{ err.textContent = 'Username is required.'; err.style.display = 'block'; return; }}
-  var body = new URLSearchParams({{_csrf: CSRF, source: src, username: user, password: pass}});
-  if (totp) body.append('totp_secret', totp);
-  fetch('/credentials/save', {{method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}}, body: body}})
-    .then(function(r) {{ return r.json(); }})
-    .then(function(d) {{
-      if (!d.ok) {{ err.textContent = d.error || 'Save failed.'; err.style.display = 'block'; return; }}
-      closeCredModal();
-      // Trigger a sync for this account
-      fetch('/api/sync/' + encodeURIComponent(src), {{method:'POST', headers:{{'X-CSRF-Token': CSRF}}}})
-        .finally(function() {{
-          var t = document.getElementById('mighty-toast');
-          if (t) {{ t.textContent = 'Credentials saved — syncing…'; t.classList.add('show'); setTimeout(function(){{t.classList.remove('show');}}, 3000); }}
-          setTimeout(function(){{ location.reload(); }}, 3500);
-        }});
-    }}).catch(function() {{
-      err.textContent = 'Network error. Please try again.';
-      err.style.display = 'block';
-    }});
+  try {{
+    var src  = document.getElementById('dash-cred-source').value;
+    var user = document.getElementById('dash-cred-username').value.trim();
+    var pass = document.getElementById('dash-cred-password').value;
+    var totp = document.getElementById('dash-cred-totp').value.trim();
+    var err  = document.getElementById('dash-cred-error');
+    var saveBtn = document.querySelector('#dash-cred-modal button:last-of-type');
+    if (err) err.style.display = 'none';
+    if (!user) {{
+      if (err) {{ err.textContent = 'Username is required.'; err.style.display = 'block'; }}
+      return;
+    }}
+    if (saveBtn) {{ saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }}
+    var params = {{_csrf: CSRF, source: src, username: user}};
+    if (pass) params.password = pass;          // only send if re-entered; blank = keep existing
+    if (totp) params.totp_secret = totp;
+    var body = new URLSearchParams(params);
+    fetch('/credentials/save', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+      body: body
+    }})
+      .then(function(r) {{
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }})
+      .then(function(d) {{
+        if (!d.ok) {{
+          if (saveBtn) {{ saveBtn.textContent = 'Save & Sync'; saveBtn.disabled = false; }}
+          if (err) {{ err.textContent = d.error || 'Save failed.'; err.style.display = 'block'; }}
+          return;
+        }}
+        closeCredModal();
+        if (saveBtn) {{ saveBtn.textContent = 'Save & Sync'; saveBtn.disabled = false; }}
+        var t = document.getElementById('mighty-toast');
+        if (t) {{ t.textContent = 'Credentials saved — syncing…'; t.classList.add('show'); setTimeout(function(){{t.classList.remove('show');}}, 3000); }}
+        setTimeout(function(){{ location.reload(); }}, 2000);
+      }})
+      .catch(function(e) {{
+        if (saveBtn) {{ saveBtn.textContent = 'Save & Sync'; saveBtn.disabled = false; }}
+        if (err) {{ err.textContent = 'Error: ' + (e.message || 'Network error'); err.style.display = 'block'; }}
+      }});
+  }} catch(e) {{
+    var err2 = document.getElementById('dash-cred-error');
+    if (err2) {{ err2.textContent = 'JS error: ' + e.message; err2.style.display = 'block'; }}
+  }}
 }}
 </script>
 
@@ -12546,10 +12568,17 @@ def credentials_save():
     now = iso()
     db  = get_db()
     existing = db.execute(
-        "SELECT created_at FROM account_credentials WHERE user_id=? AND source=?",
+        "SELECT created_at, password_enc FROM account_credentials WHERE user_id=? AND source=?",
         (uid, source)
     ).fetchone()
     created = existing["created_at"] if existing else now
+    # Preserve existing password if none supplied (blank = "keep existing")
+    if password:
+        new_password_enc = encrypt_cred(uid, password)
+    elif existing and existing["password_enc"]:
+        new_password_enc = existing["password_enc"]
+    else:
+        new_password_enc = ""
 
     db.execute(
         "INSERT OR REPLACE INTO account_credentials "
@@ -12557,7 +12586,7 @@ def credentials_save():
         "VALUES (?,?,?,?,?,?,?)",
         (uid, source,
          encrypt_cred(uid, username),
-         encrypt_cred(uid, password) if password else "",
+         new_password_enc,
          encrypt_cred(uid, json.dumps(extra)) if extra else "",
          created, now)
     )
