@@ -11148,7 +11148,7 @@ function archiveBenefit(src, lbl, btn) {{
   fetch('/api/benefits/archive', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    body: new URLSearchParams({{_csrf: CSRF, source: src, label: lbl}})
+    body: new URLSearchParams({{_csrf: _DASH_CSRF, source: src, label: lbl}})
   }});
 }}
 function _updateArchivedFooter() {{
@@ -11189,7 +11189,7 @@ function restoreArchivedBenefit(idx) {{
   fetch('/api/benefits/unarchive', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    body: new URLSearchParams({{_csrf: CSRF, source: item.source, label: item.label}})
+    body: new URLSearchParams({{_csrf: _DASH_CSRF, source: item.source, label: item.label}})
   }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
     if (d.ok) {{
       _ARCHIVED_BENEFITS.splice(idx, 1);
@@ -11281,7 +11281,7 @@ function saveCredModal() {{
       return;
     }}
     if (saveBtn) {{ saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }}
-    var params = {{_csrf: CSRF, source: src, username: user}};
+    var params = {{_csrf: _DASH_CSRF, source: src, username: user}};
     if (pass) params.password = pass;          // only send if re-entered; blank = keep existing
     if (totp) params.totp_secret = totp;
     var body = new URLSearchParams(params);
