@@ -13478,37 +13478,41 @@ def api_debug_scrub_fields():
 
 
 @app.route("/api/debug/fields/<source>")
-@require_login
+@require_login_or_key
 def api_debug_fields(source):
     """Debug: return every extracted AI item for an account from account_data,
     with its classified benefit type. Reads the synced data table, not credentials."""
-    uid = session["user_id"]
-    row = get_db().execute(
-        "SELECT data_enc, synced_at, sync_source FROM account_data WHERE user_id=? AND source=?",
-        (uid, source)
-    ).fetchone()
-    if not row:
-        return jsonify({"error": "no synced data found for source", "source": source})
     try:
-        data = decrypt_account_data(uid, row["data_enc"] or "")
+        uid = get_current_user_id()
+        row = get_db().execute(
+            "SELECT data_enc, synced_at, sync_source FROM account_data WHERE user_id=? AND source=?",
+            (uid, source)
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "no synced data found for source", "source": source})
+        try:
+            data = decrypt_account_data(uid, row["data_enc"] or "")
+        except Exception as e:
+            return jsonify({"error": "decrypt failed: " + str(e)})
+        items = data.get("ai_items") or data.get("items") or []
+        out = []
+        for it in items:
+            lbl = it.get("label", "")
+            val = str(it.get("value", ""))
+            btype = it.get("_type") or classify_benefit(lbl, val, source)
+            out.append({"label": lbl, "value": val, "type": btype, "key": it.get("key", "")})
+        out.sort(key=lambda x: x["type"])
+        return jsonify({
+            "source": source,
+            "synced_at": row["synced_at"],
+            "sync_source": row["sync_source"],
+            "item_count": len(out),
+            "items": out,
+            "raw_text_chars": len(data.get("raw_text", "")),
+        })
     except Exception as e:
-        return jsonify({"error": "decrypt failed: " + str(e)})
-    items = data.get("ai_items") or data.get("items") or []
-    out = []
-    for it in items:
-        lbl = it.get("label", "")
-        val = str(it.get("value", ""))
-        btype = it.get("_type") or classify_benefit(lbl, val, source)
-        out.append({"label": lbl, "value": val, "type": btype, "key": it.get("key", "")})
-    out.sort(key=lambda x: x["type"])
-    return jsonify({
-        "source": source,
-        "synced_at": row["synced_at"],
-        "sync_source": row["sync_source"],
-        "item_count": len(out),
-        "items": out,
-        "raw_text_chars": len(data.get("raw_text", "")),
-    })
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 
 @app.route("/api/debug/provenance/<source>")
