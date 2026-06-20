@@ -180,16 +180,63 @@ const TAB_SYNC_SOURCES = new Set([]);
 
 // Domain → source mapping for API interception
 const INTERCEPT_DOMAIN_MAP = {
-  'delta.com':            'delta',
-  'marriott.com':         'marriott',
-  'hilton.com':           'hilton',
-  'hyatt.com':            'hyatt',
-  'united.com':           'united',
-  'southwest.com':        'southwest',
-  'aa.com':               'american_air',
-  'alaskaair.com':        'alaska_air',
-  'americanexpress.com':  'amex',
-  'chase.com':            'chase',
+  // Travel — airlines
+  'delta.com':              'delta',
+  'united.com':             'united',
+  'southwest.com':          'southwest',
+  'aa.com':                 'american_air',
+  'americanairlines.com':   'american_air',
+  'alaskaair.com':          'alaska_air',
+  // Travel — hotels
+  'marriott.com':           'marriott',
+  'hilton.com':             'hilton',
+  'hyatt.com':              'hyatt',
+  'ihg.com':                'ihg',
+  'wyndham.com':            'wyndham',
+  // Travel — car rental
+  'hertz.com':              'hertz',
+  'avis.com':               'avis',
+  // Banking & Finance
+  'americanexpress.com':    'amex',
+  'chase.com':              'chase',
+  'wellsfargo.com':         'wells_fargo',
+  'bankofamerica.com':      'bofa',
+  'capitalone.com':         'capital_one',
+  'discover.com':           'discover',
+  'discovercard.com':       'discover',
+  'citi.com':               'citi',
+  'citibank.com':           'citi',
+  'paypal.com':             'paypal',
+  'fidelity.com':           'fidelity',
+  'schwab.com':             'schwab',
+  'sfcu.org':               'sfcu',
+  // Utilities & Telecom
+  'xfinity.com':            'xfinity',
+  'comcast.com':            'xfinity',
+  'att.com':                'att',
+  'verizon.com':            'verizon',
+  't-mobile.com':           'tmobile',
+  // Shopping
+  'amazon.com':             'amazon',
+  'target.com':             'target',
+  'walmart.com':            'walmart',
+  'costco.com':             'costco',
+  'starbucks.com':          'starbucks',
+  'cvs.com':                'cvs',
+  'walgreens.com':          'walgreens',
+  // Entertainment
+  'disneyplus.com':         'disney_plus',
+  'netflix.com':            'netflix',
+  'hulu.com':               'hulu',
+  'spotify.com':            'spotify',
+  'max.com':                'max',
+  'peacocktv.com':          'peacock',
+  'paramountplus.com':      'paramount_plus',
+  'ticketmaster.com':       'ticketmaster',
+  // Health
+  'kp.org':                 'kaiser',
+  // Insurance
+  'statefarm.com':          'state_farm',
 };
 
 // In-memory dedup: url → timestamp, cleared after 10 minutes

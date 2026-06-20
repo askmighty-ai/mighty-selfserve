@@ -9,30 +9,42 @@
 
   const MSG_TYPE = '__mighty_api__';
 
-  // Keywords: if a JSON response contains 2+ of these it's probably account data
+  // Broad keyword list — program-specific names + generic account terms.
+  // A single hit on a response ≥500 chars is enough to forward.
   const KEYWORDS = [
-    'miles', 'certificate', 'points', 'balance', 'status', 'expir',
-    'award', 'companion', 'upgrade', 'medallion', 'wallet', 'credit',
-    'voucher', 'ecredit', 'tier', 'loyalty', 'reward', 'frequent',
+    // Generic account data
+    'miles', 'points', 'balance', 'status', 'tier', 'reward', 'loyalty',
+    'certificate', 'award', 'companion', 'upgrade', 'credit', 'voucher',
+    'ecredit', 'wallet', 'expir', 'medallion', 'frequent', 'elite',
+    // Program-specific tokens (camelCase and snake_case both hit on lowercase)
+    'skymiles', 'hhonors', 'bonvoy', 'mileageplus', 'rapidrewards',
+    'aadvantage', 'trueblue', 'worldofhyatt', 'ihgrewards', 'wyndhamrewards',
+    'thankyoupoints', 'ultimaterewards', 'membershiprewards',
+    // Account/billing fields
+    'autopay', 'amountdue', 'minimumpayment', 'statementbalance',
+    'accountsummary', 'loyaltynumber', 'membernumber', 'memberid',
   ];
 
   function looksLikeAccountData(text) {
-    if (!text || text.length < 80 || text.length > 800_000) return false;
+    if (!text || text.length < 80 || text.length > 1_000_000) return false;
     // Must be parseable JSON
     try { JSON.parse(text); } catch { return false; }
     const lower = text.toLowerCase();
     const hits = KEYWORDS.filter(k => lower.includes(k)).length;
-    return hits >= 2;
+    // 1 hit is enough for larger responses; tiny responses need 2+ to avoid noise
+    return text.length >= 500 ? hits >= 1 : hits >= 2;
   }
 
   function maybeForward(url, responseText, contentType) {
-    if (!contentType || !contentType.includes('json')) return;
+    // Accept any JSON-ish content-type (application/json, application/graphql+json, text/json, etc.)
+    const ct = (contentType || '').toLowerCase();
+    if (!ct.includes('json') && !ct.includes('graphql')) return;
     if (!looksLikeAccountData(responseText)) return;
     try {
       window.postMessage({
         type: MSG_TYPE,
         url:  String(url || '').slice(0, 500),
-        data: responseText.slice(0, 100_000),
+        data: responseText.slice(0, 120_000),
       }, '*');
     } catch (_) {}
   }
