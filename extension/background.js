@@ -320,9 +320,132 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 
 // ── Sync orchestration ───────────────────────────────────────────────────────
 
-/** Create a hidden background tab for sync work.
- *  Background tabs (active: false) load completely silently — no new window,
- *  no focus theft, no macOS dock bounce, no keystroke interruption.
+// Prevent concurrent sync runs (each would open its own tab set)
+let _syncInProgress = false;
+
+// ── Silent fetch helpers (no tabs needed) ────────────────────────────────────
+
+/** Strip HTML tags to plain text. Service workers have no DOM, so we use regex. */
+function _htmlToText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+    .replace(/&#\d+;/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** True if the text looks like a login/auth page redirect. */
+function _isSilentLoginPage(text) {
+  const lower = text.slice(0, 3000).toLowerCase();
+  const hits = ['sign in', 'log in', 'forgot password', 'create account', 'enter your password',
+                 'enter your email', 'continue with google', 'remember me']
+    .filter(s => lower.includes(s)).length;
+  return hits >= 2;
+}
+
+/** Extract hrefs from raw HTML without DOM. Returns [{href, text}]. */
+function _extractLinksFromHtml(html, baseUrl) {
+  const links = [];
+  // Match href="..." and href='...'
+  const re = /href=["']([^"'#\s][^"']*?)["']/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    try {
+      const href = new URL(m[1], baseUrl).href;
+      if (!href.startsWith('http')) continue;
+      // Get surrounding text for scoring
+      const ctx = html.slice(Math.max(0, m.index - 80), m.index + 120)
+        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      links.push({ href, text: ctx });
+    } catch {}
+  }
+  return links;
+}
+
+/**
+ * Silently fetch an account's pages using the user's existing session cookies.
+ * Extension service workers with <all_urls> host_permissions can read cross-origin
+ * responses — no tab, no visibility, no Chrome Memory Saver warnings.
+ *
+ * Returns combined page text if content is substantive, or null to signal
+ * that tab-based fallback is needed.
+ */
+async function _silentFetchPages(source, account) {
+  const entry = ACCOUNT_ENTRY[source];
+  if (!entry) return null;
+
+  let entryHtml;
+  try {
+    const resp = await fetch(entry, { credentials: 'include' });
+    if (!resp.ok) return null;
+    entryHtml = await resp.text();
+  } catch {
+    return null;
+  }
+
+  const entryText = _htmlToText(entryHtml);
+
+  // Too short = empty SPA shell or error page — needs tab
+  if (entryText.length < 600) return null;
+  // Login redirect — not logged in
+  if (_isSilentLoginPage(entryText)) return null;
+  // Bot detection
+  if (BOT_DETECTION_PHRASES.some(p => entryText.toLowerCase().includes(p))) return null;
+
+  let allText = `\n\n--- ${entry} ---\n${entryText}`;
+  const visitedNorm = new Set([_normUrl(entry)]);
+
+  // Discover and silently fetch high-value subpages
+  const MAX_SILENT_SUBPAGES = 4;
+  let baseDomain;
+  try {
+    baseDomain = ACCOUNT_BASE_DOMAIN_OVERRIDE[source] || new URL(entry).hostname.replace(/^www\./, '');
+  } catch { return allText.length > 600 ? allText : null; }
+
+  const links = _extractLinksFromHtml(entryHtml, entry);
+  const scored = links
+    .map(l => ({ ...l, score: _scoreLink(l.href, l.text, baseDomain) }))
+    .filter(l => l.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  // Supplement with registry paths
+  const regPaths = await fetchRegistryPaths(source).catch(() => []);
+  const entryOrigin = new URL(entry).origin;
+  for (const path of regPaths) {
+    const regUrl = entryOrigin + path;
+    if (!visitedNorm.has(_normUrl(regUrl))) {
+      scored.push({ href: regUrl, text: '', score: 5, fromRegistry: true });
+    }
+  }
+
+  for (const link of scored) {
+    if (visitedNorm.size - 1 >= MAX_SILENT_SUBPAGES) break;
+    const norm = _normUrl(link.href);
+    if (visitedNorm.has(norm)) continue;
+    visitedNorm.add(norm);
+
+    try {
+      await randomDelay(300, 900); // polite pacing
+      const r = await fetch(link.href, { credentials: 'include' });
+      if (!r.ok) continue;
+      const html = await r.text();
+      const text = _htmlToText(html);
+      if (text.length < 200) continue;
+      if (BOT_DETECTION_PHRASES.some(p => text.toLowerCase().includes(p))) continue;
+      if (_isSilentLoginPage(text)) continue;
+      allText += `\n\n--- ${link.href} ---\n${text}`;
+      reportPathToRegistry(source, link.href);
+      console.log(`[Mighty] ${source}: silent-fetched ${link.href} (${text.length} chars)`);
+    } catch {}
+  }
+
+  return allText.length > 600 ? allText : null;
+}
+
+/** Create a hidden background tab for sync work (fallback when silent fetch fails).
  *  Returns { win: { id }, tabId } or null on failure. */
 async function _createSyncWindow(initialUrl = 'about:blank') {
   try {
@@ -347,8 +470,25 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
 }
 
 async function runSync() {
+  // Prevent concurrent syncs — each would spawn its own tab set
+  if (_syncInProgress) {
+    console.log('[Mighty] Sync already in progress — skipping duplicate trigger');
+    return;
+  }
+  _syncInProgress = true;
+
+  // Clean up any tab leaked by a previous crashed/interrupted sync run
+  try {
+    const { _leaked_sync_tab } = await chrome.storage.local.get('_leaked_sync_tab');
+    if (_leaked_sync_tab) {
+      chrome.tabs.remove(_leaked_sync_tab).catch(() => {});
+      await chrome.storage.local.remove('_leaked_sync_tab');
+    }
+  } catch {}
+
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) {
+    _syncInProgress = false;
     await setStatus('No API key — open the extension to set it up');
     return;
   }
@@ -391,16 +531,30 @@ async function runSync() {
   const crawlAccounts = accounts.filter(a => ACCOUNT_ENTRY[a.source] && !TAB_SYNC_SOURCES.has(a.source));
   const tabAccounts   = accounts.filter(a => ACCOUNT_ENTRY[a.source] &&  TAB_SYNC_SOURCES.has(a.source));
 
+  // Shared tab is only created if needed (crawl fallback) — most accounts will use
+  // silent fetch and never need it. Created lazily on first tab-based fallback.
   let sharedSync = null;
-  if (crawlAccounts.length || capturedList.length) {
-    sharedSync = await _createSyncWindow();
-    if (sharedSync) console.log('[Mighty] Shared sync window ready (1 window for all accounts)');
-  }
+  let sharedTabId = null;
 
-  const sharedTabId = sharedSync?.tabId ?? null;
+  // Wrap the entire sync in try/finally to guarantee tab cleanup even on crash
+  try {
+
   const ACCOUNT_TIMEOUT_MS = 90_000; // hard cap per account
 
-  // Tab-based accounts (xfinity etc.) — still use their own tab mechanism
+  // Helper: get-or-create the shared tab (only when silent fetch has failed for an account)
+  async function getSharedTab() {
+    if (sharedSync) return sharedSync.tabId;
+    sharedSync = await _createSyncWindow();
+    if (sharedSync) {
+      // Persist tab ID so we can clean it up even if service worker restarts mid-sync
+      await chrome.storage.local.set({ _leaked_sync_tab: sharedSync.tabId });
+      console.log('[Mighty] Created fallback shared tab (silent fetch unavailable for this account)');
+    }
+    return sharedSync?.tabId ?? null;
+  }
+
+  // Tab-based accounts (xfinity etc.) — supplement watcher handles these passively;
+  // open a real tab only to warm up the session and let supplement fire.
   for (const account of tabAccounts) {
     try {
       await Promise.race([
@@ -414,19 +568,23 @@ async function runSync() {
     }
   }
 
-  // Crawl-based accounts — all share the same minimized window
+  // Crawl-based accounts — silent fetch first; shared tab only as fallback
   for (const account of crawlAccounts) {
     try {
+      // Patch crawlAccount to use lazy shared tab
+      const _lazySharedTabId = { get: getSharedTab };
       await Promise.race([
-        crawlAccount(api_key, account, syncSessionTime, sharedTabId),
+        crawlAccount(api_key, account, syncSessionTime, null, _lazySharedTabId),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ACCOUNT_TIMEOUT_MS)),
       ]);
       ok++;
-      // Autonomous gap-filling: after successful sync, check coverage and visit missing pages
-      try {
-        await gapFillAccount(api_key, account, syncSessionTime, 2, sharedTabId);
-      } catch(gfe) {
-        console.log(`[Mighty] ${account.name}: gap-fill skipped: ${gfe.message}`);
+      // Gap-fill only if we already have a shared tab (don't create one just for gap-fill)
+      if (sharedSync?.tabId) {
+        try {
+          await gapFillAccount(api_key, account, syncSessionTime, 2, sharedSync.tabId);
+        } catch(gfe) {
+          console.log(`[Mighty] ${account.name}: gap-fill skipped: ${gfe.message}`);
+        }
       }
     } catch (e) {
       console.error(`[Mighty] Failed: ${account.name}:`, e.message);
@@ -434,23 +592,18 @@ async function runSync() {
     }
   }
 
-  // Re-sync captured accounts by re-visiting their saved URLs
+  // Re-sync captured accounts — try silent fetch for each URL, tab as fallback
   for (const [source, info] of capturedList) {
     if (!info.urls || !info.urls.length) continue;
     console.log(`[Mighty] Re-syncing captured: ${info.name} (${info.urls.length} URL(s))`);
     try {
-      await resyncCaptured(api_key, source, info, syncSessionTime, sharedTabId);
+      const tabId = await getSharedTab();
+      await resyncCaptured(api_key, source, info, syncSessionTime, tabId);
       ok++;
     } catch (e) {
       console.error(`[Mighty] Failed captured ${info.name}:`, e.message);
       failed++;
     }
-  }
-
-  // Close the shared background tab now that all accounts are done
-  if (sharedSync?.tabId) {
-    try { await chrome.tabs.remove(sharedSync.tabId); } catch {}
-    console.log('[Mighty] Shared sync tab closed');
   }
 
   const ts = new Date(syncSessionTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -469,6 +622,16 @@ async function runSync() {
     });
   } catch (e) {
     console.warn('[Mighty] finalize failed (non-critical):', e.message);
+  }
+
+  } finally {
+    // Guaranteed cleanup — runs even if sync throws or times out
+    if (sharedSync?.tabId) {
+      chrome.tabs.remove(sharedSync.tabId).catch(() => {});
+      await chrome.storage.local.remove('_leaked_sync_tab');
+      console.log('[Mighty] Shared sync tab closed');
+    }
+    _syncInProgress = false;
   }
 }
 
@@ -1074,11 +1237,46 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
   }
 }
 
-async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null) {
+async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null, _lazySharedTab = null) {
   const entry = ACCOUNT_ENTRY[account.source];
   if (!entry) {
     console.log(`[Mighty] No entry URL for ${account.source} — skipping`);
     return;
+  }
+
+  // ── Try silent fetch first (no tab, completely invisible) ───────────────────
+  // Extension service workers can fetch cross-origin pages with user cookies via
+  // credentials: 'include' + <all_urls> host_permissions. Zero UI, zero tabs.
+  const silentText = await _silentFetchPages(account.source, account);
+  if (silentText) {
+    console.log(`[Mighty] ${account.name}: silent fetch succeeded (${silentText.length} chars) — no tab needed`);
+    const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        api_key:     apiKey,
+        source:      account.source,
+        sync_source: 'extension',
+        data: {
+          name:     account.name,
+          icon:     account.icon,
+          color:    account.color,
+          status:   'ok',
+          items:    [],
+          raw_text: silentText.slice(0, 40_000),
+        },
+        synced_at: syncSessionTime,
+      }),
+    });
+    if (pushResp.ok) return;
+    // Push failed — fall through to tab-based
+    console.warn(`[Mighty] ${account.name}: silent push failed, falling back to tab`);
+  }
+
+  // ── Tab-based fallback (SPA sites / login-gated / insufficient silent content) ─
+  // Resolve the shared tab lazily — only created now if actually needed
+  if (_lazySharedTab) {
+    sharedTabId = await _lazySharedTab.get();
   }
 
   const warmup = WARMUP_URLS[account.source];
