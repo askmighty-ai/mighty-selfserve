@@ -14254,42 +14254,6 @@ def api_reclassify():
     return jsonify({"ok": True, "accounts_updated": updated})
 
 
-@app.route("/api/data/rediscover-all", methods=["POST"])
-@require_login_or_key
-def api_rediscover_all():
-    """Re-run AI field discovery on all stored raw_text blobs for this user.
-    Useful after prompt improvements (e.g. DISCOVER_PROMPT update) without
-    needing a fresh page sync.  Runs discovery synchronously; may be slow.
-    """
-    uid = get_current_user_id()
-    db  = get_db()
-    rows = db.execute(
-        "SELECT source, data_enc FROM account_data WHERE user_id=?", (uid,)
-    ).fetchall()
-    results = []
-    for row in rows:
-        src  = row["source"]
-        data = decrypt_account_data(uid, row["data_enc"] or "")
-        raw  = data.get("raw_text", "")
-        if not raw or len(raw) < 50:
-            results.append({"source": src, "skipped": True, "reason": "no raw_text"})
-            continue
-        site_name = next(
-            (n for k, n, *_ in SUPPORTED_SITES if k == src),
-            src.replace("_", " ").title()
-        )
-        try:
-            fields = claude_discover_fields(raw, site_name, source=src)
-            if fields:
-                _save_discovered_fields(uid, src, fields)
-                results.append({"source": src, "fields_found": len(fields)})
-            else:
-                results.append({"source": src, "fields_found": 0})
-        except Exception as _e:
-            results.append({"source": src, "error": str(_e)})
-    return jsonify({"ok": True, "results": results})
-
-
 @app.route("/api/extension/capture", methods=["POST"])
 def api_extension_capture():
     """Receive a page captured by the extension for a custom (user-defined) account.
