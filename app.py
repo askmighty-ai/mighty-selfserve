@@ -681,6 +681,162 @@ def _recompute_intent_summary(uid: str) -> dict:
     return summary
 
 
+def _relevant_now_items(uid: str, max_items: int = 3) -> list[dict]:
+    """Return benefits contextually relevant to the user's most recent intent signal.
+
+    Reads the latest intent_history row within the last 48 hours.  Maps the
+    intent domain to adjacent domains (flight → hotel, car; hotel → flight, car;
+    etc.) then walks the user's account_data to find actionable/certificate
+    benefits from those adjacent sources.  Items are scored and the top
+    max_items returned.
+
+    Returns [] when there is no fresh intent signal.
+
+    Each returned dict has:
+        source, label, value, btype, days_left, score, why, intent_type
+    """
+    import datetime as _dt_rn
+    import json as _json_rn
+
+    _ADJACENT: dict[str, list[str]] = {
+        "flight":      ["hotel", "car"],
+        "hotel":       ["flight", "car"],
+        "car":         ["flight", "hotel"],
+        "credit_card": ["flight", "hotel", "car", "shopping", "dining"],
+        "shopping":    ["dining"],
+        "dining":      ["shopping"],
+    }
+
+    # Source key → intent domain (mirrors scoring._SOURCE_DOMAIN)
+    _SRC_DOMAIN: dict[str, str] = {
+        "delta": "flight", "american": "flight", "united": "flight",
+        "southwest": "flight", "alaska": "flight", "jetblue": "flight",
+        "spirit": "flight", "frontier": "flight", "hawaiian": "flight",
+        "hyatt": "hotel", "marriott": "hotel", "hilton": "hotel",
+        "ihg": "hotel", "wyndham": "hotel", "accor": "hotel",
+        "hertz": "car", "avis": "car", "enterprise": "car",
+        "national": "car", "budget": "car", "alamo": "car", "thrifty": "car",
+        "amazon": "shopping", "walmart": "shopping", "target": "shopping",
+        "doordash": "dining", "ubereats": "dining", "grubhub": "dining",
+        "amex": "credit_card", "chase": "credit_card", "citi": "credit_card",
+        "capital one": "credit_card", "discover": "credit_card",
+    }
+
+    def _src_to_domain(source: str) -> str | None:
+        s = source.lower().replace("_", " ")
+        for frag, dom in _SRC_DOMAIN.items():
+            if frag in s:
+                return dom
+        return None
+
+    try:
+        from mighty.classify import classify_benefit, is_actionable, BENEFIT_TYPES
+        from mighty.scoring import score_opportunity
+    except Exception:
+        return []
+
+    db = get_db()
+    cutoff_48h = (_dt_rn.datetime.utcnow() - _dt_rn.timedelta(hours=48)).isoformat()
+
+    # Most recent intent signal within 48 hours
+    recent = db.execute(
+        "SELECT intent_type, page_url, detected_at FROM intent_history "
+        "WHERE user_id=? AND detected_at > ? ORDER BY detected_at DESC LIMIT 1",
+        (uid, cutoff_48h)
+    ).fetchone()
+    if not recent:
+        return []
+
+    intent_type = recent["intent_type"]
+    adjacent_domains = _ADJACENT.get(intent_type, [])
+    if not adjacent_domains:
+        return []
+
+    # Load user's corrections (field_key → type)
+    corrections = _get_user_corrections(uid)
+
+    # Load user intent summary for scoring
+    user_intent: dict = {}
+    try:
+        _ui_r = db.execute("SELECT intent_summary FROM users WHERE id=?", (uid,)).fetchone()
+        if _ui_r and _ui_r["intent_summary"]:
+            user_intent = _json_rn.loads(_ui_r["intent_summary"])
+    except Exception:
+        pass
+
+    # Walk all synced accounts
+    accounts = db.execute(
+        "SELECT source, display_name, data_enc, synced_at FROM account_data WHERE user_id=?",
+        (uid,)
+    ).fetchall()
+
+    candidates: list[dict] = []
+    seen_keys: set[str] = set()
+
+    for acct in accounts:
+        source = acct["source"]
+        src_domain = _src_to_domain(source)
+        if src_domain not in adjacent_domains:
+            continue  # not an adjacent domain — skip
+
+        if not acct["data_enc"]:
+            continue
+        try:
+            data = decrypt_account_data(uid, acct["data_enc"])
+            if not isinstance(data, dict):
+                continue
+        except Exception:
+            continue
+
+        items = (data.get("items") or []) + (data.get("ai_items") or [])
+        for item in items:
+            label = (item.get("label") or "").strip()
+            value = str(item.get("value") or "").strip()
+            if not label or not value or value in {"—", "-", "N/A", "None", "TBD", "0"}:
+                continue
+
+            field_key = f"{source}::{label}"
+            if field_key in seen_keys:
+                continue
+
+            # Resolve type: correction > stored > classify
+            if field_key in corrections:
+                btype = corrections[field_key]
+            else:
+                btype = item.get("_type") or classify_benefit(label, value, source)
+
+            if not is_actionable(btype):
+                continue  # only surface redeemable benefits
+
+            days_left = _parse_expiry_days(label, value)
+            if days_left is not None and days_left < 0:
+                continue  # expired
+
+            score_item = {"label": label, "value": value, "btype": btype, "days_left": days_left}
+            score = score_opportunity(score_item, user_intent=user_intent, source=source)
+            if score < 20:
+                continue  # too low signal even in context
+
+            seen_keys.add(field_key)
+            candidates.append({
+                "source":      acct["display_name"] or source,
+                "source_key":  source,
+                "field_key":   field_key,
+                "label":       label,
+                "value":       value,
+                "btype":       btype,
+                "days_left":   days_left,
+                "score":       score,
+                "intent_type": intent_type,
+            })
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda x: -x["score"])
+    return candidates[:max_items]
+
+
 def _why_shown(btype: str, days_left=None, source_display: str = "",
                methodology: str = "") -> str:
     """Return a one-sentence 'Why am I seeing this?' explanation for a benefit item.
@@ -7836,51 +7992,90 @@ def dashboard():
 </script>
 """
 
-    relevant_now_html = """
-<div id="relevant-now-section" style="margin-bottom:28px;display:none">
-  <h2 style="font-size:14px;font-weight:700;color:#111;margin:0 0 12px;
-     text-transform:uppercase;letter-spacing:.05em">&#10022; Relevant Right Now</h2>
-  <div id="relevant-now-panel"></div>
-</div>
-<script>
-(function(){
-  fetch('/api/intent/recent').then(r=>r.json()).then(function(items){
-    if(!items || !items.length) return;
-    var section = document.getElementById('relevant-now-section');
-    var panel   = document.getElementById('relevant-now-panel');
-    var LABELS  = {flight:'flight search', hotel:'hotel search', car:'car rental', shopping:'shopping', dining:'dining'};
-    var html = '';
-    for(var i=0;i<items.length;i++){
-      var item = items[i];
-      if(!item.benefit_count) continue;
-      var label = LABELS[item.intent_type] || item.intent_type;
-      var blist = (item.benefits||[]).slice(0,3).map(function(b){
-        return '<div style="font-size:12px;color:#374151;padding:1px 0">&#8226; <strong>'+
-          escHtml(b.account)+'</strong> '+escHtml(b.label)+
-          (b.value ? ' <span style="color:#6b7280">'+escHtml(b.value.slice(0,25))+'</span>' : '')+
-          '</div>';
-      }).join('');
-      html += '<div style="padding:10px 12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px">'+
-        '<div style="font-size:12px;font-weight:600;color:#6b7280;margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em">'+
-          escHtml(label)+'</div>'+
-        blist+
-        '</div>';
-    }
-    if(html){
-      panel.innerHTML = html;
-      section.style.display = 'block';
-      // Store most recent context so wallet-insights can filter by it
-      try {
-        if (items[0] && items[0].intent_type) {
-          sessionStorage.setItem('mighty_last_context', items[0].intent_type);
+    # ── RELEVANT NOW — cross-domain intent recommendations ──────────────────
+    _rn_items = _relevant_now_items(session["user_id"])
+    if _rn_items:
+        import json as _json_rn_dash
+        _rn_intent = _rn_items[0]["intent_type"]
+        _rn_intent_labels = {
+            "flight": "searching for flights",
+            "hotel":  "searching for hotels",
+            "car":    "searching for rental cars",
+            "shopping": "shopping online",
+            "dining": "searching for restaurants",
         }
-      } catch(e) {}
-    }
-  }).catch(function(){});
-  function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-})();
-</script>
-"""
+        _rn_intent_label = _rn_intent_labels.get(_rn_intent, f"searching for {_rn_intent}")
+        _rn_adjacent_labels = {
+            "flight": "hotels & car rentals",
+            "hotel":  "flights & car rentals",
+            "car":    "flights & hotels",
+            "shopping": "dining",
+            "dining": "shopping",
+        }
+        _rn_adj_label = _rn_adjacent_labels.get(_rn_intent, "related benefits")
+        _rn_type_icons = {
+            "certificate":   "🎫",
+            "travel_credit": "✈",
+            "cash_credit":   "💳",
+            "elite_status":  "◆",
+            "membership":    "🔑",
+        }
+
+        _rn_rows_html = ""
+        for _rni in _rn_items:
+            _rni_icon  = _rn_type_icons.get(_rni["btype"], "•")
+            _rni_why   = _why_shown(_rni["btype"], _rni.get("days_left"), _rni["source"])
+            _rni_exp   = _rni.get("days_left")
+            # Drawer data
+            _rni_bd = _json_rn_dash.dumps({
+                "label":    _rni["label"],
+                "account":  _rni["source"],
+                "value":    _rni["value"],
+                "icon":     _rni_icon,
+                "expDays":  _rni_exp,
+                "field_key": _rni["field_key"],
+                "btype":    _rni["btype"],
+            }).replace("'", "&#39;")
+            _rni_exp_html = ""
+            if _rni_exp is not None and 0 <= _rni_exp <= 60:
+                _exp_col = "#dc2626" if _rni_exp <= 14 else "#d97706"
+                _rni_exp_html = (
+                    f'<span style="font-size:10px;color:{_exp_col};margin-left:4px;'
+                    f'font-weight:600">· {_rni_exp}d left</span>'
+                )
+            _rn_rows_html += (
+                f'<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 4px;'
+                f'cursor:pointer;border-radius:7px;transition:background 0.1s" '
+                f'onmouseover="this.style.background=\'#f0f9ff\'" '
+                f'onmouseout="this.style.background=\'\'" '
+                f'onclick="openBenefitDrawer(this)" data-benefit=\'{_rni_bd}\'>'
+                f'<span style="font-size:17px;flex-shrink:0;margin-top:1px;line-height:1.3">{_rni_icon}</span>'
+                f'<div style="flex:1;min-width:0">'
+                f'<div style="font-size:13.5px;font-weight:600;color:#0c4a6e;line-height:1.3;'
+                f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+                f'{he(_rni["label"])}{_rni_exp_html}</div>'
+                f'<div style="font-size:11px;color:#6b7280;margin-top:1px">{he(_rni["source"])}</div>'
+                + (f'<div style="font-size:10.5px;color:#0369a1;margin-top:2px">{he(_rni_why)}</div>' if _rni_why else '')
+                + f'</div></div>'
+            )
+
+        relevant_now_html = (
+            f'<div style="margin-bottom:28px;background:#f0f9ff;border:1px solid #bae6fd;'
+            f'border-radius:12px;padding:16px 18px">'
+            f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">'
+            f'<span style="font-size:13px;font-weight:700;color:#0369a1;text-transform:uppercase;'
+            f'letter-spacing:.05em">Relevant now</span>'
+            f'<span style="font-size:11px;background:#e0f2fe;color:#0284c7;padding:2px 8px;'
+            f'border-radius:99px;font-weight:500">You\'re {he(_rn_intent_label)}</span>'
+            f'</div>'
+            f'<div style="font-size:11px;color:#6b7280;margin-bottom:10px">'
+            f'Your {he(_rn_adj_label)} benefits — useful for your current trip.</div>'
+            f'{_rn_rows_html}'
+            f'</div>'
+        )
+    else:
+        relevant_now_html = ""
+    # ── END RELEVANT NOW ─────────────────────────────────────────────────────
 
     # Build re-auth banner if any accounts need re-login
     if login_required_accounts:
