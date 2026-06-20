@@ -7060,24 +7060,14 @@ def dashboard():
             _fprefix = f"{_ficon} " if _ficon else ""
             freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
 
-            # Footer: expand toggle only if there are extra items
-            if extra_items:
-                expand_btn = (
-                    f'<button class="acct-expand-btn" onclick="toggleExpand(this)" '
-                    f'data-count="{len(extra_items)}">'
-                    f'<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                    f'{len(extra_items)} more field{"s" if len(extra_items)!=1 else ""}'
-                    f'</button>'
-                )
-            else:
-                expand_btn = (
-                    f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')" '
-                    f'style="font-size:10px;color:#d1d5db;border-color:#f0ede9">Edit fields</button>'
-                )
-
             # Show "Remove account" when there's no data (sync failed or never captured anything)
             _no_data = not items or (len(items) == 1 and items[0].get("value","") in {"—", "No data", ""})
             if _no_data:
+                # No-data cards: "Edit login" + "Remove"
+                expand_btn = (
+                    f'<button class="acct-edit-btn" onclick="openCredModal(\'{he(src)}\',\'{he(display_name)}\')" '
+                    f'style="font-size:10px;color:#6366f1;border-color:#e0e7ff">Edit login</button>'
+                )
                 _rm_onclick = (
                     "if(confirm('Remove " + he(display_name).replace("'","\\'") + "?')){"
                     "fetch('/credentials/delete/" + he(src) + "',"
@@ -7091,6 +7081,20 @@ def dashboard():
                     f'Remove</button>'
                 )
             else:
+                # Cards with data: expand toggle or "Edit fields"
+                if extra_items:
+                    expand_btn = (
+                        f'<button class="acct-expand-btn" onclick="toggleExpand(this)" '
+                        f'data-count="{len(extra_items)}">'
+                        f'<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                        f'{len(extra_items)} more field{"s" if len(extra_items)!=1 else ""}'
+                        f'</button>'
+                    )
+                else:
+                    expand_btn = (
+                        f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')" '
+                        f'style="font-size:10px;color:#d1d5db;border-color:#f0ede9">Edit fields</button>'
+                    )
                 _remove_btn = ""
             card_footer = (
                 f'<div class="acct-footer">'
@@ -11057,9 +11061,95 @@ document.addEventListener('keydown', function(e) {{
     if (co && co.classList.contains('open')) closeDashConnectModal();
     var fo = document.getElementById('dash-field-overlay');
     if (fo && fo.style.display !== 'none') closeDashFieldModal();
+    var co2 = document.getElementById('dash-cred-overlay');
+    if (co2 && co2.style.display !== 'none') closeCredModal();
     closeBenefitDrawer();
   }}
 }});
+</script>
+
+<!-- Credential edit modal -->
+<div id="dash-cred-overlay" onclick="if(event.target===this)closeCredModal()"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:310;align-items:center;justify-content:center"></div>
+<div id="dash-cred-modal"
+     style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+            background:#fff;border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,0.18);
+            width:min(400px,92vw);padding:24px;z-index:311">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+    <h3 id="dash-cred-title" style="font-size:15px;font-weight:700;color:#1c1917;margin:0">Edit login</h3>
+    <button onclick="closeCredModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:2px 6px">&times;</button>
+  </div>
+  <div style="margin-bottom:12px">
+    <label style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Username or email</label>
+    <input id="dash-cred-username" type="text" autocomplete="off" placeholder="username@example.com"
+           style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:9px 11px;font-size:14px;color:#1c1917;outline:none">
+  </div>
+  <div style="margin-bottom:12px">
+    <label style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Password</label>
+    <input id="dash-cred-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"
+           style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:9px 11px;font-size:14px;color:#1c1917;outline:none">
+  </div>
+  <details style="margin-bottom:16px">
+    <summary style="font-size:12px;color:#9ca3af;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
+    <input id="dash-cred-totp" type="text" placeholder="TOTP secret key"
+           style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:9px 11px;font-size:14px;margin-top:8px">
+    <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
+  </details>
+  <input id="dash-cred-source" type="hidden">
+  <div style="display:flex;gap:8px;justify-content:flex-end">
+    <button onclick="closeCredModal()" style="padding:8px 16px;border:1px solid #e5e7eb;border-radius:7px;background:#fff;font-size:13px;color:#6b7280;cursor:pointer">Cancel</button>
+    <button onclick="saveCredModal()" style="padding:8px 18px;border:none;border-radius:7px;background:#6366f1;color:#fff;font-size:13px;font-weight:600;cursor:pointer">Save &amp; Sync</button>
+  </div>
+  <div id="dash-cred-error" style="display:none;margin-top:10px;font-size:12px;color:#ef4444"></div>
+</div>
+<script>
+function openCredModal(src, displayName) {{
+  document.getElementById('dash-cred-title').textContent = (displayName || src) + ' — Edit login';
+  document.getElementById('dash-cred-source').value = src;
+  document.getElementById('dash-cred-password').value = '';
+  document.getElementById('dash-cred-totp').value = '';
+  document.getElementById('dash-cred-error').style.display = 'none';
+  document.getElementById('dash-cred-username').value = 'Loading…';
+  document.getElementById('dash-cred-overlay').style.display = 'flex';
+  document.getElementById('dash-cred-modal').style.display = 'block';
+  fetch('/api/credentials/' + encodeURIComponent(src) + '/username')
+    .then(function(r) {{ return r.json(); }})
+    .then(function(d) {{
+      document.getElementById('dash-cred-username').value = d.username || '';
+    }}).catch(function() {{
+      document.getElementById('dash-cred-username').value = '';
+    }});
+}}
+function closeCredModal() {{
+  document.getElementById('dash-cred-overlay').style.display = 'none';
+  document.getElementById('dash-cred-modal').style.display = 'none';
+}}
+function saveCredModal() {{
+  var src  = document.getElementById('dash-cred-source').value;
+  var user = document.getElementById('dash-cred-username').value.trim();
+  var pass = document.getElementById('dash-cred-password').value;
+  var totp = document.getElementById('dash-cred-totp').value.trim();
+  var err  = document.getElementById('dash-cred-error');
+  if (!user) {{ err.textContent = 'Username is required.'; err.style.display = 'block'; return; }}
+  var body = new URLSearchParams({{_csrf: CSRF, source: src, username: user, password: pass}});
+  if (totp) body.append('totp_secret', totp);
+  fetch('/credentials/save', {{method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}}, body: body}})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(d) {{
+      if (!d.ok) {{ err.textContent = d.error || 'Save failed.'; err.style.display = 'block'; return; }}
+      closeCredModal();
+      // Trigger a sync for this account
+      fetch('/api/sync/' + encodeURIComponent(src), {{method:'POST', headers:{{'X-CSRF-Token': CSRF}}}})
+        .finally(function() {{
+          var t = document.getElementById('mighty-toast');
+          if (t) {{ t.textContent = 'Credentials saved — syncing…'; t.classList.add('show'); setTimeout(function(){{t.classList.remove('show');}}, 3000); }}
+          setTimeout(function(){{ location.reload(); }}, 3500);
+        }});
+    }}).catch(function() {{
+      err.textContent = 'Network error. Please try again.';
+      err.style.display = 'block';
+    }});
+}}
 </script>
 
 <!-- Benefit detail drawer -->
@@ -12209,6 +12299,24 @@ def extension_poll(source):
     if row:
         return jsonify({"captured": True, "synced_at": row["synced_at"]})
     return jsonify({"captured": False})
+
+
+@app.route("/api/credentials/<source>/username")
+@require_login
+def credentials_get_username(source):
+    """Return the stored (decrypted) username for a source — used to prefill the Edit login modal."""
+    uid = session["user_id"]
+    row = get_db().execute(
+        "SELECT username_enc FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not row:
+        return jsonify({"username": ""})
+    try:
+        username = decrypt_cred(uid, row["username_enc"])
+    except Exception:
+        username = ""
+    return jsonify({"username": username})
 
 
 @app.route("/credentials/register", methods=["POST"])
