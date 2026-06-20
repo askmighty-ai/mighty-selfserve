@@ -14113,6 +14113,23 @@ def api_admin_site_health():
         try:
             ad    = decrypt_account_data(row["user_id"], row["data_enc"] or "")
             items = ad.get("items") or ad.get("ai_items") or []
+
+            # Also check account_credentials.discovered_fields — fields are saved
+            # there by _save_discovered_fields and may not always be synced back
+            # to account_data.items (e.g. after a Railway re-sync clears items).
+            if not items:
+                cred_row = db.execute(
+                    "SELECT extra_enc FROM account_credentials "
+                    "WHERE user_id=? AND source=?",
+                    (row["user_id"], row["source"])
+                ).fetchone()
+                if cred_row and cred_row["extra_enc"]:
+                    try:
+                        ex = json.loads(decrypt_cred(row["user_id"], cred_row["extra_enc"]))
+                        items = ex.get("discovered_fields") or []
+                    except Exception:
+                        pass
+
             if items:
                 st["accounts_with_data"] += 1
                 for it in items:

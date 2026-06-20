@@ -130,10 +130,43 @@ If a session hits the context limit, the summary prompt at the top of the next s
 
 ---
 
+## Site Health (last checked 2026-06-20)
+
+| Source | Rate | Fields | Notes |
+|--------|------|--------|-------|
+| hilton | 100% | elite_status, points_balance, 2 progress | ✓ Working |
+| southwest | 100% | 6 fields incl companion pass | ✓ Working |
+| marriott | 100% | elite_status only | Missing points_balance |
+| delta | 0%* | Discovered: Diamond Medallion | *Fields in discovered_fields, not account_data.items |
+| united | 0% | None | JS SPA, needs extension + logged-in browser session |
+| amex | 100%* | None in account_data | Fields elsewhere |
+| xfinity | 100% | active_services, mobile_service_status | ✓ |
+| pa_utilities | 100% | autopay_status | ✓ |
+
+## Known Bugs
+
+### Delta 0% in health despite Diamond Medallion on dashboard
+- Fields stored in `account_credentials.extra_enc.discovered_fields` but NOT in `account_data.items`
+- Happens when Railway re-syncs and overwrites account_data without re-running discovery
+- Health endpoint now reads both (fixed 2026-06-20)
+- Root cause: Railway scraper visits `/us/en/my-account/companion-certificate` (nav page, no data)
+- Fix: extension supplement from `delta.com/us/en/my-account/account-summary`
+
+### United 0% extraction
+- `united.com/en/us/myaccount/mileageplus` returns 404 (wrong URL)
+- `united.com/en/us/myaccount/awards` returns "Loading..." — JS SPA, Railway can't render
+- Fix: user must log into United in Chrome with extension active; the interceptor 
+  will catch the MileagePlus API calls. Correct page to visit: `united.com/en/us/myaccount`
+
+### Marriott missing points_balance
+- Only elite_status extracted, no points
+- Likely the Bonvoy points are on a different page than what Railway scrapes
+- Fix: run `discover-now/marriott` to see raw text, add supplement from Bonvoy account page
+
 ## Next Priorities
 
-1. **Deploy current changes** (connector registry + site-health endpoint)
-2. **Verify Hilton fields on dashboard** — navigate to account page, hit rediscover-all
-3. **Check Railway logs for `[ConnectorCandidate]`** entries after browsing Delta/United
-4. **United extraction** — debug why no data (bot detection vs wrong page)
-5. **Marriott Bonvoy card** — run discover-now/marriott to diagnose empty ai_items
+1. **Deploy** — `git add -A && git commit -m "Connector registry, health endpoint fix, dev tooling" && git push`
+2. **Delta** — visit `delta.com/us/en/my-account/account-summary` in Chrome (logged in) to trigger supplement
+3. **United** — log into United in Chrome, visit `united.com/en/us/myaccount`, let extension intercept
+4. **Marriott points** — run `discover-now/marriott`, check what raw text contains
+5. **Watch Railway logs for `[ConnectorCandidate]`** — these tell us verified JSON paths to hardcode
