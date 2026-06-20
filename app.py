@@ -4050,10 +4050,12 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .feed-tabs{display:flex;gap:0;background:#e4dfd8;border:0.5px solid #d5cfc8;border-radius:9px;padding:3px;width:fit-content}
 .feed-tab{padding:5px 18px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:600;color:#7d7670;cursor:pointer;transition:all 0.12s;font-family:inherit}
 .feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10)}
-/* Page body — two-panel layout */
-.page-body{flex:1;display:flex;min-height:0;overflow:hidden;padding:0}
-.insight-panel{width:340px;flex-shrink:0;overflow-y:auto;padding:20px 20px 32px;border-right:1px solid #ece8e2;background:#f7f4f0}
-.cards-panel{flex:1;min-width:0;overflow-y:auto;padding:20px 24px 32px}
+/* Page body — single-column, information hierarchy */
+.page-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:0}
+.insight-panel{width:100%;padding:24px 32px 20px;background:#f7f4f0;border-bottom:1px solid #e5e0da;flex-shrink:0}
+.insight-inner{max-width:900px;margin:0 auto}
+.cards-panel{flex:1;min-width:0;padding:20px 32px 40px}
+.cards-panel-inner{max-width:900px;margin:0 auto}
 .cards-panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 /* Category groups */
 .cat-group{margin-bottom:22px}
@@ -4150,7 +4152,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}#rediscover-btn{display:none!important}.pending-pill{font-size:10px;padding:3px 8px}.page-body{flex-direction:column;overflow:visible}.insight-panel{width:100%;border-right:none;border-bottom:1px solid #ece8e2;overflow-y:visible}.cards-panel{overflow-y:visible}}
+@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}#rediscover-btn{display:none!important}.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:16px 16px 16px}.cards-panel{padding:16px 16px 32px}}
 </style>
 </head>
 <body>
@@ -4191,16 +4193,18 @@ body{display:flex;flex-direction:row;background:#eee9e2}
   <div class="page-body" {feed_col_hidden}>
     <input type="hidden" name="_csrf" value="{csrf_token}">
 
-    <!-- Intelligence panel: summary, benefits, insights -->
+    <!-- Intelligence panel: greeting, relevant now, status -->
     <div class="insight-panel">
+      <div class="insight-inner">
       {hero_section_html}
+      {relevant_now_html}
       {top_benefits_html}
       {progress_section_html}
       {action_center_html}
       {recently_found_html}
       {value_center_html}
       {wallet_insights_html}
-      {relevant_now_html}
+      </div><!-- /insight-inner -->
       <script>
       (function() {
         var TYPE_ICONS = {
@@ -4287,10 +4291,11 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       </script>
     </div><!-- /insight-panel -->
 
-    <!-- Cards panel: account grid -->
+    <!-- Cards panel: account grid (evidence layer) -->
     <div class="cards-panel">
+      <div class="cards-panel-inner">
       <div class="cards-panel-header">
-        <span style="font-size:13px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.05em">Accounts</span>
+        <span style="font-size:12px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.07em">Accounts</span>
         <div style="display:flex;align-items:center;gap:8px">
           {agent_cta_button}
           <button class="btn-connect" onclick="openDashConnectModal()">+ Connect</button>
@@ -4321,6 +4326,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
         <div id="feed-no-results" style="display:none;padding:40px 0;text-align:center;color:#b8b2ac;font-size:13px">No matching actions</div>
       </div>
       </div><!-- /fview-activity -->
+      </div><!-- /cards-panel-inner -->
     </div><!-- /cards-panel -->
   </div><!-- /page-body -->
 </div><!-- /main-content -->
@@ -6767,6 +6773,31 @@ def dashboard():
                     return 6
                 items = sorted(items, key=_card_type_priority)
 
+            # Benefit badges — count certs, credits, statuses for card header
+            _badge_certs   = sum(1 for it in items if it.get("_type") == "certificate")
+            _badge_credits = sum(1 for it in items if it.get("_type") in ("travel_credit","cash_credit"))
+            _badge_status  = sum(1 for it in items if it.get("_type") == "elite_status")
+            _badges_html = ""
+            if _badge_certs:
+                _badges_html += (
+                    f'<span style="font-size:10px;font-weight:600;color:#1d4ed8;background:#dbeafe;'
+                    f'border-radius:10px;padding:2px 7px;white-space:nowrap">🎫 {_badge_certs}</span>'
+                )
+            if _badge_credits:
+                _badges_html += (
+                    f'<span style="font-size:10px;font-weight:600;color:#047857;background:#d1fae5;'
+                    f'border-radius:10px;padding:2px 7px;white-space:nowrap">💳 {_badge_credits}</span>'
+                )
+            if _badge_status:
+                _badges_html += (
+                    f'<span style="font-size:10px;font-weight:600;color:#6d28d9;background:#ede9fe;'
+                    f'border-radius:10px;padding:2px 7px;white-space:nowrap">◆ {_badge_status}</span>'
+                )
+            if _badges_html:
+                _badges_html = (
+                    f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">{_badges_html}</div>'
+                )
+
             # Separate hero stat from secondary stats, and find alerts
             hero_item = None
             secondary_items = []
@@ -7154,7 +7185,8 @@ def dashboard():
                 f'<div class="acct-card-header">'
                 f'<div style="flex:1;min-width:0">'
                 f'<div class="acct-name">{he(display_name)}{completeness_badge}</div>'
-                f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{freshness_html}</div>'
+                + _badges_html
+                + f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{freshness_html}</div>'
                 f'{coverage_face}'
                 f'</div>'
                 f'<div class="acct-controls">'
@@ -7226,7 +7258,8 @@ def dashboard():
             items_v = data_v.get("items", []) or data_v.get("ai_items", []) or []
             _bf_dirty = False
             for _bi in items_v:
-                if "_type" not in _bi:
+                # Reclassify if missing or stale "other" (catches items from older classifier versions)
+                if not _bi.get("_type") or _bi.get("_type") == "other":
                     _bi["_type"] = classify_benefit(_bi.get("label",""), str(_bi.get("value","")), row_v["source"])
                     _bf_dirty = True
             if _bf_dirty:
@@ -7244,6 +7277,9 @@ def dashboard():
                     for f in disc_v.get("fields", [])
                     if f.get("key") in disc_v.get("enabled", set())
                 ]
+                # Classify discovered items — they have no _type from the discovery pipeline
+                for _di in items_v:
+                    _di["_type"] = classify_benefit(_di.get("label",""), str(_di.get("value","")), row_v["source"])
             for it in items_v:
                 _rs, _rf = _relevance_score(it.get("key",""), it.get("label",""), str(it.get("value","")))
                 _raw_val = _rf["value_factor"] * 300.0
@@ -7488,10 +7524,20 @@ def dashboard():
         else:
             _hero_value_block = ''
 
-    # Greeting only — Available/Status/Relevant Now sections follow below
+    # Asset summary counts for header line
+    _n_certs    = sum(1 for _, _, _, _, _, bt in value_items if bt in ("certificate",))
+    _n_credits  = sum(1 for _, _, _, _, _, bt in value_items if bt in ("travel_credit", "cash_credit"))
+    _n_statuses = sum(1 for _, _, _, _, _, bt in value_items if bt == "elite_status")
+    _asset_parts = []
+    if _n_certs:    _asset_parts.append(f'{_n_certs} cert{"s" if _n_certs != 1 else ""}')
+    if _n_credits:  _asset_parts.append(f'{_n_credits} credit{"s" if _n_credits != 1 else ""}')
+    if _n_statuses: _asset_parts.append(f'{_n_statuses} status{"es" if _n_statuses != 1 else ""}')
+    _asset_summary = " · ".join(_asset_parts) if _asset_parts else ""
+
+    # Greeting + asset summary header
     hero_section_html = (
-        f'<div style="padding:12px 0 18px;border-bottom:1px solid #e5e7eb;margin-bottom:20px">'
-        f'<div style="font-size:17px;font-weight:700;color:#111" id="hero-greeting">'
+        f'<div style="padding-bottom:20px;margin-bottom:20px;border-bottom:1px solid #e5e0da">'
+        f'<div style="font-size:20px;font-weight:700;color:#1c1917" id="hero-greeting">'
         f'Hello, {he(_first_name)}'
         f'</div>'
         f'<script>'
@@ -7499,12 +7545,14 @@ def dashboard():
         f'  var h=new Date().getHours();'
         f'  var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";'
         f'  var el=document.getElementById("hero-greeting");'
-        f'  if(el) el.innerHTML=g+", {he(_first_name)}";'
+        f'  if(el) el.textContent=g+", {he(_first_name)}";'
         f'}})();'
         f'</script>'
-        + (f'<div style="font-size:13px;color:#9ca3af;margin-top:3px">'
-           f'Watching {_account_count} account{"s" if _account_count != 1 else ""}.</div>'
-           if _account_count > 0 else '')
+        + f'<div style="font-size:13px;color:#6b7280;margin-top:5px">'
+        + (f'{_account_count} account{"s" if _account_count != 1 else ""} connected'
+           + (f' · {_asset_summary}' if _asset_summary else '')
+           if _account_count > 0 else 'No accounts connected yet.')
+        + f'</div>'
         + f'</div>'
     )
 
@@ -7851,9 +7899,9 @@ def dashboard():
         )
     if _status_chips_html:
         progress_section_html = (
-            '<div style="margin-bottom:24px">'
-            '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 10px;'
-            'text-transform:uppercase;letter-spacing:.06em">Status</h2>'
+            '<div style="margin-bottom:20px">'
+            '<h2 style="font-size:11px;font-weight:700;color:#6b7280;margin:0 0 10px;'
+            'text-transform:uppercase;letter-spacing:.07em">Your Status</h2>'
             '<div style="display:flex;flex-wrap:wrap;gap:6px">'
             + _status_chips_html +
             '</div></div>'
@@ -7973,18 +8021,49 @@ def dashboard():
     if _avail_body:
         top_benefits_html = (
             '<div style="margin-bottom:24px">'
-            '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 10px;'
-            'text-transform:uppercase;letter-spacing:.06em">Available</h2>'
+            '<h2 style="font-size:11px;font-weight:700;color:#6b7280;margin:0 0 12px;'
+            'text-transform:uppercase;letter-spacing:.07em">Relevant Now</h2>'
             + _avail_body +
             '</div>'
         )
     else:
-        # Nothing to show yet
-        if _account_count > 0:
+        # Nothing urgent — but always show something if we have value_items
+        _fallback_items = [
+            (bt, disp, lbl, val)
+            for disp, lbl, val, _, _, bt in value_items
+            if bt in ("certificate","travel_credit","cash_credit","elite_status","points_balance")
+            and val.strip() and val.strip() not in {'0','—','-','N/A','None','TBD',''}
+        ][:4]
+        if _fallback_items:
+            _fb_html = ""
+            for _fbt, _fdisp, _flbl, _fval in _fallback_items:
+                _ficon = {"certificate":"🎫","travel_credit":"✈","cash_credit":"💳",
+                          "elite_status":"◆","points_balance":"✈"}.get(_fbt,"•")
+                _skip_vals_fb = {'available','active','yes','enabled','valid','earned',''}
+                _fshow = _fval if _fval.lower().strip() not in _skip_vals_fb else ""
+                _fb_html += (
+                    f'<div style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;'
+                    f'border-bottom:1px solid #f0ece8">'
+                    f'<span style="font-size:16px;flex-shrink:0">{_ficon}</span>'
+                    f'<div style="flex:1;min-width:0">'
+                    f'<div style="font-size:13.5px;font-weight:600;color:#1c1917">{he(_flbl)}'
+                    + (f'<span style="font-size:12px;font-weight:400;color:#6b7280;margin-left:6px">{he(_fshow)}</span>' if _fshow else '')
+                    + f'</div>'
+                    f'<div style="font-size:11px;color:#9ca3af;margin-top:1px">{he(_fdisp)}</div>'
+                    f'</div></div>'
+                )
             top_benefits_html = (
                 '<div style="margin-bottom:24px">'
-                '<div style="font-size:13px;color:#9ca3af;padding:4px 0">Nothing urgent right now.</div>'
+                '<h2 style="font-size:11px;font-weight:700;color:#6b7280;margin:0 0 12px;'
+                'text-transform:uppercase;letter-spacing:.07em">Top Assets</h2>'
+                + _fb_html +
+                '<div style="font-size:11px;color:#9ca3af;margin-top:8px;padding-top:4px">✓ Nothing urgent right now</div>'
                 '</div>'
+            )
+        elif _account_count > 0:
+            top_benefits_html = (
+                '<div style="margin-bottom:24px;color:#9ca3af;font-size:13px">'
+                '✓ Nothing urgent right now</div>'
             )
         else:
             top_benefits_html = ""
