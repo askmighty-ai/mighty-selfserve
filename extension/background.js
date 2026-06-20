@@ -247,10 +247,12 @@ async function handleInterceptedApi(url, data) {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
 
-  // Map URL to source
+  // Map URL to source.
+  // Handles both standard API URLs and embedded state URLs (embedded:KEY@https://...)
   let source = null;
   try {
-    const hostname = new URL(url).hostname.replace(/^www\./, '');
+    const realUrl = url.startsWith('embedded:') ? (url.split('@')[1] || '') : url;
+    const hostname = new URL(realUrl).hostname.replace(/^www\./, '');
     for (const [domain, src] of Object.entries(INTERCEPT_DOMAIN_MAP)) {
       if (hostname.endsWith(domain)) { source = src; break; }
     }

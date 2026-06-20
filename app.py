@@ -2771,15 +2771,20 @@ DISCOVER_PROMPT = """You are analyzing one or more pages from a user's {site} ac
 Pages may be separated by === URL === markers.
 Today's date: {today}.
 {category_hint}
-CRITICAL — How to read API response blocks:
-Sections marked "=== API RESPONSE ===" contain raw JSON from the site's backend API.
-These are SUPPLEMENTARY. The displayed page text values are always more reliable.
-If an API block shows empty arrays ([]) or null/empty for a field, that does NOT mean the user has no data
-for that field — the site may load it from a different API call or render it dynamically.
-ALWAYS trust what the page text displays (e.g. "Gold", "143,996 Points") over an empty API field.
-Example: API shows "programAccountSummary":[] but page text shows "Gold\nWelcome back, Jonathan" →
-extract Elite Status = "Gold" from the page text. Never let an empty API array suppress a clearly
-displayed page value.
+CRITICAL — How to read structured data blocks:
+=== EMBEDDED STATE === blocks contain JSON serialized directly into the page by the framework
+(Next.js __NEXT_DATA__, Apollo __APOLLO_STATE__, Redux, etc.) before any API call fires.
+This is the HIGHEST CONFIDENCE source — treat non-empty values here as ground truth.
+
+=== API RESPONSE === blocks contain JSON from a specific network API call.
+These are high-confidence but may be INCOMPLETE — a single API call often returns partial data.
+If an API block shows empty arrays ([]) or null/empty for a field, that does NOT mean the user
+has no data — the site loads different data from different endpoints.
+
+In both cases: if the block shows empty/null but the page text clearly displays a value
+(e.g. "Gold", "143,996 Points"), ALWAYS trust the displayed page text. A site may render
+status from a different API call than the one captured. Never let an empty JSON field suppress
+a value that is clearly visible on the page.
 
 Page text:
 {text}
@@ -13415,17 +13420,27 @@ def api_extension_intercept():
     if not existing:
         return jsonify({"ok": False, "error": "Account not connected"}), 404
 
+    # Determine acquisition tier from URL prefix
+    # embedded:KEY@https://... → Tier 2 (embedded page state: Next.js, Apollo, Redux)
+    # normal URL              → Tier 1 (fetch/XHR API response)
+    is_embedded = url.startswith("embedded:")
+    acquisition_tier = 2 if is_embedded else 1
+    tier_label = "EMBEDDED STATE" if is_embedded else "API RESPONSE"
+    # For embedded URLs, extract the real page URL for domain checking + logging
+    real_url = url.split("@", 1)[1] if is_embedded and "@" in url else url
+
     # Domain enforcement — truncate data from unexpected hostnames
-    if not _url_allowed_for_source(source, url):
+    if not _url_allowed_for_source(source, real_url):
         json_data = json_data[:500]
-        _log_privacy_event(uid, "domain_rejected", source=source, domain=url[:80])
-        print(f"[Intercept] Domain mismatch for {source}: {url[:80]} — truncated", flush=True)
+        _log_privacy_event(uid, "domain_rejected", source=source, domain=real_url[:80])
+        print(f"[Intercept] Domain mismatch for {source}: {real_url[:80]} — truncated", flush=True)
 
     ad      = decrypt_account_data(uid, existing["data_enc"] or "")
     old_raw = ad.get("raw_text", "")
 
-    # Prepend the intercepted JSON so it leads the raw_text window
-    intercept_block = f"\n\n=== API RESPONSE: {url} ===\n{json_data}\n"
+    # Prepend the intercepted data so it leads the raw_text window.
+    # Tier 2 (embedded) gets a distinct label so Gemini knows it's pre-hydration state.
+    intercept_block = f"\n\n=== {tier_label}: {url} ===\n{json_data}\n"
     combined = (intercept_block + old_raw)[:40_000]
     ad["raw_text"] = combined
 
@@ -13434,8 +13449,8 @@ def api_extension_intercept():
         (encrypt_account_data(uid, ad), synced_at, uid, source)
     )
     db.commit()
-    _log_privacy_event(uid, "api_intercepted", source=source, domain=url[:80])
-    print(f"[Intercept] {source}: {len(json_data)} chars from {url[:80]}", flush=True)
+    _log_privacy_event(uid, "api_intercepted", source=source, domain=real_url[:80])
+    print(f"[Intercept] {source} (tier {acquisition_tier}): {len(json_data)} chars from {url[:80]}", flush=True)
 
     # Re-run field discovery in background
     if _claude:
@@ -13447,11 +13462,17 @@ def api_extension_intercept():
             with app.app_context():
                 fields = claude_discover_fields(combined, site_name, source=source)
                 if fields:
-                    # Tag API-intercepted fields — higher fidelity than DOM scrapes
+                    # Tag fields with acquisition tier and source confidence
+                    # Tier 1 (API response): confidence boost 1.05×
+                    # Tier 2 (embedded state): confidence boost 1.10× — more reliable
+                    _tier_boost = 1.10 if acquisition_tier == 2 else 1.05
                     for _f in fields:
                         _f["from_api"] = True
+                        _f["acquisition_tier"] = acquisition_tier
+                        if "confidence" in _f:
+                            _f["confidence"] = min(0.99, _f["confidence"] * _tier_boost)
                     _save_discovered_fields(uid, source, fields)
-                    print(f"[Intercept] {source}: {len(fields)} fields discovered (API-priority)", flush=True)
+                    print(f"[Intercept] {source} (tier {acquisition_tier}): {len(fields)} fields", flush=True)
                 else:
                     # Discovery returned nothing usable. If all stored items are placeholder "–"
                     # values (stale defaults), clear them so they don't persist indefinitely.
