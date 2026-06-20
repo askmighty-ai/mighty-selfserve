@@ -13705,8 +13705,9 @@ def api_debug_fields(source):
 @app.route("/api/debug/discover-now/<source>")
 @require_login
 def api_debug_discover_now(source):
-    """Run field discovery synchronously on stored raw_text and return Gemini's raw response + snippets.
-    GET /api/debug/discover-now/hilton — useful for diagnosing why fields aren't being extracted."""
+    """Run field discovery synchronously and expose every intermediate step.
+    GET /api/debug/discover-now/hilton
+    Returns: snippets sent to Gemini, raw Gemini text, pre-filter fields, post-filter fields."""
     uid = session["user_id"]
     try:
         row = get_db().execute(
@@ -13723,7 +13724,7 @@ def api_debug_discover_now(source):
         site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == source),
                          source.replace("_", " ").title())
 
-        # Get snippets (what Gemini actually receives)
+        # Build snippets (identical to what claude_discover_fields uses)
         _hint_rows = get_db().execute(
             "SELECT trigger_phrase FROM extraction_hints WHERE site=? "
             "ORDER BY success_count DESC LIMIT 50", (source,)
@@ -13731,21 +13732,76 @@ def api_debug_discover_now(source):
         _hint_phrases = [r["trigger_phrase"] for r in _hint_rows]
         snippets = _extract_candidate_snippets(raw, hint_phrases=_hint_phrases)
 
-        # Bust the discovery cache so we get a fresh Gemini call
-        global _discovery_cache
-        cache_key = __import__('hashlib').md5(((raw or "")[:5000] + str(source)).encode()).hexdigest()
-        _discovery_cache.pop(cache_key, None)
+        # Build prompt (identical to claude_discover_fields)
+        schema = _get_category_schema(source or "")
+        from datetime import datetime as _dtm
+        _today_str = _dtm.utcnow().strftime("%B %d, %Y")
+        if schema:
+            category_hint = (
+                f"\nThis is a {schema['name']}. "
+                f"Prioritise these field types:\n  {schema['priority_fields']}\n"
+            )
+        else:
+            category_hint = ""
+        prompt = DISCOVER_PROMPT.format(
+            site=site_name, text=snippets,
+            today=_today_str, category_hint=category_hint
+        )
 
-        # Run discovery synchronously
-        fields_raw = claude_discover_fields(raw, site_name, source=source)
+        # Call Gemini directly so we can capture the raw response
+        gemini_raw_text = None
+        gemini_error = None
+        fields_before_filter = []
+        fields_after_filter = []
+
+        if _claude:
+            _models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-preview-05-20"]
+            for _m in _models:
+                try:
+                    resp = _claude.models.generate_content(
+                        model=_m,
+                        contents=prompt,
+                        config=_genai_sdk.types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0,
+                        ),
+                    )
+                    gemini_raw_text = resp.text.strip() if resp.text else ""
+                    gemini_error = f"used model: {_m}"
+                    break
+                except Exception as _me:
+                    gemini_error = f"model {_m} failed: {_me}"
+
+            if gemini_raw_text:
+                try:
+                    parsed = json.loads(gemini_raw_text)
+                    if isinstance(parsed, list):
+                        fields_before_filter = parsed
+                    elif isinstance(parsed, dict):
+                        for k in ("fields", "data", "items", "results"):
+                            if isinstance(parsed.get(k), list):
+                                fields_before_filter = parsed[k]; break
+                except json.JSONDecodeError:
+                    m = re.search(r'\[.*\]', gemini_raw_text, re.DOTALL)
+                    if m:
+                        try: fields_before_filter = json.loads(m.group())
+                        except Exception: pass
+
+                fields_after_filter = _post_filter_fields(fields_before_filter)
+        else:
+            gemini_error = "Gemini client not configured"
 
         return jsonify({
             "source": source,
             "raw_text_chars": len(raw),
             "snippets_chars": len(snippets),
-            "snippets_preview": snippets[:2000],
-            "fields_returned": fields_raw,
-            "field_count": len(fields_raw),
+            "snippets_preview": snippets[:3000],
+            "gemini_status": gemini_error,
+            "gemini_raw_preview": (gemini_raw_text or "")[:2000],
+            "fields_before_filter": fields_before_filter,
+            "fields_after_filter": fields_after_filter,
+            "field_count_before": len(fields_before_filter),
+            "field_count_after": len(fields_after_filter),
         })
     except Exception as e:
         import traceback
