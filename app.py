@@ -445,6 +445,12 @@ def init_db():
             db.commit()
         except Exception:
             pass
+        # Per-user learned type affinity — updated on every interaction signal
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN type_affinity TEXT")
+            db.commit()
+        except Exception:
+            pass  # column already exists
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -520,12 +526,15 @@ def populate_action_items(uid: str, source: str, data: dict):
 
     # Load user's intent summary for scoring (non-fatal if missing)
     user_intent: dict = {}
+    user_type_affinity: dict = {}
     try:
         _ui_row = get_db().execute(
-            "SELECT intent_summary FROM users WHERE id=?", (uid,)
+            "SELECT intent_summary, type_affinity FROM users WHERE id=?", (uid,)
         ).fetchone()
         if _ui_row and _ui_row["intent_summary"]:
             user_intent = _json_ai.loads(_ui_row["intent_summary"])
+        if _ui_row and _ui_row["type_affinity"]:
+            user_type_affinity = _json_ai.loads(_ui_row["type_affinity"])
     except Exception:
         pass
 
@@ -570,7 +579,8 @@ def populate_action_items(uid: str, source: str, data: dict):
             urgency    = urgency_for_attention(days_left)
         else:
             _score_item = {"label": label, "value": value, "btype": btype, "days_left": days_left}
-            score   = score_opportunity(_score_item, user_intent=user_intent, source=source)
+            score   = score_opportunity(_score_item, user_intent=user_intent, source=source,
+                                        user_type_affinity=user_type_affinity)
             urgency = urgency_from_score(score)
             should_add = score >= _ENTRY_THRESHOLD
 
@@ -681,6 +691,94 @@ def _recompute_intent_summary(uid: str) -> dict:
     return summary
 
 
+def _recompute_type_affinity(uid: str) -> dict:
+    """Aggregate interaction signals into a per-btype affinity score.
+
+    Signal weights (per item interaction):
+        completed           → +3.0  (user redeemed / acted — strongest positive)
+        feedback: useful    → +2.0
+        feedback: already_used → +1.5
+        snoozed (no dismiss/complete) → -0.5  (mild avoidance)
+        dismissed           → -1.0
+        feedback: not_relevant → -2.0
+        feedback: dont_show → -3.0
+
+    Affinity is accumulated per canonical benefit type (btype).  The resulting
+    dict is stored as JSON on users.type_affinity and used by score_opportunity
+    to add up to 15 bonus points for types the user consistently acts on.
+
+    Returns the computed dict (without _computed_at — kept lean for scoring).
+    """
+    import json as _json_ta
+    import datetime as _dt_ta
+
+    db = get_db()
+
+    # Aggregate action_items signals (last 90 days of rows, including preserved completed ones)
+    cutoff = (_dt_ta.datetime.utcnow() - _dt_ta.timedelta(days=90)).isoformat()
+
+    ai_rows = db.execute(
+        """
+        SELECT btype,
+               SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) AS completed,
+               SUM(CASE WHEN dismissed_at IS NOT NULL
+                         AND completed_at IS NULL THEN 1 ELSE 0 END)    AS dismissed,
+               SUM(CASE WHEN snoozed_until IS NOT NULL
+                         AND dismissed_at IS NULL
+                         AND completed_at IS NULL THEN 1 ELSE 0 END)    AS snoozed_only
+        FROM action_items
+        WHERE user_id = ? AND created_at > ?
+        GROUP BY btype
+        """,
+        (uid, cutoff)
+    ).fetchall()
+
+    # Aggregate benefit_feedback signals
+    fb_rows = db.execute(
+        """
+        SELECT ai.btype,
+               bf.feedback,
+               COUNT(*) AS cnt
+        FROM benefit_feedback bf
+        JOIN action_items ai ON ai.user_id = bf.user_id
+                             AND ai.source = bf.source
+                             AND ai.field_key = (bf.source || '::' || ai.label)
+        WHERE bf.user_id = ? AND bf.created_at > ?
+        GROUP BY ai.btype, bf.feedback
+        """,
+        (uid, cutoff)
+    ).fetchall()
+
+    affinity: dict[str, float] = {}
+
+    for r in ai_rows:
+        bt = r["btype"]
+        score = (r["completed"] or 0) * 3.0 \
+              - (r["dismissed"] or 0) * 1.0 \
+              - (r["snoozed_only"] or 0) * 0.5
+        affinity[bt] = affinity.get(bt, 0.0) + score
+
+    _FB_WEIGHTS = {
+        "useful":        2.0,
+        "already_used":  1.5,
+        "not_relevant": -2.0,
+        "dont_show":    -3.0,
+    }
+    for r in fb_rows:
+        bt = r["btype"]
+        w  = _FB_WEIGHTS.get(r["feedback"], 0.0)
+        affinity[bt] = affinity.get(bt, 0.0) + w * (r["cnt"] or 0)
+
+    affinity["_computed_at"] = _dt_ta.datetime.utcnow().isoformat()
+
+    db.execute(
+        "UPDATE users SET type_affinity=? WHERE id=?",
+        (_json_ta.dumps(affinity), uid)
+    )
+    db.commit()
+    return affinity
+
+
 def _relevant_now_items(uid: str, max_items: int = 3) -> list[dict]:
     """Return benefits contextually relevant to the user's most recent intent signal.
 
@@ -755,12 +853,17 @@ def _relevant_now_items(uid: str, max_items: int = 3) -> list[dict]:
     # Load user's corrections (field_key → type)
     corrections = _get_user_corrections(uid)
 
-    # Load user intent summary for scoring
+    # Load user intent summary and type affinity for scoring
     user_intent: dict = {}
+    user_type_affinity: dict = {}
     try:
-        _ui_r = db.execute("SELECT intent_summary FROM users WHERE id=?", (uid,)).fetchone()
+        _ui_r = db.execute(
+            "SELECT intent_summary, type_affinity FROM users WHERE id=?", (uid,)
+        ).fetchone()
         if _ui_r and _ui_r["intent_summary"]:
             user_intent = _json_rn.loads(_ui_r["intent_summary"])
+        if _ui_r and _ui_r["type_affinity"]:
+            user_type_affinity = _json_rn.loads(_ui_r["type_affinity"])
     except Exception:
         pass
 
@@ -813,7 +916,8 @@ def _relevant_now_items(uid: str, max_items: int = 3) -> list[dict]:
                 continue  # expired
 
             score_item = {"label": label, "value": value, "btype": btype, "days_left": days_left}
-            score = score_opportunity(score_item, user_intent=user_intent, source=source)
+            score = score_opportunity(score_item, user_intent=user_intent, source=source,
+                                      user_type_affinity=user_type_affinity)
             if score < 20:
                 continue  # too low signal even in context
 
@@ -2433,7 +2537,7 @@ except ImportError:
     def _relevance_score(field_key="", field_label="", field_value="",  # type: ignore[misc]
                          confidence=0.85, context=None, expiry_date_str=None):
         return 0.5, {}
-    def score_opportunity(item, user_intent=None, source=""):  # type: ignore[misc]
+    def score_opportunity(item, user_intent=None, source="", user_type_affinity=None):  # type: ignore[misc]
         d = item.get("days_left")
         if d is not None and d <= 7:  return 70
         if d is not None and d <= 30: return 45
@@ -7136,13 +7240,16 @@ def dashboard():
     ).fetchone()
     _sort_context = _latest_intent["intent_type"] if _latest_intent else None
     _dash_user_intent: dict = {}
+    _dash_type_affinity: dict = {}
     try:
         import json as _json_dui
         _ui_r = get_db().execute(
-            "SELECT intent_summary FROM users WHERE id=?", (session["user_id"],)
+            "SELECT intent_summary, type_affinity FROM users WHERE id=?", (session["user_id"],)
         ).fetchone()
         if _ui_r and _ui_r["intent_summary"]:
             _dash_user_intent = _json_dui.loads(_ui_r["intent_summary"])
+        if _ui_r and _ui_r["type_affinity"]:
+            _dash_type_affinity = _json_dui.loads(_ui_r["type_affinity"])
     except Exception:
         pass
     # Load user type corrections for dashboard surfaces
@@ -7253,7 +7360,8 @@ def dashboard():
         if _lead_nums and int(_lead_nums[0].replace(',','')) == 0: continue
         # Score via unified opportunity engine (value + expiry + intent + rarity)
         _h_score_item = {"label": _lbl, "value": _val, "btype": _btype, "days_left": _exp}
-        _priority = score_opportunity(_h_score_item, user_intent=_dash_user_intent, source=_disp)
+        _priority = score_opportunity(_h_score_item, user_intent=_dash_user_intent, source=_disp,
+                                      user_type_affinity=_dash_type_affinity)
         _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp))
     _hero_candidates.sort(key=lambda x: (-x[0], x[1]))
 
@@ -7710,7 +7818,8 @@ def dashboard():
         _tb_seen.add(_dedup)
         _exp = _tb_exp_days(_lbl, _val)
         _tb_score_item = {"label": _lbl, "value": _val, "btype": _btype_tb, "days_left": _exp}
-        _pri = score_opportunity(_tb_score_item, user_intent=_dash_user_intent, source=_disp)
+        _pri = score_opportunity(_tb_score_item, user_intent=_dash_user_intent, source=_disp,
+                                 user_type_affinity=_dash_type_affinity)
         _top_benefit_cards.append((_pri, _exp if _exp is not None else 9999,
                                    _disp, _lbl, _val, _exp))
     _top_benefit_cards.sort(key=lambda x: (-x[0], x[1]))
@@ -12943,6 +13052,10 @@ def api_action_item_dismiss(item_id):
     db.commit()
     if rowcount == 0:
         return jsonify({"error": "not found"}), 404
+    try:
+        _recompute_type_affinity(uid)
+    except Exception:
+        pass
     return jsonify({"ok": True})
 
 
@@ -12963,6 +13076,10 @@ def api_action_item_snooze(item_id):
     db.commit()
     if rowcount == 0:
         return jsonify({"error": "not found"}), 404
+    try:
+        _recompute_type_affinity(uid)
+    except Exception:
+        pass
     return jsonify({"ok": True, "snoozed_until": snoozed_until})
 
 
@@ -12982,6 +13099,10 @@ def api_action_item_complete(item_id):
     db.commit()
     if rowcount == 0:
         return jsonify({"error": "not found"}), 404
+    try:
+        _recompute_type_affinity(uid)
+    except Exception:
+        pass
     return jsonify({"ok": True, "completed_at": now})
 
 
@@ -14169,6 +14290,10 @@ def api_benefits_feedback():
         (uid, source, field_key, feedback, context, _dt_fb.datetime.utcnow().isoformat())
     )
     get_db().commit()
+    try:
+        _recompute_type_affinity(uid)
+    except Exception:
+        pass
     return jsonify({"ok": True, "action": feedback})
 
 

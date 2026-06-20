@@ -205,32 +205,61 @@ def _rarity_weight(btype: str) -> int:
     return _RARITY.get(btype, 0)
 
 
+def _affinity_weight(btype: str, user_type_affinity: dict) -> int:
+    """Return 0-15 bonus points from the user's learned interaction pattern.
+
+    Positive affinity (completed / marked useful) → up to 15 pts.
+    Negative or zero → 0 (no boost, no penalty — low-affinity types just rank
+    lower because they don't receive the bonus).
+
+    Scale: raw ≥ 5 → 15pts, raw = 3 → 9pts, raw = 1 → 3pts.
+    """
+    if not user_type_affinity:
+        return 0
+    raw = user_type_affinity.get(btype, 0.0)
+    if not isinstance(raw, (int, float)) or raw <= 0:
+        return 0
+    return min(int(raw * 3), 15)
+
+
 def score_opportunity(
     item: dict,
     user_intent: dict | None = None,
     source: str = "",
+    user_type_affinity: dict | None = None,
 ) -> int:
     """Return a 0-100 opportunity score for an item.
 
     item keys used: label, value, btype, days_left
     user_intent: dict from users.intent_summary, e.g. {"hotel": 3, "flight": 1}
     source: source key string (e.g. "delta", "hyatt_world_of_hyatt")
+    user_type_affinity: dict from users.type_affinity (learned per-btype signal)
 
-    The score is a stable 0-100 integer useful for both surface ranking and
-    action center gating.  Higher = more worth surfacing now.
+    Score components (max 100):
+        expiration  0-40   time pressure
+        value       0-30   literal dollar or intrinsic type value
+        intent      0-20   domain match with recent browsing
+        rarity      0-10   scarcity of benefit type
+        affinity    0-15   learned from user's past interactions
     """
-    days = item.get("days_left")
+    days  = item.get("days_left")
     btype = item.get("btype", "other")
 
     exp   = _expiration_weight(days)
     val   = _value_weight(item)
     inten = _intent_weight(item, user_intent or {}, source)
     rar   = _rarity_weight(btype)
+    aff   = _affinity_weight(btype, user_type_affinity or {})
 
-    return min(exp + val + inten + rar, 100)
+    return min(exp + val + inten + rar + aff, 100)
 
 
-def score_components(item: dict, user_intent: dict | None = None, source: str = "") -> dict:
+def score_components(
+    item: dict,
+    user_intent: dict | None = None,
+    source: str = "",
+    user_type_affinity: dict | None = None,
+) -> dict:
     """Return a breakdown dict — useful for debugging and the benefit drawer."""
     days  = item.get("days_left")
     btype = item.get("btype", "other")
@@ -238,13 +267,15 @@ def score_components(item: dict, user_intent: dict | None = None, source: str = 
     val   = _value_weight(item)
     inten = _intent_weight(item, user_intent or {}, source)
     rar   = _rarity_weight(btype)
-    total = min(exp + val + inten + rar, 100)
+    aff   = _affinity_weight(btype, user_type_affinity or {})
+    total = min(exp + val + inten + rar + aff, 100)
     return {
         "total": total,
         "expiration": exp,
         "value": val,
         "intent": inten,
         "rarity": rar,
+        "affinity": aff,
     }
 
 
