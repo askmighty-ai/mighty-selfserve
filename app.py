@@ -349,6 +349,12 @@ def init_db():
         except Exception:
             pass
         try:
+            # Remove legacy United /ual/ paths that cause 404s — current paths are /en/us/myaccount/*
+            db.execute("DELETE FROM site_paths WHERE site='united' AND path LIKE '/ual/%'")
+            db.commit()
+        except Exception:
+            pass
+        try:
             db.execute("ALTER TABLE users ADD COLUMN notification_pref TEXT NOT NULL DEFAULT 'quiet'")
             db.commit()
         except Exception:
@@ -1778,7 +1784,10 @@ SOURCE_CAPABILITIES: dict[str, dict] = {
         "display_name": "United MileagePlus",
         "category": "airline",
         "benefit_types": ["miles", "ecredit", "upgrade_cert", "premier_status"],
-        "key_pages": ["/ual/en/us/fly/travel/awards/certificates.html"],
+        "key_pages": [
+            "/en/us/myaccount/summary",
+            "/en/us/myaccount/upgrades",
+        ],
     },
     "american_air": {
         "display_name": "American Airlines AAdvantage",
@@ -7066,9 +7075,27 @@ def dashboard():
                     f'style="font-size:10px;color:#d1d5db;border-color:#f0ede9">Edit fields</button>'
                 )
 
+            # Show "Remove account" when there's no data (sync failed or never captured anything)
+            _no_data = not items or (len(items) == 1 and items[0].get("value","") in {"—", "No data", ""})
+            if _no_data:
+                _rm_onclick = (
+                    "if(confirm('Remove " + he(display_name).replace("'","\\'") + "?')){"
+                    "fetch('/credentials/delete/" + he(src) + "',"
+                    "{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+                    "body:'_csrf='+encodeURIComponent(CSRF)})"
+                    ".then(()=>location.reload())}"
+                )
+                _remove_btn = (
+                    f'<button class="acct-edit-btn" onclick="{_rm_onclick}" '
+                    f'style="font-size:10px;color:#ef4444;border-color:#fee2e2;margin-left:8px">'
+                    f'Remove</button>'
+                )
+            else:
+                _remove_btn = ""
             card_footer = (
                 f'<div class="acct-footer">'
                 f'{expand_btn}'
+                f'{_remove_btn}'
                 f'</div>'
             )
 
@@ -7588,6 +7615,9 @@ def dashboard():
         if _idk in _ins_seen: continue
         _ins_seen.add(_idk)
         _iicon = _hero_icon(_ilbl.lower())
+        if _iicon == '•':
+            _iicon = {'certificate':'🎫','travel_credit':'✈️','cash_credit':'💳',
+                      'elite_status':'⭐','points_balance':'✈️','upgrade_cert':'⬆️'}.get(_ibtype,'•')
         # Value display
         _iskip = {'available','active','yes','enabled','valid','earned',''}
         _ival_show = _ival.strip() if _ival.strip() and _ival.strip().lower() not in _iskip else ""
