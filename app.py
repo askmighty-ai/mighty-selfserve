@@ -12920,6 +12920,7 @@ def api_data_sync():
     color      = data.get("color", "#f0f0f0")
     raw_text   = data.get("raw_text", "") or body.get("raw_text", "")
     sync_source = (body.get("sync_source") or data.get("sync_source") or "railway").lower()
+    is_gap_fill = bool(body.get("gap_fill", False))
 
     db = get_db()
     existing_row = db.execute(
@@ -12927,6 +12928,41 @@ def api_data_sync():
         (user["id"], source)
     ).fetchone()
     ex_data = decrypt_account_data(user["id"], existing_row["data_enc"] or "") if existing_row else {}
+
+    # ── Gap-fill merge: append sub-page text to existing raw_text instead of replacing ──
+    # Gap-fill payloads only contain certificate/wallet page text (targeted, small).
+    # Replacing the full record would erase previously synced points, status, etc.
+    if is_gap_fill and existing_row and ex_data.get("sync_status") == "ok":
+        old_raw = ex_data.get("raw_text", "")
+        if raw_text and raw_text.strip():
+            # Prepend new text so it takes priority in AI extraction; cap total
+            merged = (raw_text.strip() + "\n\n" + old_raw).strip()
+            ex_data["raw_text"] = merged[:40_000]
+        # Re-encrypt merged record and return — skip all the overwrite logic below
+        data_enc = encrypt_account_data(user["id"], ex_data)
+        db.execute(
+            "UPDATE account_data SET data_enc=?, synced_at=? WHERE user_id=? AND source=?",
+            (data_enc, synced_at, user["id"], source)
+        )
+        db.commit()
+        _log_privacy_event(user["id"], "data_synced", source=source,
+                           detail=f"gap_fill +{len(raw_text)} chars merged")
+        # Trigger re-discovery on merged text in background (no Gemini call if content unchanged)
+        _gf_uid    = user["id"]
+        _gf_src    = source
+        _gf_text   = ex_data.get("raw_text", "")
+        _gf_name   = next((n for k, n, *_ in SUPPORTED_SITES if k == source), source.replace("_", " ").title())
+        def _bg_gf_discover():
+            with app.app_context():
+                try:
+                    fields = claude_discover_fields(_gf_text, _gf_name, source=_gf_src)
+                    if fields:
+                        _save_discovered_fields(_gf_uid, _gf_src, fields)
+                        print(f"[GapFill] {_gf_src}: re-discovered {len(fields)} fields on merged text", flush=True)
+                except Exception as _e:
+                    print(f"[GapFill] {_gf_src}: re-discovery error: {_e}", flush=True)
+        threading.Thread(target=_bg_gf_discover, daemon=True).start()
+        return jsonify({"ok": True, "gap_fill": True, "merged_chars": len(ex_data.get("raw_text",""))})
 
     # Extension-first: if Railway is trying to sync but extension already has fresh good data, skip.
     # force=True (manual "Sync All") bypasses the recency check but still applies a quality gate:
