@@ -6751,6 +6751,21 @@ def dashboard():
                 preferred = [it for it in items if it.get("key") in _UTILITY_HERO_KEYS]
                 rest = [it for it in items if it.get("key") not in _UTILITY_HERO_KEYS]
                 items = preferred + rest
+            else:
+                # Sort by benefit type: certs/credits first (action-driving), points/miles last (inventory)
+                def _card_type_priority(item):
+                    t = item.get("_type", "other")
+                    if t == "certificate":                   return 0
+                    if t in ("travel_credit", "cash_credit"): return 1
+                    if t == "elite_status":                  return 2
+                    if t == "upcoming_event":                return 3
+                    if t in ("partner_benefit", "membership"): return 4
+                    if t in ("payment_due", "renewal"):      return 5
+                    if t == "other":                         return 6
+                    if t == "points_balance":                return 7
+                    if t == "progress_toward":               return 8
+                    return 6
+                items = sorted(items, key=_card_type_priority)
 
             # Separate hero stat from secondary stats, and find alerts
             hero_item = None
@@ -7473,38 +7488,24 @@ def dashboard():
         else:
             _hero_value_block = ''
 
-    # Attention status line — shown inside greeting, removes need for standalone compact row
-    if not _inline_reminders:
-        _attn_status_html = (
-            '<div style="font-size:13px;color:#9ca3af;margin-top:3px">'
-            'Nothing needs attention today.</div>'
-        )
-    else:
-        _n_attn = len(_inline_reminders)
-        _any_urgent = any(r.get("urgency") == "urgent" for r in _inline_reminders)
-        _attn_color = "#dc2626" if _any_urgent else "#d97706"
-        _attn_label = f'{_n_attn} item{"s" if _n_attn != 1 else ""} need{"" if _n_attn != 1 else "s"} your attention'
-        _attn_status_html = (
-            f'<div style="font-size:13px;color:{_attn_color};margin-top:3px">⚠ {_attn_label}</div>'
-        )
-
+    # Greeting only — Available/Status/Relevant Now sections follow below
     hero_section_html = (
         f'<div style="padding:12px 0 18px;border-bottom:1px solid #e5e7eb;margin-bottom:20px">'
         f'<div style="font-size:17px;font-weight:700;color:#111" id="hero-greeting">'
-        f'Hello, {he(_first_name)} \U0001f44b'
+        f'Hello, {he(_first_name)}'
         f'</div>'
         f'<script>'
         f'(function(){{'
         f'  var h=new Date().getHours();'
         f'  var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";'
         f'  var el=document.getElementById("hero-greeting");'
-        f'  if(el) el.innerHTML=g+", {he(_first_name)} \U0001f44b";'
+        f'  if(el) el.innerHTML=g+", {he(_first_name)}";'
         f'}})();'
         f'</script>'
-        + _attn_status_html
-        + _hero_value_block
-        + _focus_html +
-        f'</div>'
+        + (f'<div style="font-size:13px;color:#9ca3af;margin-top:3px">'
+           f'Watching {_account_count} account{"s" if _account_count != 1 else ""}.</div>'
+           if _account_count > 0 else '')
+        + f'</div>'
     )
 
     # ── LAYER 2: Action Center (persistent, dismissible) ─────────────────────
@@ -7582,23 +7583,8 @@ def dashboard():
             f'</div>'
         )
 
-    if _all_action_items:
-        _ac_any_urgent = any(i.get("urgency") == "urgent" for i in _all_action_items)
-        _ac_border_clr  = "#dc2626" if _ac_any_urgent else "#f59e0b"
-        _ac_heading_clr = "#dc2626" if _ac_any_urgent else "#d97706"
-        action_center_html = (
-            '<div id="action-center-wrap" style="background:#fffbeb;border:1px solid #fde68a;'
-            'border-radius:10px;padding:14px 16px;margin-bottom:24px">'
-            '<div style="display:flex;align-items:center;margin-bottom:10px">'
-            f'<h2 style="font-size:11px;font-weight:700;color:{_ac_heading_clr};margin:0;'
-            f'text-transform:uppercase;letter-spacing:.06em;border-left:3px solid {_ac_border_clr};'
-            f'padding-left:10px">Needs Action</h2>'
-            '</div>'
-            + _ac_items_html +
-            '</div>'
-        )
-    else:
-        action_center_html = ""
+    # action_center_html suppressed — action items merged into AVAILABLE section below
+    action_center_html = ""
 
     # ── LAYER 2b: Recently Discovered feed ───────────────────────────────────
     import datetime as _dtrd
@@ -7672,13 +7658,7 @@ def dashboard():
             )
 
         if _rc_lines:
-            recently_found_html = (
-                '<div style="margin-bottom:20px">'
-                '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
-                'text-transform:uppercase;letter-spacing:.06em">Recently Changed</h2>'
-                + "".join(_rc_lines) +
-                '</div>'
-            )
+            recently_found_html = ""  # suppressed — data in account cards
 
     # Pre-check whether TOP BENEFITS will render — avoids duplicating certs/credits in Use Soon
     _will_have_top_benefits = any(
@@ -7735,27 +7715,7 @@ def dashboard():
                 f'<span style="color:#6b7280;margin-left:6px">{he(val_str)}</span></div>'
             )
 
-        if forgotten_lines or points_lines:
-            _points_section = ""
-            if points_lines:
-                _points_header = ('<div style="font-size:11px;font-weight:600;color:#9ca3af;'
-                                  'text-transform:uppercase;letter-spacing:.05em;'
-                                  'margin-top:10px;margin-bottom:4px">Points &amp; Miles</div>'
-                                  if forgotten_lines else "")
-                _points_section = _points_header + "".join(points_lines)
-            value_center_html = (
-                '<div style="margin-bottom:20px">'
-                '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
-                'text-transform:uppercase;letter-spacing:.06em">'
-                + ('Balances' if _will_have_top_benefits else 'Use Soon') +
-                '</h2>'
-                + "".join(forgotten_lines)
-                + _points_section
-                + '</div>'
-            )
-        else:
-            value_center_html = ""
-
+        value_center_html = ""  # suppressed — data in account cards
         value_banner = ""
     else:
         value_center_html = ""
@@ -7860,13 +7820,43 @@ def dashboard():
             f'{he(_pright)}</div>'
             f'</div>'
         )
-    if _prog_html:
+    # STATUS section: elite_status chips ("◆ Delta Diamond · ◆ Marriott Gold")
+    _status_chips_html = ""
+    for _pri_sc, _, _disp_sc, _lbl_sc, _val_sc, _exp_sc in _top_benefit_cards[:6]:
+        _tier_sc = _val_sc.strip() if _val_sc.strip() and _val_sc.strip().lower() not in {
+            'active','yes','enabled','true','','member'} else _lbl_sc
+        _tier_lc_sc = _tier_sc.lower()
+        if any(k in _tier_lc_sc for k in ['diamond','globalist','titanium','executive','chairman','1k','executive platinum']):
+            _chip_color, _chip_bg = "#92400e", "#fef3c7"  # amber — top tier
+        elif any(k in _tier_lc_sc for k in ['platinum','gold','sapphire','status']):
+            _chip_color, _chip_bg = "#5b21b6", "#f5f3ff"  # purple — mid-high
+        else:
+            _chip_color, _chip_bg = "#374151", "#f3f4f6"  # grey — base
+        _fk_sc = f"{_disp_sc}::{_lbl_sc}"
+        _btype_sc = _dash_corrections.get(_fk_sc, "elite_status")
+        import json as _json_sc
+        _sc_bd = _json_sc.dumps({
+            "label": _lbl_sc, "account": _disp_sc, "value": _val_sc,
+            "icon": "◆", "expDays": _exp_sc,
+            "field_key": _fk_sc, "btype": _btype_sc,
+            "corrected": _fk_sc in _dash_corrections,
+        }).replace("'", "&#39;")
+        _status_chips_html += (
+            f'<span style="display:inline-flex;align-items:center;gap:4px;'
+            f'background:{_chip_bg};color:{_chip_color};font-size:12px;font-weight:600;'
+            f'border-radius:20px;padding:4px 10px;cursor:pointer;white-space:nowrap" '
+            f'onclick="openBenefitDrawer(this)" data-benefit=\'{_sc_bd}\' '
+            f'title="{he(_disp_sc)}">'
+            f'◆ {he(_tier_sc)}</span>'
+        )
+    if _status_chips_html:
         progress_section_html = (
-            '<div style="margin-bottom:20px">'
-            '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
-            'text-transform:uppercase;letter-spacing:.06em">Progress</h2>'
-            + _prog_html +
-            '</div>'
+            '<div style="margin-bottom:24px">'
+            '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 10px;'
+            'text-transform:uppercase;letter-spacing:.06em">Status</h2>'
+            '<div style="display:flex;flex-wrap:wrap;gap:6px">'
+            + _status_chips_html +
+            '</div></div>'
         )
     else:
         progress_section_html = ""
@@ -7909,21 +7899,95 @@ def dashboard():
             + (f'<div style="font-size:10px;color:#a78bfa;margin-top:1px">{he(_tb_why)}</div>' if _tb_why else '')
             + f'</div></div>'
         )
-    _tb_overflow = max(0, len(_top_benefit_cards) - 6)
-    if _tb_html:
-        _tb_more_html = (
-            f'<div style="font-size:13px;color:#6366f1;padding:6px 2px 2px;font-weight:500;cursor:pointer"'
-            f' onclick="document.getElementById(\'accounts-section\').scrollIntoView({{behavior:\'smooth\'}})">View remaining benefits →</div>'
-        ) if _tb_overflow > 0 else ""
+    # ── AVAILABLE section: hero bullets (certs/credits) + urgent action items ─────
+    # Build urgent-action items inline (payment_due, renewal, login_required)
+    _avail_attn_html = ""
+    _csrf_tok = get_csrf_token()
+    for _ai in _all_action_items[:6]:
+        _ai_id      = _ai.get("id")
+        _ai_urgency = _ai.get("urgency", "info")
+        _ai_label   = _ai.get("label", "")
+        _ai_val     = _ai.get("value", "")
+        _ai_btype   = _ai.get("btype", "")
+        _ai_days    = _ai.get("days_left")
+        _ai_disp_lbl = _ai_val if not _ai_label or _ai_label == "Login required" else f"{_ai_label}: {_ai_val}"
+        if _ai_btype == "login_required":
+            _ai_why = "Re-authenticate to continue syncing"
+        elif _ai_days is not None and _ai_days < 0:
+            _ai_why = "Expired"
+        else:
+            _ai_why = _why_shown(_ai_btype, _ai_days)
+        _ai_urg_clr = "#dc2626" if _ai_urgency == "urgent" else "#d97706"
+        _ai_icon    = "🔴" if _ai_urgency == "urgent" else "🟡"
+        # Action buttons for persisted items
+        if _ai_id is not None:
+            _rm_js = (
+                f"document.getElementById('avail-ai-{_ai_id}').remove();"
+                f"if(!document.querySelector('[id^=\"avail-ai-\"]'))document.getElementById('avail-attn-section').remove();"
+            )
+            _done_js = (
+                f"fetch('/api/action-items/{_ai_id}/complete',{{"
+                f"method:'POST',headers:{{'X-CSRF-Token':'{_csrf_tok}','Content-Type':'application/json'}},"
+                f"credentials:'same-origin'}}).then(r=>r.ok&&({_rm_js}))"
+            )
+            _dismiss_js = (
+                f"fetch('/api/action-items/{_ai_id}/dismiss',{{"
+                f"method:'POST',headers:{{'X-CSRF-Token':'{_csrf_tok}','Content-Type':'application/json'}},"
+                f"credentials:'same-origin'}}).then(r=>r.ok&&({_rm_js}))"
+            )
+            _snooze_js = (
+                f"fetch('/api/action-items/{_ai_id}/snooze',{{"
+                f"method:'POST',headers:{{'X-CSRF-Token':'{_csrf_tok}','Content-Type':'application/json'}},"
+                f"body:JSON.stringify({{days:7}}),credentials:'same-origin'}})"
+                f".then(r=>r.ok&&({_rm_js}))"
+            )
+            _ai_btns = (
+                f'<div style="display:flex;gap:6px;margin-top:5px">'
+                f'<button onclick="{_done_js}" style="font-size:11px;font-weight:600;color:#fff;'
+                f'background:#16a34a;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;line-height:1.5">✓ Done</button>'
+                f'<button onclick="{_snooze_js}" style="font-size:11px;color:#6b7280;background:none;'
+                f'border:1px solid #e5e7eb;border-radius:4px;padding:3px 8px;cursor:pointer;line-height:1.5">Snooze 7d</button>'
+                f'<button onclick="{_dismiss_js}" style="font-size:11px;color:#9ca3af;background:none;'
+                f'border:none;padding:3px 4px;cursor:pointer;line-height:1.5">✕</button>'
+                f'</div>'
+            )
+            _ai_id_attr = f'id="avail-ai-{_ai_id}"'
+        else:
+            _ai_btns, _ai_id_attr = "", ""
+        _avail_attn_html += (
+            f'<div {_ai_id_attr} style="display:flex;align-items:flex-start;gap:10px;'
+            f'padding:8px 0;border-bottom:1px solid #fef3c7">'
+            f'<span style="font-size:14px;flex-shrink:0;margin-top:2px">{_ai_icon}</span>'
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="font-size:13px;font-weight:500;color:#111;line-height:1.35">{he(_ai_disp_lbl)}</div>'
+            + (f'<div style="font-size:11px;color:{_ai_urg_clr};margin-top:1px">{he(_ai_why)}</div>' if _ai_why else '')
+            + _ai_btns
+            + '</div></div>'
+        )
+    if _avail_attn_html:
+        _avail_attn_html = (
+            f'<div id="avail-attn-section" style="margin-bottom:10px">{_avail_attn_html}</div>'
+        )
+
+    _avail_body = _avail_attn_html + _hero_bullets_html
+    if _avail_body:
         top_benefits_html = (
-            '<div style="margin-bottom:20px">'
-            '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
-            'text-transform:uppercase;letter-spacing:.06em">Status</h2>'
-            + _tb_html + _tb_more_html +
+            '<div style="margin-bottom:24px">'
+            '<h2 style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 10px;'
+            'text-transform:uppercase;letter-spacing:.06em">Available</h2>'
+            + _avail_body +
             '</div>'
         )
     else:
-        top_benefits_html = ""
+        # Nothing to show yet
+        if _account_count > 0:
+            top_benefits_html = (
+                '<div style="margin-bottom:24px">'
+                '<div style="font-size:13px;color:#9ca3af;padding:4px 0">Nothing urgent right now.</div>'
+                '</div>'
+            )
+        else:
+            top_benefits_html = ""
 
     opportunities_html = """
 <style>
@@ -7998,11 +8062,10 @@ def dashboard():
 """
 
     # ── Wallet Insights: card descriptions relevant to connected accounts ─────
-    # Collapsed by default. Only expands if there are matching recommendations.
-    # Context-gated: when the extension fires a contextual intent (stored in
-    # sessionStorage by the relevant_now section), only cards for that context
-    # are shown; otherwise all are shown in the collapsed shell.
-    wallet_insights_html = """
+    # wallet_insights_html suppressed — card recommendations removed per product direction
+    # (surfacing existing benefits, not recommending new cards)
+    wallet_insights_html = ""
+    _wallet_insights_unused = """
 <div id="wallet-insights-wrap" style="margin-bottom:28px;display:none">
   <button id="wallet-insights-toggle"
     onclick="toggleWalletInsights()"
