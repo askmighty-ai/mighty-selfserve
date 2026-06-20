@@ -4050,18 +4050,21 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .feed-tabs{display:flex;gap:0;background:#e4dfd8;border:0.5px solid #d5cfc8;border-radius:9px;padding:3px;width:fit-content}
 .feed-tab{padding:5px 18px;border-radius:6px;border:none;background:none;font-size:12px;font-weight:600;color:#7d7670;cursor:pointer;transition:all 0.12s;font-family:inherit}
 .feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10)}
-/* Page body — single-column, intelligence top + accounts below */
+/* Page body — single column: intelligence strip at top, accounts below */
 .page-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:0}
-/* Insight panel: two-column row — main content + right Available Benefits rail */
-.insight-panel{width:100%;display:flex;flex-direction:row;background:#f7f4f0;border-bottom:1px solid #e5e0da;flex-shrink:0}
-.insight-main{flex:1;min-width:0;padding:24px 28px 22px}
-.insight-rail{width:264px;flex-shrink:0;padding:22px 18px 22px;border-left:1px solid #e0dbd4;background:#efebe5}
-/* Cards panel fills full width — no max-width cap */
+.insight-panel{width:100%;padding:24px 32px 22px;background:#f7f4f0;border-bottom:1px solid #e5e0da;flex-shrink:0}
+.insight-inner{max-width:820px;margin:0 auto}
+/* Cards panel — full-width with generous max so wide monitors breathe */
 .cards-panel{flex:1;min-width:0;padding:20px 28px 40px}
 .cards-panel-inner{max-width:1600px;margin:0 auto}
 .cards-panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
-/* Mobile: stack insight-panel columns */
-@media(max-width:700px){.insight-panel{flex-direction:column}.insight-rail{width:100%;border-left:none;border-top:1px solid #e0dbd4}}
+/* Compact (utility/low-value) account cards — subdued when not expanded */
+.acct-card.is-compact{opacity:0.55;border-color:rgba(0,0,0,0.05)}
+.acct-card.is-compact:not(.is-expanded) .acct-hero{display:none}
+.acct-card.is-compact:not(.is-expanded) .acct-secondary{display:none}
+.acct-card.is-compact:not(.is-expanded) .acct-alert{display:none}
+.acct-card.is-compact:hover{opacity:0.85}
+.acct-card.is-compact.is-expanded{opacity:1}
 /* Category groups */
 .cat-group{margin-bottom:22px}
 .cat-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -4198,16 +4201,14 @@ body{display:flex;flex-direction:row;background:#eee9e2}
   <div class="page-body" {feed_col_hidden}>
     <input type="hidden" name="_csrf" value="{csrf_token}">
 
-    <!-- Intelligence panel: main column (greeting + intent + status) + right rail (available benefits) -->
+    <!-- Intelligence panel: greeting → available benefits → status -->
     <div class="insight-panel">
-      <div class="insight-main">
+      <div class="insight-inner">
       {hero_section_html}
+      {insights_html}
       {relevant_now_html}
       {progress_section_html}
-      </div><!-- /insight-main -->
-      <div class="insight-rail">
-      {available_rail_html}
-      </div><!-- /insight-rail -->
+      </div><!-- /insight-inner -->
       <script>
       (function() {
         var TYPE_ICONS = {
@@ -6776,6 +6777,14 @@ def dashboard():
                     return 6
                 items = sorted(items, key=_card_type_priority)
 
+            # Visual weight: compact class for accounts with no high-value items
+            # (no certs, credits, or elite status — just utility data like bills/balances)
+            _has_highval = any(
+                it.get("_type") in ("certificate","travel_credit","cash_credit","elite_status")
+                for it in items
+            )
+            _compact_cls = "" if _has_highval else " is-compact"
+
             # Benefit badges — count certs, credits, statuses for card header
             _badge_certs   = sum(1 for it in items if it.get("_type") == "certificate")
             _badge_credits = sum(1 for it in items if it.get("_type") in ("travel_credit","cash_credit"))
@@ -7184,7 +7193,7 @@ def dashboard():
             )
 
             grid_cards += (
-                f'<div class="acct-card{stale_cls}{expiring_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}">'
+                f'<div class="acct-card{stale_cls}{expiring_cls}{_compact_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}">'
                 f'<div class="acct-card-header">'
                 f'<div style="flex:1;min-width:0">'
                 f'<div class="acct-name">{he(display_name)}{completeness_badge}</div>'
@@ -7527,17 +7536,30 @@ def dashboard():
         else:
             _hero_value_block = ''
 
-    # Asset summary counts for header line
-    _n_certs    = sum(1 for _, _, _, _, _, bt in value_items if bt in ("certificate",))
-    _n_credits  = sum(1 for _, _, _, _, _, bt in value_items if bt in ("travel_credit", "cash_credit"))
-    _n_statuses = sum(1 for _, _, _, _, _, bt in value_items if bt == "elite_status")
-    _asset_parts = []
-    if _n_certs:    _asset_parts.append(f'{_n_certs} cert{"s" if _n_certs != 1 else ""}')
-    if _n_credits:  _asset_parts.append(f'{_n_credits} credit{"s" if _n_credits != 1 else ""}')
-    if _n_statuses: _asset_parts.append(f'{_n_statuses} status{"es" if _n_statuses != 1 else ""}')
-    _asset_summary = " · ".join(_asset_parts) if _asset_parts else ""
+    # Value-first sub-line: lead with what the user has, not counts
+    _n_hc = len(_hero_candidates)
+    if _n_hc >= 1:
+        _th_lbl   = _hero_candidates[0][3]
+        _th_btype = _hero_candidates[0][6]
+        _art = "an" if _th_lbl and _th_lbl[0].lower() in "aeiou" else "a"
+        if _n_hc == 1:
+            _value_lead = f"You have {_art} {he(_th_lbl)} available right now."
+        elif _n_hc == 2:
+            _th2_lbl = _hero_candidates[1][3]
+            _art2 = "an" if _th2_lbl and _th2_lbl[0].lower() in "aeiou" else "a"
+            _value_lead = f"You have {_art} {he(_th_lbl)} and {_art2} {he(_th2_lbl)} available."
+        else:
+            _value_lead = f"You have {_n_hc} benefits available, including {_art} {he(_th_lbl)}."
+    elif _account_count > 0:
+        _n_statuses = sum(1 for _, _, _, _, _, bt in value_items if bt == "elite_status")
+        if _n_statuses:
+            _value_lead = f'{_account_count} account{"s" if _account_count != 1 else ""} synced.'
+        else:
+            _value_lead = f'{_account_count} account{"s" if _account_count != 1 else ""} connected.'
+    else:
+        _value_lead = "No accounts connected yet."
 
-    # Greeting + asset summary header
+    # Greeting + value-first header
     hero_section_html = (
         f'<div style="padding-bottom:20px;margin-bottom:20px;border-bottom:1px solid #e5e0da">'
         f'<div style="font-size:20px;font-weight:700;color:#1c1917" id="hero-greeting">'
@@ -7551,13 +7573,80 @@ def dashboard():
         f'  if(el) el.textContent=g+", {he(_first_name)}";'
         f'}})();'
         f'</script>'
-        + f'<div style="font-size:13px;color:#6b7280;margin-top:5px">'
-        + (f'{_account_count} account{"s" if _account_count != 1 else ""} connected'
-           + (f' · {_asset_summary}' if _asset_summary else '')
-           if _account_count > 0 else 'No accounts connected yet.')
-        + f'</div>'
-        + f'</div>'
+        f'<div style="font-size:14px;color:#374151;margin-top:6px;line-height:1.5">{_value_lead}</div>'
+        f'</div>'
     )
+
+    # ── INSIGHTS: Available Now — prominent section, benefits as primary objects ─
+    # Shows top scored certs/credits as a clean list. Each item is clickable
+    # and opens the benefit detail drawer. Ordered by score (expiry + value + intent).
+    import json as _json_ins
+    _ins_rows_html = ""
+    _ins_seen = set()
+    for _ip, _, _idisp, _ilbl, _ival, _iexp, _ibtype in _hero_candidates[:5]:
+        _idk = (_idisp, _ilbl[:30])
+        if _idk in _ins_seen: continue
+        _ins_seen.add(_idk)
+        _iicon = _hero_icon(_ilbl.lower())
+        # Value display
+        _iskip = {'available','active','yes','enabled','valid','earned',''}
+        _ival_show = _ival.strip() if _ival.strip() and _ival.strip().lower() not in _iskip else ""
+        # Sub-line: "through [source]" + expiry chip
+        _isub_parts = [f'through {he(_idisp)}']
+        _iexp_html = ""
+        if _iexp is not None and _iexp >= 0:
+            import datetime as _idt
+            if _iexp <= 14:
+                _iexp_html = (
+                    f'<span style="display:inline-block;margin-top:4px;font-size:11px;font-weight:600;'
+                    f'color:#dc2626;background:#fee2e2;border-radius:4px;padding:1px 6px">'
+                    f'Expires in {_iexp}d</span>'
+                )
+            elif _iexp <= 60:
+                _iexp_html = (
+                    f'<span style="display:inline-block;margin-top:4px;font-size:11px;'
+                    f'color:#d97706;background:#fef3c7;border-radius:4px;padding:1px 6px">'
+                    f'Exp {(_idt.date.today() + _idt.timedelta(days=_iexp)).strftime("%b %Y")}</span>'
+                )
+        # Label color: certs blue, credits green
+        _ilbl_color = "#1d4ed8" if _ibtype == "certificate" else "#059669" if _ibtype in ("travel_credit","cash_credit") else "#1c1917"
+        # Drawer data
+        _ifk = f"{_idisp}::{_ilbl}"
+        _ibd = _json_ins.dumps({
+            "label": _ilbl, "account": _idisp, "value": _ival,
+            "icon": _iicon, "expDays": _iexp, "field_key": _ifk, "btype": _ibtype,
+            "corrected": _ifk in _dash_corrections
+        }).replace("'", "&#39;")
+        _ins_rows_html += (
+            f'<div style="display:flex;gap:14px;align-items:flex-start;padding:13px 8px;'
+            f'border-bottom:1px solid #e8e3de;cursor:pointer;border-radius:8px;'
+            f'transition:background 0.1s" '
+            f'onmouseover="this.style.background=\'#edece9\'" '
+            f'onmouseout="this.style.background=\'\'" '
+            f'onclick="openBenefitDrawer(this)" data-benefit=\'{_ibd}\'>'
+            f'<span style="font-size:24px;flex-shrink:0;line-height:1.1;margin-top:2px">{_iicon}</span>'
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="font-size:15px;font-weight:700;color:{_ilbl_color};line-height:1.3">'
+            f'{he(_ilbl)}'
+            + (f'<span style="font-size:13px;font-weight:500;color:#4b5563;margin-left:7px">{he(_ival_show)}</span>' if _ival_show else '')
+            + f'</div>'
+            f'<div style="font-size:12px;color:#9ca3af;margin-top:2px">{" · ".join(_isub_parts)}</div>'
+            + (f'<div>{_iexp_html}</div>' if _iexp_html else '')
+            + f'</div>'
+            f'<div style="font-size:11px;color:#9ca3af;flex-shrink:0;margin-top:4px;align-self:center">›</div>'
+            f'</div>'
+        )
+    if _ins_rows_html:
+        insights_html = (
+            f'<div style="margin-bottom:24px">'
+            f'<h2 style="font-size:10px;font-weight:700;color:#9ca3af;margin:0 0 2px;'
+            f'text-transform:uppercase;letter-spacing:.08em">Available Now</h2>'
+            + _ins_rows_html +
+            f'</div>'
+        )
+    else:
+        insights_html = ""
+    # ── END INSIGHTS ─────────────────────────────────────────────────────────
 
     # ── LAYER 2: Action Center (persistent, dismissible) ─────────────────────
     def _ai_urgency_icon(urgency):
@@ -8518,6 +8607,7 @@ function dismissOnboarding() {
             .replace("{new_accounts_banner}",     new_accounts_banner)
             .replace("{account_data_html}",       account_data_html)
             .replace("{hero_section_html}",       hero_section_html)
+            .replace("{insights_html}",           insights_html)
             .replace("{available_rail_html}",     available_rail_html)
             .replace("{action_center_html}",      action_center_html)
             .replace("{recently_found_html}",     recently_found_html)
