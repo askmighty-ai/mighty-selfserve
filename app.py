@@ -6635,7 +6635,9 @@ def dashboard():
         "SELECT * FROM account_data WHERE user_id=? ORDER BY synced_at DESC",
         (user["id"],)
     ).fetchall()
-    synced_map = {r["source"]: r for r in acct_rows}
+    # Convert to plain dicts so .get() works safely even when columns are
+    # missing from older production DB schemas (e.g. sync_status, sync_failure_reason).
+    synced_map = {r["source"]: dict(r) for r in acct_rows}
 
     # Step 3: build cards for ALL connected accounts, grouped by category
     configured = connected_sources
@@ -7276,7 +7278,7 @@ def dashboard():
     for _src, _dname, _ic, _cl in [
         item for cat in _cat_order for item in _cat_map[cat]
         if synced_map.get(item[0]) and
-           (synced_map[item[0]]["sync_status"] or "") == "login_required"
+           (synced_map[item[0]].get("sync_status") or "") == "login_required"
     ]:
         _lr_items.append({
             "id": None, "source": _src, "label": "Login required",
