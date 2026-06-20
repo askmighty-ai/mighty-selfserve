@@ -1796,6 +1796,325 @@ def _get_category_schema(source: str) -> dict | None:
     return None
 
 
+# ── Site Connector Registry ───────────────────────────────────────────────────
+# Deterministic JSON path extractors for known loyalty sites.
+# Paths are dot-notation into the parsed API/embedded-state JSON.
+# The first path that yields a non-empty value wins.
+#
+# These are seeded from known API shapes and auto-updated via
+# _record_connector_candidates() when Gemini successfully extracts a field.
+#
+# Priority: connector paths are tried BEFORE Gemini. On a cache hit,
+# Gemini is skipped entirely (faster, cheaper, zero hallucination risk).
+#
+SITE_CONNECTORS: dict[str, list[dict]] = {
+    # Each entry is a list of field specs:
+    #   key        — internal field key (matches _CATEGORY_SCHEMAS fields)
+    #   label      — display label
+    #   paths      — ordered list of dot-notation paths to try
+    "delta": [
+        {
+            "key": "elite_status", "label": "Medallion Status",
+            "paths": [
+                "data.member.medallionStatus",
+                "member.medallionStatus",
+                "loyalty.tier",
+                "account.tier",
+            ],
+        },
+        {
+            "key": "points_balance", "label": "SkyMiles Balance",
+            "paths": [
+                "data.member.skymiles",
+                "data.member.miles",
+                "member.skymiles",
+                "member.miles",
+                "loyalty.miles",
+                "account.miles",
+            ],
+        },
+        {
+            "key": "ecredit_balance", "label": "eCredit Balance",
+            "paths": [
+                "data.wallet.totalEcreditValue",
+                "wallet.totalEcreditValue",
+                "ecredits.totalValue",
+            ],
+        },
+    ],
+    "united": [
+        {
+            "key": "elite_status", "label": "MileagePlus Status",
+            "paths": [
+                "mpAccount.eliteStatus",
+                "mileagePlusAccount.eliteLevel",
+                "account.eliteStatus",
+                "loyalty.tier",
+            ],
+        },
+        {
+            "key": "points_balance", "label": "MileagePlus Miles",
+            "paths": [
+                "mpAccount.balance",
+                "mileagePlusAccount.accountBalance",
+                "account.miles",
+                "loyalty.miles",
+            ],
+        },
+    ],
+    "hilton": [
+        {
+            "key": "elite_status", "label": "Hilton Honors Status",
+            "paths": [
+                "loyalty.tier",
+                "guest.hhonors.tier",
+                "data.guest.hhonors.tier",
+                "guestInfo.hhonors.tier",
+                "props.pageProps.guestInfo.hhonors.tier",
+                "loyaltyProfile.tier",
+                "hhonors.tier",
+            ],
+        },
+        {
+            "key": "points_balance", "label": "Hilton Honors Points",
+            "paths": [
+                "loyalty.points",
+                "loyalty.pointsBalance",
+                "guest.hhonors.points",
+                "data.guest.hhonors.points",
+                "guestInfo.hhonors.points",
+                "props.pageProps.guestInfo.hhonors.points",
+                "hhonors.points",
+                "hhonors.pointsBalance",
+            ],
+        },
+    ],
+    "marriott": [
+        {
+            "key": "elite_status", "label": "Bonvoy Status",
+            "paths": [
+                "loyalty.tier",
+                "bonvoyAccount.tier",
+                "member.eliteStatus",
+                "profile.tier",
+                "account.tier",
+                "props.pageProps.memberProfile.tier",
+            ],
+        },
+        {
+            "key": "points_balance", "label": "Bonvoy Points",
+            "paths": [
+                "loyalty.points",
+                "bonvoyAccount.points",
+                "member.points",
+                "props.pageProps.memberProfile.points",
+                "account.points",
+            ],
+        },
+    ],
+    "hyatt": [
+        {
+            "key": "elite_status", "label": "World of Hyatt Status",
+            "paths": [
+                "loyalty.tier",
+                "member.tier",
+                "account.tier",
+                "props.pageProps.member.tier",
+            ],
+        },
+        {
+            "key": "points_balance", "label": "World of Hyatt Points",
+            "paths": [
+                "loyalty.points",
+                "member.points",
+                "account.points",
+                "props.pageProps.member.points",
+            ],
+        },
+    ],
+    "southwest": [
+        {
+            "key": "elite_status", "label": "A-List Status",
+            "paths": [
+                "account.tierName",
+                "loyalty.tier",
+                "member.tierStatus",
+                "customer.tierLevel",
+            ],
+        },
+        {
+            "key": "points_balance", "label": "Rapid Rewards Points",
+            "paths": [
+                "account.pointsBalance",
+                "loyalty.points",
+                "member.points",
+                "customer.points",
+            ],
+        },
+    ],
+    "amex": [
+        {
+            "key": "points_balance", "label": "Membership Rewards Points",
+            "paths": [
+                "membershipRewards.points",
+                "loyalty.balance",
+                "accountSummary.rewardsBalance",
+                "rewards.pointsBalance",
+            ],
+        },
+        {
+            "key": "statement_balance", "label": "Statement Balance",
+            "paths": [
+                "accountSummary.statementBalance",
+                "account.statementBalance",
+                "balance.statementBalance",
+            ],
+        },
+    ],
+    "chase": [
+        {
+            "key": "points_balance", "label": "Ultimate Rewards Points",
+            "paths": [
+                "ultimateRewards.balance",
+                "rewards.pointsBalance",
+                "loyalty.balance",
+            ],
+        },
+        {
+            "key": "statement_balance", "label": "Statement Balance",
+            "paths": [
+                "accountSummary.statementBalance",
+                "account.statementBalance",
+            ],
+        },
+    ],
+}
+
+
+def _resolve_json_path(obj, path: str):
+    """Walk a dot-notation path through a nested JSON object.
+    Returns the value at that path, or None if any segment is missing.
+    Handles list indexing with integer segments (e.g. 'items.0.value').
+    """
+    cur = obj
+    for part in path.split("."):
+        if cur is None:
+            return None
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        elif isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError, TypeError):
+                return None
+        else:
+            return None
+    return cur
+
+
+def try_connector_paths(source: str, json_data: str) -> list[dict]:
+    """Try deterministic JSON path extractors for known loyalty sites.
+
+    Returns a list of field dicts in the same format as claude_discover_fields,
+    or an empty list if the source has no connector or no paths match.
+
+    Connector fields carry confidence=0.99 and from_connector=True so they
+    sort ahead of Gemini fields in _save_discovered_fields dedup.
+    """
+    specs = SITE_CONNECTORS.get(source)
+    if not specs:
+        return []
+    try:
+        obj = json.loads(json_data)
+    except (ValueError, TypeError):
+        return []
+
+    _EMPTY = frozenset({"", "0", "-", "–", "—", "null", "none", "unknown"})
+    fields: list[dict] = []
+    for spec in specs:
+        field_key = spec["key"]
+        label     = spec["label"]
+        for path in spec["paths"]:
+            val = _resolve_json_path(obj, path)
+            if val is None:
+                continue
+            val_str = str(val).strip()
+            if val_str.lower() in _EMPTY or not val_str:
+                continue
+            # Found a real value
+            fields.append({
+                "key":            field_key,
+                "label":          label,
+                "value":          val_str,
+                "confidence":     0.99,
+                "source_snippet": f"[connector:{path}]",
+                "from_api":       True,
+                "from_connector": True,
+                "connector_path": path,
+            })
+            break  # first matching path wins; don't add duplicates for same field
+
+    return fields
+
+
+def _find_json_path_for_value(obj, target: str, max_depth: int = 8, _path: str = "") -> str | None:
+    """Recursively search a parsed JSON object for the first leaf whose string
+    representation matches *target* (case-insensitive strip match).
+
+    Returns the dot-notation path of the first match, or None.
+    Used by _record_connector_candidates to learn new connector paths from
+    successful Gemini extractions.
+    """
+    if max_depth <= 0:
+        return None
+    t_lower = target.strip().lower()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            p = f"{_path}.{k}" if _path else k
+            if isinstance(v, (str, int, float)):
+                if str(v).strip().lower() == t_lower:
+                    return p
+            result = _find_json_path_for_value(v, target, max_depth - 1, p)
+            if result:
+                return result
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            p = f"{_path}.{i}" if _path else str(i)
+            result = _find_json_path_for_value(v, target, max_depth - 1, p)
+            if result:
+                return result
+    return None
+
+
+def _record_connector_candidates(source: str, raw_json: str, fields: list[dict]) -> None:
+    """After a successful Gemini extraction, search the source JSON for each
+    extracted field value and log the dot-notation path.
+
+    These log lines are candidates for promotion into SITE_CONNECTORS:
+      [ConnectorCandidate] delta.elite_status → data.member.medallionStatus = 'Gold'
+    """
+    if not fields or not raw_json:
+        return
+    try:
+        obj = json.loads(raw_json)
+    except Exception:
+        return
+
+    for field in fields:
+        if field.get("from_connector"):
+            continue  # already came from a connector path
+        val = str(field.get("value", "")).strip()
+        key = field.get("key", "")
+        if not val or not key or val.lower() in ("", "-", "–", "—"):
+            continue
+        path = _find_json_path_for_value(obj, val)
+        if path:
+            print(
+                f"[ConnectorCandidate] {source}.{key} → {path} = {val[:50]!r}",
+                flush=True,
+            )
+
+
 SOURCE_CAPABILITIES: dict[str, dict] = {
     # Airlines
     "delta": {
@@ -13464,27 +13783,61 @@ def api_extension_intercept():
     _log_privacy_event(uid, "api_intercepted", source=source, domain=real_url[:80])
     print(f"[Intercept] {source} (tier {acquisition_tier}): {len(json_data)} chars from {url[:80]}", flush=True)
 
+    # ── Connector fast path (deterministic, no Gemini) ───────────────────────
+    # Try known JSON path extractors before falling back to Gemini.
+    # connector_fields is passed into _bg() so it can merge with Gemini output.
+    connector_fields = try_connector_paths(source, json_data)
+    if connector_fields:
+        print(
+            f"[Intercept] {source} (tier {acquisition_tier}): "
+            f"{len(connector_fields)} fields from connector (skipping Gemini for covered keys)",
+            flush=True,
+        )
+
     # Re-run field discovery in background
     if _claude:
         site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == source),
                          source.replace("_", " ").title())
         # Capture current stored items for stale-data clearing below
         _current_items = list(ad.get("items") or ad.get("ai_items") or [])
+        _connector_fields_snap = list(connector_fields)  # close over current value
         def _bg():
             with app.app_context():
-                fields = claude_discover_fields(combined, site_name, source=source)
-                if fields:
-                    # Tag fields with acquisition tier and source confidence
-                    # Tier 1 (API response): confidence boost 1.05×
-                    # Tier 2 (embedded state): confidence boost 1.10× — more reliable
-                    _tier_boost = 1.10 if acquisition_tier == 2 else 1.05
-                    for _f in fields:
+                _tier_boost = 1.10 if acquisition_tier == 2 else 1.05
+                _connector_keys = {f["key"] for f in _connector_fields_snap}
+
+                # Only call Gemini if connector didn't cover all fields OR source has no connector
+                if not _connector_keys or True:  # always run Gemini to catch fields not in connector
+                    fields = claude_discover_fields(combined, site_name, source=source)
+                else:
+                    fields = []
+
+                # Log candidate connector paths from Gemini's output
+                if fields and json_data:
+                    _record_connector_candidates(source, json_data, fields)
+
+                # Merge: connector fields take priority for keys they cover,
+                # Gemini fills in anything the connector missed.
+                gemini_unique = [f for f in fields if f.get("key") not in _connector_keys]
+                merged = _connector_fields_snap + gemini_unique
+
+                if merged:
+                    # Tag all fields with acquisition tier
+                    for _f in merged:
                         _f["from_api"] = True
                         _f["acquisition_tier"] = acquisition_tier
-                        if "confidence" in _f:
+                        # Connector fields already have confidence=0.99; only boost Gemini fields
+                        if "confidence" in _f and not _f.get("from_connector"):
                             _f["confidence"] = min(0.99, _f["confidence"] * _tier_boost)
-                    _save_discovered_fields(uid, source, fields)
-                    print(f"[Intercept] {source} (tier {acquisition_tier}): {len(fields)} fields", flush=True)
+                    _save_discovered_fields(uid, source, merged)
+                    connector_count = len(_connector_fields_snap)
+                    gemini_count    = len(gemini_unique)
+                    print(
+                        f"[Intercept] {source} (tier {acquisition_tier}): "
+                        f"{len(merged)} fields saved "
+                        f"({connector_count} connector + {gemini_count} Gemini)",
+                        flush=True,
+                    )
                 else:
                     # Discovery returned nothing usable. If all stored items are placeholder "–"
                     # values (stale defaults), clear them so they don't persist indefinitely.
@@ -13710,6 +14063,92 @@ def api_debug_fields(source):
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/api/admin/site-health")
+@require_login
+def api_admin_site_health():
+    """Return per-site extraction health across all users.
+
+    For each connected source, reports:
+      - connected_accounts  — number of users with this source connected
+      - accounts_with_data  — accounts that have ≥1 extracted field
+      - extraction_rate     — percentage with data
+      - connector_supported — whether SITE_CONNECTORS has paths for this source
+      - last_synced         — most recent sync timestamp across all users
+      - field_keys          — union of all field keys seen across users (sample)
+    """
+    uid = session.get("user_id")
+    if not uid:
+        return jsonify({"error": "unauthorized"}), 401
+
+    db = get_db()
+
+    # Gather all account_data rows (all users in multi-user mode, just this user otherwise)
+    # For privacy, we only expose aggregate counts, never individual values.
+    rows = db.execute(
+        "SELECT user_id, source, data_enc, synced_at FROM account_data ORDER BY source"
+    ).fetchall()
+
+    # Group by source
+    from collections import defaultdict as _dd
+    site_stats: dict = _dd(lambda: {
+        "connected_accounts": 0,
+        "accounts_with_data": 0,
+        "last_synced": None,
+        "field_keys": set(),
+        "connector_supported": False,
+        "example_values": {},
+    })
+
+    for row in rows:
+        src = row["source"]
+        st  = site_stats[src]
+        st["connected_accounts"] += 1
+        st["connector_supported"] = src in SITE_CONNECTORS
+
+        if row["synced_at"] and (not st["last_synced"] or row["synced_at"] > st["last_synced"]):
+            st["last_synced"] = row["synced_at"]
+
+        try:
+            ad    = decrypt_account_data(row["user_id"], row["data_enc"] or "")
+            items = ad.get("items") or ad.get("ai_items") or []
+            if items:
+                st["accounts_with_data"] += 1
+                for it in items:
+                    k = it.get("key", "")
+                    v = str(it.get("value", "")).strip()
+                    if k:
+                        st["field_keys"].add(k)
+                        # Capture one example value per field key (from this user)
+                        if k not in st["example_values"] and v and v not in ("-", "–", ""):
+                            st["example_values"][k] = v
+        except Exception:
+            pass
+
+    # Serialize sets; compute derived metrics
+    result = []
+    for src, st in sorted(site_stats.items()):
+        connected = st["connected_accounts"]
+        with_data  = st["accounts_with_data"]
+        rate = round(with_data / connected * 100) if connected else 0
+        result.append({
+            "source":              src,
+            "connected_accounts":  connected,
+            "accounts_with_data":  with_data,
+            "extraction_rate_pct": rate,
+            "connector_supported": st["connector_supported"],
+            "last_synced":         st["last_synced"],
+            "field_keys":          sorted(st["field_keys"]),
+            "example_values":      st["example_values"],
+            "status": (
+                "green"  if rate >= 80 else
+                "yellow" if rate >= 30 else
+                "red"
+            ),
+        })
+
+    return jsonify({"sites": result, "total_sites": len(result)})
 
 
 @app.route("/api/debug/discover-now/<source>")
