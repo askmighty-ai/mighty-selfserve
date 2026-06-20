@@ -7673,8 +7673,8 @@ def dashboard():
             "icon": _iicon, "expDays": _iexp, "field_key": _ifk, "btype": _ibtype,
             "corrected": _ifk in _dash_corrections
         }).replace("'", "&#39;")
-        _iarch_src = _json_ins.dumps(_idisp).replace("'","&#39;")
-        _iarch_lbl = _json_ins.dumps(_ilbl).replace("'","&#39;")
+        _iarch_src = "'" + _idisp.replace("\\", "\\\\").replace("'", "\\'") + "'"
+        _iarch_lbl = "'" + _ilbl.replace("\\", "\\\\").replace("'", "\\'") + "'"
         _ins_rows_html += (
             f'<div style="display:flex;gap:14px;align-items:flex-start;padding:13px 8px;'
             f'border-bottom:1px solid #e8e3de;border-radius:8px;'
