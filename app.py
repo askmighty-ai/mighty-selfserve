@@ -7050,46 +7050,29 @@ def dashboard():
             _fprefix = f"{_ficon} " if _ficon else ""
             freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
 
-            # Show "Remove account" when there's no data (sync failed or never captured anything)
+            # Consistent footer for all cards
             _no_data = not items or (len(items) == 1 and items[0].get("value","") in {"—", "No data", ""})
-            if _no_data:
-                # No-data cards: "Edit login" + "Remove"
+            if extra_items:
                 expand_btn = (
-                    f'<button class="acct-edit-btn" onclick="openCredModal(\'{he(src)}\',\'{he(display_name)}\')" '
-                    f'style="font-size:10px;color:#6366f1;border-color:#e0e7ff">Edit login</button>'
+                    f'<button class="acct-expand-btn" onclick="toggleExpand(this)" '
+                    f'data-count="{len(extra_items)}">'
+                    f'<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                    f'{len(extra_items)} more field{"s" if len(extra_items)!=1 else ""}'
+                    f'</button>'
                 )
-                _rm_onclick = (
-                    "if(confirm('Remove " + he(display_name).replace("'","\\'") + "?')){"
-                    "fetch('/credentials/delete/" + he(src) + "',"
-                    "{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
-                    "body:'_csrf='+encodeURIComponent(CSRF)})"
-                    ".then(()=>location.reload())}"
-                )
-                _remove_btn = (
-                    f'<button class="acct-edit-btn" onclick="{_rm_onclick}" '
-                    f'style="font-size:10px;color:#ef4444;border-color:#fee2e2;margin-left:8px">'
-                    f'Remove</button>'
+            elif _no_data:
+                # No data yet — nudge to sync, don't show a confusing "Edit login" button
+                expand_btn = (
+                    f'<span style="font-size:10px;color:#d1d5db">No data synced yet</span>'
                 )
             else:
-                # Cards with data: expand toggle or "Edit fields"
-                if extra_items:
-                    expand_btn = (
-                        f'<button class="acct-expand-btn" onclick="toggleExpand(this)" '
-                        f'data-count="{len(extra_items)}">'
-                        f'<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                        f'{len(extra_items)} more field{"s" if len(extra_items)!=1 else ""}'
-                        f'</button>'
-                    )
-                else:
-                    expand_btn = (
-                        f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')" '
-                        f'style="font-size:10px;color:#d1d5db;border-color:#f0ede9">Edit fields</button>'
-                    )
-                _remove_btn = ""
+                expand_btn = (
+                    f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')" '
+                    f'style="font-size:10px;color:#d1d5db;border-color:#f0ede9">Edit fields</button>'
+                )
             card_footer = (
                 f'<div class="acct-footer">'
                 f'{expand_btn}'
-                f'{_remove_btn}'
                 f'</div>'
             )
 
@@ -13513,6 +13496,47 @@ def api_debug_fields(source):
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/api/data/reclassify-all", methods=["POST"])
+@require_login
+def api_reclassify_all():
+    """Re-stamp _type on every stored ai_item using the current classifier.
+    No Gemini calls — pure in-process classification. Safe to call anytime."""
+    try:
+        check_csrf()
+    except Exception:
+        return jsonify({"ok": False, "error": "Session expired"}), 403
+    uid = session["user_id"]
+    db  = get_db()
+    rows = db.execute(
+        "SELECT source, data_enc FROM account_data WHERE user_id=?", (uid,)
+    ).fetchall()
+    updated_sources = []
+    for row in rows:
+        src = row["source"]
+        try:
+            data = decrypt_account_data(uid, row["data_enc"] or "")
+        except Exception:
+            continue
+        items = data.get("ai_items") or data.get("items") or []
+        changed = 0
+        for it in items:
+            lbl  = it.get("label", "")
+            val  = str(it.get("value", ""))
+            new_type = classify_benefit(lbl, val, src)
+            if it.get("_type") != new_type:
+                it["_type"] = new_type
+                changed += 1
+        if changed:
+            data["ai_items"] = items
+            db.execute(
+                "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                (encrypt_account_data(uid, data), uid, src)
+            )
+            updated_sources.append({"source": src, "reclassified": changed})
+    db.commit()
+    return jsonify({"ok": True, "updated": updated_sources, "total_sources": len(rows)})
 
 
 @app.route("/api/debug/provenance/<source>")

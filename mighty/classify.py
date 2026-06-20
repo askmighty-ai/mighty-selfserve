@@ -67,15 +67,19 @@ _BT_RULES = [
      [r"\b\d[\d,]*\s*(?:of|/)\s*\d[\d,]*\b"], []),
 
     # ── Earned status tier ────────────────────────────────────────────────────
+    # NOTE: "account status", "active", "enabled" intentionally removed from excludes —
+    # loyalty programs often surface these alongside tier names (e.g. "Account Status: Gold").
+    # Utility/telecom sources are filtered at the dashboard level via _STATUS_SKIP_SOURCES.
     ("elite_status",
      ["status","medallion","tier","elite","level","diamond","platinum","gold","silver",
       "globalist","titanium","sapphire","senator","chairman","premier","executive",
-      "ambassador","rouge","velocity","bronze"],
+      "ambassador","rouge","velocity","bronze","honors","skymiles","mileageplus",
+      "onepass","rapidrewards","aadvantage","thankyou","membership rewards"],
      [],
      ["progress","qualifying","toward","credit","certificate","cert","voucher",
       "upgrade","award","free night","points","miles","balance","reservation","booking",
-      "autopay","auto-pay","payment","bill","subscription","service","account status",
-      "paperless","enrolled","enabled","active","loyalty number","member id"]),
+      "autopay","auto-pay","payment","bill","subscription","service",
+      "paperless","loyalty number","member id","member since","member number"]),
 
     # ── Redeemable certificates and awards ────────────────────────────────────
     ("certificate",
