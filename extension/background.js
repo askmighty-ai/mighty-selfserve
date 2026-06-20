@@ -320,22 +320,28 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 
 // ── Sync orchestration ───────────────────────────────────────────────────────
 
-/** Create a minimized, non-focused popup window for background sync work.
- *  Returns { win, tabId } or null if window creation fails. */
+/** Create a hidden background tab for sync work.
+ *  Background tabs (active: false) load completely silently — no new window,
+ *  no focus theft, no macOS dock bounce, no keystroke interruption.
+ *  Returns { win: { id }, tabId } or null on failure. */
 async function _createSyncWindow(initialUrl = 'about:blank') {
   try {
-    const win = await chrome.windows.create({
+    // Prefer an existing normal window so no new window is ever created
+    let windowId;
+    try {
+      const wins = await chrome.windows.getAll({ windowTypes: ['normal'] });
+      const normal = wins.find(w => w.type === 'normal');
+      if (normal) windowId = normal.id;
+    } catch (_) {}
+
+    const tab = await chrome.tabs.create({
       url: initialUrl,
-      type: 'popup',
-      width: 800,
-      height: 600,
-      focused: false,
+      active: false,           // never steals focus or switches the visible tab
+      ...(windowId ? { windowId } : {}),
     });
-    // 'minimized' is not valid in create() — must call update() separately
-    try { await chrome.windows.update(win.id, { state: 'minimized' }); } catch (_) {}
-    return { win, tabId: win.tabs[0].id };
+    return { win: { id: tab.windowId }, tabId: tab.id };
   } catch (e) {
-    console.warn('[Mighty] Could not create sync window:', e.message);
+    console.warn('[Mighty] Could not create sync tab:', e.message);
     return null;
   }
 }
@@ -441,10 +447,10 @@ async function runSync() {
     }
   }
 
-  // Close the one shared window now that all accounts are done
-  if (sharedSync?.win) {
-    try { await chrome.windows.remove(sharedSync.win.id); } catch {}
-    console.log('[Mighty] Shared sync window closed');
+  // Close the shared background tab now that all accounts are done
+  if (sharedSync?.tabId) {
+    try { await chrome.tabs.remove(sharedSync.tabId); } catch {}
+    console.log('[Mighty] Shared sync tab closed');
   }
 
   const ts = new Date(syncSessionTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -521,8 +527,8 @@ async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date()
       }
     }
   } finally {
-    if (!useShared && win) chrome.windows.remove(win.id).catch(() => {});
-    else if (useShared) chrome.tabs.update(tabId, { url: 'about:blank' }).catch(() => {});
+    if (!useShared) chrome.tabs.remove(tabId).catch(() => {});
+    else chrome.tabs.update(tabId, { url: 'about:blank' }).catch(() => {});
   }
 
   if (!allTexts.length) throw new Error('No page text captured');
@@ -1033,7 +1039,7 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
           }
         }
       } finally {
-        if (!useShared && gfWin) chrome.windows.remove(gfWin.id).catch(() => {});
+        if (!useShared) chrome.tabs.remove(tabId).catch(() => {});
       }
 
       if (newText.trim().length < 200) break;
@@ -1288,9 +1294,9 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     console.log(`[Mighty] ${account.name}: ✓`);
 
   } finally {
-    if (!useShared && win) {
-      chrome.windows.remove(win.id).catch(() => {});
-    } else if (useShared) {
+    if (!useShared) {
+      chrome.tabs.remove(tabId).catch(() => {});
+    } else {
       // Leave the tab open for the next account; navigate to blank to clear state
       chrome.tabs.update(tabId, { url: 'about:blank' }).catch(() => {});
       await sleep(500); // brief pause before next account
