@@ -579,13 +579,13 @@ async function runSync() {
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ACCOUNT_TIMEOUT_MS)),
       ]);
       ok++;
-      // Gap-fill only if we already have a shared tab (don't create one just for gap-fill)
-      if (sharedSync?.tabId) {
-        try {
-          await gapFillAccount(api_key, account, syncSessionTime, 2, sharedSync.tabId);
-        } catch(gfe) {
-          console.log(`[Mighty] ${account.name}: gap-fill skipped: ${gfe.message}`);
-        }
+      // Always run gap-fill — this visits wallet/certificate sub-pages that silent
+      // fetch of the entry page misses. Creates a tab only if one doesn't exist yet.
+      try {
+        const gfTabId = await getSharedTab();
+        await gapFillAccount(api_key, account, syncSessionTime, 2, gfTabId);
+      } catch(gfe) {
+        console.log(`[Mighty] ${account.name}: gap-fill skipped: ${gfe.message}`);
       }
     } catch (e) {
       console.error(`[Mighty] Failed: ${account.name}:`, e.message);

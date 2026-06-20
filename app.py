@@ -13471,25 +13471,34 @@ def api_debug_scrub_fields():
 @app.route("/api/debug/fields/<source>")
 @require_login
 def api_debug_fields(source):
-    """Temporary debug endpoint: return raw discovered fields for one account."""
+    """Debug: return every extracted AI item for an account from account_data,
+    with its classified benefit type. Reads the synced data table, not credentials."""
     uid = session["user_id"]
     row = get_db().execute(
-        "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+        "SELECT data_enc, synced_at, sync_source FROM account_data WHERE user_id=? AND source=?",
         (uid, source)
     ).fetchone()
     if not row:
-        return jsonify({"error": "not found"})
+        return jsonify({"error": "no synced data found for source", "source": source})
     try:
-        ex = json.loads(decrypt_cred(uid, row["extra_enc"]))
+        data = decrypt_account_data(uid, row["data_enc"] or "")
     except Exception as e:
-        return jsonify({"error": str(e)})
-    fields = ex.get("discovered_fields", [])
-    enabled = ex.get("enabled_fields", [])
+        return jsonify({"error": "decrypt failed: " + str(e)})
+    items = data.get("ai_items") or data.get("items") or []
+    out = []
+    for it in items:
+        lbl = it.get("label", "")
+        val = str(it.get("value", ""))
+        btype = it.get("_type") or classify_benefit(lbl, val, source)
+        out.append({"label": lbl, "value": val, "type": btype, "key": it.get("key", "")})
+    out.sort(key=lambda x: x["type"])
     return jsonify({
-        "total_discovered": len(fields),
-        "enabled_count": len(enabled),
-        "enabled_keys": enabled,
-        "fields": [{"key": f.get("key"), "label": f.get("label"), "value": f.get("value")} for f in fields]
+        "source": source,
+        "synced_at": row["synced_at"],
+        "sync_source": row["sync_source"],
+        "item_count": len(out),
+        "items": out,
+        "raw_text_chars": len(data.get("raw_text", "")),
     })
 
 
