@@ -287,6 +287,8 @@ def init_db():
             ('delta',      '/myprofile'),
             ('marriott',   '/loyalty/myAccount/certificates'),
             ('marriott',   '/loyalty/myAccount/benefits'),
+            ('hilton',     '/en/hilton-honors/guest/dashboard/'),
+            ('hilton',     '/en/hilton-honors/guest/my-account/'),
             ('hilton',     '/en/hilton-honors/profile/awards'),
             ('hilton',     '/en/hilton-honors/profile/benefits'),
             ('hyatt',      '/en-US/my-account/awards'),

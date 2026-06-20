@@ -38,6 +38,10 @@
     // Must be parseable JSON
     try { JSON.parse(text); } catch { return false; }
     const lower = text.toLowerCase();
+    // Skip pure auth/token responses — they're never loyalty data and JWTs
+    // can accidentally match keywords in their base64 payload
+    if (lower.includes('"token_type"') || lower.includes('"access_token"') ||
+        lower.includes('"id_token"') || lower.includes('"refresh_token"')) return false;
     const hits = KEYWORDS.filter(k => lower.includes(k)).length;
     // 1 hit is enough for larger responses; tiny responses need 2+ to avoid noise
     return text.length >= 500 ? hits >= 1 : hits >= 2;
