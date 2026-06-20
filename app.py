@@ -2771,6 +2771,16 @@ DISCOVER_PROMPT = """You are analyzing one or more pages from a user's {site} ac
 Pages may be separated by === URL === markers.
 Today's date: {today}.
 {category_hint}
+CRITICAL — How to read API response blocks:
+Sections marked "=== API RESPONSE ===" contain raw JSON from the site's backend API.
+These are SUPPLEMENTARY. The displayed page text values are always more reliable.
+If an API block shows empty arrays ([]) or null/empty for a field, that does NOT mean the user has no data
+for that field — the site may load it from a different API call or render it dynamically.
+ALWAYS trust what the page text displays (e.g. "Gold", "143,996 Points") over an empty API field.
+Example: API shows "programAccountSummary":[] but page text shows "Gold\nWelcome back, Jonathan" →
+extract Elite Status = "Gold" from the page text. Never let an empty API array suppress a clearly
+displayed page value.
+
 Page text:
 {text}
 
@@ -13431,6 +13441,8 @@ def api_extension_intercept():
     if _claude:
         site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == source),
                          source.replace("_", " ").title())
+        # Capture current stored items for stale-data clearing below
+        _current_items = list(ad.get("items") or ad.get("ai_items") or [])
         def _bg():
             with app.app_context():
                 fields = claude_discover_fields(combined, site_name, source=source)
@@ -13440,6 +13452,33 @@ def api_extension_intercept():
                         _f["from_api"] = True
                     _save_discovered_fields(uid, source, fields)
                     print(f"[Intercept] {source}: {len(fields)} fields discovered (API-priority)", flush=True)
+                else:
+                    # Discovery returned nothing usable. If all stored items are placeholder "–"
+                    # values (stale defaults), clear them so they don't persist indefinitely.
+                    _EMPTY_VALS = frozenset({"", "0", "-", "–", "—", "n/a", "none"})
+                    _all_stale = _current_items and all(
+                        str(it.get("value", "")).strip() in _EMPTY_VALS
+                        for it in _current_items
+                    )
+                    if _all_stale:
+                        try:
+                            _db2 = get_db()
+                            _ad2 = _db2.execute(
+                                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                                (uid, source)
+                            ).fetchone()
+                            if _ad2:
+                                _d2 = decrypt_account_data(uid, _ad2["data_enc"] or "")
+                                _d2["items"] = []
+                                _d2.pop("ai_items", None)
+                                _db2.execute(
+                                    "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                                    (encrypt_account_data(uid, _d2), uid, source)
+                                )
+                                _db2.commit()
+                            print(f"[Intercept] {source}: cleared stale placeholder items", flush=True)
+                        except Exception:
+                            pass
         threading.Thread(target=_bg, daemon=True).start()
 
     _registry_report_path(source, url)
@@ -13634,6 +13673,56 @@ def api_debug_fields(source):
             "raw_text_chars": len(raw),
             "raw_text_start": raw[:500],
             "relevant_chunks": _relevant_chunks[:10],
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
+
+@app.route("/api/debug/discover-now/<source>")
+@require_login
+def api_debug_discover_now(source):
+    """Run field discovery synchronously on stored raw_text and return Gemini's raw response + snippets.
+    GET /api/debug/discover-now/hilton — useful for diagnosing why fields aren't being extracted."""
+    uid = session["user_id"]
+    try:
+        row = get_db().execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+            (uid, source)
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "no data found for source"}), 404
+        data = decrypt_account_data(uid, row["data_enc"] or "")
+        raw = data.get("raw_text", "")
+        if not raw:
+            return jsonify({"error": "raw_text is empty"}), 400
+
+        site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == source),
+                         source.replace("_", " ").title())
+
+        # Get snippets (what Gemini actually receives)
+        _hint_rows = get_db().execute(
+            "SELECT trigger_phrase FROM extraction_hints WHERE site=? "
+            "ORDER BY success_count DESC LIMIT 50", (source,)
+        ).fetchall()
+        _hint_phrases = [r["trigger_phrase"] for r in _hint_rows]
+        snippets = _extract_candidate_snippets(raw, hint_phrases=_hint_phrases)
+
+        # Bust the discovery cache so we get a fresh Gemini call
+        global _discovery_cache
+        cache_key = __import__('hashlib').md5(((raw or "")[:5000] + str(source)).encode()).hexdigest()
+        _discovery_cache.pop(cache_key, None)
+
+        # Run discovery synchronously
+        fields_raw = claude_discover_fields(raw, site_name, source=source)
+
+        return jsonify({
+            "source": source,
+            "raw_text_chars": len(raw),
+            "snippets_chars": len(snippets),
+            "snippets_preview": snippets[:2000],
+            "fields_returned": fields_raw,
+            "field_count": len(fields_raw),
         })
     except Exception as e:
         import traceback
