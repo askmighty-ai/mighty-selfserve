@@ -9621,11 +9621,20 @@ def health():
     except Exception as e:
         user_count = None
         db_ok = False
+    import subprocess, os
+    try:
+        git_sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                          cwd=os.path.dirname(__file__) or ".",
+                                          stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        git_sha = "unknown"
     return jsonify({
         "ok":         True,
         "db_ok":      db_ok,
         "db_path":    DATABASE,
         "user_count": user_count,
+        "git_sha":    git_sha,
+        "has_debug_fields_route": "/api/debug/fields/<source>" in [str(r) for r in app.url_map.iter_rules()],
     })
 
 
