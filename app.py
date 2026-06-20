@@ -1788,6 +1788,14 @@ _EXPECTED_FIELDS: dict[str, dict[str, str]] = {
 }
 
 
+def _get_category_schema(source: str) -> dict | None:
+    """Return the _CATEGORY_SCHEMAS entry for a given source key, or None."""
+    for schema in _CATEGORY_SCHEMAS.values():
+        if source in schema.get("sources", set()):
+            return schema
+    return None
+
+
 SOURCE_CAPABILITIES: dict[str, dict] = {
     # Airlines
     "delta": {
