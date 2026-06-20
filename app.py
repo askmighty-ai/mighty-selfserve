@@ -7679,8 +7679,8 @@ def dashboard():
             f'<div style="display:flex;gap:14px;align-items:flex-start;padding:13px 8px;'
             f'border-bottom:1px solid #e8e3de;border-radius:8px;'
             f'transition:background 0.1s" '
-            f'onmouseover="this.style.background=\'#edece9\'" '
-            f'onmouseout="this.style.background=\'\'">'
+            f'onmouseover="this.style.background=\'#edece9\';this.querySelector(\'.arch-btn\').style.opacity=\'1\'" '
+            f'onmouseout="this.style.background=\'\';this.querySelector(\'.arch-btn\').style.opacity=\'0\'">'
             f'<span style="font-size:24px;flex-shrink:0;line-height:1.1;margin-top:2px;cursor:pointer" '
             f'onclick="openBenefitDrawer(this.parentElement)" data-benefit=\'{_ibd}\'>{_iicon}</span>'
             f'<div style="flex:1;min-width:0;cursor:pointer" '
@@ -7692,24 +7692,26 @@ def dashboard():
             f'<div style="font-size:12px;color:#9ca3af;margin-top:2px">{" · ".join(_isub_parts)}</div>'
             + (f'<div>{_iexp_html}</div>' if _iexp_html else '')
             + f'</div>'
-            f'<button onclick="archiveBenefit({_iarch_src},{_iarch_lbl},this)" '
+            f'<button class="arch-btn" onclick="archiveBenefit({_iarch_src},{_iarch_lbl},this)" '
             f'title="Archive — hide from this list" '
-            f'style="flex-shrink:0;background:none;border:none;cursor:pointer;color:#d1d5db;'
-            f'font-size:16px;line-height:1;padding:4px 6px;border-radius:4px;align-self:center;'
-            f'transition:color 0.15s" '
-            f'onmouseover="this.style.color=\'#9ca3af\'" onmouseout="this.style.color=\'#d1d5db\'">×</button>'
+            f'style="flex-shrink:0;background:none;border:none;cursor:pointer;color:#9ca3af;'
+            f'font-size:11px;font-weight:500;padding:4px 6px;border-radius:4px;align-self:center;'
+            f'opacity:0;transition:opacity 0.15s;white-space:nowrap">Archive</button>'
             f'</div>'
         )
     import json as _json_arch
     _arch_js = f'<script>var _ARCHIVED_BENEFITS={_json_arch.dumps(_archived_list)};</script>'
     _arch_count = len(_archived_list)
     _arch_footer = (
-        f'<div style="margin-top:6px;text-align:right">'
-        f'<button onclick="showArchivedBenefits()" '
-        f'style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;'
-        f'text-decoration:underline;padding:0">'
-        f'{_arch_count} archived</button></div>'
-    ) if _arch_count else ""
+        f'<div id="arch-footer-wrap" style="margin-top:6px;text-align:right;'
+        + ('' if _arch_count else 'display:none;')
+        + f'">'
+        f'<button id="arch-toggle-btn" onclick="toggleArchivedPanel()" '
+        f'style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;padding:0">'
+        f'↩ {_arch_count} archived</button></div>'
+        f'<div id="arch-inline-panel" style="display:none;border-top:1px solid #f0ece8;margin-top:8px;padding-top:8px">'
+        f'<div id="arch-inline-list"></div></div>'
+    )
     if _ins_rows_html:
         insights_html = (
             _arch_js +
@@ -7728,8 +7730,11 @@ def dashboard():
             f'<h2 style="font-size:10px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
             f'text-transform:uppercase;letter-spacing:.08em">Available Now</h2>'
             f'<div style="font-size:13px;color:#9ca3af;padding:4px 0">All items archived. '
-            f'<button onclick="showArchivedBenefits()" style="background:none;border:none;cursor:pointer;'
-            f'font-size:13px;color:#6366f1;text-decoration:underline;padding:0">Restore</button></div>'
+            f'<button onclick="toggleArchivedPanel()" style="background:none;border:none;cursor:pointer;'
+            f'font-size:13px;color:#6366f1;text-decoration:underline;padding:0">View archived</button></div>'
+            f'<div id="arch-footer-wrap" style="display:none"></div>'
+            f'<div id="arch-inline-panel" style="display:none;border-top:1px solid #f0ece8;margin-top:8px;padding-top:8px">'
+            f'<div id="arch-inline-list"></div></div>'
             f'</div>'
         )
     else:
@@ -11117,35 +11122,24 @@ document.addEventListener('keydown', function(e) {{
     if (fo && fo.style.display !== 'none') closeDashFieldModal();
     var co2 = document.getElementById('dash-cred-overlay');
     if (co2 && co2.style.display !== 'none') closeCredModal();
-    var ao = document.getElementById('archived-overlay');
-    if (ao && ao.style.display !== 'none') closeArchivedModal();
+    var ap = document.getElementById('arch-inline-panel');
+    if (ap && ap.style.display !== 'none') ap.style.display = 'none';
     closeBenefitDrawer();
   }}
 }});
 </script>
 
-<!-- Archived benefits restore modal -->
-<div id="archived-overlay" onclick="if(event.target===this)closeArchivedModal()"
-     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:310;align-items:center;justify-content:center"></div>
-<div id="archived-modal"
-     style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-            background:#fff;border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,0.18);
-            width:min(420px,92vw);max-height:70vh;display:flex;flex-direction:column;z-index:311">
-  <div style="padding:20px 20px 14px;border-bottom:1px solid #f5f2ed;flex-shrink:0;display:flex;align-items:center;justify-content:space-between">
-    <h3 style="font-size:15px;font-weight:700;color:#1c1917;margin:0">Archived items</h3>
-    <button onclick="closeArchivedModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:2px 6px">&times;</button>
-  </div>
-  <div id="archived-list" style="overflow-y:auto;padding:12px 20px 20px;flex:1"></div>
-</div>
 <script>
 function archiveBenefit(src, lbl, btn) {{
-  var row = btn.closest('div[style*="border-bottom"]') || btn.parentElement;
+  var row = btn.parentElement;
+  // Walk up to find the actual row (has border-bottom in its style)
+  while (row && row !== document.body && !row.style.borderBottom) row = row.parentElement;
+  if (!row || row === document.body) row = btn.parentElement;
   // Optimistic UI: fade and remove the row immediately
   row.style.transition = 'opacity 0.25s';
   row.style.opacity = '0';
   setTimeout(function() {{
     row.remove();
-    // Update the _ARCHIVED_BENEFITS array
     if (!window._ARCHIVED_BENEFITS) window._ARCHIVED_BENEFITS = [];
     _ARCHIVED_BENEFITS.push({{source: src, label: lbl}});
     _updateArchivedFooter();
@@ -11159,53 +11153,35 @@ function archiveBenefit(src, lbl, btn) {{
 }}
 function _updateArchivedFooter() {{
   var count = (_ARCHIVED_BENEFITS || []).length;
-  // Find or create the archived footer link
-  var footer = document.getElementById('arch-footer-link');
-  if (!footer) {{
-    // Try to find Available Now section and append
-    var sections = document.querySelectorAll('[style*="margin-bottom:24px"]');
-    for (var i = 0; i < sections.length; i++) {{
-      var h = sections[i].querySelector('h2');
-      if (h && h.textContent.trim() === 'Available Now') {{
-        footer = document.createElement('div');
-        footer.id = 'arch-footer-link';
-        footer.style.cssText = 'margin-top:6px;text-align:right';
-        sections[i].appendChild(footer);
-        break;
-      }}
-    }}
-  }}
-  if (footer) {{
-    footer.innerHTML = count > 0
-      ? '<button onclick="showArchivedBenefits()" style="background:none;border:none;cursor:pointer;font-size:11px;color:#9ca3af;text-decoration:underline;padding:0">' + count + ' archived</button>'
-      : '';
+  var wrap = document.getElementById('arch-footer-wrap');
+  var btn  = document.getElementById('arch-toggle-btn');
+  if (btn) btn.textContent = '↩ ' + count + ' archived';
+  if (wrap) wrap.style.display = count > 0 ? 'block' : 'none';
+  // Close the panel if nothing left
+  if (count === 0) {{
+    var panel = document.getElementById('arch-inline-panel');
+    if (panel) panel.style.display = 'none';
   }}
 }}
-function showArchivedBenefits() {{
-  var list = document.getElementById('archived-list');
+function toggleArchivedPanel() {{
+  var panel = document.getElementById('arch-inline-panel');
+  if (!panel) return;
+  var isOpen = panel.style.display !== 'none';
+  if (isOpen) {{ panel.style.display = 'none'; return; }}
   var items = window._ARCHIVED_BENEFITS || [];
-  if (!items.length) {{
-    list.innerHTML = '<p style="font-size:13px;color:#9ca3af;text-align:center;padding:16px 0">Nothing archived.</p>';
-  }} else {{
-    list.innerHTML = items.map(function(item, i) {{
-      return '<div style="display:flex;align-items:center;justify-content:space-between;'
-           + 'padding:10px 0;border-bottom:1px solid #f5f2ed" id="arch-item-'+i+'">'
-           + '<div>'
-           + '<div style="font-size:14px;font-weight:600;color:#1c1917">' + item.label + '</div>'
-           + '<div style="font-size:12px;color:#9ca3af;margin-top:2px">through ' + item.source + '</div>'
-           + '</div>'
-           + '<button onclick="restoreArchivedBenefit('+i+')" '
-           + 'style="padding:5px 12px;border-radius:7px;border:1px solid #e5e7eb;background:#f9fafb;'
-           + 'font-size:12px;font-weight:600;color:#6366f1;cursor:pointer">Restore</button>'
-           + '</div>';
-    }}).join('');
-  }}
-  document.getElementById('archived-overlay').style.display = 'flex';
-  document.getElementById('archived-modal').style.display = 'flex';
-}}
-function closeArchivedModal() {{
-  document.getElementById('archived-overlay').style.display = 'none';
-  document.getElementById('archived-modal').style.display = 'none';
+  var list = document.getElementById('arch-inline-list');
+  if (!list || !items.length) return;
+  list.innerHTML = items.map(function(item, i) {{
+    return '<div style="display:flex;align-items:center;justify-content:space-between;'
+         + 'padding:7px 0;border-bottom:1px solid #f5f2ed" id="arch-item-' + i + '">'
+         + '<div style="font-size:13px;color:#6b7280">' + item.label
+         + ' <span style="color:#d1d5db">\xb7</span> <span style="font-size:12px;color:#9ca3af">' + item.source + '</span></div>'
+         + '<button onclick="restoreArchivedBenefit(' + i + ')" '
+         + 'style="font-size:11px;color:#6366f1;background:none;border:none;cursor:pointer;'
+         + 'text-decoration:underline;padding:0;flex-shrink:0;margin-left:12px">Restore</button>'
+         + '</div>';
+  }}).join('');
+  panel.style.display = 'block';
 }}
 function restoreArchivedBenefit(idx) {{
   var item = (_ARCHIVED_BENEFITS || [])[idx];
@@ -11217,8 +11193,8 @@ function restoreArchivedBenefit(idx) {{
   }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
     if (d.ok) {{
       _ARCHIVED_BENEFITS.splice(idx, 1);
-      // Reload to re-render Available Now with the restored item
-      closeArchivedModal();
+      var panel = document.getElementById('arch-inline-panel');
+      if (panel) panel.style.display = 'none';
       location.reload();
     }}
   }});
