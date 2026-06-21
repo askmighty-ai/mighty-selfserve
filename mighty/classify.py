@@ -64,7 +64,7 @@ _BT_RULES = [
     ("progress_toward",
      ["progress","qualifying","segment","toward","threshold","requalif","earned toward",
       "flights required","nights required","stays required","spend required"],
-     [r"\b\d[\d,]*\s*(?:of|/)\s*\d[\d,]*\b"], []),
+     [r"\b\d[\d,]*\s+of\s+\d[\d,]*\b"], []),
 
     # ── Earned status tier ────────────────────────────────────────────────────
     # NOTE: "account status", "active", "enabled" intentionally removed from excludes —
