@@ -17672,8 +17672,8 @@ def _render_email_scan_page(suggestions=None, already_count=0, provider_triggere
     uid = session["user_id"]
 
     # Already-connected site keys
-    acts = db.execute("SELECT source FROM actions WHERE user_id=?", (uid,)).fetchall()
-    connected = {r["source"] for r in acts}
+    acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
+    connected = {r["source"] for r in acts if not r["source"].startswith("_")}
 
     gmail_configured = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
     outlook_configured = bool(MS_CLIENT_ID and MS_CLIENT_SECRET)
@@ -17830,8 +17830,8 @@ def email_gmail_callback():
     db.commit()
 
     # Run the scan
-    acts = db.execute("SELECT source FROM actions WHERE user_id=?", (uid,)).fetchall()
-    connected = {r["source"] for r in acts}
+    acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
+    connected = {r["source"] for r in acts if not r["source"].startswith("_")}
     try:
         suggestions = scan_gmail(access_token, already_connected=connected)
     except Exception as e:
@@ -17917,8 +17917,8 @@ def email_outlook_callback():
     """, (uid, "outlook", enc_access, enc_refresh, "", now, now))
     db.commit()
 
-    acts = db.execute("SELECT source FROM actions WHERE user_id=?", (uid,)).fetchall()
-    connected = {r["source"] for r in acts}
+    acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
+    connected = {r["source"] for r in acts if not r["source"].startswith("_")}
     try:
         suggestions = scan_outlook(access_token, already_connected=connected)
     except Exception:
@@ -17951,8 +17951,8 @@ def api_email_scan_imap():
 
     db  = get_db()
     uid = session["user_id"]
-    acts = db.execute("SELECT source FROM actions WHERE user_id=?", (uid,)).fetchall()
-    connected = {r["source"] for r in acts}
+    acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
+    connected = {r["source"] for r in acts if not r["source"].startswith("_")}
 
     try:
         suggestions = scan_imap(host, port, username, password,
