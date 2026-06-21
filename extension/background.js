@@ -1009,6 +1009,11 @@ async function _supplementCapturePage(tabId, tab, source) {
   if (last && Date.now() - last < _AUTO_COOLDOWN_MS) return;
   _autoCaptureRecent.set(tab.url, Date.now());
 
+  // Diagnostic: yellow flash = supplement triggered for this page
+  chrome.action.setBadgeText({ text: '●' });
+  chrome.action.setBadgeBackgroundColor({ color: '#f59e0b' });
+  setTimeout(() => chrome.action.setBadgeText({ text: '' }), 3_000);
+
   await sleep(6_000); // give SPA time to render
 
   let extracted;
@@ -1027,7 +1032,8 @@ async function _supplementCapturePage(tabId, tab, source) {
     extracted = r?.result;
   } catch { _autoCaptureRecent.delete(tab.url); return; }
 
-  if (!extracted || extracted.hasPassword || extracted.loginSignals >= 2) return;
+  // Use threshold of 3 (not 2) — known account domains often have "Sign In" in nav even when logged in
+  if (!extracted || extracted.hasPassword || extracted.loginSignals >= 3) return;
   if (!extracted.text || extracted.text.length < 200) return;
 
   const lower = extracted.text.toLowerCase();
