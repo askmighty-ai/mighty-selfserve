@@ -9359,9 +9359,9 @@ def dashboard():
         _rc_lines = []
         for _s, _rr in list(_src_latest.items())[:5]:
             _disp_rc = _source_display_name(_s)
-            _lbl_rc  = _rr.get("field_label", "")
-            _ago_rc  = _rel_time(_rr.get("changed_at", ""))
-            _is_new  = not _rr.get("old_value")   # first-time discovery vs update
+            _lbl_rc  = _rr["field_label"] or ""
+            _ago_rc  = _rel_time(_rr["changed_at"] or "")
+            _is_new  = not _rr["old_value"]   # first-time discovery vs update
             _verb    = "found" if _is_new else "updated"
             _is_valuable = any(k in _lbl_rc.lower() for k in _VALUE_KEYWORDS)
             # Show the label only if it's a high-value field; otherwise say "synced"
@@ -16730,11 +16730,7 @@ def not_found(e):
 
 @app.errorhandler(500)
 def server_error(e):
-    import traceback as _tb
-    _trace = _tb.format_exc()
-    _body = NOT_FOUND_HTML.replace("Page not found", "Something went wrong").replace("The page you were looking for doesn't exist.", "An unexpected error occurred. Please try again or <a href=\"/\">return home</a>.")
-    _body = _body.replace("</body>", f"<!-- DEBUG:\n{_trace}\n-->\n</body>")
-    return _body, 500
+    return NOT_FOUND_HTML.replace("Page not found", "Something went wrong").replace("The page you were looking for doesn't exist.", "An unexpected error occurred. Please try again or <a href=\"/\">return home</a>."), 500
 
 
 
