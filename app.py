@@ -8166,7 +8166,7 @@ def dashboard():
     synced_map = {r["source"]: dict(r) for r in acct_rows}
 
     # Global "last synced" — most recent sync across all accounts
-    _all_synced_ats = [r["synced_at"] for r in acct_rows if r.get("synced_at")]
+    _all_synced_ats = [v["synced_at"] for v in synced_map.values() if v.get("synced_at")]
     _global_last_synced = max(_all_synced_ats) if _all_synced_ats else None
     if _global_last_synced:
         _glbl, _glbc, _glbi = _freshness_label(_global_last_synced)
