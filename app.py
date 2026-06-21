@@ -15023,6 +15023,23 @@ def registry_paths():
     return jsonify({"paths": [r["path"] for r in rows]})
 
 
+@app.route("/api/registry/remove", methods=["POST"])
+def registry_remove():
+    """Zero-out a known-bad path so it stops being served. No auth — paths aren't personal data."""
+    body = request.get_json(silent=True) or {}
+    site = (body.get("site") or "").strip().lower()
+    path = (body.get("path") or "").strip()
+    if not site or not path:
+        return jsonify({"ok": False}), 400
+    db = get_db()
+    db.execute(
+        "UPDATE site_paths SET quality_score = 0.0 WHERE site = ? AND path = ?",
+        (site, path)
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/debug/scrub-fields", methods=["POST"])
 @require_login
 def api_debug_scrub_fields():
