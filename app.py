@@ -8394,6 +8394,11 @@ def dashboard():
             # If we have an alert but no hero, use first secondary as hero
             if alert_item and not hero_item and secondary_items:
                 hero_item = secondary_items.pop(0)
+            # Last-resort: if still no hero but items exist, force first item
+            # (prevents "Discovering fields…" spinner on synced cards)
+            if not hero_item and items:
+                hero_item = items[0]
+                secondary_items = [i for i in items if i is not hero_item]
 
             # Build card hero section
             if hero_item:
@@ -8465,11 +8470,32 @@ def dashboard():
                 )
                 status_color = "#9ca3af"
 
-            # Build secondary stats (up to 2 visible)
+            # Filter noise items (bare IDs / member numbers) from secondary visible slots
+            # so real benefits/balances don't get pushed behind "more fields"
+            _NOISE_KEYS = {
+                "skymiles_number","member_number","member_id","account_number",
+                "loyalty_number","ff_number","membership_number","rewards_number",
+                "member_since","card_number","policy_number",
+            }
+            _NOISE_LABELS = ("member since","member id","member number","account number",
+                             "loyalty id","loyalty number","ff number","membership number",
+                             "skymiles number","mileage plus number","rapid rewards number",
+                             "card number","policy number","honors number")
+            def _is_noise(it):
+                k = (it.get("key") or "").lower()
+                l = (it.get("label") or "").lower()
+                return k in _NOISE_KEYS or any(nl in l for nl in _NOISE_LABELS)
+
+            # Partition secondary into signal (show first) vs noise (show last)
+            _sec_signal = [i for i in secondary_items if not _is_noise(i)]
+            _sec_noise   = [i for i in secondary_items if _is_noise(i)]
+            secondary_items = _sec_signal + _sec_noise
+
+            # Build secondary stats (up to 3 visible)
             sec_html = ""
             if secondary_items:
                 sec_row_parts = []
-                for i in secondary_items[:2]:
+                for i in secondary_items[:3]:
                     review_badge = (
                         '<span style="font-size:10px;color:#f59e0b;margin-left:4px;cursor:help" '
                         'title="Lower confidence — may need verification">⚠ review</span>'
@@ -8520,7 +8546,7 @@ def dashboard():
                 shown_keys.add(hero_item.get("key"))
             if alert_item:
                 shown_keys.add(alert_item.get("key"))
-            for i in secondary_items[:2]:
+            for i in secondary_items[:3]:
                 shown_keys.add(i.get("key"))
             extra_items = [i for i in items if i.get("key") not in shown_keys]
             expanded_html = ""
