@@ -5717,6 +5717,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
+    <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap">{global_sync_label}</span>
     <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Sync all accounts — fetches live data from connected sites, then re-extracts fields">
       <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
       <span id="sync-label">Sync</span>
@@ -8119,6 +8120,13 @@ def dashboard():
             return "amber"
         return None
 
+    # Promote any pending candidates (confidence>=0.60) that weren't auto-enabled before
+    # the threshold was lowered. Idempotent — marks promoted rows 'auto_approved'.
+    try:
+        _promote_pending_candidates(uid)
+    except Exception:
+        pass
+
     # Step 1: get ALL connected accounts (have credentials, not internal keys)
     cred_rows = get_db().execute(
         "SELECT source, extra_enc FROM account_credentials WHERE user_id=?",
@@ -8156,6 +8164,15 @@ def dashboard():
     # Convert to plain dicts so .get() works safely even when columns are
     # missing from older production DB schemas (e.g. sync_status, sync_failure_reason).
     synced_map = {r["source"]: dict(r) for r in acct_rows}
+
+    # Global "last synced" — most recent sync across all accounts
+    _all_synced_ats = [r["synced_at"] for r in acct_rows if r.get("synced_at")]
+    _global_last_synced = max(_all_synced_ats) if _all_synced_ats else None
+    if _global_last_synced:
+        _glbl, _glbc, _glbi = _freshness_label(_global_last_synced)
+        _global_sync_label = f'Synced {_glbl}'
+    else:
+        _global_sync_label = ""
 
     # Step 3: build cards for ALL connected accounts, grouped by category
     configured = connected_sources
@@ -8293,10 +8310,19 @@ def dashboard():
             )
             _compact_cls = "" if _has_highval else " is-compact"
 
-            # Benefit badges — count certs, credits, statuses for card header
+            # Status/level — show actual status value inline on card header
+            _status_item = next((it for it in items if it.get("_type") == "elite_status"), None)
+            _status_inline_html = ""
+            if _status_item and str(_status_item.get("value","")).strip():
+                _sv = str(_status_item["value"]).strip()
+                _status_inline_html = (
+                    f'<div style="font-size:11px;color:#6b7280;margin-top:1px;white-space:nowrap;'
+                    f'overflow:hidden;text-overflow:ellipsis">{he(_sv)}</div>'
+                )
+
+            # Benefit badges — count certs and credits for card header
             _badge_certs   = sum(1 for it in items if it.get("_type") == "certificate")
             _badge_credits = sum(1 for it in items if it.get("_type") in ("travel_credit","cash_credit"))
-            _badge_status  = sum(1 for it in items if it.get("_type") == "elite_status")
             _badges_html = ""
             if _badge_certs:
                 _badges_html += (
@@ -8308,14 +8334,9 @@ def dashboard():
                     f'<span style="font-size:10px;font-weight:600;color:#047857;background:#d1fae5;'
                     f'border-radius:10px;padding:2px 7px;white-space:nowrap">💳 {_badge_credits}</span>'
                 )
-            if _badge_status:
-                _badges_html += (
-                    f'<span style="font-size:10px;font-weight:600;color:#6d28d9;background:#ede9fe;'
-                    f'border-radius:10px;padding:2px 7px;white-space:nowrap">◆ {_badge_status}</span>'
-                )
             if _badges_html:
                 _badges_html = (
-                    f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">{_badges_html}</div>'
+                    f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px">{_badges_html}</div>'
                 )
 
             # Separate hero stat from secondary stats, and find alerts
@@ -8576,7 +8597,13 @@ def dashboard():
             _flabel, _fcolor, _ficon = _freshness_label(synced_at, sync_status)
             _fw = "700" if _fcolor == "#dc2626" else "500"
             _fprefix = f"{_ficon} " if _ficon else ""
-            freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
+            # Only show per-card sync time when there's a problem (amber/red = stale or login required)
+            # Normal/green sync times are shown globally in the topbar
+            _is_sync_problem = _fcolor in ("#f59e0b", "#dc2626") or not synced_at
+            freshness_html = (
+                f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
+                if _is_sync_problem else ""
+            )
 
             # Consistent footer for all cards
             _BAD_VALUES = {"", "—", "–", "—", "no data", "none", "n/a", "-"}
@@ -8729,8 +8756,10 @@ def dashboard():
                 f'<div class="acct-card-header">'
                 f'<div style="flex:1;min-width:0">'
                 f'<div class="acct-name">{he(display_name)}{completeness_badge}</div>'
+                f'{_status_inline_html}'
                 + _badges_html
-                + f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{freshness_html}</div>'
+                + (f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{freshness_html}</div>' if freshness_html else '')
+                + f'<div class="acct-sync-time" data-synced="{he(synced_at)}" style="display:none"></div>'
                 f'{coverage_face}'
                 f'</div>'
                 f'<div class="acct-controls">'
@@ -8826,7 +8855,7 @@ def dashboard():
                     _di["_type"] = classify_benefit(_di.get("label",""), str(_di.get("value","")), row_v["source"])
             for it in items_v:
                 _rs, _rf = _relevance_score(it.get("key",""), it.get("label",""), str(it.get("value","")))
-                _raw_val = _rf["value_factor"] * 300.0
+                _raw_val = _rf.get("value_factor", 1.0) * 300.0  # default 1.0 when using inline fallback
                 if _raw_val > 0:
                     total_value += _raw_val
                     value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), _rs, "relevance", it.get("_type","other")))
@@ -10207,7 +10236,8 @@ function dismissOnboarding() {
             .replace("{opportunities_html}",      "")
             .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{dash_modals}",             _build_dash_modals(configured, _csrf))
-            .replace("{csrf_token}",              _csrf))
+            .replace("{csrf_token}",              _csrf)
+            .replace("{global_sync_label}",       _global_sync_label))
 
 @app.route("/settings")
 @require_login
@@ -12082,9 +12112,9 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
     candidates_to_insert = []
     for f in deduped:
         sc = f.get("system_confidence") or f.get("confidence") or 0.0
-        if sc >= 0.85:
+        if sc >= 0.60:
             auto_enabled.append(f["key"])
-        elif sc >= 0.60:
+        elif sc >= 0.40:
             candidates_to_insert.append(f)
         # else: discard silently
 
@@ -12248,6 +12278,88 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
                     get_db().commit()
     except Exception:
         pass
+
+
+def _promote_pending_candidates(uid: str) -> None:
+    """Promote field_candidates with confidence>=0.60 into enabled_fields.
+
+    Runs on every dashboard load (idempotent — candidates already promoted are
+    marked 'auto_approved' so subsequent calls are a quick no-op SELECT).
+    """
+    try:
+        db = get_db()
+        cands = db.execute(
+            "SELECT source, field_key, field_label, field_value, confidence, source_snippet "
+            "FROM field_candidates WHERE user_id=? AND status='pending' AND confidence>=0.60",
+            (uid,)
+        ).fetchall()
+        if not cands:
+            return
+        by_source: dict = {}
+        for c in cands:
+            by_source.setdefault(c["source"], []).append(c)
+        for source, source_cands in by_source.items():
+            cred_row = db.execute(
+                "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
+                (uid, source)
+            ).fetchone()
+            if not cred_row:
+                continue
+            try:
+                ex = json.loads(decrypt_cred(uid, cred_row["extra_enc"] or "") or "{}")
+            except Exception:
+                continue
+            existing_enabled = set(ex.get("enabled_fields", []))
+            disc_by_key = {f["key"]: f for f in ex.get("discovered_fields", [])}
+            new_keys = [c["field_key"] for c in source_cands if c["field_key"] not in existing_enabled]
+            if not new_keys:
+                continue
+            for c in source_cands:
+                if c["field_key"] not in disc_by_key:
+                    disc_by_key[c["field_key"]] = {
+                        "key": c["field_key"],
+                        "label": c["field_label"],
+                        "value": c["field_value"],
+                        "confidence": float(c["confidence"]) if c["confidence"] else 0.6,
+                    }
+            all_enabled = list(existing_enabled | set(new_keys))
+            ex["enabled_fields"] = all_enabled
+            ex["discovered_fields"] = list(disc_by_key.values())
+            db.execute(
+                "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
+                (encrypt_cred(uid, json.dumps(ex)), iso(), uid, source)
+            )
+            enabled_set = set(all_enabled)
+            ad = db.execute(
+                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
+            ).fetchone()
+            if ad:
+                ad_data = decrypt_account_data(uid, ad["data_enc"] or "")
+                new_items = [
+                    {
+                        "key": f["key"],
+                        "label": f["label"],
+                        "value": f.get("value", ""),
+                        "_type": classify_benefit(f.get("label", ""), str(f.get("value", "")), source),
+                    }
+                    for f in ex["discovered_fields"]
+                    if f.get("key") in enabled_set and str(f.get("value", "")).strip()
+                ]
+                if new_items:
+                    ad_data["items"] = new_items
+                    db.execute(
+                        "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                        (encrypt_account_data(uid, ad_data), uid, source)
+                    )
+        db.commit()
+        db.execute(
+            "UPDATE field_candidates SET status='auto_approved' "
+            "WHERE user_id=? AND status='pending' AND confidence>=0.60",
+            (uid,)
+        )
+        db.commit()
+    except Exception as _ppc_err:
+        print(f"[Mighty] _promote_pending_candidates error: {_ppc_err}", flush=True)
 
 
 def _field_config_html(source: str, configured: set, extra_data: dict = None) -> str:
