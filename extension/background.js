@@ -1214,7 +1214,7 @@ async function syncAccountViaTab(apiKey, account, urls, syncSessionTime) {
 // Autonomous gap-filling: check coverage and visit missing-field pages
 async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 2, sharedTabId = null) {
   const source = account.source;
-  const entry = ACCOUNT_ENTRY[source];
+  const entry = (account && account.entry_url) || ACCOUNT_ENTRY[source];
   if (!entry) return;
 
   let entryOrigin;
@@ -1427,7 +1427,7 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
 }
 
 async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null, _lazySharedTab = null) {
-  const entry = ACCOUNT_ENTRY[account.source];
+  const entry = account.entry_url || ACCOUNT_ENTRY[account.source];
   if (!entry) {
     console.log(`[Mighty] No entry URL for ${account.source} — skipping`);
     return;

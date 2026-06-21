@@ -339,6 +339,10 @@ def init_db():
         except Exception:
             pass
         try:
+            db.execute("ALTER TABLE account_data ADD COLUMN entry_url TEXT")
+        except Exception:
+            pass
+        try:
             db.execute("ALTER TABLE account_credentials ADD COLUMN review_required_fields TEXT DEFAULT '[]'")
         except Exception:
             pass
@@ -8347,6 +8351,25 @@ def dashboard():
                     f'<div class="hero-lbl">{he(hero_item["label"])}</div>'
                     f'</div>'
                 )
+            elif sync_status == "needs_first_visit":
+                _nfv_login_url = SOURCE_CAPABILITIES.get(src, {}).get("login_url", "")
+                _nfv_link = (
+                    f'<a href="{he(_nfv_login_url)}" target="_blank" rel="noopener" '
+                    f'style="display:inline-block;margin-top:8px;padding:5px 12px;background:#6366f1;'
+                    f'color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none">'
+                    f'Open {he(display_name)} →</a>'
+                ) if _nfv_login_url else ""
+                card_hero_html = (
+                    f'<div class="acct-divider"></div>'
+                    f'<div class="acct-hero">'
+                    f'<div style="color:#6b7280;font-size:12px;line-height:1.5">'
+                    f'Visit your {he(display_name)} account page to start syncing. '
+                    f'The extension will capture it automatically.'
+                    f'</div>'
+                    f'{_nfv_link}'
+                    f'</div>'
+                )
+                status_color = "#a78bfa"
             elif sync_status == "login_required":
                 card_hero_html = (
                     f'<div class="acct-divider"></div>'
@@ -14003,6 +14026,17 @@ def credentials_register():
             (uid, source, "", "", "", now, now)
         )
         db.commit()
+    # Create stub account_data row so supplement can fire on first visit
+    site_meta = next(((n,i,c) for k,n,i,c,*_ in SUPPORTED_SITES if k == source), None)
+    if not site_meta:
+        site_meta = (source.replace('_',' ').title(), '🔗', '#f3f4f6')
+    display, icon, color = site_meta
+    stub_enc = encrypt_account_data(uid, {"sync_status": "needs_first_visit", "items": [], "raw_text": ""})
+    db.execute(
+        "INSERT OR IGNORE INTO account_data (user_id, source, display_name, icon, color, data_enc, synced_at) VALUES (?,?,?,?,?,?,?)",
+        (uid, source, display, icon, color, stub_enc, iso())
+    )
+    db.commit()
     return jsonify({"ok": True})
 
 
@@ -14939,7 +14973,22 @@ def api_extension_supplement():
         (uid, source)
     ).fetchone()
     if not existing:
-        return jsonify({"ok": False, "error": "Account not found"}), 404
+        site_meta = next(((n,i,c) for k,n,i,c,*_ in SUPPORTED_SITES if k == source), None)
+        if not site_meta:
+            site_meta = (source.replace('_',' ').title(), '🔗', '#f3f4f6')
+        display, icon, color = site_meta
+        stub_enc = encrypt_account_data(uid, {"sync_status": "needs_first_visit", "items": [], "raw_text": ""})
+        db.execute(
+            "INSERT OR IGNORE INTO account_data (user_id, source, display_name, icon, color, data_enc, synced_at) VALUES (?,?,?,?,?,?,?)",
+            (uid, source, display, icon, color, stub_enc, iso())
+        )
+        db.commit()
+        existing = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+            (uid, source)
+        ).fetchone()
+        if not existing:
+            return jsonify({"ok": False, "error": "Could not create account row"}), 500
 
     # Domain enforcement — truncate data from unexpected hostnames
     if not _url_allowed_for_source(source, url):
@@ -14960,6 +15009,13 @@ def api_extension_supplement():
         (encrypt_account_data(uid, ad), synced_at, uid, source)
     )
     db.commit()
+    # Store entry_url on first successful capture so crawlAccount can use it
+    if url:
+        db.execute(
+            "UPDATE account_data SET entry_url=? WHERE user_id=? AND source=? AND (entry_url IS NULL OR entry_url='')",
+            (url, uid, source)
+        )
+        db.commit()
     print(f"[Supplement] {source}: appended {len(new_text)} chars from {url}", flush=True)
 
     if _claude:
@@ -16067,7 +16123,8 @@ def api_extension_accounts():
     if not user:
         return jsonify({"error": "Invalid or missing api_key"}), 401
 
-    rows = get_db().execute(
+    db = get_db()
+    rows = db.execute(
         "SELECT source, username_enc FROM account_credentials WHERE user_id=?",
         (user["id"],)
     ).fetchall()
@@ -16124,7 +16181,12 @@ def api_extension_accounts():
             continue
 
         name, icon, color = meta
-        accounts.append({"source": source, "name": name, "icon": icon, "color": color})
+        ad_row = db.execute(
+            "SELECT entry_url FROM account_data WHERE user_id=? AND source=?",
+            (user["id"], source)
+        ).fetchone()
+        entry_url = ad_row["entry_url"] if ad_row and ad_row["entry_url"] else None
+        accounts.append({"source": source, "name": name, "icon": icon, "color": color, "entry_url": entry_url})
 
     return jsonify(accounts)
 
