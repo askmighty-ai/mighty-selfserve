@@ -916,11 +916,16 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   try { tabDomain = new URL(tab.url).hostname.replace(/^www\./, ''); }
   catch { return; }
 
-  // Known account domain: supplement-capture if path looks like account data.
-  // No hardcoded paths — _ACCOUNT_PATH_RE decides what's worth capturing.
+  // Known account domain: always attempt supplement capture.
+  // We don't gate on _ACCOUNT_PATH_RE here — URL structures change (e.g. United
+  // moved from /myaccount/mileageplus to /myunited). The supplement function already
+  // rejects pages with too little text, login screens, or bot-detection walls.
+  // Skip only obvious non-account paths (booking, search, homepage root).
+  const _SKIP_PATH_RE = /\/(book|search|flight-search|find-flights|deals|shop|cart|checkout|help|faq|legal|careers|about|press|sitemap|accessibility|sign-?up|register|login|sign-?in)(\b|\/|$)/i;
   for (const [domain, source] of Object.entries(SUPPLEMENT_DOMAINS)) {
     if (tabDomain.endsWith(domain)) {
-      if (_ACCOUNT_PATH_RE.test(tab.url)) {
+      const path = new URL(tab.url).pathname;
+      if (path !== '/' && !_SKIP_PATH_RE.test(path)) {
         _supplementCapturePage(tabId, tab, source).catch(() => {});
       }
       return;
