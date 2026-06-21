@@ -17444,7 +17444,7 @@ input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
 .suggestion-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
 .sugg-card{background:#fff;border:1.5px solid #e8e3dc;border-radius:10px;padding:14px 16px;
   display:flex;align-items:center;gap:12px;transition:border-color .15s}
-.sugg-card.added{opacity:.5;pointer-events:none}
+.sugg-card.added{opacity:.65;pointer-events:none;border-color:#6ee7b7;background:#f0fdf4}
 .sugg-name{flex:1;font-size:13px;font-weight:600}
 .sugg-count{font-size:11px;color:#9ca3af;margin-top:1px}
 .sugg-actions{display:flex;gap:6px;flex-shrink:0}
@@ -17455,8 +17455,18 @@ input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
 .btn-dismiss{background:none;border:none;color:#d1d5db;font-size:16px;cursor:pointer;
   padding:4px;line-height:1;transition:color .12s}
 .btn-dismiss:hover{color:#6b7280}
+.btn-add-all{background:#059669;color:#fff;border:none;border-radius:6px;
+  padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
+  transition:background .12s}
+.btn-add-all:hover:not(:disabled){background:#047857}
+.btn-add-all:disabled{opacity:.6;cursor:default}
+.btn-connect{background:#1d4ed8;color:#fff;border:none;border-radius:6px;
+  padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
+  transition:background .12s,opacity .12s}
+.btn-connect:hover:not(:disabled){background:#1e40af}
+.btn-connect:disabled{cursor:default}
 .empty-state{text-align:center;padding:48px;color:#9ca3af;font-size:14px}
-.already-note{font-size:12px;color:#9ca3af;margin-top:16px;text-align:center}
+.already-note{font-size:12px;color:#9ca3af;margin-top:8px;margin-bottom:12px}
 .note-box{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;
   font-size:13px;color:#92400e;margin-bottom:24px;display:none}
 .note-box.visible{display:block}
@@ -17519,10 +17529,18 @@ input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
   </div>
 
   <div class="results-section" id="resultsSection" style="display:none">
-    <div class="results-header" id="resultsHeader"></div>
-    <div class="results-sub" id="resultsSub"></div>
-    <div id="resultsBody"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div>
+        <div class="results-header" id="resultsHeader"></div>
+        <div class="results-sub" id="resultsSub"></div>
+      </div>
+      <div id="addAllBar" style="display:none;align-items:center;gap:10px">
+        <button id="btnAddAll" class="btn-add-all">+ Add All</button>
+        <button id="btnConnect" class="btn-connect" disabled style="opacity:0.45">Connect accounts →</button>
+      </div>
+    </div>
     <p class="already-note" id="alreadyNote" style="display:none"></p>
+    <div id="resultsBody"></div>
   </div>
 </div>
 
@@ -17579,12 +17597,24 @@ function renderResults(suggestions, alreadyCount) {
   var sec = document.getElementById('resultsSection');
   var body = document.getElementById('resultsBody');
   sec.style.display = 'block';
+  window._allSuggestions = suggestions;
+  window._addedSiteKeys = new Set();
+
   document.getElementById('resultsHeader').textContent =
     suggestions.length > 0 ? 'Found ' + suggestions.length + ' accounts' : 'No new accounts found';
   document.getElementById('resultsSub').textContent =
     suggestions.length > 0
       ? 'These services sent you email. Click Add to connect them to Mighty.'
       : 'All accounts we detected are already connected, or no matching emails were found.';
+
+  // Add All + Connect bar
+  var addAllBar = document.getElementById('addAllBar');
+  if (suggestions.length > 0) {
+    addAllBar.style.display = 'flex';
+    document.getElementById('btnAddAll').onclick = addAll;
+    document.getElementById('btnConnect').onclick = connectAdded;
+  }
+
   if (alreadyCount > 0) {
     var note = document.getElementById('alreadyNote');
     note.style.display = 'block';
@@ -17605,7 +17635,6 @@ function renderResults(suggestions, alreadyCount) {
   var html = '';
   catOrder.forEach(function(cat){
     if (!cats[cat]) return;
-    var label = {already_connected_json}.hasOwnProperty; // placeholder
     html += '<div class="category-block">';
     html += '<div class="cat-label">' + (window._catLabels[cat] || cat) + '</div>';
     html += '<div class="suggestion-grid">';
@@ -17616,13 +17645,62 @@ function renderResults(suggestions, alreadyCount) {
       html += '<div class="sugg-count">' + s.email_count + ' email' + (s.email_count !== 1 ? 's' : '') + ' found</div>';
       html += '</div>';
       html += '<div class="sugg-actions">';
-      html += '<button class="btn-add" onclick="addSuggestion(\'' + s.site_key + '\',\'' + escHtml(s.display_name) + '\')">+ Add</button>';
+      html += '<button class="btn-add" id="btn-add-' + s.site_key + '" onclick="addSuggestion(\'' + s.site_key + '\',\'' + escHtml(s.display_name) + '\')">+ Add</button>';
       html += '<button class="btn-dismiss" onclick="dismissSuggestion(\'' + s.site_key + '\')" title="Dismiss">✕</button>';
       html += '</div></div>';
     });
     html += '</div></div>';
   });
   body.innerHTML = html;
+}
+
+function _markAdded(siteKey) {
+  window._addedSiteKeys.add(siteKey);
+  var card = document.getElementById('sc-' + siteKey);
+  var btn  = document.getElementById('btn-add-' + siteKey);
+  if (card) card.classList.add('added');
+  if (btn)  { btn.textContent = '✓ Added'; btn.disabled = true; }
+  updateConnectBar();
+}
+
+function updateConnectBar() {
+  var n = window._addedSiteKeys ? window._addedSiteKeys.size : 0;
+  var connectBtn = document.getElementById('btnConnect');
+  if (!connectBtn) return;
+  if (n > 0) {
+    connectBtn.textContent = 'Connect ' + n + ' account' + (n !== 1 ? 's' : '') + ' →';
+    connectBtn.disabled = false;
+    connectBtn.style.opacity = '1';
+  } else {
+    connectBtn.textContent = 'Connect accounts →';
+    connectBtn.disabled = true;
+    connectBtn.style.opacity = '0.45';
+  }
+}
+
+function addAll() {
+  if (!window._allSuggestions) return;
+  var pending = window._allSuggestions.filter(function(s){ return !window._addedSiteKeys.has(s.site_key); });
+  if (pending.length === 0) return;
+  // Fire all add requests in parallel, then mark cards
+  var fetches = pending.map(function(s){
+    return fetch('/api/email/suggestions/add', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({site_key: s.site_key})
+    }).then(function(){ _markAdded(s.site_key); });
+  });
+  var btn = document.getElementById('btnAddAll');
+  btn.disabled = true;
+  btn.textContent = 'Adding…';
+  Promise.all(fetches).then(function(){
+    btn.textContent = '✓ All added';
+    updateConnectBar();
+  });
+}
+
+function connectAdded() {
+  // Go to dashboard; user can set up credentials from there
+  window.location.href = '/dashboard';
 }
 
 window._catLabels = {already_cat_labels_json};
@@ -17633,12 +17711,7 @@ function addSuggestion(siteKey, displayName) {
   fetch('/api/email/suggestions/add', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({site_key: siteKey})
-  }).then(function(){
-    var card = document.getElementById('sc-' + siteKey);
-    if (card) card.classList.add('added');
-    // Open connect flow in same tab
-    window.location.href = '/accounts/connect?site=' + encodeURIComponent(siteKey);
-  });
+  }).then(function(){ _markAdded(siteKey); });
 }
 
 function dismissSuggestion(siteKey) {
