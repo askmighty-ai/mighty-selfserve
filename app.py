@@ -78,7 +78,11 @@ POSTMARK_FROM    = os.environ.get("POSTMARK_FROM", "Mighty <noreply@mighty.ai>")
 NOTIFY_EMAIL_OVERRIDE = os.environ.get("NOTIFY_EMAIL", "")  # override recipient for sandbox testing
 if NOTIFY_EMAIL_OVERRIDE:
     print(f"[Mighty] WARNING: NOTIFY_EMAIL_OVERRIDE is set — all notification emails go to {NOTIFY_EMAIL_OVERRIDE}", flush=True)
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
+GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+MS_CLIENT_ID         = os.environ.get("MS_CLIENT_ID", "")
+MS_CLIENT_SECRET     = os.environ.get("MS_CLIENT_SECRET", "")
 
 LOGO_ICON_B64 = "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"
 
@@ -485,6 +489,45 @@ def init_db():
             db.commit()
         except Exception:
             pass  # column already exists
+        # Email scan — connected providers (tokens stored encrypted)
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS email_connections (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id       TEXT NOT NULL,
+                    provider      TEXT NOT NULL,
+                    access_token_enc  TEXT,
+                    refresh_token_enc TEXT,
+                    email_address TEXT,
+                    scanned_at    TEXT,
+                    created_at    TEXT NOT NULL,
+                    UNIQUE(user_id, provider)
+                )
+            """)
+            db.commit()
+        except Exception:
+            pass
+        # Email scan — surfaced account suggestions per user
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS email_suggestions (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id       TEXT NOT NULL,
+                    site_key      TEXT NOT NULL,
+                    display_name  TEXT NOT NULL,
+                    category      TEXT NOT NULL,
+                    email_count   INTEGER DEFAULT 0,
+                    sender_domain TEXT,
+                    dismissed     INTEGER DEFAULT 0,
+                    added         INTEGER DEFAULT 0,
+                    created_at    TEXT NOT NULL,
+                    UNIQUE(user_id, site_key)
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_esugg_user ON email_suggestions(user_id, dismissed)")
+            db.commit()
+        except Exception:
+            pass
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -6770,6 +6813,14 @@ body{display:flex;flex-direction:row}
   </div>
 
   <div class="card">
+    <div class="section-title">Account discovery</div>
+    <div style="font-size:13px;color:#6b7280;margin-bottom:14px;line-height:1.5">
+      Scan your email inbox to find accounts you might want to add to Mighty. Only sender addresses are checked — no email content is read.
+    </div>
+    <a href="/email-scan" class="btn-sm" style="display:inline-block;text-decoration:none">🔍 Find accounts from email</a>
+  </div>
+
+  <div class="card">
     <div class="section-title">Data &amp; Privacy</div>
     <button class="btn-sm" onclick="window.location.href=\'/settings/export-csv\'">↓ Export activity log (CSV)</button>
     <hr style="border:none;border-top:1px solid #f5f2ed;margin:16px 0">
@@ -7953,7 +8004,7 @@ def dashboard():
     debug_mode      = request.args.get("debug") == "1"
 
     onboarding_banner = ""
-    # Only show the banner in the active (non-empty) state — the empty welcome state handles its own CTA
+    # Onboarding banner takes priority — only show the active (non-empty) state
     if not user["onboarded"] and len(acts) > 0:
         onboarding_banner = (
             '<div style="background:rgba(129,140,248,0.08);border:1px solid rgba(129,140,248,0.2);'
@@ -7964,6 +8015,21 @@ def dashboard():
             '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#6366f1;white-space:nowrap">'
             'Complete setup &#8594;</a></div>'
         )
+    elif len(acts) < 4:
+        # Email scan nudge: shown when user has few accounts and hasn't scanned yet
+        _email_scan_done = db.execute(
+            "SELECT COUNT(*) FROM email_suggestions WHERE user_id=?", (uid,)
+        ).fetchone()[0]
+        if not _email_scan_done:
+            onboarding_banner = (
+                '<div style="background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.18);'
+                'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
+                'justify-content:space-between;gap:16px;margin:0 16px 8px">'
+                '<div style="font-size:13px;color:#1d4ed8">💡 <strong>Find more accounts to track</strong> — '
+                'scan your email to discover loyalty programs and subscriptions you already have.</div>'
+                '<a href="/email-scan" style="font-size:13px;font-weight:600;color:#3b82f6;white-space:nowrap">'
+                'Scan email &#8594;</a></div>'
+            )
 
     welcome_state = ''
     if len(acts) == 0:
@@ -17321,6 +17387,626 @@ def api_opportunities():
     context = request.args.get("context", "").strip().lower() or None
     opps    = _generate_opportunities(uid, context)
     return jsonify({"context": context, "opportunities": opps, "count": len(opps)})
+
+
+# ── Email scan ────────────────────────────────────────────────────────────────
+
+from mighty.email_scan import (
+    scan_gmail, scan_imap, scan_outlook,
+    get_imap_preset, CATEGORY_LABELS,
+)
+
+_EMAIL_SCAN_PAGE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Find accounts — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:#f7f5f2;color:#1a1a1a;min-height:100vh}
+.topbar{background:#fff;border-bottom:1px solid #e8e3dc;padding:0 24px;height:52px;display:flex;align-items:center;gap:12px}
+.topbar a{color:#6b6b6b;text-decoration:none;font-size:13px}
+.topbar a:hover{color:#1a1a1a}
+.topbar .sep{color:#d1c9be}
+.page{max-width:860px;margin:40px auto;padding:0 24px 60px}
+h1{font-size:22px;font-weight:700;margin-bottom:6px}
+.sub{color:#6b6b6b;font-size:14px;margin-bottom:32px}
+.provider-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:32px}
+.provider-card{background:#fff;border:1.5px solid #e8e3dc;border-radius:12px;padding:20px;cursor:pointer;
+  transition:border-color .15s,box-shadow .15s;text-align:center}
+.provider-card:hover{border-color:#a8a29e;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.provider-card.active{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+.provider-icon{font-size:28px;margin-bottom:8px}
+.provider-name{font-size:14px;font-weight:600;margin-bottom:3px}
+.provider-desc{font-size:12px;color:#6b6b6b}
+.imap-form{background:#fff;border:1px solid #e8e3dc;border-radius:12px;padding:24px;margin-bottom:24px;display:none}
+.imap-form.visible{display:block}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.form-row.single{grid-template-columns:1fr}
+label{display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px}
+input,select{width:100%;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;
+  font-family:inherit;background:#fafafa}
+input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
+.scan-btn{background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:10px 24px;
+  font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s}
+.scan-btn:hover{background:#2563eb}
+.scan-btn:disabled{background:#9ca3af;cursor:not-allowed}
+.status-msg{font-size:13px;color:#6b7280;margin-left:12px;display:none}
+.results-section{margin-top:8px}
+.results-header{font-size:16px;font-weight:700;margin-bottom:4px}
+.results-sub{font-size:13px;color:#6b7280;margin-bottom:20px}
+.category-block{margin-bottom:28px}
+.cat-label{font-size:11px;font-weight:700;color:#9ca3af;letter-spacing:.06em;text-transform:uppercase;
+  margin-bottom:10px}
+.suggestion-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.sugg-card{background:#fff;border:1.5px solid #e8e3dc;border-radius:10px;padding:14px 16px;
+  display:flex;align-items:center;gap:12px;transition:border-color .15s}
+.sugg-card.added{opacity:.5;pointer-events:none}
+.sugg-name{flex:1;font-size:13px;font-weight:600}
+.sugg-count{font-size:11px;color:#9ca3af;margin-top:1px}
+.sugg-actions{display:flex;gap:6px;flex-shrink:0}
+.btn-add{background:#ecfdf5;color:#059669;border:1.5px solid #6ee7b7;border-radius:6px;
+  padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;
+  transition:background .12s}
+.btn-add:hover{background:#d1fae5}
+.btn-dismiss{background:none;border:none;color:#d1d5db;font-size:16px;cursor:pointer;
+  padding:4px;line-height:1;transition:color .12s}
+.btn-dismiss:hover{color:#6b7280}
+.empty-state{text-align:center;padding:48px;color:#9ca3af;font-size:14px}
+.already-note{font-size:12px;color:#9ca3af;margin-top:16px;text-align:center}
+.note-box{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;
+  font-size:13px;color:#92400e;margin-bottom:24px;display:none}
+.note-box.visible{display:block}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <a href="/dashboard">← Dashboard</a>
+  <span class="sep">·</span>
+  <span style="font-size:13px;font-weight:600">Find accounts from email</span>
+</div>
+<div class="page">
+  <h1>Find accounts from your email</h1>
+  <p class="sub">Mighty scans only sender addresses — never email content or attachments.</p>
+
+  <div class="provider-grid" id="providerGrid">
+    {gmail_card}
+    {outlook_card}
+    <div class="provider-card" id="card-imap" onclick="selectProvider('imap')">
+      <div class="provider-icon">📬</div>
+      <div class="provider-name">Any email (IMAP)</div>
+      <div class="provider-desc">Gmail app password, Yahoo, iCloud, or any IMAP server</div>
+    </div>
+  </div>
+
+  <div class="note-box" id="noteConfigure">
+    Gmail OAuth is not configured on this server yet. Use IMAP with a Gmail App Password instead,
+    or ask the server admin to set <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>.
+  </div>
+
+  <div class="imap-form" id="imapForm">
+    <div class="form-row">
+      <div>
+        <label for="imapProvider">Email provider</label>
+        <select id="imapProvider" onchange="onImapProviderChange()">
+          <option value="gmail">Gmail (app password)</option>
+          <option value="outlook">Outlook / Hotmail</option>
+          <option value="yahoo">Yahoo Mail</option>
+          <option value="icloud">iCloud Mail</option>
+          <option value="custom">Custom IMAP server…</option>
+        </select>
+      </div>
+      <div id="imapHostField" style="display:none">
+        <label for="imapHost">IMAP host</label>
+        <input type="text" id="imapHost" placeholder="imap.example.com">
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label for="imapUser">Email address</label>
+        <input type="email" id="imapUser" placeholder="you@example.com">
+      </div>
+      <div>
+        <label for="imapPass">Password / App password</label>
+        <input type="password" id="imapPass" placeholder="••••••••••••">
+      </div>
+    </div>
+    <button class="scan-btn" id="imapScanBtn" onclick="runImapScan()">Scan inbox</button>
+    <span class="status-msg" id="imapStatus">Scanning…</span>
+  </div>
+
+  <div class="results-section" id="resultsSection" style="display:none">
+    <div class="results-header" id="resultsHeader"></div>
+    <div class="results-sub" id="resultsSub"></div>
+    <div id="resultsBody"></div>
+    <p class="already-note" id="alreadyNote" style="display:none"></p>
+  </div>
+</div>
+
+<script>
+var _selectedProvider = null;
+var _alreadyConnected = {already_connected_json};
+
+function selectProvider(p) {
+  _selectedProvider = p;
+  document.querySelectorAll('.provider-card').forEach(function(c){ c.classList.remove('active'); });
+  var card = document.getElementById('card-' + p);
+  if (card) card.classList.add('active');
+  document.getElementById('imapForm').classList.toggle('visible', p === 'imap');
+  if (p === 'gmail') startGmailOAuth();
+  if (p === 'outlook') startOutlookOAuth();
+}
+
+function onImapProviderChange() {
+  var v = document.getElementById('imapProvider').value;
+  document.getElementById('imapHostField').style.display = v === 'custom' ? 'block' : 'none';
+}
+
+function startGmailOAuth() {
+  window.location.href = '/email/gmail/auth';
+}
+function startOutlookOAuth() {
+  window.location.href = '/email/outlook/auth';
+}
+
+function runImapScan() {
+  var btn = document.getElementById('imapScanBtn');
+  var status = document.getElementById('imapStatus');
+  btn.disabled = true;
+  status.style.display = 'inline';
+  var provider = document.getElementById('imapProvider').value;
+  var host = document.getElementById('imapHost').value.trim();
+  var user = document.getElementById('imapUser').value.trim();
+  var pass = document.getElementById('imapPass').value;
+  fetch('/api/email/scan/imap', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({provider: provider, host: host, username: user, password: pass})
+  }).then(function(r){ return r.json(); }).then(function(data){
+    btn.disabled = false; status.style.display = 'none';
+    if (data.error) { alert('Scan failed: ' + data.error); return; }
+    renderResults(data.suggestions, data.already_connected_count);
+  }).catch(function(e){
+    btn.disabled = false; status.style.display = 'none';
+    alert('Connection error: ' + e.message);
+  });
+}
+
+function renderResults(suggestions, alreadyCount) {
+  var sec = document.getElementById('resultsSection');
+  var body = document.getElementById('resultsBody');
+  sec.style.display = 'block';
+  document.getElementById('resultsHeader').textContent =
+    suggestions.length > 0 ? 'Found ' + suggestions.length + ' accounts' : 'No new accounts found';
+  document.getElementById('resultsSub').textContent =
+    suggestions.length > 0
+      ? 'These services sent you email. Click Add to connect them to Mighty.'
+      : 'All accounts we detected are already connected, or no matching emails were found.';
+  if (alreadyCount > 0) {
+    var note = document.getElementById('alreadyNote');
+    note.style.display = 'block';
+    note.textContent = alreadyCount + ' account' + (alreadyCount !== 1 ? 's' : '') + ' already connected — not shown.';
+  }
+  if (suggestions.length === 0) {
+    body.innerHTML = '<div class="empty-state">✓ Nothing new to add</div>';
+    return;
+  }
+  // Group by category
+  var cats = {};
+  suggestions.forEach(function(s){
+    if (!cats[s.category]) cats[s.category] = [];
+    cats[s.category].push(s);
+  });
+  var catOrder = ['airline','hotel','credit_card','bank','investment','payment',
+                  'telecom','streaming','car_rental','retail','dining','gas','health','insurance','tech'];
+  var html = '';
+  catOrder.forEach(function(cat){
+    if (!cats[cat]) return;
+    var label = {already_connected_json}.hasOwnProperty; // placeholder
+    html += '<div class="category-block">';
+    html += '<div class="cat-label">' + (window._catLabels[cat] || cat) + '</div>';
+    html += '<div class="suggestion-grid">';
+    cats[cat].forEach(function(s){
+      html += '<div class="sugg-card" id="sc-' + s.site_key + '">';
+      html += '<div style="flex:1">';
+      html += '<div class="sugg-name">' + escHtml(s.display_name) + '</div>';
+      html += '<div class="sugg-count">' + s.email_count + ' email' + (s.email_count !== 1 ? 's' : '') + ' found</div>';
+      html += '</div>';
+      html += '<div class="sugg-actions">';
+      html += '<button class="btn-add" onclick="addSuggestion(\'' + s.site_key + '\',\'' + escHtml(s.display_name) + '\')">+ Add</button>';
+      html += '<button class="btn-dismiss" onclick="dismissSuggestion(\'' + s.site_key + '\')" title="Dismiss">✕</button>';
+      html += '</div></div>';
+    });
+    html += '</div></div>';
+  });
+  body.innerHTML = html;
+}
+
+window._catLabels = {already_cat_labels_json};
+
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function addSuggestion(siteKey, displayName) {
+  fetch('/api/email/suggestions/add', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({site_key: siteKey})
+  }).then(function(){
+    var card = document.getElementById('sc-' + siteKey);
+    if (card) card.classList.add('added');
+    // Open connect flow in same tab
+    window.location.href = '/accounts/connect?site=' + encodeURIComponent(siteKey);
+  });
+}
+
+function dismissSuggestion(siteKey) {
+  fetch('/api/email/suggestions/dismiss', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({site_key: siteKey})
+  });
+  var card = document.getElementById('sc-' + siteKey);
+  if (card) { card.style.opacity='0'; card.style.transition='opacity .2s'; setTimeout(function(){ card.remove(); },200); }
+}
+
+// Auto-render if suggestions were injected server-side (after OAuth callback)
+var _injectedSuggestions = {injected_suggestions_json};
+var _injectedAlreadyCount = {injected_already_count};
+if (_injectedSuggestions !== null) {
+  renderResults(_injectedSuggestions, _injectedAlreadyCount);
+}
+
+// Show config note if Gmail OAuth not configured
+if ({gmail_not_configured}) {
+  document.getElementById('noteConfigure').classList.add('visible');
+}
+</script>
+</body>
+</html>"""
+
+
+def _render_email_scan_page(suggestions=None, already_count=0, provider_triggered=None):
+    """Render the /email-scan page, optionally with pre-populated scan results."""
+    db  = get_db()
+    uid = session["user_id"]
+
+    # Already-connected site keys
+    acts = db.execute("SELECT source FROM actions WHERE user_id=?", (uid,)).fetchall()
+    connected = {r["source"] for r in acts}
+
+    gmail_configured = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+    outlook_configured = bool(MS_CLIENT_ID and MS_CLIENT_SECRET)
+
+    gmail_card = (
+        '<div class="provider-card" id="card-gmail" onclick="selectProvider(\'gmail\')">'
+        '<div class="provider-icon">📧</div>'
+        '<div class="provider-name">Gmail</div>'
+        '<div class="provider-desc">Connect with Google — fast, no password needed</div>'
+        '</div>'
+        if gmail_configured else
+        '<div class="provider-card" id="card-gmail" style="opacity:.45;cursor:default" title="Not configured on this server">'
+        '<div class="provider-icon">📧</div>'
+        '<div class="provider-name">Gmail</div>'
+        '<div class="provider-desc">OAuth not configured (use IMAP below)</div>'
+        '</div>'
+    )
+    outlook_card = (
+        '<div class="provider-card" id="card-outlook" onclick="selectProvider(\'outlook\')">'
+        '<div class="provider-icon">📨</div>'
+        '<div class="provider-name">Outlook</div>'
+        '<div class="provider-desc">Connect with Microsoft — Hotmail, Live, Office 365</div>'
+        '</div>'
+        if outlook_configured else
+        '<div class="provider-card" id="card-outlook" style="opacity:.45;cursor:default" title="Not configured on this server">'
+        '<div class="provider-icon">📨</div>'
+        '<div class="provider-name">Outlook</div>'
+        '<div class="provider-desc">OAuth not configured (use IMAP below)</div>'
+        '</div>'
+    )
+
+    import json as _json
+    page = _EMAIL_SCAN_PAGE
+    page = page.replace("{gmail_card}", gmail_card)
+    page = page.replace("{outlook_card}", outlook_card)
+    page = page.replace("{already_connected_json}", _json.dumps(list(connected)))
+    page = page.replace("{already_cat_labels_json}", _json.dumps(CATEGORY_LABELS))
+    page = page.replace("{injected_suggestions_json}", _json.dumps(suggestions))
+    page = page.replace("{injected_already_count}", str(already_count))
+    page = page.replace("{gmail_not_configured}", "true" if not gmail_configured else "false")
+    return page
+
+
+def _store_suggestions(uid: str, suggestions: list, db):
+    """Upsert scan results into email_suggestions table."""
+    now = datetime.now(timezone.utc).isoformat()
+    for s in suggestions:
+        try:
+            db.execute("""
+                INSERT INTO email_suggestions(user_id,site_key,display_name,category,email_count,sender_domain,created_at)
+                VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(user_id,site_key) DO UPDATE SET
+                  email_count=excluded.email_count, dismissed=0, added=0
+            """, (uid, s["site_key"], s["display_name"], s["category"],
+                  s["email_count"], s.get("sender",""), now))
+        except Exception:
+            pass
+    db.commit()
+
+
+@app.route("/email-scan")
+@require_login
+def email_scan_page():
+    return _render_email_scan_page()
+
+
+@app.route("/email/gmail/auth")
+@require_login
+def email_gmail_auth():
+    if not GOOGLE_CLIENT_ID:
+        return redirect("/email-scan")
+    import urllib.parse
+    state = secrets.token_urlsafe(16)
+    session["gmail_oauth_state"] = state
+    params = {
+        "client_id":     GOOGLE_CLIENT_ID,
+        "redirect_uri":  base_url() + "/email/gmail/callback",
+        "response_type": "code",
+        "scope":         "https://www.googleapis.com/auth/gmail.readonly",
+        "access_type":   "offline",
+        "prompt":        "consent",
+        "state":         state,
+    }
+    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+    return redirect(url)
+
+
+@app.route("/email/gmail/callback")
+@require_login
+def email_gmail_callback():
+    import urllib.parse
+    error = request.args.get("error")
+    if error:
+        return redirect("/email-scan")
+
+    code  = request.args.get("code", "")
+    state = request.args.get("state", "")
+    if state != session.pop("gmail_oauth_state", None):
+        return "Invalid state", 400
+
+    # Exchange code for tokens
+    token_data = {
+        "code":          code,
+        "client_id":     GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri":  base_url() + "/email/gmail/callback",
+        "grant_type":    "authorization_code",
+    }
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(
+            "https://oauth2.googleapis.com/token",
+            data=urllib.parse.urlencode(token_data).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=15) as resp:
+            token_resp = json.loads(resp.read())
+    except Exception as e:
+        return f"Token exchange failed: {e}", 500
+
+    access_token = token_resp.get("access_token", "")
+    if not access_token:
+        return "No access token received", 500
+
+    # Get the user's email address
+    try:
+        profile_req = _ur.Request(
+            "https://www.googleapis.com/gmail/v1/users/me/profile",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        with _ur.urlopen(profile_req, timeout=10) as resp:
+            profile = json.loads(resp.read())
+        email_address = profile.get("emailAddress", "")
+    except Exception:
+        email_address = ""
+
+    db  = get_db()
+    uid = session["user_id"]
+
+    # Store connection (encrypt tokens)
+    enc_access  = encrypt_cred(uid, access_token)
+    enc_refresh = encrypt_cred(uid, token_resp.get("refresh_token", "")) if token_resp.get("refresh_token") else ""
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute("""
+        INSERT INTO email_connections(user_id,provider,access_token_enc,refresh_token_enc,email_address,scanned_at,created_at)
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(user_id,provider) DO UPDATE SET
+          access_token_enc=excluded.access_token_enc,
+          refresh_token_enc=excluded.refresh_token_enc,
+          email_address=excluded.email_address,
+          scanned_at=excluded.scanned_at
+    """, (uid, "gmail", enc_access, enc_refresh, email_address, now, now))
+    db.commit()
+
+    # Run the scan
+    acts = db.execute("SELECT source FROM actions WHERE user_id=?", (uid,)).fetchall()
+    connected = {r["source"] for r in acts}
+    try:
+        suggestions = scan_gmail(access_token, already_connected=connected)
+    except Exception as e:
+        suggestions = []
+
+    already_count = sum(1 for s in suggestions if s["site_key"] in connected)
+    visible = [s for s in suggestions if s["site_key"] not in connected]
+    _store_suggestions(uid, visible, db)
+
+    return _render_email_scan_page(suggestions=visible, already_count=already_count)
+
+
+@app.route("/email/outlook/auth")
+@require_login
+def email_outlook_auth():
+    if not MS_CLIENT_ID:
+        return redirect("/email-scan")
+    import urllib.parse
+    state = secrets.token_urlsafe(16)
+    session["outlook_oauth_state"] = state
+    params = {
+        "client_id":     MS_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri":  base_url() + "/email/outlook/callback",
+        "scope":         "Mail.Read offline_access",
+        "state":         state,
+    }
+    url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?" + urllib.parse.urlencode(params)
+    return redirect(url)
+
+
+@app.route("/email/outlook/callback")
+@require_login
+def email_outlook_callback():
+    import urllib.parse
+    error = request.args.get("error")
+    if error:
+        return redirect("/email-scan")
+
+    code  = request.args.get("code", "")
+    state = request.args.get("state", "")
+    if state != session.pop("outlook_oauth_state", None):
+        return "Invalid state", 400
+
+    token_data = {
+        "client_id":     MS_CLIENT_ID,
+        "client_secret": MS_CLIENT_SECRET,
+        "code":          code,
+        "redirect_uri":  base_url() + "/email/outlook/callback",
+        "grant_type":    "authorization_code",
+        "scope":         "Mail.Read offline_access",
+    }
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            data=urllib.parse.urlencode(token_data).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=15) as resp:
+            token_resp = json.loads(resp.read())
+    except Exception as e:
+        return f"Token exchange failed: {e}", 500
+
+    access_token = token_resp.get("access_token", "")
+    if not access_token:
+        return "No access token received", 500
+
+    db  = get_db()
+    uid = session["user_id"]
+
+    enc_access  = encrypt_cred(uid, access_token)
+    enc_refresh = encrypt_cred(uid, token_resp.get("refresh_token", "")) if token_resp.get("refresh_token") else ""
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute("""
+        INSERT INTO email_connections(user_id,provider,access_token_enc,refresh_token_enc,email_address,scanned_at,created_at)
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(user_id,provider) DO UPDATE SET
+          access_token_enc=excluded.access_token_enc,
+          refresh_token_enc=excluded.refresh_token_enc,
+          scanned_at=excluded.scanned_at
+    """, (uid, "outlook", enc_access, enc_refresh, "", now, now))
+    db.commit()
+
+    acts = db.execute("SELECT source FROM actions WHERE user_id=?", (uid,)).fetchall()
+    connected = {r["source"] for r in acts}
+    try:
+        suggestions = scan_outlook(access_token, already_connected=connected)
+    except Exception:
+        suggestions = []
+
+    already_count = sum(1 for s in suggestions if s["site_key"] in connected)
+    visible = [s for s in suggestions if s["site_key"] not in connected]
+    _store_suggestions(uid, visible, db)
+
+    return _render_email_scan_page(suggestions=visible, already_count=already_count)
+
+
+@app.route("/api/email/scan/imap", methods=["POST"])
+@require_login
+def api_email_scan_imap():
+    data     = request.get_json(force=True) or {}
+    provider = data.get("provider", "custom")
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    host     = data.get("host", "").strip()
+
+    preset = get_imap_preset(provider)
+    if not host:
+        host = preset["host"]
+    port   = int(data.get("port", preset.get("port", 993)))
+    use_ssl = preset.get("ssl", True)
+
+    if not host or not username or not password:
+        return jsonify({"error": "host, username, and password are required"}), 400
+
+    db  = get_db()
+    uid = session["user_id"]
+    acts = db.execute("SELECT source FROM actions WHERE user_id=?", (uid,)).fetchall()
+    connected = {r["source"] for r in acts}
+
+    try:
+        suggestions = scan_imap(host, port, username, password,
+                                already_connected=connected, use_ssl=use_ssl)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+    already_count = 0  # scan_imap already filters
+    visible = suggestions
+    _store_suggestions(uid, visible, db)
+
+    return jsonify({
+        "suggestions": visible,
+        "already_connected_count": already_count,
+        "total": len(visible),
+    })
+
+
+@app.route("/api/email/suggestions")
+@require_login
+def api_email_suggestions():
+    db  = get_db()
+    uid = session["user_id"]
+    rows = db.execute("""
+        SELECT site_key, display_name, category, email_count, sender_domain
+        FROM email_suggestions
+        WHERE user_id=? AND dismissed=0 AND added=0
+        ORDER BY email_count DESC
+    """, (uid,)).fetchall()
+    return jsonify({"suggestions": [dict(r) for r in rows]})
+
+
+@app.route("/api/email/suggestions/dismiss", methods=["POST"])
+@require_login
+def api_email_suggestions_dismiss():
+    data = request.get_json(force=True) or {}
+    site_key = data.get("site_key", "")
+    db  = get_db()
+    uid = session["user_id"]
+    db.execute("UPDATE email_suggestions SET dismissed=1 WHERE user_id=? AND site_key=?", (uid, site_key))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/email/suggestions/add", methods=["POST"])
+@require_login
+def api_email_suggestions_add():
+    data = request.get_json(force=True) or {}
+    site_key = data.get("site_key", "")
+    db  = get_db()
+    uid = session["user_id"]
+    db.execute("UPDATE email_suggestions SET added=1 WHERE user_id=? AND site_key=?", (uid, site_key))
+    db.commit()
+    return jsonify({"ok": True})
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
