@@ -9312,7 +9312,7 @@ def dashboard():
     try:
         # Fetch extra rows so we can detect first-sync floods
         _recent_rows = get_db().execute(
-            "SELECT source, field_label, new_value, changed_at FROM field_history "
+            "SELECT source, field_label, new_value, old_value, changed_at FROM field_history "
             "WHERE user_id=? AND old_value IS NULL AND changed_at > ? "
             "ORDER BY changed_at DESC LIMIT 50",
             (uid, _cutoff)
@@ -16730,11 +16730,7 @@ def not_found(e):
 
 @app.errorhandler(500)
 def server_error(e):
-    import traceback as _tb, sys as _sys
-    _trace = "".join(_tb.format_exception(*_sys.exc_info()))
-    _safe = _trace.replace("--", "- -")
-    _body = NOT_FOUND_HTML.replace("Page not found", "Something went wrong").replace("The page you were looking for doesn't exist.", "An unexpected error occurred. Please try again or <a href=\"/\">return home</a>.")
-    return _body + f"\n<!-- ERR:{_safe}:ERR -->", 500
+    return NOT_FOUND_HTML.replace("Page not found", "Something went wrong").replace("The page you were looking for doesn't exist.", "An unexpected error occurred. Please try again or <a href=\"/\">return home</a>."), 500
 
 
 
