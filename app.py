@@ -16730,7 +16730,11 @@ def not_found(e):
 
 @app.errorhandler(500)
 def server_error(e):
-    return NOT_FOUND_HTML.replace("Page not found", "Something went wrong").replace("The page you were looking for doesn't exist.", "An unexpected error occurred. Please try again or <a href=\"/\">return home</a>."), 500
+    import traceback as _tb
+    _trace = _tb.format_exc()
+    _body = NOT_FOUND_HTML.replace("Page not found", "Something went wrong").replace("The page you were looking for doesn't exist.", "An unexpected error occurred. Please try again or <a href=\"/\">return home</a>.")
+    _body = _body.replace("</body>", f"<!-- DEBUG:\n{_trace}\n-->\n</body>")
+    return _body, 500
 
 
 
