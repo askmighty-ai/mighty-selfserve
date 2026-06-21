@@ -8924,6 +8924,79 @@ def dashboard():
         '</div>'
     )
 
+    # ── Suggested accounts (from email scan, not yet connected) ─────────────────
+    _site_info = {k: (n, ic, col) for k, n, ic, col, _ in SUPPORTED_SITES}
+    _pending_sugg = db.execute(
+        "SELECT site_key, display_name FROM email_suggestions "
+        "WHERE user_id=? AND added=1 AND dismissed=0 ORDER BY email_count DESC",
+        (uid,)
+    ).fetchall()
+    _pending_not_connected = [
+        r for r in _pending_sugg if r["site_key"] not in connected
+    ]
+    if _pending_not_connected:
+        _sugg_items_html = ""
+        for r in _pending_not_connected:
+            sk   = r["site_key"]
+            dname = r["display_name"]
+            info = _site_info.get(sk)
+            icon_s  = info[1] if info else "🌐"
+            color_s = info[2] if info else "#e5e7eb"
+            name_s  = info[0] if info else dname
+            _sugg_items_html += (
+                f'<div class="sugg-row" data-sk="{he(sk)}" style="display:flex;align-items:center;gap:10px;padding:8px 0;'
+                f'border-bottom:1px solid #f0ede8">'
+                f'<div style="width:28px;height:28px;border-radius:6px;background:{he(color_s)};'
+                f'display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">{icon_s}</div>'
+                f'<div style="flex:1;font-size:13px;font-weight:500;color:#1c1917">{he(name_s)}</div>'
+                f'<button onclick="dashOpenCredForm(\'{he(sk)}\',\'{he(name_s)}\',\'{icon_s}\',\'{he(color_s)}\')" '
+                f'style="padding:4px 10px;border-radius:6px;border:1px solid #c7d2fe;background:#eef2ff;'
+                f'font-size:11px;font-weight:600;color:#4338ca;cursor:pointer;font-family:inherit;flex-shrink:0">'
+                f'Connect</button>'
+                f'<button onclick="dismissSuggRow(this)" '
+                f'style="background:none;border:none;color:#d1d5db;font-size:14px;cursor:pointer;padding:2px 4px;flex-shrink:0" '
+                f'title="Remove from list">✕</button>'
+                f'</div>'
+            )
+        _n_sugg = len(_pending_not_connected)
+        _sugg_label = f"{_n_sugg} account{'s' if _n_sugg != 1 else ''} ready to connect"
+        _sugg_section = (
+            f'<div id="sugg-section" style="background:#fff;border:1.5px solid #e0e7ff;border-radius:12px;'
+            f'padding:16px 20px;margin-bottom:20px">'
+            f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+            f'<div style="font-size:13px;font-weight:700;color:#3730a3">📬 {he(_sugg_label)} from your email scan</div>'
+            f'<div style="display:flex;gap:10px;align-items:center">'
+            f'<a href="/email-scan" style="font-size:11px;color:#6366f1;text-decoration:none">Edit list</a>'
+            f'<button onclick="dismissAllSugg()" style="font-size:11px;color:#9ca3af;background:none;'
+            f'border:none;cursor:pointer;font-family:inherit">Dismiss all</button>'
+            f'</div></div>'
+            f'<div id="sugg-list" style="max-height:320px;overflow-y:auto">{_sugg_items_html}</div>'
+            f'<script>'
+            f'function dismissSuggRow(btn){{'
+            f'  var row=btn.closest(".sugg-row");'
+            f'  var sk=row?row.dataset.sk:"";'
+            f'  if(sk)fetch("/api/email/suggestions/dismiss",{{method:"POST",headers:{{"Content-Type":"application/json"}},'
+            f'  body:JSON.stringify({{site_key:sk}})}});'
+            f'  if(row){{row.style.opacity="0";row.style.transition="opacity .2s";'
+            f'  setTimeout(function(){{row.remove();'
+            f'    var lst=document.getElementById("sugg-list");'
+            f'    if(lst&&!lst.querySelector(".sugg-row")){{document.getElementById("sugg-section").remove();}}'
+            f'  }},210);}}'
+            f'}}'
+            f'function dismissAllSugg(){{'
+            f'  document.querySelectorAll("#sugg-list .sugg-row").forEach(function(row){{'
+            f'    var sk=row.dataset.sk;'
+            f'    if(sk)fetch("/api/email/suggestions/dismiss",{{method:"POST",headers:{{"Content-Type":"application/json"}},'
+            f'    body:JSON.stringify({{site_key:sk}})}});'
+            f'  }});'
+            f'  var sec=document.getElementById("sugg-section");'
+            f'  if(sec){{sec.style.opacity="0";sec.style.transition="opacity .2s";setTimeout(function(){{sec.remove();}},210);}}'
+            f'}}'
+            f'</script>'
+            f'</div>'
+        )
+        account_data_html = _sugg_section + account_data_html
+
     # Compute total tracked value across all accounts
     total_value = 0.0
     value_items = []  # list of (source_display, field_label, value_str, dollar_val, methodology)
