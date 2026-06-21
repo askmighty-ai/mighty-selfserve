@@ -8230,12 +8230,17 @@ def dashboard():
                         "label": f["label"],
                         "value": f.get("value", "–"),
                         "source_snippet": f.get("source_snippet", ""),
+                        "_type": classify_benefit(f["label"], str(f.get("value", "")), src),
                     }
                     for f in _post_filter_fields(disc["fields"], source=src)
                     if f.get("key") in disc["enabled"]
                 ]
             else:
                 items = data.get("items", [])
+                # Reclassify items that are missing _type (older stored data)
+                for _ci in items:
+                    if not _ci.get("_type") or _ci.get("_type") == "other":
+                        _ci["_type"] = classify_benefit(_ci.get("label",""), str(_ci.get("value","")), src)
 
             synced_at   = row["synced_at"] if row else ""
             sync_status = data.get("sync_status", "ok") if row else ""
@@ -8310,14 +8315,24 @@ def dashboard():
             )
             _compact_cls = "" if _has_highval else " is-compact"
 
-            # Status/level — show actual status value inline on card header
+            # Status/level — show tier as a colored chip directly below the account name
             _status_item = next((it for it in items if it.get("_type") == "elite_status"), None)
             _status_inline_html = ""
             if _status_item and str(_status_item.get("value","")).strip():
                 _sv = str(_status_item["value"]).strip()
+                _sv_lc = _sv.lower()
+                # Color by tier level
+                if any(k in _sv_lc for k in ["diamond","globalist","1k","executive platinum","titanium","chairman","ambassador"]):
+                    _st_color, _st_bg = "#92400e", "#fef3c7"   # amber — top
+                elif any(k in _sv_lc for k in ["platinum","gold","sapphire","silver","premier","rouge"]):
+                    _st_color, _st_bg = "#5b21b6", "#ede9fe"   # purple — mid-high
+                else:
+                    _st_color, _st_bg = "#1e40af", "#dbeafe"   # blue — base
                 _status_inline_html = (
-                    f'<div style="font-size:11px;color:#6b7280;margin-top:1px;white-space:nowrap;'
-                    f'overflow:hidden;text-overflow:ellipsis">{he(_sv)}</div>'
+                    f'<div style="display:inline-block;margin-top:3px;font-size:11px;font-weight:600;'
+                    f'color:{_st_color};background:{_st_bg};border-radius:8px;'
+                    f'padding:2px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">'
+                    f'◆ {he(_sv)}</div>'
                 )
 
             # Benefit badges — count certs and credits for card header
@@ -9599,17 +9614,8 @@ def dashboard():
             f'<span style="font-size:10px;font-weight:400;opacity:0.65;letter-spacing:0">{he(_disp_sc)}</span>'
             f'</span>'
         )
-    if _status_chips_html:
-        progress_section_html = (
-            '<div style="margin-bottom:20px">'
-            '<h2 style="font-size:11px;font-weight:700;color:#6b7280;margin:0 0 10px;'
-            'text-transform:uppercase;letter-spacing:.07em">Your Status</h2>'
-            '<div style="display:flex;flex-wrap:wrap;gap:6px">'
-            + _status_chips_html +
-            '</div></div>'
-        )
-    else:
-        progress_section_html = ""
+    # Status chips are now shown on each account card — no separate "Your Status" section needed
+    progress_section_html = ""
 
     # Status section: identity rows — tier name prominent, account below
     import json as _tb_json
