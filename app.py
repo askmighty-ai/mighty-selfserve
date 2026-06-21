@@ -8932,7 +8932,7 @@ def dashboard():
         (uid,)
     ).fetchall()
     _pending_not_connected = [
-        r for r in _pending_sugg if r["site_key"] not in connected
+        r for r in _pending_sugg if r["site_key"] not in connected_sources
     ]
     if _pending_not_connected:
         _sugg_items_html = ""
