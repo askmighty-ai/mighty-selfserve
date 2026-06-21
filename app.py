@@ -7950,7 +7950,7 @@ def dashboard():
     ).fetchone()[0]
     pending_display = "flex" if pending_count > 0 else "none"
     is_connected    = len(acts) > 0
-
+    debug_mode      = request.args.get("debug") == "1"
 
     onboarding_banner = ""
     # Only show the banner in the active (non-empty) state — the empty welcome state handles its own CTA
@@ -8529,7 +8529,7 @@ def dashboard():
                         f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
                         f'margin-top:4px;line-height:1.6">'
                         f'{_why_detail_html}{_why_snippet_html}</div>'
-                    ) if (_why_detail_rows or snip) else ""
+                    ) if (debug_mode and (_why_detail_rows or snip)) else ""
                     sec_row_parts.append(
                         f'<div class="sec-row">'
                         f'<span class="sec-lbl">{he(i["label"])}{review_badge}</span>'
@@ -8586,7 +8586,7 @@ def dashboard():
                         f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
                         f'margin-top:4px;line-height:1.6">'
                         f'{_why_detail_html}{_why_snippet_html}</div>'
-                    ) if (_why_detail_rows or snip) else ""
+                    ) if (debug_mode and (_why_detail_rows or snip)) else ""
                     exp_row_parts.append(
                         f'<div class="exp-row">'
                         f'<span class="exp-lbl" title="{he(i["label"])}">{he(i["label"])}{review_badge}</span>'
