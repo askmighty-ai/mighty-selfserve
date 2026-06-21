@@ -1,8 +1,9 @@
 // Mighty content script — contextual benefit surfacing
 
-let mightyPill   = null;
-let mightyPanel  = null;
-let hideTimer    = null;
+let mightyPill     = null;
+let mightyPanel    = null;
+let hideTimer      = null;
+let mightyDashUrl  = null;  // set from background message
 
 function removePill() {
   if (mightyPill)  { mightyPill.remove();  mightyPill  = null; }
@@ -225,7 +226,7 @@ function showBenefits(context, benefits, cardRecs, isCheckout) {
   var footer = document.createElement('div');
   footer.style.cssText = 'padding:8px 16px;border-top:1px solid #f3f4f6';
   footer.innerHTML =
-    '<a href="https://mighty-selfserve-production.up.railway.app/dashboard" target="_blank" ' +
+    '<a href="' + (mightyDashUrl || 'https://mighty-selfserve-production.up.railway.app/dashboard') + '" target="_blank" ' +
     'style="font-size:11px;color:#6366f1;text-decoration:none">View all in Mighty →</a>';
   mightyPanel.appendChild(footer);
 
@@ -250,6 +251,7 @@ function showBenefits(context, benefits, cardRecs, isCheckout) {
 
 chrome.runtime.onMessage.addListener(function(msg) {
   if (msg.type === 'MIGHTY_BENEFITS' && msg.count > 0) {
+    if (msg.dashUrl) mightyDashUrl = msg.dashUrl;
     showBenefits(msg.context, msg.benefits || [], msg.cardRecs || [], msg.isCheckout || false);
   }
 });

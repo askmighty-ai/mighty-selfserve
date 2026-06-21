@@ -5,8 +5,10 @@
 (function () {
   'use strict';
 
+  const _ALLOWED_ORIGIN = location.origin; // only accept messages from this page's own origin
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
+    if (event.origin !== _ALLOWED_ORIGIN) return;
     if (!event.data || event.data.type !== '__mighty_dashboard__') return;
 
     const action = event.data.action;

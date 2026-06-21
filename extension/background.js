@@ -4,6 +4,7 @@
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
 const SYNC_INTERVAL = 240; // minutes (every 4 hours)
+const _SKIP_PATH_RE = /\/(book|search|flight-search|find-flights|deals|shop|cart|checkout|help|faq|legal|careers|about|press|sitemap|accessibility|sign-?up|register|login|sign-?in)(\b|\/|$)/i;
 
 // ── Path registry helpers ─────────────────────────────────────────────────────
 
@@ -55,11 +56,11 @@ const ACCOUNT_ENTRY = {
   sfcu:         'https://www.sfcu.org/accounts/online-banking',
   amex:         'https://www.americanexpress.com/en-us/account/',
   chase:        'https://secure.chase.com/web/auth/dashboard',
-  wells_fargo:  'https://connect.secure.wellsfargo.com/auth/login/present',
+  wells_fargo:  'https://www.wellsfargo.com/change-the-way-you-bank/online-banking/jump/',
   bofa:         'https://www.bankofamerica.com/myaccounts/brain/render.go',
   capital_one:  'https://myaccounts.capitalone.com/accountSummary',
   discover:     'https://portal.discover.com/customer/en/portal/account-home',
-  citi:         'https://online.citi.com/US/login.do',
+  citi:         'https://online.citi.com/US/JRS/portal/Home.do',
   paypal:       'https://www.paypal.com/myaccount/summary',
   fidelity:     'https://digital.fidelity.com/ftgw/digital/portfolio/summary',
   schwab:       'https://client.schwab.com/app/accounts/#/',
@@ -72,7 +73,7 @@ const ACCOUNT_ENTRY = {
   target:       'https://www.target.com/account',
   costco:       'https://www.costco.com/OrderStatusCmd',
   starbucks:    'https://www.starbucks.com/rewards/',
-  state_farm:   'https://www.statefarm.com/customer-care/sign-in-to-my-account',
+  state_farm:   'https://www.statefarm.com/customer-care/my-accounts',
   pamf:         'https://mychart.pamf.org/MyChart/',
   ticketmaster: 'https://www.ticketmaster.com/member/orders',
   netflix:      'https://www.netflix.com/YourAccount',
@@ -345,7 +346,11 @@ async function handleInterceptedApi(url, data) {
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_INTERVAL });
+  chrome.alarms.get(SYNC_ALARM, (existing) => {
+    if (!existing) {
+      chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_INTERVAL });
+    }
+  });
   console.log('[Mighty] Extension installed, sync scheduled every', SYNC_INTERVAL, 'minutes');
 });
 
@@ -627,7 +632,7 @@ async function runSync() {
   // All per-account crawls reuse this single tab — no new windows appear mid-sync.
   // TAB_SYNC_SOURCES (xfinity etc.) are excluded: they rely on the supplement watcher
   // which needs a real tab in the user's main window.
-  const crawlAccounts = accounts.filter(a => ACCOUNT_ENTRY[a.source] && !TAB_SYNC_SOURCES.has(a.source));
+  const crawlAccounts = accounts.filter(a => (ACCOUNT_ENTRY[a.source] || a.entry_url) && !TAB_SYNC_SOURCES.has(a.source));
   const tabAccounts   = accounts.filter(a => ACCOUNT_ENTRY[a.source] &&  TAB_SYNC_SOURCES.has(a.source));
 
   // Shared tab is only created if needed (crawl fallback) — most accounts will use
@@ -815,7 +820,7 @@ async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date()
 const _ACCOUNT_PATH_RE = /\/(my[-_]?account|myaccount|myunited|account[-_/]|dashboard|my[-_]?profile|profile\/|loyalty|rewards|member[-_/]|membership|portal|billing|overview|summary|wallet|benefits|perks|certificates|ecredits|statement|transactions)/i;
 
 // URL patterns that indicate a login/auth page — skip these
-const _LOGIN_PATH_RE = /\/(login|log[-_]in|signin|sign[-_]in|auth\/|sso\/|oauth|forgot|reset[-_]password|register|signup|sign[-_]up|create[-_]account)/i;
+const _LOGIN_PATH_RE = /\/(login|log[-_]in|signin|sign[-_]in|auth\/(login|signin|sso)|sso\/|oauth|forgot|reset[-_]password|register|signup|sign[-_]up|create[-_]account)/i;
 
 // Domains belonging to known scheduled accounts — don't auto-capture (already synced)
 const _KNOWN_DOMAINS = new Set(
@@ -827,6 +832,16 @@ const _KNOWN_DOMAINS = new Set(
 // In-memory debounce: url → ms timestamp of last auto-capture
 const _autoCaptureRecent = new Map();
 const _AUTO_COOLDOWN_MS  = 60 * 60 * 1000; // 1 hour per URL
+const _AUTO_CAPTURE_MAX  = 200; // cap map size to prevent unbounded growth in long sessions
+
+function _autoCaptureSet(key, ts) {
+  // Evict oldest entry when at capacity (keep hottest URLs in map)
+  if (_autoCaptureRecent.size >= _AUTO_CAPTURE_MAX) {
+    const oldest = [..._autoCaptureRecent.entries()].sort((a, b) => a[1] - b[1])[0];
+    if (oldest) _autoCaptureRecent.delete(oldest[0]);
+  }
+  _autoCaptureRecent.set(key, ts);
+}
 
 function _guessCategory(url) {
   const u = url.toLowerCase();
@@ -921,7 +936,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   // moved from /myaccount/mileageplus to /myunited). The supplement function already
   // rejects pages with too little text, login screens, or bot-detection walls.
   // Skip only obvious non-account paths (booking, search, homepage root).
-  const _SKIP_PATH_RE = /\/(book|search|flight-search|find-flights|deals|shop|cart|checkout|help|faq|legal|careers|about|press|sitemap|accessibility|sign-?up|register|login|sign-?in)(\b|\/|$)/i;
   for (const [domain, source] of Object.entries(SUPPLEMENT_DOMAINS)) {
     if (tabDomain.endsWith(domain)) {
       const path = new URL(tab.url).pathname;
@@ -973,17 +987,17 @@ async function _autoCapturePage(tabId, tab) {
   if (!text || text.length < 400) return;
 
   // Mark debounce before async work to avoid duplicate triggers
-  _autoCaptureRecent.set(tab.url, Date.now());
+  _autoCaptureSet(tab.url, Date.now());
 
   const name     = _nameFromTab(tab);
   const category = _guessCategory(tab.url);
 
   // Privacy mode: for unapproved domains, only send first 500 chars of raw text
   let rawText = text;
-  const baseDomain = (() => { try { return new URL(tab.url).hostname.replace(/^www./, ''); } catch(e) { return ''; } })();
-  const isApprovedDomain = Object.keys(SUPPLEMENT_DOMAINS || {}).some(d => baseDomain.includes(d)) ||
+  const baseDomain = (() => { try { return new URL(tab.url).hostname.replace(/^www\./, ''); } catch(e) { return ''; } })();
+  const isApprovedDomain = Object.keys(SUPPLEMENT_DOMAINS || {}).some(d => baseDomain === d || baseDomain.endsWith('.' + d)) ||
     Object.keys(ACCOUNT_ENTRY || {}).some(k => {
-      try { return new URL(ACCOUNT_ENTRY[k]).hostname.replace(/^www./, '') === baseDomain; } catch(e) { return false; }
+      try { return new URL(ACCOUNT_ENTRY[k]).hostname.replace(/^www\./, '') === baseDomain; } catch(e) { return false; }
     });
   const payload = {};
   if (!isApprovedDomain && rawText) {
@@ -1009,10 +1023,11 @@ async function _supplementCapturePage(tabId, tab, source) {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
 
-  // Debounce: skip if we supplemented this URL recently
-  const last = _autoCaptureRecent.get(tab.url);
+  // Debounce: skip if we supplemented this URL recently (normalize to strip query/fragment)
+  const _suppNorm = _normUrl(tab.url);
+  const last = _autoCaptureRecent.get(_suppNorm);
   if (last && Date.now() - last < _AUTO_COOLDOWN_MS) return;
-  _autoCaptureRecent.set(tab.url, Date.now());
+  _autoCaptureSet(_suppNorm, Date.now());
 
   // Diagnostic: yellow flash = supplement triggered for this page
   chrome.action.setBadgeText({ text: '●' });
@@ -1035,14 +1050,14 @@ async function _supplementCapturePage(tabId, tab, source) {
       },
     });
     extracted = r?.result;
-  } catch { _autoCaptureRecent.delete(tab.url); return; }
+  } catch { _autoCaptureRecent.delete(_suppNorm); return; }
 
   // Use threshold of 3 (not 2) — known account domains often have "Sign In" in nav even when logged in
   if (!extracted || extracted.hasPassword || extracted.loginSignals >= 3) return;
   if (!extracted.text || extracted.text.length < 200) return;
 
   const lower = extracted.text.toLowerCase();
-  if (['gate change', 'access denied', 'checking your browser'].some(p => lower.includes(p))) return;
+  if (BOT_DETECTION_PHRASES.some(p => lower.includes(p))) return;
 
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/supplement`, {
@@ -1063,7 +1078,7 @@ async function _supplementCapturePage(tabId, tab, source) {
       setTimeout(() => chrome.action.setBadgeText({ text: '' }), 3_000);
     }
   } catch (e) {
-    _autoCaptureRecent.delete(tab.url);
+    _autoCaptureRecent.delete(_suppNorm);
     console.warn(`[Mighty] Supplement failed for ${source}:`, e.message);
   }
 }
@@ -1091,11 +1106,12 @@ const BOT_DETECTION_PHRASES = [
   'access denied',
   'checking your browser',
   'ddos protection',
-  'please wait',             // Cloudflare challenge
-  'cf-browser-verification',
-  'unusual traffic',
-  'please enable cookies',   // Xfinity/Akamai cookie-check page
+  'cf-browser-verification', // Cloudflare challenge page
+  'unusual traffic from your computer',  // Google/Akamai — full phrase to avoid false positives
+  'enable cookies to continue',          // More specific than 'please enable cookies'
   'cookie functionality is turned off',
+  'verifying you are human',
+  'security check to access',
 ];
 
 // ── Bot detection helpers ────────────────────────────────────────────────────
@@ -1263,7 +1279,7 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
         break;
       }
 
-      console.log(`[Mighty] ${source}: gap-filling ${targetPaths.length} pages for missing: ${cov.gaps.map(g => g.key).join(', ')}`);
+      console.log(`[Mighty] ${source}: gap-filling ${targetPaths.length} pages for missing: ${(cov.gaps || []).map(g => g.key).join(', ')}`);
 
       // Reuse the shared sync tab if available; otherwise create a temporary window
       const useShared = !!sharedTabId;
@@ -1776,6 +1792,7 @@ const INTENT_PATTERNS = {
     /kayak\.com\/flight/i,
     /expedia\.com\/Flights-Search/i,
     /delta\.com\/.*\/book-a-flight/i,
+    /delta\.com\/en-us\/flight-search/i,
     /delta\.com\/us\/en\/flight-search/i,
     /aa\.com\/booking\/choose-flights/i,
     /united\.com\/en\/us\/fsr\/choose-flights/i,
@@ -1867,8 +1884,8 @@ chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
 
     const checkoutPatterns = [
       /\/checkout/i, /\/cart/i, /\/payment/i, /\/booking\/confirm/i,
-      /\/purchase/i, /\/order\/review/i, /\/reserve/i, /\/book\b/i,
-      /\/confirm/i, /step=payment/i, /step=review/i,
+      /\/purchase/i, /\/order\/review/i, /\/reserve/i, /\/book\//i,
+      /booking.*confirm/i, /order.*confirm/i, /step=payment/i, /step=review/i,
     ];
     const isCheckout = checkoutPatterns.some(p => p.test(tab.url));
 
@@ -1924,6 +1941,7 @@ chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
       cardRecs: cardRecs,
       isCheckout: isCheckout,
       count: surfaced.length,
+      dashUrl: MIGHTY_URL + '/dashboard',
     }).catch(() => {}); // content script may not be loaded yet
 
     // Log the intent so the dashboard can show "Relevant Right Now"

@@ -59,7 +59,15 @@ def _rate_limit(ip: str, name: str, limit: int = 10, window: int = 60) -> bool:
         if len(ts) >= limit:
             return False
         ts.append(now)
-        _rl_store[key] = ts
+        if ts:
+            _rl_store[key] = ts
+        else:
+            _rl_store.pop(key, None)  # evict empty buckets
+        # Periodic cleanup: prune stale keys every ~1000 requests to prevent memory leak
+        if len(_rl_store) > 5000:
+            _stale = [k for k, v in _rl_store.items() if not v or now - v[-1] > 3600]
+            for _k in _stale:
+                _rl_store.pop(_k, None)
         return True
 
 DATABASE        = os.environ.get("DATABASE_PATH", "/app/data/mighty.db")
@@ -525,6 +533,8 @@ _ALERT_THRESHOLDS = [7, 14, 30]  # send at each crossing, closest first
 
 # ── Action Center persistence ──────────────────────────────────────────────────
 
+_ENTRY_THRESHOLD = 30  # minimum score for an action item to surface
+
 def populate_action_items(uid: str, source: str, data: dict):
     """Upsert action_items rows from freshly-synced data for one source.
 
@@ -568,7 +578,6 @@ def populate_action_items(uid: str, source: str, data: dict):
     corrections = _get_user_corrections(uid)
 
     # Action center entry threshold: score ≥ 30 (filters pure noise)
-    _ENTRY_THRESHOLD = 30
 
     # Collect field_keys we'll upsert so we can cull stale rows afterward
     live_keys: list[str] = []
@@ -1167,7 +1176,8 @@ def send_expiry_alert_email(to_email, name, items, base_url, user_id):
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
-                print(f"[Alerts] Sent expiry email to {to_email}: {resp.status}", flush=True)
+                _masked_email = to_email[:2] + "***@" + to_email.split("@")[-1] if "@" in to_email else "***"
+                print(f"[Alerts] Sent expiry email to {_masked_email}: {resp.status}", flush=True)
         except Exception as e:
             print(f"[Alerts] Email send failed: {e}", flush=True)
 
@@ -1347,7 +1357,7 @@ def _fmt_sync(ts):
         secs = int((utcnow() - dt).total_seconds())
         if secs < 60:    return "just now"
         mins = secs // 60
-        if mins < 30:    return "just now"
+        if mins < 2:     return "just now"
         if mins < 60:    return f"{mins} minute{'s' if mins != 1 else ''} ago"
         hrs = mins // 60
         if hrs < 24:    return f"{hrs} hour{'s' if hrs != 1 else ''} ago"
@@ -2509,6 +2519,18 @@ SOURCE_CAPABILITIES: dict[str, dict] = {
         ],
         "login_url": "https://www.att.com/my/",
     },
+    "att_wireless": {
+        "display_name": "AT&T Wireless",
+        "domain": "att.com",
+        "category": "telecom",
+        "benefit_types": ["plan_details", "data_usage", "billing_amount", "autopay_discount", "rewards"],
+        "key_pages": [
+            "/my/account/",
+            "/my/account/devices",
+            "/my/account/payment",
+        ],
+        "login_url": "https://www.att.com/my/",
+    },
     "verizon": {
         "display_name": "Verizon",
         "domain": "verizon.com",
@@ -2920,15 +2942,7 @@ SOURCE_CAPABILITIES: dict[str, dict] = {
         "key_pages": ["/account/"],
         "login_url": "https://www.grubhub.com/login",
     },
-    "starbucks_delivery": {
-        "display_name": "Starbucks Rewards",
-        "domain": "starbucks.com",
-        "category": "food_delivery",
-        "benefit_types": ["stars", "free_reward", "gift_card_balance"],
-        "key_pages": ["/account/profile"],
-        "login_url": "https://www.starbucks.com/account/signin",
-    },
-    "chipotle": {
+        "chipotle": {
         "display_name": "Chipotle Rewards",
         "domain": "chipotle.com",
         "category": "food_delivery",
@@ -3226,6 +3240,7 @@ SOURCE_DOMAINS: dict[str, list[str]] = {
     # Telecom
     "xfinity":           ["xfinity.com", "comcast.com"],
     "att":               ["att.com"],
+    "att_wireless":      ["att.com", "myatt.att.com"],
     "verizon":           ["verizon.com"],
     "tmobile":           ["t-mobile.com"],
     "spectrum":          ["spectrum.com"],
@@ -4576,8 +4591,9 @@ def check_csrf():
 def api_user():
     """Return user row from API key in request body or X-Mighty-Key header."""
     data = request.get_json(force=True, silent=True) or {}
-    key  = data.get("api_key") or request.headers.get("X-Mighty-Key", "")
-    if not key:
+    key  = (data.get("api_key") or request.headers.get("X-Mighty-Key", "")).strip()
+    # Reject obviously invalid keys before touching the DB (min length = "mk_" + 40 hex chars)
+    if not key or len(key) < 10:
         return None, data
     row = get_db().execute("SELECT * FROM users WHERE api_key=?", (key,)).fetchone()
     return row, data
@@ -7919,6 +7935,7 @@ def dashboard():
     if not user:
         session.clear()
         return redirect("/login")
+    uid   = user["id"]
     acts  = db.execute(
         "SELECT * FROM actions WHERE user_id=? ORDER BY created_at DESC LIMIT 100",
         (session["user_id"],),
@@ -9989,6 +10006,7 @@ def dashboard():
             "car":    "searching for rental cars",
             "shopping": "shopping online",
             "dining": "searching for restaurants",
+            "credit_card": "looking at credit card offers",
         }
         _rn_intent_label = _rn_intent_labels.get(_rn_intent, f"searching for {_rn_intent}")
         _rn_adjacent_labels = {
@@ -9997,6 +10015,7 @@ def dashboard():
             "car":    "flights & hotels",
             "shopping": "dining",
             "dining": "shopping",
+            "credit_card": "travel & cash back rewards",
         }
         _rn_adj_label = _rn_adjacent_labels.get(_rn_intent, "related benefits")
         _rn_type_icons = {
@@ -10148,7 +10167,12 @@ def dashboard():
 <script>
 function dismissOnboarding() {
   document.getElementById('onboarding-overlay').style.display = 'none';
-  fetch('/api/onboarding/complete', {method:'POST'}).catch(function(){});
+  var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
+  fetch('/api/onboarding/complete', {
+    method: 'POST',
+    headers: {'X-CSRF-Token': csrf, 'Content-Type': 'application/json'},
+    credentials: 'same-origin'
+  }).catch(function(){});
 }
 </script>"""
 
@@ -10336,6 +10360,7 @@ def delete_activity():
 @app.route("/settings/change-password", methods=["POST"])
 @require_login
 def change_password():
+    check_csrf()
     data     = request.get_json(force=True, silent=True) or {}
     current  = data.get("current", "")
     new_pw   = data.get("password", "")
@@ -10382,6 +10407,7 @@ def change_email():
 @app.route("/settings/delete-account", methods=["POST"])
 @require_login
 def delete_account():
+    check_csrf()
     data     = request.get_json(force=True, silent=True) or {}
     password = data.get("password", "")
     db       = get_db()
@@ -10394,6 +10420,19 @@ def delete_account():
     db.execute("DELETE FROM password_resets WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM account_credentials WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM account_data WHERE user_id=?", (user_id,))
+    # Orphan cleanup — tables added after the original delete_account was written
+    db.execute("DELETE FROM field_history WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM field_observations WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM approved_domains WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM privacy_audit_log WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM field_candidates WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM reminder_snoozes WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM intent_history WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM benefit_feedback WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM notifications_sent WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM archived_benefits WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM action_items WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM benefit_corrections WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM users WHERE id=?", (user_id,))
     db.commit()
     session.clear()
@@ -10680,6 +10719,7 @@ def onboarding():
 @app.route("/onboarding/complete", methods=["POST"])
 @require_login
 def onboarding_complete():
+    check_csrf()
     get_db().execute("UPDATE users SET onboarded=1 WHERE id=?", (session["user_id"],))
     get_db().commit()
     return jsonify({"ok": True})
@@ -10687,6 +10727,7 @@ def onboarding_complete():
 @app.route("/api/onboarding/complete", methods=["POST"])
 @require_login
 def api_onboarding_complete():
+    check_csrf()
     get_db().execute("UPDATE users SET onboarded=1 WHERE id=?", (session["user_id"],))
     get_db().commit()
     return jsonify({"ok": True})
@@ -10821,7 +10862,7 @@ def approve_page(token):
 
 @app.route("/approve/<token>", methods=["POST"])
 def approve_submit(token):
-    data     = request.get_json(force=True)
+    data     = request.get_json(force=True, silent=True) or {}
     decision = data.get("decision")
     if decision not in ("approve", "deny"):
         return jsonify({"error": "invalid"}), 400
@@ -11055,6 +11096,7 @@ def service_worker():
 @app.route("/api/push/subscribe", methods=["POST"])
 @require_login
 def push_subscribe():
+    check_csrf()
     data = request.get_json(force=True)
     sub  = data.get("subscription")
     if not sub:
@@ -11094,6 +11136,7 @@ def push_subscribe():
 @app.route("/api/push/unsubscribe", methods=["POST"])
 @require_login
 def push_unsubscribe():
+    check_csrf()
     get_db().execute("DELETE FROM push_subscriptions WHERE user_id=?", (session["user_id"],))
     get_db().commit()
     return jsonify({"ok": True})
@@ -11125,10 +11168,8 @@ def health():
     return jsonify({
         "ok":         True,
         "db_ok":      db_ok,
-        "db_path":    DATABASE,
         "user_count": user_count,
         "git_sha":    git_sha,
-        "has_debug_fields_route": "/api/debug/fields/<source>" in [str(r) for r in app.url_map.iter_rules()],
     })
 
 
@@ -12596,6 +12637,8 @@ function clearAndRediscoverDash(source) {{
 }}
 document.addEventListener('keydown', function(e) {{
   if (e.key === 'Escape') {{
+    var oo = document.getElementById('onboarding-overlay');
+    if (oo && oo.style.display !== 'none') dismissOnboarding();
     var co = document.getElementById('dash-modal-overlay');
     if (co && co.classList.contains('open')) closeDashConnectModal();
     var fo = document.getElementById('dash-field-overlay');
@@ -14122,6 +14165,7 @@ def credentials_fields_save():
 @require_login
 def credentials_auto_discover():
     """Background: discover fields for any connected account missing them."""
+    check_csrf()
     uid = session["user_id"]
     threading.Thread(target=_auto_discover_missing, args=(uid,), daemon=True).start()
     return jsonify({"ok": True})
@@ -14343,11 +14387,16 @@ def credentials_fields_load():
 @require_login
 def credentials_delete(source):
     check_csrf()
-    get_db().execute(
+    db = get_db()
+    db.execute(
         "DELETE FROM account_credentials WHERE user_id=? AND source=?",
         (session["user_id"], source)
     )
-    get_db().commit()
+    db.execute(
+        "DELETE FROM account_data WHERE user_id=? AND source=?",
+        (session["user_id"], source)
+    )
+    db.commit()
     return jsonify({"ok": True})
 
 
@@ -14430,13 +14479,17 @@ def api_data_sync():
     source = (body.get("source") or "").strip().lower()
     if not source:
         return jsonify({"ok": False, "error": "source required"}), 400
+    # Validate source: alphanumeric + underscore only, max 50 chars
+    # Prevents log injection and storage of junk keys
+    if len(source) > 50 or not re.match(r'^[a-z0-9_]+$', source):
+        return jsonify({"ok": False, "error": "invalid source"}), 400
 
     data       = body.get("data") or {}
     synced_at  = body.get("synced_at") or iso()
     display    = data.get("name", source)
     icon       = data.get("icon", "?")
     color      = data.get("color", "#f0f0f0")
-    raw_text   = data.get("raw_text", "") or body.get("raw_text", "")
+    raw_text   = (data.get("raw_text", "") or body.get("raw_text", ""))[:40_000]
     sync_source = (body.get("sync_source") or data.get("sync_source") or "railway").lower()
     is_gap_fill = bool(body.get("gap_fill", False))
 
@@ -14528,9 +14581,16 @@ def api_data_sync():
 
     db = get_db()
     db.execute(
-        "INSERT OR REPLACE INTO account_data "
-        "(user_id, source, display_name, icon, color, data_enc, synced_at, sync_failure_reason) "
-        "VALUES (?,?,?,?,?,?,?,?)",
+        """INSERT INTO account_data
+           (user_id, source, display_name, icon, color, data_enc, synced_at, sync_failure_reason)
+           VALUES (?,?,?,?,?,?,?,?)
+           ON CONFLICT(user_id, source) DO UPDATE SET
+               display_name        = excluded.display_name,
+               icon                = excluded.icon,
+               color               = excluded.color,
+               data_enc            = excluded.data_enc,
+               synced_at           = excluded.synced_at,
+               sync_failure_reason = excluded.sync_failure_reason""",
         (user["id"], source, display, icon, color, data_enc, synced_at,
          data.get("sync_failure_reason")),
     )
@@ -14560,6 +14620,9 @@ def api_data_sync():
         import threading
         site_name = display
         uid       = user["id"]
+        # Materialise cred_row data before spawning threads — sqlite3.Row objects
+        # reference the request-scoped connection which closes when the request ends.
+        _cred_extra_enc = (cred_row["extra_enc"] if cred_row else None)
 
         if not has_prefs:
             # First-time: discover fields.
@@ -14653,8 +14716,8 @@ def api_data_sync():
                         # Discovery ran but LLM returned nothing — set discovery_failed
                         # flag so the dashboard can show "couldn't read this account".
                         ex2 = {}
-                        if cred_row and cred_row["extra_enc"]:
-                            try: ex2 = json.loads(decrypt_cred(uid, cred_row["extra_enc"]))
+                        if _cred_extra_enc:
+                            try: ex2 = json.loads(decrypt_cred(uid, _cred_extra_enc))
                             except Exception: pass
                         ex2["discovery_failed"] = True
                         ex2.setdefault("enabled_fields",    [])
@@ -14818,6 +14881,8 @@ def api_extension_intercept():
 
     if not source or not json_data:
         return jsonify({"error": "source and json_data required"}), 400
+    if len(source) > 50 or not re.match(r'^[a-z0-9_]+$', source):
+        return jsonify({"error": "invalid source"}), 400
 
     uid = user["id"]
     db  = get_db()
@@ -14884,11 +14949,8 @@ def api_extension_intercept():
                 _tier_boost = 1.10 if acquisition_tier == 2 else 1.05
                 _connector_keys = {f["key"] for f in _connector_fields_snap}
 
-                # Only call Gemini if connector didn't cover all fields OR source has no connector
-                if not _connector_keys or True:  # always run Gemini to catch fields not in connector
-                    fields = claude_discover_fields(combined, site_name, source=source)
-                else:
-                    fields = []
+                # Always run Gemini to catch fields the connector doesn't cover
+                fields = claude_discover_fields(combined, site_name, source=source)
 
                 # Log candidate connector paths from Gemini's output
                 if fields and json_data:
@@ -14964,6 +15026,8 @@ def api_extension_supplement():
 
     if not source or not new_text:
         return jsonify({"error": "source and raw_text required"}), 400
+    if len(source) > 50 or not re.match(r'^[a-z0-9_]+$', source):
+        return jsonify({"error": "invalid source"}), 400
 
     uid = user["id"]
     db  = get_db()
@@ -14999,6 +15063,8 @@ def api_extension_supplement():
     ad = decrypt_account_data(uid, existing["data_enc"] or "")
     old_raw = ad.get("raw_text", "")
 
+    # Cap individual submission to prevent a single call from flooding the window
+    new_text = new_text[:20_000]
     # Prepend new page text so benefit data is prioritised in the 40k char window
     combined = f"\n\n--- {url} ---\n{new_text}\n\n" + old_raw
     combined = combined[:40_000]
@@ -15027,6 +15093,16 @@ def api_extension_supplement():
                 if fields:
                     _save_discovered_fields(uid, source, fields)
                     print(f"[Supplement] {source}: {len(fields)} fields", flush=True)
+                    try:
+                        _ad3 = get_db().execute(
+                            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                            (uid, source)
+                        ).fetchone()
+                        if _ad3:
+                            _d3 = decrypt_account_data(uid, _ad3["data_enc"] or "")
+                            populate_action_items(uid, source, _d3)
+                    except Exception as _pai_sup_err:
+                        print(f"[Supplement] populate_action_items error: {_pai_sup_err}", flush=True)
         threading.Thread(target=_bg, daemon=True).start()
 
     _registry_report_path(source, url)
@@ -15036,6 +15112,9 @@ def api_extension_supplement():
 @app.route("/api/registry/report", methods=["POST"])
 def registry_report():
     """Accept a {site, path} report and upsert into site_paths. No auth — paths aren't personal data."""
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+    if not _rate_limit(ip, "registry_report", limit=30, window=60):
+        return jsonify({"ok": False, "error": "rate limited"}), 429
     body  = request.get_json(silent=True) or {}
     site  = (body.get("site") or "").strip().lower()
     path  = normalize_path((body.get("path") or "").strip())
@@ -15057,17 +15136,21 @@ def registry_report():
 @app.route("/api/registry/paths", methods=["GET"])
 def registry_paths():
     """Return trusted paths for a site, sorted by quality. Decays paths not seen in 30+ days."""
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+    if not _rate_limit(ip, "registry_paths", limit=60, window=60):
+        return jsonify({"paths": []}), 429
     site = request.args.get("site", "").strip().lower()
     if not site:
         return jsonify({"paths": []})
     db = get_db()
-    # Decay stale entries (not seen in 30 days → lose 1 quality point)
+    # Decay stale entries (not seen in 30+ days → lose 1 quality point, once per day max)
     db.execute('''
         UPDATE site_paths
         SET quality_score = MAX(0.0, quality_score - 1.0)
         WHERE site = ?
           AND julianday('now') - julianday(last_seen) > 30
           AND quality_score > 0
+          AND julianday('now') - julianday(last_seen) < 31
     ''', (site,))
     db.commit()
     rows = db.execute('''
@@ -15082,6 +15165,9 @@ def registry_paths():
 @app.route("/api/registry/remove", methods=["POST"])
 def registry_remove():
     """Zero-out a known-bad path so it stops being served. No auth — paths aren't personal data."""
+    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+    if not _rate_limit(ip, "registry_remove", limit=10, window=60):
+        return jsonify({"ok": False, "error": "rate limited"}), 429
     body = request.get_json(silent=True) or {}
     site = (body.get("site") or "").strip().lower()
     path = (body.get("path") or "").strip()
@@ -15863,13 +15949,16 @@ def api_sync_health(source):
 
 
 @app.route("/api/coverage/<source>")
-@require_login
+@require_login_or_key
 def api_account_coverage(source):
     """
     Returns coverage score, found fields, gaps, and suggested crawl targets.
     Used by extension to decide whether to keep crawling.
     """
-    uid = session["user_id"]
+    uid = getattr(g, "api_key_user_id", None) or session.get("user_id")
+    # Validate source key — alphanumeric + underscore, max 50 chars
+    if not source or len(source) > 50 or not re.match(r'^[a-z0-9_]+$', source):
+        return jsonify({"error": "invalid source"}), 400
     db = get_db()
 
     ad_row = db.execute(
@@ -15895,7 +15984,7 @@ def api_account_coverage(source):
 
     coverage_pct = 0
     if expected:
-        found_count = len(expected) - len(gaps)
+        found_count = max(0, len(expected) - len(gaps))
         coverage_pct = int(found_count / len(expected) * 100)
     else:
         found_count = len(items)
@@ -15950,7 +16039,11 @@ def api_sync_finalize():
     if not user:
         return jsonify({"error": "unauthorized"}), 401
 
-    session_ts = (body or {}).get("session_ts") or iso()
+    _raw_ts = (body or {}).get("session_ts") or ""
+    if _raw_ts and len(_raw_ts) >= 10 and _raw_ts[4:5] == "-" and _raw_ts[7:8] == "-":
+        session_ts = _raw_ts[:26]
+    else:
+        session_ts = iso()
     sources    = (body or {}).get("sources")  # optional list to restrict which accounts
     db = get_db()
     # Only touch accounts that were actually synced in this session window (last 30 min),
@@ -15960,6 +16053,7 @@ def api_sync_finalize():
         - __import__("datetime").timedelta(minutes=30)
     ).isoformat()
     if sources and isinstance(sources, list):
+        sources = sources[:50]  # cap to prevent oversized IN clause
         placeholders = ",".join("?" * len(sources))
         result = db.execute(
             f"UPDATE account_data SET synced_at=? WHERE user_id=? AND source IN ({placeholders})",
@@ -16165,6 +16259,16 @@ def api_extension_accounts():
         "hertz":        ("Hertz",              "🚗", "#fef3c7"),
         "cvs":          ("CVS",                "💊", "#fee2e2"),
         "walgreens":    ("Walgreens",          "💊", "#ecfdf5"),
+        "max":             ("Max",                  "🎬", "#002be7"),
+        "peacock":         ("Peacock",               "🦚", "#ffd700"),
+        "paramount_plus":  ("Paramount+",            "🎬", "#0064ff"),
+        "ticketmaster":    ("Ticketmaster",          "🎟️", "#026cdf"),
+        "walmart":         ("Walmart",               "🛒", "#0071ce"),
+        "starbucks":       ("Starbucks",             "☕", "#00704a"),
+        "state_farm":      ("State Farm",            "🛡️", "#e8000d"),
+        "kaiser":          ("Kaiser Permanente",     "🏥", "#006ba6"),
+        "att_wireless":    ("AT&T Wireless",         "📱", "#00a8e0"),
+        "pa_utilities":    ("Palo Alto Utilities",   "⚡", "#4b9cd3"),
     }
 
     accounts = []
@@ -16172,21 +16276,19 @@ def api_extension_accounts():
         source = row["source"]
         if source == "_email":
             continue
-        # Only include if a username is stored
-        if not row["username_enc"]:
-            continue
-
         meta = SITE_META.get(source)
         if not meta:
             continue
 
         name, icon, color = meta
         ad_row = db.execute(
-            "SELECT entry_url FROM account_data WHERE user_id=? AND source=?",
+            "SELECT entry_url, synced_at FROM account_data WHERE user_id=? AND source=?",
             (user["id"], source)
         ).fetchone()
         entry_url = ad_row["entry_url"] if ad_row and ad_row["entry_url"] else None
-        accounts.append({"source": source, "name": name, "icon": icon, "color": color, "entry_url": entry_url})
+        synced_at = ad_row["synced_at"] if ad_row else None
+        accounts.append({"source": source, "name": name, "icon": icon, "color": color,
+                         "entry_url": entry_url, "synced_at": synced_at})
 
     return jsonify(accounts)
 
@@ -16543,6 +16645,12 @@ def sync_account_cloud(source):
     """Trigger an immediate cloud sync for a single account."""
     check_csrf()
     uid  = session["user_id"]
+    # Validate source is a known site key to prevent log injection / junk sync entries
+    _valid_sources = {s[0] for s in SUPPORTED_SITES}
+    if source not in _valid_sources:
+        return jsonify({"ok": False, "error": "Unknown source"}), 400
+    if _sync_status.get(uid, {}).get("running"):
+        return jsonify({"ok": False, "error": "Sync already in progress"}), 409
     user = get_db().execute("SELECT api_key FROM users WHERE id=?", (uid,)).fetchone()
     url  = os.environ.get("BASE_URL", "https://mighty-selfserve-production.up.railway.app")
     _sync_status[uid] = {"running": True, "step": "connecting", "source": source}
@@ -16833,8 +16941,8 @@ def api_trigger_alerts():
     # Only allow admins (email ends in @anthropic.com or ADMIN_EMAIL env var matches)
     uid = session["user_id"]
     user = get_db().execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
-    admin_email = os.environ.get("ADMIN_EMAIL", "jmanson@anthropic.com")
-    if not user or user["email"] not in (admin_email,):
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    if not admin_email or not user or user["email"] != admin_email:
         return jsonify({"error": "forbidden"}), 403
     dry = request.args.get("dry") == "1"
     sent = run_expiry_alerts(dry_run=dry)

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Mighty Sync",
-  "description": "Automatically sync your account data to your Mighty dashboard — no login needed.",
-  "version": "1.3.4",
+  "description": "Automatically sync your account data to your Mighty dashboard \u2014 no login needed.",
+  "version": "1.3.5",
   "permissions": [
     "tabs",
     "windows",
@@ -72,6 +72,7 @@
         "*://*.xfinity.com/*",
         "*://*.comcast.com/*",
         "*://*.att.com/*",
+        "*://*.myatt.att.com/*",
         "*://*.verizon.com/*",
         "*://*.t-mobile.com/*",
         "*://*.amazon.com/*",
@@ -131,6 +132,7 @@
         "*://*.xfinity.com/*",
         "*://*.comcast.com/*",
         "*://*.att.com/*",
+        "*://*.myatt.att.com/*",
         "*://*.verizon.com/*",
         "*://*.t-mobile.com/*",
         "*://*.amazon.com/*",

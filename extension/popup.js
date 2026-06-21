@@ -1,6 +1,7 @@
 function timeAgo(isoStr) {
   if (!isoStr) return null;
   const diff = Math.floor((Date.now() - new Date(isoStr).getTime()) / 1000);
+  if (isNaN(diff)) return 'unknown';
   if (diff < 60)    return 'just now';
   if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
   if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
@@ -30,7 +31,7 @@ chrome.storage.local.get(['api_key', 'last_sync', 'sync_status', 'captured_accou
 
   const capturedCount = Object.keys(captured_accounts).length;
 
-  if (sync_status === 'syncing') {
+  if (sync_status && sync_status.startsWith('Syncing')) {
     dot.classList.add('active');
     label.textContent = 'Syncing…';
     sub.textContent   = 'Updating your account data';
