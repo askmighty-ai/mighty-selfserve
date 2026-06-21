@@ -5590,11 +5590,9 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .cards-panel-inner{max-width:1600px;margin:0 auto}
 .cards-panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 /* Compact (utility/low-value) account cards — subdued when not expanded */
-.acct-card.is-compact{opacity:0.55;border-color:rgba(0,0,0,0.05)}
-.acct-card.is-compact:not(.is-expanded) .acct-hero{display:none}
+.acct-card.is-compact{opacity:0.72;border-color:rgba(0,0,0,0.06)}
 .acct-card.is-compact:not(.is-expanded) .acct-secondary{display:none}
-.acct-card.is-compact:not(.is-expanded) .acct-alert{display:none}
-.acct-card.is-compact:hover{opacity:0.85}
+.acct-card.is-compact:hover{opacity:0.92}
 .acct-card.is-compact.is-expanded{opacity:1}
 /* Category groups */
 .cat-group{margin-bottom:22px}
@@ -9147,19 +9145,28 @@ def dashboard():
             _hero_value_block = ''
 
     # Value-first sub-line: lead with what the user has, not counts
+    def _article(lbl):
+        """Return 'a '/'an '/'' — empty string for plural labels (last word ends in s, not ss)."""
+        if not lbl:
+            return ""
+        last_word = lbl.rsplit(None, 1)[-1].lower().rstrip(".")
+        if last_word.endswith("s") and not last_word.endswith("ss"):
+            return ""
+        return "an " if lbl[0].lower() in "aeiou" else "a "
+
     _n_hc = len(_hero_candidates)
     if _n_hc >= 1:
         _th_lbl   = _hero_candidates[0][3]
         _th_btype = _hero_candidates[0][6]
-        _art = "an" if _th_lbl and _th_lbl[0].lower() in "aeiou" else "a"
+        _art = _article(_th_lbl)
         if _n_hc == 1:
-            _value_lead = f"You have {_art} {he(_th_lbl)} available right now."
+            _value_lead = f"You have {_art}{he(_th_lbl)} available right now."
         elif _n_hc == 2:
             _th2_lbl = _hero_candidates[1][3]
-            _art2 = "an" if _th2_lbl and _th2_lbl[0].lower() in "aeiou" else "a"
-            _value_lead = f"You have {_art} {he(_th_lbl)} and {_art2} {he(_th2_lbl)} available."
+            _art2 = _article(_th2_lbl)
+            _value_lead = f"You have {_art}{he(_th_lbl)} and {_art2}{he(_th2_lbl)} available."
         else:
-            _value_lead = f"You have {_n_hc} benefits available, including {_art} {he(_th_lbl)}."
+            _value_lead = f"You have {_n_hc} benefits available, including {_art}{he(_th_lbl)}."
     elif _account_count > 0:
         _n_statuses = sum(1 for _, _, _, _, _, bt in value_items if bt == "elite_status")
         if _n_statuses:

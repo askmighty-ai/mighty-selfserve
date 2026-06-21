@@ -78,8 +78,9 @@ _BT_RULES = [
      [],
      ["progress","qualifying","toward","credit","certificate","cert","voucher",
       "upgrade","award","free night","points","miles","balance","reservation","booking",
-      "autopay","auto-pay","payment","bill","subscription","service",
-      "paperless","loyalty number","member id","member since","member number"]),
+      "autopay","auto-pay","auto pay","payment","bill","subscription","service",
+      "paperless","loyalty number","member id","member since","member number",
+      "enrolled","active","enabled","disconnected"]),
 
     # ── Redeemable certificates and awards ────────────────────────────────────
     ("certificate",
