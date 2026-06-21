@@ -1341,9 +1341,10 @@ def _fmt_sync(ts):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         secs = int((utcnow() - dt).total_seconds())
-        if secs < 60:   return "just now"
+        if secs < 60:    return "just now"
         mins = secs // 60
-        if mins < 60:   return f"{mins} minute{'s' if mins != 1 else ''} ago"
+        if mins < 30:    return "just now"
+        if mins < 60:    return f"{mins} minute{'s' if mins != 1 else ''} ago"
         hrs = mins // 60
         if hrs < 24:    return f"{hrs} hour{'s' if hrs != 1 else ''} ago"
         days = hrs // 24
@@ -3288,7 +3289,7 @@ SOURCE_DOMAINS: dict[str, list[str]] = {
     "amtrak":            ["amtrak.com"],
     "global_entry":      ["ttp.dhs.gov"],
     # Utilities
-    "pa_utilities":      ["cityofpaloalto.org"],
+    "pa_utilities":      ["cityofpaloalto.org", "utilities.cityofpaloalto.org"],
     "pg_and_e":          ["pge.com"],
     "con_ed":            ["coned.com"],
     "duke_energy":       ["duke-energy.com"],
@@ -5621,7 +5622,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .acct-card.highlight-on{box-shadow:0 4px 20px rgba(0,0,0,0.12),0 0 0 2.5px rgba(37,99,235,0.7) !important;transform:translateY(-2px);background:#fff !important}
 /* Card footer */
 .acct-footer{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:0.5px solid rgba(0,0,0,0.05);gap:8px}
-.acct-expand-btn{font-size:11px;font-weight:500;color:#9ca3af;background:none;border:none;cursor:pointer;padding:0;font-family:inherit;display:flex;align-items:center;gap:4px;transition:color 0.1s}
+.acct-expand-btn{font-size:11px;font-weight:500;color:#6b7280;background:none;border:none;cursor:pointer;padding:0;font-family:inherit;display:flex;align-items:center;gap:4px;transition:color 0.1s}
 .acct-expand-btn:hover{color:#6366f1}
 .acct-expand-btn svg{transition:transform 0.15s}
 .acct-card.is-expanded .acct-expand-btn svg{transform:rotate(180deg)}
@@ -8538,7 +8539,9 @@ def dashboard():
             freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
 
             # Consistent footer for all cards
-            _no_data = not items or (len(items) == 1 and items[0].get("value","") in {"—", "No data", ""})
+            _BAD_VALUES = {"", "—", "–", "—", "no data", "none", "n/a", "-"}
+            _no_data = (not items or
+                        all(str(i.get("value","")).strip().lower() in _BAD_VALUES for i in items))
             if extra_items:
                 expand_btn = (
                     f'<button class="acct-expand-btn" onclick="toggleExpand(this)" '
@@ -8548,15 +8551,13 @@ def dashboard():
                     f'</button>'
                 )
             elif _no_data:
-                # No data yet — nudge to sync, don't show a confusing "Edit login" button
+                # No data yet — don't show a confusing button
                 expand_btn = (
-                    f'<span style="font-size:10px;color:#d1d5db">No data synced yet</span>'
+                    f'<span style="font-size:11px;color:#c0bab4">No data synced yet</span>'
                 )
             else:
-                expand_btn = (
-                    f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')" '
-                    f'style="font-size:10px;color:#d1d5db;border-color:#f0ede9">Edit fields</button>'
-                )
+                # Has data, all fields already shown — nothing extra to expand
+                expand_btn = ""
             card_footer = (
                 f'<div class="acct-footer">'
                 f'{expand_btn}'

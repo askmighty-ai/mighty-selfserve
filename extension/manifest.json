@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Mighty Sync",
   "description": "Automatically sync your account data to your Mighty dashboard — no login needed.",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "permissions": [
     "tabs",
     "windows",
@@ -90,7 +90,9 @@
         "*://*.paramountplus.com/*",
         "*://*.ticketmaster.com/*",
         "*://*.kp.org/*",
-        "*://*.statefarm.com/*"
+        "*://*.statefarm.com/*",
+        "*://*.cityofpaloalto.org/*",
+        "*://utilities.cityofpaloalto.org/*"
       ],
       "js": [
         "content_scripts/api_interceptor.js"
@@ -147,7 +149,9 @@
         "*://*.paramountplus.com/*",
         "*://*.ticketmaster.com/*",
         "*://*.kp.org/*",
-        "*://*.statefarm.com/*"
+        "*://*.statefarm.com/*",
+        "*://*.cityofpaloalto.org/*",
+        "*://utilities.cityofpaloalto.org/*"
       ],
       "js": [
         "content_scripts/api_relay.js"

@@ -198,6 +198,7 @@ const SUPPLEMENT_DOMAINS = {
   'verizon.com':                  'verizon',
   't-mobile.com':                 'tmobile',
   'cityofpaloalto.org':           'pa_utilities',
+  'utilities.cityofpaloalto.org': 'pa_utilities',
   // Shopping
   'amazon.com':                   'amazon',
   'target.com':                   'target',
