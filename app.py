@@ -2137,9 +2137,9 @@ SOURCE_CAPABILITIES: dict[str, dict] = {
         "category": "airline",
         "benefit_types": ["miles", "ecredit", "upgrade_cert", "premier_status"],
         "key_pages": [
-            "/en/us/myaccount/summary",
-            "/en/us/myaccount/upgrades",
-            "/en/us/myaccount/awards",
+            "/en/us/myunited",
+            "/en/us/myunited/wallet",
+            "/en/us/myunited/mileageplus",
         ],
         "login_url": "https://www.united.com/en/us/myaccount/login",
     },

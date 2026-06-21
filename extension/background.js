@@ -49,7 +49,7 @@ async function fetchRegistryPaths(site) {
 const ACCOUNT_ENTRY = {
   southwest:    'https://www.southwest.com/loyalty/myaccount/',
   delta:        'https://www.delta.com/myprofile/',
-  united:       'https://www.united.com/en/us/myaccount/mileageplus',
+  united:       'https://www.united.com/en/us/myunited',
   american_air: 'https://www.aa.com/loyalty/home.do',
   alaska_air:   'https://www.alaskaair.com/account/dashboard',
   sfcu:         'https://www.sfcu.org/accounts/online-banking',
@@ -812,7 +812,7 @@ async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date()
 // ── Auto-capture: watch tabs as user browses ──────────────────────────────────
 
 // URL path patterns that suggest a logged-in account page
-const _ACCOUNT_PATH_RE = /\/(my[-_]?account|myaccount|account[-_/]|dashboard|my[-_]?profile|profile\/|loyalty|rewards|member[-_/]|membership|portal|billing|overview|summary|wallet|benefits|perks|certificates|ecredits|statement|transactions)/i;
+const _ACCOUNT_PATH_RE = /\/(my[-_]?account|myaccount|myunited|account[-_/]|dashboard|my[-_]?profile|profile\/|loyalty|rewards|member[-_/]|membership|portal|billing|overview|summary|wallet|benefits|perks|certificates|ecredits|statement|transactions)/i;
 
 // URL patterns that indicate a login/auth page — skip these
 const _LOGIN_PATH_RE = /\/(login|log[-_]in|signin|sign[-_]in|auth\/|sso\/|oauth|forgot|reset[-_]password|register|signup|sign[-_]up|create[-_]account)/i;
