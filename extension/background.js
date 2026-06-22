@@ -579,6 +579,10 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
       if (!api_key) return;
       console.log(`[Mighty] Content script login detected for ${source} (${hostname})`);
       reportSyncFailure(api_key, source, 'login_wall');
+      // Reload any open dashboard tabs so the card immediately shows login_required
+      chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, (tabs) => {
+        tabs.forEach(t => chrome.tabs.reload(t.id));
+      });
     })();
     return false;
   }

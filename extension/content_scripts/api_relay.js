@@ -14,19 +14,24 @@
   // showing a login form — report it so the dashboard card can be updated.
   window.addEventListener('load', function() {
     // Give JS-rendered overlays (e.g. United) an extra moment to appear
-    setTimeout(function() {
+    // Check at 1.5s and again at 4s — JS-rendered overlays (e.g. United) can take a while
+    function _checkForLoginOverlay() {
       const pwFields = document.querySelectorAll('input[type="password"]');
       const hasVisiblePw = Array.from(pwFields).some(function(el) {
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
       });
-      if (!hasVisiblePw) return;
+      if (!hasVisiblePw) return false;
       try {
         chrome.runtime.sendMessage({
           action: 'login_page_detected',
           href: window.location.href,
         }).catch(function() {});
       } catch (_e) {}
+      return true;
+    }
+    setTimeout(function() {
+      if (!_checkForLoginOverlay()) setTimeout(_checkForLoginOverlay, 2500);
     }, 1500);
   });
 

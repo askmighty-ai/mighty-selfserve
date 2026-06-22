@@ -6418,23 +6418,6 @@ function checkForUpdates() {
   }).catch(function() {});
 }
 setInterval(checkForUpdates, 4000);
-
-// Background watcher: reload if any account data changes while no explicit sync is running.
-// This catches extension-detected login failures (which update synced_at) and
-// background extension syncs that land without the dashboard triggering them.
-var _bgLatestSync = null;
-fetch('/api/latest-sync').then(function(r){ return r.json(); }).then(function(d){ _bgLatestSync = d.latest; }).catch(function(){});
-setInterval(function() {
-  if (window._syncPoll) return;
-  fetch('/api/latest-sync').then(function(r){ return r.json(); }).then(function(d) {
-    if (window._syncPoll) return;
-    if (_bgLatestSync !== null && d.latest && d.latest !== _bgLatestSync) {
-      _bgLatestSync = d.latest;
-      reloadWithScroll();
-    }
-    if (d.latest) _bgLatestSync = d.latest;
-  }).catch(function(){});
-}, 12000);
 // Immediately check when user switches back to this tab
 document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'visible') checkForUpdates();
