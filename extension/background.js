@@ -509,6 +509,27 @@ async function runSessionKeepalive() {
   }
 }
 
+// Login detection via storage — more reliable than sendMessage for waking a sleeping service worker
+chrome.storage.onChanged.addListener(async function(changes, area) {
+  if (area !== 'local' || !changes.mighty_login_detected) return;
+  const { href } = changes.mighty_login_detected.newValue || {};
+  if (!href) return;
+  let hostname;
+  try { hostname = new URL(href).hostname.replace(/^www\./, ''); } catch { return; }
+  const source = _DOMAIN_TO_SOURCE[hostname]
+    || _DOMAIN_TO_SOURCE[hostname.split('.').slice(-2).join('.')];
+  if (!source) return;
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+  console.log(`[Mighty] Storage-based login detected for ${source} (${hostname})`);
+  reportSyncFailure(api_key, source, 'login_wall');
+  chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, (tabs) => {
+    tabs.forEach(t => chrome.tabs.reload(t.id));
+  });
+  // Clear the flag so it can fire again next time
+  chrome.storage.local.remove('mighty_login_detected');
+});
+
 // Messages from popup
 chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   if (msg.type === 'MIGHTY_FEEDBACK') {

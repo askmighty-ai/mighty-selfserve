@@ -14,6 +14,8 @@
   // here because United (and similar SPAs) render the input hidden in the DOM
   // first and reveal it via CSS — no DOM insertion event fires.
   var _loginReported = false;
+  // Write a heartbeat so we can verify the content script is actually running
+  chrome.storage.local.set({ mighty_cs_alive: { href: window.location.href, ts: Date.now() } });
   var _loginPollId = setInterval(function() {
     if (_loginReported) { clearInterval(_loginPollId); return; }
     var pwFields = document.querySelectorAll('input[type="password"]');
@@ -24,11 +26,12 @@
     if (!visible) return;
     _loginReported = true;
     clearInterval(_loginPollId);
+    // Use storage instead of sendMessage — storage.onChanged reliably wakes
+    // the MV3 service worker even when it's been terminated due to inactivity.
     try {
-      chrome.runtime.sendMessage({
-        action: 'login_page_detected',
-        href: window.location.href,
-      }).catch(function() {});
+      chrome.storage.local.set({
+        mighty_login_detected: { href: window.location.href, ts: Date.now() }
+      });
     } catch (_e) {}
   }, 2000);
   // Stop polling after 3 minutes — if no login form by then, user is logged in
