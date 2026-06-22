@@ -5967,7 +5967,8 @@ function decide(actionId, decision) {
     body: JSON.stringify({decision})
   }).then(() => location.reload());
 }
-// Restore scroll position after any reload — defer until paint to avoid layout-shift reset
+// Restore scroll position after any reload — wait 300ms so async content (action center etc.)
+// finishes painting before we set scrollTop, otherwise layout shifts reset it to 0.
 (function() {
   var fc = document.querySelector('.feed-col');
   var saved = sessionStorage.getItem('mighty-feed-scroll');
@@ -5975,14 +5976,11 @@ function decide(actionId, decision) {
   var sy = sessionStorage.getItem('mighty-scroll-y');
   if (sy) {
     sessionStorage.removeItem('mighty-scroll-y');
-    // double-rAF ensures we run after the browser has committed the first layout
     // NOTE: scroll lives on .main-content (overflow-y:auto), not window
-    requestAnimationFrame(function() {
-      requestAnimationFrame(function() {
-        var mc = document.querySelector('.main-content');
-        if (mc) { mc.scrollTop = parseInt(sy); } else { window.scrollTo(0, parseInt(sy)); }
-      });
-    });
+    setTimeout(function() {
+      var mc = document.querySelector('.main-content');
+      if (mc) { mc.scrollTop = parseInt(sy); } else { window.scrollTo(0, parseInt(sy)); }
+    }, 300);
   }
 })();
 
@@ -6047,12 +6045,16 @@ function submit2FA(id, pushFlag) {
 setInterval(load2FAChallenges, 15000);
 load2FAChallenges();
 
-// Auto-reload if any account is still discovering fields (max 4 attempts)
-if (document.querySelector('[data-discovering="1"]')) {
+// Auto-reload if any account is still discovering fields (max 4 attempts).
+// Skip if a sync is actively running — the sync poller will reload when it finishes.
+if (document.querySelector('[data-discovering="1"]') && !window._syncPoll) {
   var _discoverReloads = parseInt(localStorage.getItem('mighty-discover-reloads') || '0');
   if (_discoverReloads < 4) {
     localStorage.setItem('mighty-discover-reloads', _discoverReloads + 1);
-    setTimeout(reloadWithScroll, 12000);
+    var _discoverTimer = setTimeout(function() {
+      // Double-check: if sync started after page load, skip this reload
+      if (!window._syncPoll) reloadWithScroll();
+    }, 12000);
   } else {
     // Retries exhausted — keep counter at 99 so we don't restart the cycle on next page load
     // (counter resets to 0 naturally when fields are successfully found and card loses data-discovering)
@@ -6383,8 +6385,11 @@ function toggleDetail(id) {
 
 var lastPending = document.querySelectorAll('.is-pending').length > 0;
 function checkForUpdates() {
+  // Don't interrupt an active sync — the sync poller handles the reload when done
+  if (window._syncPoll) return;
   fetch('/dashboard/has-pending').then(function(r) { return r.json(); }).then(function(d) {
     if (d.pending !== lastPending) {
+      lastPending = d.pending; // update so we only reload once per state transition
       var fc = document.querySelector('.feed-col');
       if (fc) sessionStorage.setItem('mighty-feed-scroll', fc.scrollTop);
       var mc = document.querySelector('.main-content');
