@@ -13,26 +13,39 @@
   // Polls every 2s for a visible password field. Polling beats MutationObserver
   // here because United (and similar SPAs) render the input hidden in the DOM
   // first and reveal it via CSS — no DOM insertion event fires.
+  console.log('[Mighty] api_relay.js loaded on', window.location.href);
   var _loginReported = false;
   // Write a heartbeat so we can verify the content script is actually running
   chrome.storage.local.set({ mighty_cs_alive: { href: window.location.href, ts: Date.now() } });
+  var _loginPollCount = 0;
   var _loginPollId = setInterval(function() {
     if (_loginReported) { clearInterval(_loginPollId); return; }
+    _loginPollCount++;
     var pwFields = document.querySelectorAll('input[type="password"]');
-    var visible = Array.from(pwFields).some(function(el) {
+    var rects = Array.from(pwFields).map(function(el) {
       var r = el.getBoundingClientRect();
-      return r.width > 0 && r.height > 0;
+      return { w: r.width, h: r.height, display: getComputedStyle(el).display, visibility: getComputedStyle(el).visibility };
     });
+    // Log every 5 polls (every 10s) so we can see what's happening
+    if (_loginPollCount % 5 === 1) {
+      console.log('[Mighty] poll #' + _loginPollCount + ' — pw fields:', pwFields.length, rects);
+    }
+    var visible = rects.some(function(r) { return r.w > 0 && r.h > 0; });
     if (!visible) return;
+    console.log('[Mighty] visible password field detected — reporting login_wall');
     _loginReported = true;
     clearInterval(_loginPollId);
     // Use storage instead of sendMessage — storage.onChanged reliably wakes
     // the MV3 service worker even when it's been terminated due to inactivity.
-    try {
-      chrome.storage.local.set({
-        mighty_login_detected: { href: window.location.href, ts: Date.now() }
-      });
-    } catch (_e) {}
+    chrome.storage.local.set({
+      mighty_login_detected: { href: window.location.href, ts: Date.now() }
+    }, function() {
+      if (chrome.runtime.lastError) {
+        console.log('[Mighty] storage.set failed:', chrome.runtime.lastError.message);
+      } else {
+        console.log('[Mighty] mighty_login_detected written to storage ✓');
+      }
+    });
   }, 2000);
   // Stop polling after 3 minutes — if no login form by then, user is logged in
   setTimeout(function() { clearInterval(_loginPollId); }, 180000);
