@@ -6395,16 +6395,15 @@ function toggleDetail(id) {
 
 var lastPending = document.querySelectorAll('.is-pending').length > 0;
 function checkForUpdates() {
-  // Don't interrupt an active sync — the sync poller handles the reload when done
+  // Don't interrupt an active sync — the sync poller handles the reload when done.
+  // Check is also repeated inside the callback because sync can start while the
+  // fetch is in-flight (~200ms), and we must not fire a bare location.reload() then.
   if (window._syncPoll) return;
   fetch('/dashboard/has-pending').then(function(r) { return r.json(); }).then(function(d) {
+    if (window._syncPoll) return; // re-check: sync may have started while fetch was in-flight
     if (d.pending !== lastPending) {
       lastPending = d.pending; // update so we only reload once per state transition
-      var fc = document.querySelector('.feed-col');
-      if (fc) sessionStorage.setItem('mighty-feed-scroll', fc.scrollTop);
-      var mc = document.querySelector('.main-content');
-      sessionStorage.setItem('mighty-scroll-y', mc ? mc.scrollTop : (window.scrollY || document.documentElement.scrollTop || 0));
-      location.reload();
+      reloadWithScroll();
     }
   }).catch(function() {});
 }
