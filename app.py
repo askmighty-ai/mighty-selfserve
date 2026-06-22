@@ -5976,10 +5976,10 @@ function decide(actionId, decision) {
   var sy = sessionStorage.getItem('mighty-scroll-y');
   if (sy) {
     sessionStorage.removeItem('mighty-scroll-y');
-    // NOTE: scroll lives on .main-content (overflow-y:auto), not window
+    // .main-content has overflow:hidden so scrollTop is always 0 — use .page-body instead
     setTimeout(function() {
-      var mc = document.querySelector('.main-content');
-      if (mc) { mc.scrollTop = parseInt(sy); } else { window.scrollTo(0, parseInt(sy)); }
+      var pb = document.querySelector('.page-body');
+      if (pb) { pb.scrollTop = parseInt(sy); } else { window.scrollTo(0, parseInt(sy)); }
     }, 300);
   }
 })();
@@ -5987,9 +5987,9 @@ function decide(actionId, decision) {
 function reloadWithScroll() {
   var fc = document.querySelector('.feed-col');
   if (fc) sessionStorage.setItem('mighty-feed-scroll', fc.scrollTop);
-  // Scroll lives on .main-content, not window
-  var mc = document.querySelector('.main-content');
-  sessionStorage.setItem('mighty-scroll-y', mc ? mc.scrollTop : (window.scrollY || document.documentElement.scrollTop || 0));
+  // .main-content has overflow:hidden — actual scroll container is .page-body
+  var pb = document.querySelector('.page-body');
+  sessionStorage.setItem('mighty-scroll-y', pb ? pb.scrollTop : (window.scrollY || document.documentElement.scrollTop || 0));
   location.reload();
 }
 
