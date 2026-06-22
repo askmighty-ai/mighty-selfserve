@@ -10,30 +10,52 @@
   const seen = new Set(); // dedupe within page session
 
   // ── Login detection ────────────────────────────────────────────────────────
-  // Fires after page load. If a visible password field exists, the site is
-  // showing a login form — report it so the dashboard card can be updated.
-  window.addEventListener('load', function() {
-    // Give JS-rendered overlays (e.g. United) an extra moment to appear
-    // Check at 1.5s and again at 4s — JS-rendered overlays (e.g. United) can take a while
-    function _checkForLoginOverlay() {
-      const pwFields = document.querySelectorAll('input[type="password"]');
-      const hasVisiblePw = Array.from(pwFields).some(function(el) {
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      });
-      if (!hasVisiblePw) return false;
-      try {
-        chrome.runtime.sendMessage({
-          action: 'login_page_detected',
-          href: window.location.href,
-        }).catch(function() {});
-      } catch (_e) {}
-      return true;
+  // Reports to the background script when a login form becomes visible.
+  // Uses MutationObserver so it catches JS-rendered overlays and SPA navigations
+  // that appear long after the initial page load event.
+  var _loginReported = false;
+  function _reportLoginDetected() {
+    if (_loginReported) return;
+    var pwFields = document.querySelectorAll('input[type="password"]');
+    var hasVisiblePw = Array.from(pwFields).some(function(el) {
+      var r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+    if (!hasVisiblePw) return;
+    _loginReported = true;
+    try {
+      chrome.runtime.sendMessage({
+        action: 'login_page_detected',
+        href: window.location.href,
+      }).catch(function() {});
+    } catch (_e) {}
+  }
+
+  // Watch for password inputs being added to the DOM (SPA navigation / lazy modals)
+  var _pwObserver = new MutationObserver(function(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var added = mutations[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var node = added[j];
+        if (node.nodeType !== 1) continue;
+        var hasPw = node.tagName === 'INPUT' && node.type === 'password';
+        if (!hasPw && node.querySelector) hasPw = !!node.querySelector('input[type="password"]');
+        if (hasPw) {
+          // Give the animation a moment to make it visible
+          setTimeout(_reportLoginDetected, 400);
+          return;
+        }
+      }
     }
-    setTimeout(function() {
-      if (!_checkForLoginOverlay()) setTimeout(_checkForLoginOverlay, 2500);
-    }, 1500);
   });
+
+  // Start observing immediately and also check once at load (for static login pages)
+  _pwObserver.observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('load', function() {
+    setTimeout(_reportLoginDetected, 1000);
+  });
+  // Stop after 5 minutes to avoid resource leaks on long sessions
+  setTimeout(function() { _pwObserver.disconnect(); }, 300000);
 
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
