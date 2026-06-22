@@ -677,7 +677,7 @@ async function runSync() {
       ]);
       ok++;
     } catch (e) {
-      console.error(`[Mighty] Failed: ${account.name}:`, e.message);
+      console.warn(`[Mighty] ${account.name}: sync skipped — ${e.message}`);
       failed++;
       const _tabReason = e.message === 'timeout' ? 'timeout' : 'no_data';
       reportSyncFailure(api_key, account.source, _tabReason);
@@ -703,7 +703,7 @@ async function runSync() {
         console.log(`[Mighty] ${account.name}: gap-fill skipped: ${gfe.message}`);
       }
     } catch (e) {
-      console.error(`[Mighty] Failed: ${account.name}:`, e.message);
+      console.warn(`[Mighty] ${account.name}: sync skipped — ${e.message}`);
       failed++;
       const _crawlReason = e.message === 'timeout' ? 'timeout'
         : e.message.includes('not logged in') ? 'login_wall'
@@ -721,7 +721,7 @@ async function runSync() {
       await resyncCaptured(api_key, source, info, syncSessionTime, tabId);
       ok++;
     } catch (e) {
-      console.error(`[Mighty] Failed captured ${info.name}:`, e.message);
+      console.warn(`[Mighty] ${info.name}: captured re-sync skipped — ${e.message}`);
       failed++;
     }
   }
