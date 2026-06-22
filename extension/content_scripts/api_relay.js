@@ -9,6 +9,27 @@
   const MSG_TYPE = '__mighty_api__';
   const seen = new Set(); // dedupe within page session
 
+  // ── Login detection ────────────────────────────────────────────────────────
+  // Fires after page load. If a visible password field exists, the site is
+  // showing a login form — report it so the dashboard card can be updated.
+  window.addEventListener('load', function() {
+    // Give JS-rendered overlays (e.g. United) an extra moment to appear
+    setTimeout(function() {
+      const pwFields = document.querySelectorAll('input[type="password"]');
+      const hasVisiblePw = Array.from(pwFields).some(function(el) {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+      if (!hasVisiblePw) return;
+      try {
+        chrome.runtime.sendMessage({
+          action: 'login_page_detected',
+          href: window.location.href,
+        }).catch(function() {});
+      } catch (_e) {}
+    }, 1500);
+  });
+
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     if (!event.data || event.data.type !== MSG_TYPE) return;

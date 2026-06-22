@@ -564,6 +564,24 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     handleInterceptedApi(msg.url, msg.data).catch(() => {});
     return false; // no sendResponse needed
   }
+  if (msg.action === 'login_page_detected') {
+    // Content script found a visible password field — map the tab's URL to a
+    // source key and report login_required so the dashboard card updates.
+    (async () => {
+      const href = msg.href || sender?.tab?.url || '';
+      if (!href) return;
+      let hostname;
+      try { hostname = new URL(href).hostname.replace(/^www\./, ''); } catch { return; }
+      const source = _DOMAIN_TO_SOURCE[hostname]
+        || _DOMAIN_TO_SOURCE[hostname.split('.').slice(-2).join('.')];
+      if (!source) return;
+      const { api_key } = await chrome.storage.local.get('api_key');
+      if (!api_key) return;
+      console.log(`[Mighty] Content script login detected for ${source} (${hostname})`);
+      reportSyncFailure(api_key, source, 'login_wall');
+    })();
+    return false;
+  }
   if (msg.action === 'remove_captured') {
     chrome.storage.local.get('captured_accounts', ({ captured_accounts = {} }) => {
       delete captured_accounts[msg.source];
