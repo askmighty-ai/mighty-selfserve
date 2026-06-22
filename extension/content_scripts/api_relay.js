@@ -10,52 +10,29 @@
   const seen = new Set(); // dedupe within page session
 
   // ── Login detection ────────────────────────────────────────────────────────
-  // Reports to the background script when a login form becomes visible.
-  // Uses MutationObserver so it catches JS-rendered overlays and SPA navigations
-  // that appear long after the initial page load event.
+  // Polls every 2s for a visible password field. Polling beats MutationObserver
+  // here because United (and similar SPAs) render the input hidden in the DOM
+  // first and reveal it via CSS — no DOM insertion event fires.
   var _loginReported = false;
-  function _reportLoginDetected() {
-    if (_loginReported) return;
+  var _loginPollId = setInterval(function() {
+    if (_loginReported) { clearInterval(_loginPollId); return; }
     var pwFields = document.querySelectorAll('input[type="password"]');
-    var hasVisiblePw = Array.from(pwFields).some(function(el) {
+    var visible = Array.from(pwFields).some(function(el) {
       var r = el.getBoundingClientRect();
       return r.width > 0 && r.height > 0;
     });
-    if (!hasVisiblePw) return;
+    if (!visible) return;
     _loginReported = true;
+    clearInterval(_loginPollId);
     try {
       chrome.runtime.sendMessage({
         action: 'login_page_detected',
         href: window.location.href,
       }).catch(function() {});
     } catch (_e) {}
-  }
-
-  // Watch for password inputs being added to the DOM (SPA navigation / lazy modals)
-  var _pwObserver = new MutationObserver(function(mutations) {
-    for (var i = 0; i < mutations.length; i++) {
-      var added = mutations[i].addedNodes;
-      for (var j = 0; j < added.length; j++) {
-        var node = added[j];
-        if (node.nodeType !== 1) continue;
-        var hasPw = node.tagName === 'INPUT' && node.type === 'password';
-        if (!hasPw && node.querySelector) hasPw = !!node.querySelector('input[type="password"]');
-        if (hasPw) {
-          // Give the animation a moment to make it visible
-          setTimeout(_reportLoginDetected, 400);
-          return;
-        }
-      }
-    }
-  });
-
-  // Start observing immediately and also check once at load (for static login pages)
-  _pwObserver.observe(document.documentElement, { childList: true, subtree: true });
-  window.addEventListener('load', function() {
-    setTimeout(_reportLoginDetected, 1000);
-  });
-  // Stop after 5 minutes to avoid resource leaks on long sessions
-  setTimeout(function() { _pwObserver.disconnect(); }, 300000);
+  }, 2000);
+  // Stop polling after 3 minutes — if no login form by then, user is logged in
+  setTimeout(function() { clearInterval(_loginPollId); }, 180000);
 
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
