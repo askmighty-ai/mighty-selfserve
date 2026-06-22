@@ -8705,14 +8705,19 @@ def dashboard():
             ) if bad_fields else ""
 
             sync_label = f'Synced {_fmt_sync(synced_at)}' if synced_at else 'Not yet synced'
-            synced_title = "Synced recently" if status_color == "#30d158" else "Not yet synced"
             stale_cls = " is-stale" if not synced_at else ""
             expiring_cls = " is-expiring" if alert_item else ""
             _flabel, _fcolor, _ficon = _freshness_label(synced_at, sync_status)
             _fw = "700" if _fcolor == "#dc2626" else "500"
             _fprefix = f"{_ficon} " if _ficon else ""
-            # Only show per-card sync time when there's a problem (amber/red = stale or login required)
-            # Normal/green sync times are shown globally in the topbar
+            # Promote status_color to amber/red when data is stale, even if sync_status="ok".
+            # This ensures the dot reflects actual freshness, not just last-known sync state.
+            if status_color == "#30d158" and _fcolor in ("#f59e0b", "#dc2626"):
+                status_color = _fcolor
+            synced_title = (
+                f"Synced {_fmt_sync(synced_at)}" if synced_at else "Not yet synced"
+            )
+            # Show freshness text whenever data is amber/red or missing
             _is_sync_problem = _fcolor in ("#f59e0b", "#dc2626") or not synced_at
             freshness_html = (
                 f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'

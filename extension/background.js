@@ -28,6 +28,99 @@ function reportSyncFailure(apiKey, source, reason) {
   }).catch(() => {});
 }
 
+// ── Passive login-page detection ──────────────────────────────────────────────
+// When any tab navigates to a login page for a known account site, immediately
+// mark that account as login_required on the server so the dashboard card updates.
+
+const _DOMAIN_TO_SOURCE = {
+  'delta.com':            'delta',
+  'southwest.com':        'southwest',
+  'united.com':           'united',
+  'aa.com':               'american_air',
+  'americanairlines.com': 'american_air',
+  'alaskaair.com':        'alaska_air',
+  'sfcu.org':             'sfcu',
+  'americanexpress.com':  'amex',
+  'chase.com':            'chase',
+  'wellsfargo.com':       'wells_fargo',
+  'bankofamerica.com':    'bofa',
+  'capitalone.com':       'capital_one',
+  'discover.com':         'discover',
+  'discovercard.com':     'discover',
+  'citi.com':             'citi',
+  'citibank.com':         'citi',
+  'paypal.com':           'paypal',
+  'fidelity.com':         'fidelity',
+  'schwab.com':           'schwab',
+  'vanguard.com':         'vanguard',
+  'etrade.com':           'etrade',
+  'morganstanley.com':    'morgan_stanley',
+  'robinhood.com':        'robinhood',
+  'coinbase.com':         'coinbase',
+  'marriott.com':         'marriott',
+  'hilton.com':           'hilton',
+  'hyatt.com':            'hyatt',
+  'ihg.com':              'ihg',
+  'wyndhamhotels.com':    'wyndham',
+  'amazon.com':           'amazon',
+  'target.com':           'target',
+  'costco.com':           'costco',
+  'starbucks.com':        'starbucks',
+  'statefarm.com':        'state_farm',
+  'pamf.org':             'pamf',
+  'mychart.pamf.org':     'pamf',
+  'ticketmaster.com':     'ticketmaster',
+  'netflix.com':          'netflix',
+  'hulu.com':             'hulu',
+  'spotify.com':          'spotify',
+  'disneyplus.com':       'disney_plus',
+  'att.com':              'att',
+  'xfinity.com':          'xfinity',
+  'comcast.com':          'xfinity',
+  'cityofpaloalto.org':   'pa_utilities',
+};
+
+// URL path/hostname terms that reliably indicate a login wall
+const _LOGIN_URL_RE = /\/(login|signin|sign-in|log-in|logon|log-on|authenticate|sso)(\/|$|\?)/i;
+
+// Debounce per-source so rapid redirects don't fire multiple reports
+const _loginReportedAt = {};
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'loading') return;
+  const url = changeInfo.url || tab.url;
+  if (!url || !url.startsWith('http')) return;
+
+  let hostname, pathname, search;
+  try {
+    const u = new URL(url);
+    hostname = u.hostname.replace(/^www\./, '');
+    pathname = u.pathname;
+    search   = u.search;
+  } catch { return; }
+
+  // Match hostname to a known source (try exact, then strip subdomains one level)
+  const source = _DOMAIN_TO_SOURCE[hostname]
+    || _DOMAIN_TO_SOURCE[hostname.split('.').slice(-2).join('.')];
+  if (!source) return;
+
+  // Must look like a login page
+  const isLoginPage = _LOGIN_URL_RE.test(pathname)
+    || /[?&](returnUrl|refreshURL|next|redirect|return)=/i.test(search);
+  if (!isLoginPage) return;
+
+  // Debounce: don't re-report the same source within 5 minutes
+  const now = Date.now();
+  if (_loginReportedAt[source] && now - _loginReportedAt[source] < 300_000) return;
+  _loginReportedAt[source] = now;
+
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+
+  console.log(`[Mighty] Detected login page for ${source} — marking login_required`);
+  reportSyncFailure(api_key, source, 'login_wall');
+});
+
 /** Report a fruitful path to the shared registry. Fire-and-forget. */
 function reportPathToRegistry(site, url) {
   try {
