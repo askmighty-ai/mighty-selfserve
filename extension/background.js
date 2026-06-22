@@ -448,18 +448,66 @@ async function handleInterceptedApi(url, data) {
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
+const KEEPALIVE_ALARM    = 'mighty-keepalive';
+const KEEPALIVE_INTERVAL = 20; // minutes — short enough to beat most session timeouts
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.get(SYNC_ALARM, (existing) => {
-    if (!existing) {
-      chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_INTERVAL });
-    }
+    if (!existing) chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_INTERVAL });
   });
-  console.log('[Mighty] Extension installed, sync scheduled every', SYNC_INTERVAL, 'minutes');
+  chrome.alarms.get(KEEPALIVE_ALARM, (existing) => {
+    if (!existing) chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
+  });
+  console.log('[Mighty] Extension installed, sync every', SYNC_INTERVAL, 'min, keepalive every', KEEPALIVE_INTERVAL, 'min');
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  // Re-create alarms if the browser restarted and cleared them
+  chrome.alarms.get(SYNC_ALARM, (a) => {
+    if (!a) chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_INTERVAL });
+  });
+  chrome.alarms.get(KEEPALIVE_ALARM, (a) => {
+    if (!a) chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
+  });
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === SYNC_ALARM) runSync();
+  if (alarm.name === SYNC_ALARM)     runSync();
+  if (alarm.name === KEEPALIVE_ALARM) runSessionKeepalive();
 });
+
+/**
+ * Silently ping each connected account's entry URL to keep sessions alive.
+ * Uses credentials: 'include' so the browser sends the user's cookies —
+ * the site sees an authenticated request and resets its session expiry timer.
+ * No tabs, no page rendering, no data extracted.
+ */
+async function runSessionKeepalive() {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+
+  // Sites to skip: bot-detection-heavy (Akamai) or already login_required
+  const KEEPALIVE_SKIP = new Set(['xfinity', 'pa_utilities']);
+
+  // Stagger pings to avoid a burst of simultaneous requests
+  let delay = 0;
+  for (const [source, url] of Object.entries(ACCOUNT_ENTRY)) {
+    if (KEEPALIVE_SKIP.has(source)) continue;
+    setTimeout(async () => {
+      try {
+        await fetch(url, {
+          credentials: 'include',
+          cache: 'no-store',
+          mode: 'no-cors',  // opaque response — we only need the request to reach the server
+        });
+        console.log(`[Mighty] Keepalive: ${source}`);
+      } catch (e) {
+        console.log(`[Mighty] Keepalive: ${source} failed — ${e.message}`);
+      }
+    }, delay);
+    delay += 1500 + Math.floor(Math.random() * 1000); // stagger by ~1.5–2.5s each
+  }
+}
 
 // Messages from popup
 chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
