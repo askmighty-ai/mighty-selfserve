@@ -86,6 +86,10 @@ const _LOGIN_URL_RE = /\/(login|signin|sign-in|log-in|logon|log-on|authenticate|
 // Debounce per-source so rapid redirects don't fire multiple reports
 const _loginReportedAt = {};
 
+// Sources confirmed logged-out this session — sync push is suppressed for these
+// so a running sync can't overwrite the login_required status we just set.
+const _loginWallSources = new Set();
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'loading') return;
   const url = changeInfo.url || tab.url;
@@ -118,6 +122,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!api_key) return;
 
   console.log(`[Mighty] Detected login page for ${source} — marking login_required`);
+  _loginWallSources.add(source);
   reportSyncFailure(api_key, source, 'login_wall');
 });
 
@@ -522,6 +527,7 @@ chrome.storage.onChanged.addListener(async function(changes, area) {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
   console.log(`[Mighty] Storage-based login detected for ${source} (${hostname})`);
+  _loginWallSources.add(source);
   reportSyncFailure(api_key, source, 'login_wall');
   chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, (tabs) => {
     tabs.forEach(t => chrome.tabs.reload(t.id));
@@ -1865,6 +1871,14 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     // ── Push to server ──────────────────────────────────────────────────────────
     if (allText.length === 0) {
       throw new Error('No usable content captured — possibly not logged in');
+    }
+
+    // If a login wall was detected for this source (either via URL redirect or
+    // content script password-field detection), don't push — public-page content
+    // would overwrite the login_required status we already set on the server.
+    if (_loginWallSources.has(account.source)) {
+      console.log(`[Mighty] ${account.name}: login wall confirmed — skipping push to preserve login_required status`);
+      throw new Error('Login wall detected — skipping push');
     }
 
     const rawText = allText.join('').slice(0, 40_000);
