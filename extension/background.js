@@ -18,6 +18,16 @@ function normalizePath(path) {
     .replace(/\/$/, '') || '/';
 }
 
+/** Report a sync failure to the server so the dashboard can show an actionable message.
+ *  Fire-and-forget — never throws. reason: 'no_data' | 'timeout' | 'login_wall' */
+function reportSyncFailure(apiKey, source, reason) {
+  fetch(`${MIGHTY_URL}/api/sync/failure`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+    body: JSON.stringify({ source, reason }),
+  }).catch(() => {});
+}
+
 /** Report a fruitful path to the shared registry. Fire-and-forget. */
 function reportPathToRegistry(site, url) {
   try {
@@ -669,6 +679,8 @@ async function runSync() {
     } catch (e) {
       console.error(`[Mighty] Failed: ${account.name}:`, e.message);
       failed++;
+      const _tabReason = e.message === 'timeout' ? 'timeout' : 'no_data';
+      reportSyncFailure(api_key, account.source, _tabReason);
     }
   }
 
@@ -693,6 +705,10 @@ async function runSync() {
     } catch (e) {
       console.error(`[Mighty] Failed: ${account.name}:`, e.message);
       failed++;
+      const _crawlReason = e.message === 'timeout' ? 'timeout'
+        : e.message.includes('not logged in') ? 'login_wall'
+        : 'no_data';
+      reportSyncFailure(api_key, account.source, _crawlReason);
     }
   }
 

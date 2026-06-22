@@ -8878,7 +8878,13 @@ def dashboard():
                 f'</div>'
                 f'<div class="acct-controls">'
                 f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;cursor:help" title="{synced_title}"></div>'
-                f'<button onclick="syncAccount(\'{he(src)}\', this)" title="Sync this account" class="acct-refresh-btn">↻</button>'
+                + (
+                    f'<a href="{he(_card_url)}" target="_blank" rel="noopener" title="Open {he(display_name)}" class="acct-refresh-btn" style="text-decoration:none;font-size:11px">'
+                    f'<svg width="11" height="11" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 1h4v4M11 1L5.5 6.5M5 2H2a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                    f'</a>'
+                    if (_card_url := (SITE_ENTRY_URL.get(src) or (row or {}).get("entry_url", ""))) else ""
+                )
+                + f'<button onclick="syncAccount(\'{he(src)}\', this)" title="Sync this account" class="acct-refresh-btn">↻</button>'
                 f'</div>'
                 f'</div>'
                 f'{bad_banner}'
@@ -12144,6 +12150,52 @@ SYNC_FAILURE_MESSAGES = {
     "stale_date_only":     ("Dates only",      "Visit your account overview page — Mighty only found date fields."),
     "timeout":             ("Timed out",       "The sync took too long. Try clicking sync again."),
     "extension_missing":   ("Extension needed","Install the Mighty Chrome extension, then sync again."),
+}
+
+# Direct account URLs — mirrors ACCOUNT_ENTRY in background.js.
+# Used to render the "open account" link on each dashboard card.
+SITE_ENTRY_URL = {
+    "southwest":    "https://www.southwest.com/loyalty/myaccount/",
+    "delta":        "https://www.delta.com/myprofile/",
+    "united":       "https://www.united.com/en/us/myunited",
+    "american_air": "https://www.aa.com/loyalty/home.do",
+    "alaska_air":   "https://www.alaskaair.com/account/dashboard",
+    "sfcu":         "https://www.sfcu.org/accounts/online-banking",
+    "amex":         "https://www.americanexpress.com/en-us/account/",
+    "chase":        "https://secure.chase.com/web/auth/dashboard",
+    "wells_fargo":  "https://www.wellsfargo.com/change-the-way-you-bank/online-banking/jump/",
+    "bofa":         "https://www.bankofamerica.com/myaccounts/brain/render.go",
+    "capital_one":  "https://myaccounts.capitalone.com/accountSummary",
+    "discover":     "https://portal.discover.com/customer/en/portal/account-home",
+    "citi":         "https://online.citi.com/US/JRS/portal/Home.do",
+    "paypal":       "https://www.paypal.com/myaccount/summary",
+    "fidelity":     "https://digital.fidelity.com/ftgw/digital/portfolio/summary",
+    "schwab":       "https://client.schwab.com/app/accounts/#/",
+    "vanguard":     "https://personal.vanguard.com/us/myprofile",
+    "etrade":       "https://us.etrade.com/etx/pxy/my-account",
+    "morgan_stanley": "https://www.morganstanley.com/individual/my-accounts",
+    "robinhood":    "https://robinhood.com/account/",
+    "coinbase":     "https://www.coinbase.com/dashboard",
+    "marriott":     "https://www.marriott.com/loyalty/myAccount/default.mi",
+    "hilton":       "https://www.hilton.com/en/hilton-honors/guest/my-account/",
+    "hyatt":        "https://www.hyatt.com/en-US/my-account/home",
+    "ihg":          "https://www.ihg.com/rewardsclub/content/us/en/member-home",
+    "wyndham":      "https://www.wyndhamhotels.com/registry",
+    "amazon":       "https://www.amazon.com/gp/css/order-history",
+    "target":       "https://www.target.com/account",
+    "costco":       "https://www.costco.com/OrderStatusCmd",
+    "starbucks":    "https://www.starbucks.com/rewards/",
+    "state_farm":   "https://www.statefarm.com/customer-care/my-accounts",
+    "pamf":         "https://mychart.pamf.org/MyChart/",
+    "ticketmaster": "https://www.ticketmaster.com/member/orders",
+    "netflix":      "https://www.netflix.com/YourAccount",
+    "hulu":         "https://secure.hulu.com/account",
+    "spotify":      "https://www.spotify.com/us/account/overview/",
+    "disney_plus":  "https://www.disneyplus.com/identity/account",
+    "att":          "https://www.att.com/my/#/",
+    "att_wireless": "https://myatt.att.com/exp/myconsumerdashboard/",
+    "xfinity":      "https://customer.xfinity.com/#/billing",
+    "pa_utilities": "https://utilities.cityofpaloalto.org/",
 }
 
 SUPPORTED_SITES = [
@@ -16460,6 +16512,51 @@ def api_sync_finalize():
     print(f"[Finalize] Unified {result.rowcount} accounts to session_ts={session_ts[:19]}", flush=True)
     return jsonify({"ok": True, "updated": result.rowcount})
 
+
+
+@app.route("/api/sync/failure", methods=["POST"])
+def api_sync_failure():
+    """Called by the extension when an account sync attempt fails.
+    Records the failure reason on the account_data row so the dashboard
+    can show an actionable message (e.g. 'Log back in', 'Timed out').
+    Only updates existing records — won't create a new row.
+    Auth: X-Mighty-Key header.
+    """
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    uid    = user["id"]
+    source = (body or {}).get("source", "").strip()
+    reason = (body or {}).get("reason", "").strip()
+    # Map extension reason codes to known SYNC_FAILURE_MESSAGES keys
+    _reason_map = {
+        "no_data":    "no_data",
+        "no_content": "no_data",
+        "timeout":    "timeout",
+        "login_wall": "login_required",
+        "login_required": "login_required",
+    }
+    reason = _reason_map.get(reason, "no_data")
+    if not source:
+        return jsonify({"error": "source required"}), 400
+    db  = get_db()
+    row = db.execute(
+        "SELECT id, data_enc FROM account_data WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not row:
+        # Account never synced successfully — nothing to update
+        return jsonify({"ok": True, "updated": False, "note": "no existing record"})
+    payload = decrypt_account_data(uid, row["data_enc"] or "")
+    payload["sync_status"]         = "login_required" if reason == "login_required" else "no_data"
+    payload["sync_failure_reason"] = reason
+    db.execute(
+        "UPDATE account_data SET data_enc=?, sync_failure_reason=?, sync_status=? WHERE user_id=? AND source=?",
+        (encrypt_account_data(uid, payload), reason, payload["sync_status"], uid, source)
+    )
+    db.commit()
+    print(f"[SyncFailure] uid={uid} source={source} reason={reason}", flush=True)
+    return jsonify({"ok": True, "updated": True})
 
 
 @app.route("/api/reclassify", methods=["POST"])
