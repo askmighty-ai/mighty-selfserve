@@ -17652,6 +17652,9 @@ input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
 <div class="page">
   <h1>Find accounts from your email</h1>
   <p class="sub">Mighty scans only sender addresses — never email content or attachments.</p>
+  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 16px;margin-bottom:20px;font-size:13px;color:#166534;line-height:1.6">
+    <strong>How Mighty uses your email:</strong> We only look at who sent you email — never what it says. This tells us which accounts you have. Your actual balances, points, and benefits are always pulled directly from each site when you connect, not from email content.
+  </div>
 
   <div class="provider-grid" id="providerGrid">
     {gmail_card}
