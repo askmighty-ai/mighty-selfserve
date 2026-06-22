@@ -8496,7 +8496,8 @@ def dashboard():
                 card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
-                    f'<div style="color:#ef4444;font-size:12px;font-weight:500">⚠ Login required — sync to reconnect</div>'
+                    f'<div style="color:#ef4444;font-size:12px;font-weight:500">⚠ You\'ve been logged out of {he(display_name)}</div>'
+                    f'<div style="color:#9ca3af;font-size:11px;margin-top:3px">Log back in via Chrome, then click the sync button ↻</div>'
                     f'</div>'
                 )
                 status_color = "#ef4444"
@@ -8508,10 +8509,13 @@ def dashboard():
                 _disc_info = discovered_by_source.get(src, {})
                 _no_data = _disc_info.get("failed", False) or sync_status == "no_data"
                 if _no_data:
+                    _fail_key   = (data.get("sync_failure_reason") or "") if row else ""
+                    _fail_label, _fail_action = SYNC_FAILURE_MESSAGES.get(_fail_key, ("No data found", "Visit your account overview page in Chrome, then click sync."))
                     card_hero_html = (
                         f'<div class="acct-divider"></div>'
                         f'<div class="acct-hero">'
-                        f'<div style="color:#d97706;font-size:12px">No account data — sync to retry</div>'
+                        f'<div style="color:#d97706;font-size:12px;font-weight:500">⚠ {he(_fail_label)}</div>'
+                        f'<div style="color:#9ca3af;font-size:11px;margin-top:3px">{he(_fail_action)}</div>'
                         f'</div>'
                     )
                     status_color = "#f59e0b"
@@ -12106,6 +12110,38 @@ LOGIN_HINTS = {
     "recreation_gov": {"u": "Email address", "p": "Password", "u_type": "email", "url": "https://www.recreation.gov/"},
 }
 
+# ── Per-site connection notes (2FA warnings, login tips) ──────────────────────
+SITE_CONNECT_NOTES = {
+    "chase":          {"twofa": True,  "note": "Chase will text or email you a verification code — have your phone ready."},
+    "wells_fargo":    {"twofa": True,  "note": "Wells Fargo sends a one-time passcode to your phone or email."},
+    "bofa":           {"twofa": True,  "note": "Bank of America may ask you to verify via text, email, or a security question."},
+    "capital_one":    {"twofa": True,  "note": "Capital One often requires 2-step verification on new devices."},
+    "citi":           {"twofa": True,  "note": "Citi may send a one-time code to your phone or email."},
+    "fidelity":       {"twofa": True,  "note": "Fidelity requires 2-factor authentication — have your authenticator app or phone ready."},
+    "schwab":         {"twofa": True,  "note": "Schwab may ask for a one-time verification code."},
+    "paypal":         {"twofa": True,  "note": "PayPal may ask for a code if this is a new device or browser."},
+    "amazon":         {"twofa": False, "note": "Amazon may send a verification code if it doesn't recognize your device."},
+    "sfcu":           {"twofa": True,  "note": "Your credit union may require a one-time PIN sent to your phone or email."},
+    "pamf":           {"twofa": True,  "note": "MyChart requires 2-factor authentication."},
+    "vanguard":       {"twofa": True,  "note": "Vanguard may require a security code sent to your phone or email."},
+    "etrade":         {"twofa": True,  "note": "E*TRADE may ask for a security code on new devices."},
+    "morgan_stanley": {"twofa": True,  "note": "Morgan Stanley requires multi-factor authentication."},
+    "robinhood":      {"twofa": True,  "note": "Robinhood requires 2-factor authentication — have your authenticator app ready."},
+    "coinbase":       {"twofa": True,  "note": "Coinbase requires 2-step verification — have your authenticator app or phone ready."},
+}
+
+# Failure reason codes → (short label, what to do)
+SYNC_FAILURE_MESSAGES = {
+    "login_wall":          ("Logged out",      "Log back into this site in Chrome, then click sync."),
+    "login_required":      ("Logged out",      "Log back into this site in Chrome, then click sync."),
+    "no_data":             ("No data found",   "Visit your account overview page in Chrome, then click sync."),
+    "llm_empty":           ("No data found",   "Visit your account overview page in Chrome, then click sync."),
+    "low_confidence_only": ("Partial data",    "Visit your full account page in Chrome, then click sync."),
+    "stale_date_only":     ("Dates only",      "Visit your account overview page — Mighty only found date fields."),
+    "timeout":             ("Timed out",       "The sync took too long. Try clicking sync again."),
+    "extension_missing":   ("Extension needed","Install the Mighty Chrome extension, then sync again."),
+}
+
 SUPPORTED_SITES = [
     # Banking & Finance
     ("amex",          "American Express",       "💳", "#e8f0fe", "Banking & Finance"),
@@ -12671,6 +12707,7 @@ def _build_dash_modals(configured: set, csrf: str) -> str:
     import json as _lhj
     _lh_slim = {k: {'u': v['u'], 'p': v['p'], 't': v['u_type'], 'url': v.get('url','')} for k, v in LOGIN_HINTS.items()}
     _lh_json = _lhj.dumps(_lh_slim)
+    _sn_json  = _lhj.dumps({k: {'twofa': v['twofa'], 'note': v['note']} for k, v in SITE_CONNECT_NOTES.items()})
     return f"""
 <style>
 /* Dashboard modals */
@@ -12708,32 +12745,58 @@ def _build_dash_modals(configured: set, csrf: str) -> str:
         <div id="dash-modal-no-results" style="display:none;text-align:center;padding:32px;color:#9ca3af;font-size:14px">No matching sites.</div>
       </div>
     </div>
-    <div id="dash-screen-cred" style="display:none;flex-direction:column;flex:1;min-height:0">
+    <div id="dash-screen-cred" style="display:none;flex-direction:column;flex:1;min-height:0;overflow-y:auto">
       <div style="padding:16px 20px 12px;border-bottom:1px solid #f5f2ed;display:flex;align-items:center;gap:10px;flex-shrink:0">
         <button onclick="dashBackToPicker()" style="background:none;border:none;color:#6366f1;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">← Back</button>
         <div id="dash-cred-icon" style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px"></div>
         <div style="font-size:15px;font-weight:700" id="dash-cred-name"></div>
         <button onclick="closeDashConnectModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;margin-left:auto;line-height:1;padding:2px 6px">✕</button>
       </div>
-      <div style="padding:24px 20px;text-align:center">
-        <div style="font-size:32px;margin-bottom:12px" id="dash-ext-icon-lg"></div>
-        <div style="font-size:14px;font-weight:600;color:#1c1917;margin-bottom:8px">Connect via Chrome</div>
-        <div id="dash-cred-hint" style="display:none;font-size:12px;color:#6366f1;background:#eef2ff;border-radius:7px;padding:7px 12px;margin-bottom:12px;line-height:1.5"></div>
-        <div style="font-size:13px;color:#6b7280;line-height:1.6;margin-bottom:20px">
-          Make sure you're <strong>logged into <span id="dash-ext-site-name"></span></strong> in Chrome,
-          then click the button below.
+      <div style="padding:20px 20px 24px">
+        <div id="dash-cred-hint" style="display:none;font-size:12px;color:#4338ca;background:#eef2ff;border-radius:8px;padding:9px 13px;margin-bottom:14px;line-height:1.5;font-weight:500"></div>
+        <div id="dash-twofa-warn" style="display:none;font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 13px;margin-bottom:14px;line-height:1.5">
+          🔐 <strong>2-step verification likely</strong> — <span id="dash-twofa-note"></span>
         </div>
-        <a id="dash-open-chrome-btn" href="#" target="_blank"
-           style="display:inline-block;padding:11px 22px;background:#059669;color:#fff;font-size:14px;font-weight:600;border-radius:9px;text-decoration:none"
-           onmouseenter="this.style.background='#047857'" onmouseleave="this.style.background='#059669'">
-          Open in Chrome →
-        </a>
-        <div id="dash-ext-waiting" style="display:none;margin-top:20px;font-size:13px;color:#6b7280">
-          <span style="display:inline-block;width:14px;height:14px;border:2px solid #d1fae5;border-top-color:#059669;border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:middle;margin-right:6px"></span>
-          Waiting for extension…
+        <div style="margin-bottom:20px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af;margin-bottom:10px">How this works</div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;align-items:flex-start;gap:10px">
+              <div style="width:22px;height:22px;border-radius:50%;background:#059669;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">1</div>
+              <div style="font-size:13px;color:#374151;line-height:1.5">Click <strong>Open in Chrome</strong> — we'll take you to the <span class="dash-site-name-ref" style="font-weight:600"></span> login page</div>
+            </div>
+            <div style="display:flex;align-items:flex-start;gap:10px">
+              <div style="width:22px;height:22px;border-radius:50%;background:#059669;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">2</div>
+              <div style="font-size:13px;color:#374151;line-height:1.5"><strong>Log in yourself</strong> <span id="dash-cred-type-note" style="color:#6b7280;font-size:12px"></span> — complete any verification steps if asked</div>
+            </div>
+            <div style="display:flex;align-items:flex-start;gap:10px">
+              <div style="width:22px;height:22px;border-radius:50%;background:#059669;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">3</div>
+              <div style="font-size:13px;color:#374151;line-height:1.5">The Mighty extension <strong>automatically captures your data</strong> — you don't need to do anything else</div>
+            </div>
+          </div>
         </div>
-        <div id="dash-ext-no-ext" style="display:none;margin-top:16px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:#92400e;text-align:left">
-          💡 <strong>Extension not installed?</strong> Visit <a href="/extension-setup" target="_blank" style="color:#b45309">Settings → Setup Chrome Extension</a> first.
+        <div style="text-align:center;margin-bottom:4px">
+          <a id="dash-open-chrome-btn" href="#" target="_blank"
+             style="display:inline-block;padding:11px 26px;background:#059669;color:#fff;font-size:14px;font-weight:600;border-radius:9px;text-decoration:none;transition:background 0.15s"
+             onmouseenter="this.style.background='#047857'" onmouseleave="this.style.background='#059669'">
+            Open in Chrome →
+          </a>
+        </div>
+        <div id="dash-ext-waiting" style="display:none;margin-top:16px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px">
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#15803d;font-weight:500;margin-bottom:4px">
+            <span style="display:inline-block;width:14px;height:14px;border:2px solid #bbf7d0;border-top-color:#16a34a;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0"></span>
+            Waiting for Mighty to detect your session…
+          </div>
+          <div style="font-size:12px;color:#16a34a;padding-left:22px">Stay on your account page after logging in — usually takes 5–15 seconds</div>
+        </div>
+        <div id="dash-ext-trouble" style="display:none;margin-top:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 14px;font-size:12px;color:#991b1b">
+          <div style="font-weight:600;margin-bottom:8px">⚠ Mighty didn't detect your login. Try these:</div>
+          <ol style="margin:0;padding-left:18px;line-height:1.9">
+            <li>Make sure the <a href="/extension-setup" target="_blank" style="color:#b91c1c;font-weight:500">Mighty Chrome extension is installed</a></li>
+            <li>Navigate to your <strong class="dash-site-name-ref"></strong> account page (not just the home page)</li>
+            <li>Make sure you're fully logged in — complete any 2FA prompts</li>
+            <li>Stay on the account page for a few seconds</li>
+          </ol>
+          <button onclick="dashRetryExtPoll()" style="margin-top:10px;padding:6px 14px;background:#991b1b;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Try again</button>
         </div>
       </div>
     </div>
@@ -12755,6 +12818,7 @@ def _build_dash_modals(configured: set, csrf: str) -> str:
 
 <script>
 var _LOGIN_HINTS = {_lh_json};
+var _SITE_NOTES = {_sn_json};
 var _DASH_CSRF = '{csrf_esc}';
 var _dashModalPollInterval = null;
 var _dashCurrentSource = '';
@@ -12820,41 +12884,68 @@ function dashOpenCredForm(key, name, icon, color) {{
   document.getElementById('dash-cred-name').textContent = name;
   var ic = document.getElementById('dash-cred-icon');
   ic.textContent = icon; ic.style.background = color;
-  var lg = document.getElementById('dash-ext-icon-lg');
-  if (lg) {{ lg.textContent = icon; }}
-  var sn = document.getElementById('dash-ext-site-name');
-  if (sn) {{ sn.textContent = name; }}
+
+  // Set site name everywhere it appears
+  document.querySelectorAll('.dash-site-name-ref').forEach(function(el) {{ el.textContent = name; }});
+
+  // Credential hint pill
+  var h = _LOGIN_HINTS[key];
   var hintEl = document.getElementById('dash-cred-hint');
   if (hintEl) {{
-    var h = _LOGIN_HINTS[key];
-    hintEl.textContent = h ? 'You\u2019ll need your ' + h.u + ' and ' + h.p.toLowerCase() + '.' : '';
-    hintEl.style.display = h ? 'block' : 'none';
+    var idLabel = h ? h.u : 'email or username';
+    var pwLabel = h ? h.p.toLowerCase() : 'password';
+    hintEl.textContent = '🔑 You’ll log in with your ' + idLabel.toLowerCase() + ' and ' + pwLabel + '.';
+    hintEl.style.display = 'block';
   }}
+
+  // Credential type sub-note in step 2
+  var typeNote = document.getElementById('dash-cred-type-note');
+  if (typeNote) {{
+    typeNote.textContent = h ? '(use your ' + h.u.toLowerCase() + ')' : '';
+  }}
+
+  // 2FA warning
+  var siteNote = _SITE_NOTES[key];
+  var twofaEl = document.getElementById('dash-twofa-warn');
+  var twofaNoteEl = document.getElementById('dash-twofa-note');
+  if (twofaEl) {{
+    if (siteNote && siteNote.twofa) {{
+      if (twofaNoteEl) twofaNoteEl.textContent = siteNote.note || 'Have your phone or authenticator app ready.';
+      twofaEl.style.display = 'block';
+    }} else {{
+      twofaEl.style.display = 'none';
+    }}
+  }}
+
+  // Reset status panels
+  var waiting = document.getElementById('dash-ext-waiting');
+  var trouble = document.getElementById('dash-ext-trouble');
+  if (waiting) waiting.style.display = 'none';
+  if (trouble) trouble.style.display = 'none';
+
+  // Wire up Open in Chrome button
   var openBtn = document.getElementById('dash-open-chrome-btn');
   var siteUrl = _DASH_SOURCE_URLS[key] || 'https://google.com/search?q=' + encodeURIComponent(name + ' login');
-  var waiting = document.getElementById('dash-ext-waiting');
-  var noExt = document.getElementById('dash-ext-no-ext');
-  if (waiting) waiting.style.display = 'none';
-  if (!_extPresent) {{
-    // Extension not detected — show install prompt immediately, hide "Open in Chrome" button
-    if (openBtn) openBtn.style.display = 'none';
-    if (noExt) noExt.style.display = 'block';
-  }} else {{
-    // Extension present — wire up the button and hide the no-ext notice
-    if (openBtn) {{
-      openBtn.style.display = '';
-      openBtn.href = siteUrl;
-      openBtn.onclick = function() {{ _dashStartExtPoll(key); }};
-    }}
-    if (noExt) noExt.style.display = 'none';
+  if (openBtn) {{
+    openBtn.href = siteUrl;
+    openBtn.onclick = function() {{ _dashStartExtPoll(key); }};
+    openBtn.style.display = '';
   }}
+
+  // If extension not present, skip straight to trouble panel
+  if (!_extPresent) {{
+    if (openBtn) openBtn.style.display = 'none';
+    if (trouble) trouble.style.display = 'block';
+  }}
+
   document.getElementById('dash-screen-picker').style.display = 'none';
   document.getElementById('dash-screen-cred').style.display = 'flex';
 }}
 function _dashStartExtPoll(source) {{
   var waiting = document.getElementById('dash-ext-waiting');
-  var noExt = document.getElementById('dash-ext-no-ext');
+  var trouble = document.getElementById('dash-ext-trouble');
   if (waiting) waiting.style.display = 'block';
+  if (trouble) trouble.style.display = 'none';
   fetch('/credentials/register', {{
     method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
     body: new URLSearchParams({{_csrf: _DASH_CSRF, source: source}})
@@ -12865,16 +12956,23 @@ function _dashStartExtPoll(source) {{
     fetch('/api/extension/poll/' + source).then(function(r){{return r.json();}}).then(function(d){{
       if (d.captured) {{
         clearInterval(_dashModalPollInterval); _dashModalPollInterval = null;
-        if (waiting) waiting.innerHTML = '<span style="color:#16a34a">✓ Account connected!</span>';
-        setTimeout(function() {{ closeDashConnectModal(); location.reload(); }}, 800);
+        if (waiting) waiting.innerHTML = (
+          '<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#15803d;font-weight:600">' +
+          '<span>✓</span> Connected! Loading your data…</div>'
+        );
+        setTimeout(function() {{ closeDashConnectModal(); location.reload(); }}, 1200);
       }}
     }}).catch(function(){{}});
     if (attempts >= 20) {{
       clearInterval(_dashModalPollInterval); _dashModalPollInterval = null;
       if (waiting) waiting.style.display = 'none';
-      if (noExt) noExt.style.display = 'block';
+      if (trouble) trouble.style.display = 'block';
     }}
   }}, 3000);
+}}
+function dashRetryExtPoll() {{
+  document.getElementById('dash-ext-trouble').style.display = 'none';
+  _dashStartExtPoll(_dashCurrentSource);
 }}
 
 /* Field edit modal */
