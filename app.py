@@ -6129,7 +6129,7 @@ fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
   if (s.running) return;
   var lastSync = s.last ? new Date(s.last) : null;
   var minsAgo = lastSync ? (Date.now() - lastSync.getTime()) / 60000 : Infinity;
-  if (minsAgo > 30) {
+  if (minsAgo > 180) {
     cloudSync();
   } else {
     // Still trigger auto-discovery for any account missing fields
@@ -16532,6 +16532,9 @@ def api_sync_finalize():
         )
     db.commit()
     print(f"[Finalize] Unified {result.rowcount} accounts to session_ts={session_ts[:19]}", flush=True)
+    # Tell the dashboard's auto-sync check that a fresh sync just landed so it
+    # doesn't immediately re-trigger cloudSync() on the next page load.
+    _sync_status[user["id"]] = {"running": False, "last": session_ts}
     return jsonify({"ok": True, "updated": result.rowcount})
 
 
