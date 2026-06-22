@@ -6418,6 +6418,23 @@ function checkForUpdates() {
   }).catch(function() {});
 }
 setInterval(checkForUpdates, 4000);
+
+// Background watcher: reload if any account data changes while no explicit sync is running.
+// This catches extension-detected login failures (which update synced_at) and
+// background extension syncs that land without the dashboard triggering them.
+var _bgLatestSync = null;
+fetch('/api/latest-sync').then(function(r){ return r.json(); }).then(function(d){ _bgLatestSync = d.latest; }).catch(function(){});
+setInterval(function() {
+  if (window._syncPoll) return;
+  fetch('/api/latest-sync').then(function(r){ return r.json(); }).then(function(d) {
+    if (window._syncPoll) return;
+    if (_bgLatestSync !== null && d.latest && d.latest !== _bgLatestSync) {
+      _bgLatestSync = d.latest;
+      reloadWithScroll();
+    }
+    if (d.latest) _bgLatestSync = d.latest;
+  }).catch(function(){});
+}, 12000);
 // Immediately check when user switches back to this tab
 document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'visible') checkForUpdates();
@@ -16545,7 +16562,7 @@ def api_sync_finalize():
     # Tell the dashboard's auto-sync check that a fresh sync just landed so it
     # doesn't immediately re-trigger cloudSync() on the next page load.
     _sync_status[user["id"]] = {"running": False, "last": session_ts}
-    return jsonify({"ok": True, "updated": result.rowcount})
+    return jsonify({"ok": True, "updated": result.rowcount, "session_ts": session_ts})
 
 
 
@@ -16585,9 +16602,10 @@ def api_sync_failure():
     payload = decrypt_account_data(uid, row["data_enc"] or "")
     payload["sync_status"]         = "login_required" if reason == "login_required" else "no_data"
     payload["sync_failure_reason"] = reason
+    now = iso()
     db.execute(
-        "UPDATE account_data SET data_enc=?, sync_failure_reason=?, sync_status=? WHERE user_id=? AND source=?",
-        (encrypt_account_data(uid, payload), reason, payload["sync_status"], uid, source)
+        "UPDATE account_data SET data_enc=?, sync_failure_reason=?, sync_status=?, synced_at=? WHERE user_id=? AND source=?",
+        (encrypt_account_data(uid, payload), reason, payload["sync_status"], now, uid, source)
     )
     db.commit()
     print(f"[SyncFailure] uid={uid} source={source} reason={reason}", flush=True)
