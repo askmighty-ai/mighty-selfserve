@@ -15008,10 +15008,18 @@ def api_data_sync():
 
     # Detect login-page redirects before storing
     if _is_login_page(raw_text):
-        # Don't overwrite good existing data with a failed login-page scrape
+        # Don't overwrite good existing data with a failed login-page scrape,
+        # but DO mark the account as login_required so the card shows a warning.
         if ex_data.get("sync_status") == "ok":
-            print(f"[Mighty] Skipping login-page overwrite for {source} — good data exists", flush=True)
-            return jsonify({"ok": True, "skipped": True, "reason": "login_page_but_good_data_exists"})
+            print(f"[Mighty] Login page detected for {source} — marking login_required (data preserved)", flush=True)
+            ex_data["sync_status"]         = "login_required"
+            ex_data["sync_failure_reason"] = "login_wall"
+            db.execute(
+                "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=? WHERE user_id=? AND source=?",
+                (encrypt_account_data(user["id"], ex_data), "login_required", "login_wall", user["id"], source)
+            )
+            db.commit()
+            return jsonify({"ok": True, "updated": "login_required", "reason": "login_page_detected"})
         data["sync_status"] = "login_required"
         data["sync_failure_reason"] = "login_wall"
         data["items"] = []
