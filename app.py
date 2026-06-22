@@ -5976,11 +5976,21 @@ function decide(actionId, decision) {
   var sy = sessionStorage.getItem('mighty-scroll-y');
   if (sy) {
     sessionStorage.removeItem('mighty-scroll-y');
-    // .main-content has overflow:hidden so scrollTop is always 0 — use .page-body instead
-    setTimeout(function() {
+    var target = parseInt(sy);
+    if (!target) return;
+    // Retry until the page is tall enough that scrollTop actually sticks.
+    // A fixed timeout fails when content renders slowly — the browser silently
+    // clamps scrollTop to 0 if the scroll height isn't large enough yet.
+    var attempts = 0;
+    function tryRestore() {
       var pb = document.querySelector('.page-body');
-      if (pb) { pb.scrollTop = parseInt(sy); } else { window.scrollTo(0, parseInt(sy)); }
-    }, 300);
+      if (!pb) { if (++attempts < 15) setTimeout(tryRestore, 100); return; }
+      pb.scrollTop = target;
+      if (pb.scrollTop < target - 5 && ++attempts < 15) {
+        setTimeout(tryRestore, 150);
+      }
+    }
+    setTimeout(tryRestore, 100);
   }
 })();
 
@@ -17226,6 +17236,15 @@ def sync_status():
     """Return current sync status for the logged-in user."""
     uid    = session["user_id"]
     status = _sync_status.get(uid, {})
+    # _sync_status is in-memory and lost on worker restart / multi-instance deploys.
+    # Fall back to the DB so the dashboard auto-sync check sees a real last-sync time
+    # even after Railway restarts or when the extension synced via a different worker.
+    if not status.get("last"):
+        row = get_db().execute(
+            "SELECT MAX(synced_at) AS ts FROM account_data WHERE user_id=?", (uid,)
+        ).fetchone()
+        if row and row["ts"]:
+            status = {"running": status.get("running", False), "last": row["ts"]}
     return jsonify({"ok": True, **status})
 
 
