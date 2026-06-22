@@ -9384,14 +9384,13 @@ def dashboard():
         _iarch_lbl = "'" + _ilbl.replace("\\", "\\\\").replace("'", "\\'") + "'"
         _ins_rows_html += (
             f'<div style="display:flex;gap:14px;align-items:flex-start;padding:13px 8px;'
-            f'border-bottom:1px solid #e8e3de;border-radius:8px;'
+            f'border-bottom:1px solid #e8e3de;border-radius:8px;cursor:pointer;'
             f'transition:background 0.1s" '
+            f'onclick="openBenefitDrawer(this)" data-benefit=\'{_ibd}\' '
             f'onmouseover="this.style.background=\'#edece9\';this.querySelector(\'.arch-btn\').style.opacity=\'1\'" '
             f'onmouseout="this.style.background=\'\';this.querySelector(\'.arch-btn\').style.opacity=\'0\'">'
-            f'<span style="font-size:24px;flex-shrink:0;line-height:1.1;margin-top:2px;cursor:pointer" '
-            f'onclick="openBenefitDrawer(this.parentElement)" data-benefit=\'{_ibd}\'>{_iicon}</span>'
-            f'<div style="flex:1;min-width:0;cursor:pointer" '
-            f'onclick="openBenefitDrawer(this.parentElement)" data-benefit=\'{_ibd}\'>'
+            f'<span style="font-size:24px;flex-shrink:0;line-height:1.1;margin-top:2px">{_iicon}</span>'
+            f'<div style="flex:1;min-width:0">'
             f'<div style="font-size:15px;font-weight:700;color:{_ilbl_color};line-height:1.3">'
             f'{he(_ilbl)}'
             + (f'<span style="font-size:13px;font-weight:500;color:#4b5563;margin-left:7px">{he(_ival_show)}</span>' if _ival_show else '')
