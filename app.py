@@ -6209,6 +6209,8 @@ function cloudSync() {
   btn.classList.add('syncing');
   _setSyncLabel('Syncing…');
   btn.disabled = true;
+  // Set sentinel immediately so checkForUpdates is blocked before the async fetch returns
+  window._syncPoll = window._syncPoll || true;
 
   document.querySelectorAll('.acct-card').forEach(function(c) { c.classList.add('is-syncing'); });
 
@@ -6320,21 +6322,29 @@ function syncAccount(source, btn) {
   var orig = btn.innerHTML;
   btn.innerHTML = '…';
   btn.disabled = true;
+  // Block checkForUpdates from triggering a scroll-resetting reload mid-sync
+  window._syncPoll = window._syncPoll || true;
   fetch('/sync/account/' + source, {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
     body: new URLSearchParams({_csrf: csrf})
   }).then(function(r) {
-    if (!r.ok) { btn.innerHTML = orig; btn.disabled = false; return; }
+    if (!r.ok) {
+      if (window._syncPoll === true) window._syncPoll = null;
+      btn.innerHTML = orig; btn.disabled = false; return;
+    }
     var poll = setInterval(function() {
       fetch('/sync/status').then(function(r2){ return r2.json(); }).then(function(s) {
         if (!s.running) {
           clearInterval(poll);
+          window._syncPoll = null;
           reloadWithScroll();
         }
       });
     }, 2000);
+    window._syncPoll = poll;
   }).catch(function() {
+    if (window._syncPoll === true) window._syncPoll = null;
     btn.innerHTML = orig;
     btn.disabled = false;
   });
