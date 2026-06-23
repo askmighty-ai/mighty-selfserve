@@ -86,9 +86,23 @@ const _LOGIN_URL_RE = /\/(login|signin|sign-in|log-in|logon|log-on|authenticate|
 // Debounce per-source so rapid redirects don't fire multiple reports
 const _loginReportedAt = {};
 
-// Sources confirmed logged-out this session — sync push is suppressed for these
-// so a running sync can't overwrite the login_required status we just set.
-const _loginWallSources = new Set();
+// ── Persistent login-wall tracking ──────────────────────────────────────────
+// Stored in chrome.storage.local so it survives service worker restarts.
+// When a source is login-walled, its sync push is suppressed until it succeeds.
+async function _markLoginWall(source) {
+  const { login_wall_sources = [] } = await chrome.storage.local.get('login_wall_sources');
+  if (!login_wall_sources.includes(source)) {
+    await chrome.storage.local.set({ login_wall_sources: [...login_wall_sources, source] });
+  }
+}
+async function _isLoginWall(source) {
+  const { login_wall_sources = [] } = await chrome.storage.local.get('login_wall_sources');
+  return login_wall_sources.includes(source);
+}
+async function _clearLoginWall(source) {
+  const { login_wall_sources = [] } = await chrome.storage.local.get('login_wall_sources');
+  await chrome.storage.local.set({ login_wall_sources: login_wall_sources.filter(s => s !== source) });
+}
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'loading') return;
@@ -122,7 +136,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!api_key) return;
 
   console.log(`[Mighty] Detected login page for ${source} — marking login_required`);
-  _loginWallSources.add(source);
+  _markLoginWall(source);
   reportSyncFailure(api_key, source, 'login_wall');
 });
 
@@ -527,7 +541,7 @@ chrome.storage.onChanged.addListener(async function(changes, area) {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
   console.log(`[Mighty] Storage-based login detected for ${source} (${hostname})`);
-  _loginWallSources.add(source);
+  _markLoginWall(source);
   reportSyncFailure(api_key, source, 'login_wall');
   chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, (tabs) => {
     tabs.forEach(t => chrome.tabs.reload(t.id));
@@ -1876,7 +1890,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     // If a login wall was detected for this source (either via URL redirect or
     // content script password-field detection), don't push — public-page content
     // would overwrite the login_required status we already set on the server.
-    if (_loginWallSources.has(account.source)) {
+    if (await _isLoginWall(account.source)) {
       console.log(`[Mighty] ${account.name}: login wall confirmed — skipping push to preserve login_required status`);
       throw new Error('Login wall detected — skipping push');
     }
@@ -1909,6 +1923,8 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     }
 
     console.log(`[Mighty] ${account.name}: ✓`);
+    // Successful push means the user is logged in — clear any login wall flag
+    _clearLoginWall(account.source);
 
   } finally {
     if (!useShared) {
