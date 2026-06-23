@@ -21,7 +21,8 @@ function normalizePath(path) {
 /** Report a sync failure to the server so the dashboard can show an actionable message.
  *  Fire-and-forget — never throws. reason: 'no_data' | 'timeout' | 'login_wall' */
 function reportSyncFailure(apiKey, source, reason) {
-  fetch(`${MIGHTY_URL}/api/sync/failure`, {
+  // Returns the promise so callers can await before reloading UI
+  return fetch(`${MIGHTY_URL}/api/sync/failure`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
     body: JSON.stringify({ source, reason }),
@@ -541,13 +542,14 @@ chrome.storage.onChanged.addListener(async function(changes, area) {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
   console.log(`[Mighty] Storage-based login detected for ${source} (${hostname})`);
-  _markLoginWall(source);
-  reportSyncFailure(api_key, source, 'login_wall');
+  await _markLoginWall(source);
+  await reportSyncFailure(api_key, source, 'login_wall');
+  // Clear the flag so it can fire again next time
+  chrome.storage.local.remove('mighty_login_detected');
+  // Reload dashboard AFTER the server has processed the update
   chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, (tabs) => {
     tabs.forEach(t => chrome.tabs.reload(t.id));
   });
-  // Clear the flag so it can fire again next time
-  chrome.storage.local.remove('mighty_login_detected');
 });
 
 // Messages from popup
