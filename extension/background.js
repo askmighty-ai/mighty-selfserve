@@ -660,10 +660,15 @@ function _htmlToText(html) {
 /** True if the text looks like a login/auth page redirect. */
 function _isSilentLoginPage(text) {
   const lower = text.slice(0, 3000).toLowerCase();
-  const hits = ['sign in', 'log in', 'forgot password', 'create account', 'enter your password',
-                 'enter your email', 'continue with google', 'remember me']
-    .filter(s => lower.includes(s)).length;
-  return hits >= 2;
+  // High-confidence signals: any single match is enough — these almost never
+  // appear on real authenticated account pages.
+  const highConf = ['forgot password', 'enter your password', 'enter your email',
+                    'continue with google', 'remember me', 'sign in with your',
+                    'log in with your', 'create an account', 'join for free'];
+  if (highConf.some(s => lower.includes(s))) return true;
+  // Lower-confidence signals: require 2+ (they can appear in logged-in nav/footers).
+  const lowConf = ['sign in', 'log in', 'create account'];
+  return lowConf.filter(s => lower.includes(s)).length >= 2;
 }
 
 /** Extract hrefs from raw HTML without DOM. Returns [{href, text}]. */

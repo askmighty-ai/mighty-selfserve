@@ -15089,12 +15089,15 @@ def api_credentials_fetch():
 
 # ── Login-page detection ──────────────────────────────────────────────────────
 
-_LOGIN_SIGNALS = [
+_LOGIN_SIGNALS_HIGH = [
+    "forgot password", "forgot your password", "enter your password",
+    "remember me", "email or member number", "member number or email",
+    "username and password", "sign in with your", "log in with your",
+    "join for free", "continue with google",
+]
+_LOGIN_SIGNALS_LOW = [
     "sign in to", "sign in with", "log in to", "log in with",
-    "forgot password", "forgot your password", "reset password",
-    "remember me", "create an account", "join now", "join for free",
-    "email or member number", "member number or email",
-    "username and password", "enter your password",
+    "reset password", "create an account", "join now",
 ]
 
 def _is_login_page(raw_text: str) -> bool:
@@ -15102,8 +15105,11 @@ def _is_login_page(raw_text: str) -> bool:
     if not raw_text:
         return False
     sample = raw_text[:3000].lower()
-    hits = sum(1 for sig in _LOGIN_SIGNALS if sig in sample)
-    return hits >= 2
+    # Any single high-confidence signal is sufficient
+    if any(sig in sample for sig in _LOGIN_SIGNALS_HIGH):
+        return True
+    # Lower-confidence signals require 2+
+    return sum(1 for sig in _LOGIN_SIGNALS_LOW if sig in sample) >= 2
 
 
 # ── Account data sync API ─────────────────────────────────────────────────────
