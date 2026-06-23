@@ -6507,38 +6507,6 @@ function forceDiscover(source, btn) {
   });
 }
 
-function syncAccount(source, btn) {
-  var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
-  var orig = btn.innerHTML;
-  btn.innerHTML = '…';
-  btn.disabled = true;
-  // Block checkForUpdates from triggering a scroll-resetting reload mid-sync
-  window._syncPoll = window._syncPoll || true;
-  fetch('/sync/account/' + source, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: new URLSearchParams({_csrf: csrf})
-  }).then(function(r) {
-    if (!r.ok) {
-      if (window._syncPoll === true) window._syncPoll = null;
-      btn.innerHTML = orig; btn.disabled = false; return;
-    }
-    var poll = setInterval(function() {
-      fetch('/sync/status').then(function(r2){ return r2.json(); }).then(function(s) {
-        if (!s.running) {
-          clearInterval(poll);
-          window._syncPoll = null;
-          reloadWithScroll();
-        }
-      });
-    }, 2000);
-    window._syncPoll = poll;
-  }).catch(function() {
-    if (window._syncPoll === true) window._syncPoll = null;
-    btn.innerHTML = orig;
-    btn.disabled = false;
-  });
-}
 
 var _activeStatusFilter = 'all';
 function setStatusFilter(status, btn) {
@@ -9097,7 +9065,7 @@ def dashboard():
                     f'</a>'
                     if (_card_url := (SITE_ENTRY_URL.get(src) or (row or {}).get("entry_url", ""))) else ""
                 )
-                + f'<button onclick="syncAccount(\'{he(src)}\', this)" title="Sync this account" class="acct-refresh-btn">↻</button>'
+                + ''
                 f'</div>'
                 f'</div>'
                 f'{bad_banner}'
