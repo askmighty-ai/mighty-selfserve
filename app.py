@@ -6044,7 +6044,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     <div class="cards-panel">
       <div class="cards-panel-inner">
       <div class="cards-panel-header">
-        <span style="font-size:12px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.07em">Accounts</span>
+        <span style="font-size:13px;font-weight:600;color:#1c1917">Your accounts</span>
         <div style="display:flex;align-items:center;gap:8px">
           {agent_cta_button}
           <button class="btn-connect" onclick="openDashConnectModal()">+ Connect</button>
@@ -9539,9 +9539,13 @@ def dashboard():
     else:
         _value_lead = "No accounts connected yet."
 
-    # Greeting + value-first header
+    # Greeting + stat strip
+    _n_accts    = len(configured)
+    _n_benefits = len(_hero_candidates)
+    _exp_color  = '#d97706' if total_expiring > 0 else '#1c1917'
+    _sync_sub   = (f'{he(_global_sync_label)} &middot; ' if _global_sync_label else '')
     hero_section_html = (
-        f'<div style="padding-bottom:20px;margin-bottom:20px;border-bottom:1px solid #e5e0da">'
+        f'<div style="margin-bottom:20px">'
         f'<div style="font-size:20px;font-weight:700;color:#1c1917" id="hero-greeting">'
         f'Hello, {he(_first_name)}'
         f'</div>'
@@ -9553,76 +9557,76 @@ def dashboard():
         f'  if(el) el.textContent=g+", {he(_first_name)}";'
         f'}})();'
         f'</script>'
-        f'<div style="font-size:14px;color:#374151;margin-top:6px;line-height:1.5">{_value_lead}</div>'
+        f'<div style="font-size:13px;color:#6b7280;margin-top:4px">'
+        f'{_sync_sub}{_n_accts} account{"s" if _n_accts != 1 else ""} connected'
+        f'</div>'
+        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px">'
+        f'<div style="background:#f5f2ed;border-radius:8px;padding:12px 14px">'
+        f'<div style="font-size:20px;font-weight:600;color:#1c1917">{_n_benefits}</div>'
+        f'<div style="font-size:12px;color:#6b7280;margin-top:3px">Benefits available now</div>'
+        f'</div>'
+        f'<div style="background:#f5f2ed;border-radius:8px;padding:12px 14px">'
+        f'<div style="font-size:20px;font-weight:600;color:{_exp_color}">{total_expiring}</div>'
+        f'<div style="font-size:12px;color:#6b7280;margin-top:3px">Expiring within 45 days</div>'
+        f'</div>'
+        f'<div style="background:#f5f2ed;border-radius:8px;padding:12px 14px">'
+        f'<div style="font-size:20px;font-weight:600;color:#1c1917">{_n_accts}</div>'
+        f'<div style="font-size:12px;color:#6b7280;margin-top:3px">Accounts connected</div>'
+        f'</div>'
+        f'</div>'
         f'</div>'
     )
 
-    # ── INSIGHTS: Available Now — prominent section, benefits as primary objects ─
-    # Shows top scored certs/credits as a clean list. Each item is clickable
-    # and opens the benefit detail drawer. Ordered by score (expiry + value + intent).
+    # ── INSIGHTS: Benefits available now — horizontal 3-card row ─────────────────
     import json as _json_ins
-    _ins_rows_html = ""
+    import datetime as _idt_ins
+    _ins_cards_html = ""
     _ins_seen = set()
-    for _ip, _, _idisp, _ilbl, _ival, _iexp, _ibtype in _hero_candidates[:5]:
+    _name_to_src = {name: key for key, name, icon, color, cat in SUPPORTED_SITES}
+    for _ip, _, _idisp, _ilbl, _ival, _iexp, _ibtype in _hero_candidates[:3]:
         _idk = (_idisp, _ilbl[:30])
         if _idk in _ins_seen: continue
         _ins_seen.add(_idk)
-        _iicon = _hero_icon(_ilbl.lower())
-        if _iicon == '•':
-            _iicon = {'certificate':'🎫','travel_credit':'✈️','cash_credit':'💳',
-                      'elite_status':'⭐','points_balance':'✈️','upgrade_cert':'⬆️'}.get(_ibtype,'•')
-        # Value display
-        _iskip = {'available','active','yes','enabled','valid','earned',''}
-        _ival_show = _ival.strip() if _ival.strip() and _ival.strip().lower() not in _iskip else ""
-        # Sub-line: "through [source]" + expiry chip
-        _isub_parts = [f'through {he(_idisp)}']
-        _iexp_html = ""
+        # Favicon
+        _isrc_key   = _name_to_src.get(_idisp, '')
+        _iben_domain = _reg_domain(_ACCOUNT_ENTRY_URLS.get(_isrc_key, ''))
+        _ifav_html  = (
+            f'<div style="width:30px;height:30px;border-radius:7px;border:0.5px solid #e8e4de;'
+            f'background:#f5f2ed;display:flex;align-items:center;justify-content:center;'
+            f'flex-shrink:0;overflow:hidden">'
+            f'<img src="https://www.google.com/s2/favicons?domain={_iben_domain}&sz=64"'
+            f' style="width:20px;height:20px;object-fit:contain"'
+            f' onerror="this.parentElement.style.display=\'none\'" alt="">'
+            f'</div>'
+        ) if _iben_domain else ''
+        # Expiry sub-line
+        _iexp_txt = ""
         if _iexp is not None and _iexp >= 0:
-            import datetime as _idt
-            if _iexp <= 14:
-                _iexp_html = (
-                    f'<span style="display:inline-block;margin-top:4px;font-size:11px;font-weight:600;'
-                    f'color:#dc2626;background:#fee2e2;border-radius:4px;padding:1px 6px">'
-                    f'Expires in {_iexp}d</span>'
-                )
-            elif _iexp <= 60:
-                _iexp_html = (
-                    f'<span style="display:inline-block;margin-top:4px;font-size:11px;'
-                    f'color:#d97706;background:#fef3c7;border-radius:4px;padding:1px 6px">'
-                    f'Exp {(_idt.date.today() + _idt.timedelta(days=_iexp)).strftime("%b %Y")}</span>'
-                )
-        # Label color: certs blue, credits green
-        _ilbl_color = "#1d4ed8" if _ibtype == "certificate" else "#059669" if _ibtype in ("travel_credit","cash_credit") else "#1c1917"
+            _iexp_date = (_idt_ins.date.today() + _idt_ins.timedelta(days=_iexp)).strftime("%b %d, %Y")
+            _iexp_color2 = '#dc2626' if _iexp <= 14 else '#d97706' if _iexp <= 60 else '#6b7280'
+            _iexp_txt = f'<div style="font-size:11px;color:{_iexp_color2};margin-top:3px">exp {_iexp_date}</div>'
         # Drawer data
+        _iicon2 = _hero_icon(_ilbl.lower())
         _ifk = f"{_idisp}::{_ilbl}"
         _ibd = _json_ins.dumps({
             "label": _ilbl, "account": _idisp, "value": _ival,
-            "icon": _iicon, "expDays": _iexp, "field_key": _ifk, "btype": _ibtype,
+            "icon": _iicon2, "expDays": _iexp, "field_key": _ifk, "btype": _ibtype,
             "corrected": _ifk in _dash_corrections
         }).replace("'", "&#39;")
-        _iarch_src = "'" + _idisp.replace("\\", "\\\\").replace("'", "\\'") + "'"
-        _iarch_lbl = "'" + _ilbl.replace("\\", "\\\\").replace("'", "\\'") + "'"
-        _ins_rows_html += (
-            f'<div style="display:flex;gap:14px;align-items:flex-start;padding:13px 8px;'
-            f'border-bottom:1px solid #e8e3de;border-radius:8px;cursor:pointer;'
+        _ins_cards_html += (
+            f'<div onclick="openBenefitDrawer(this)" data-benefit=\'{_ibd}\' '
+            f'style="flex:1;min-width:0;border:0.5px solid #e8e4de;border-radius:8px;'
+            f'padding:10px 12px;cursor:pointer;display:flex;gap:9px;align-items:flex-start;'
             f'transition:background 0.1s" '
-            f'onclick="openBenefitDrawer(this)" data-benefit=\'{_ibd}\' '
-            f'onmouseover="this.style.background=\'#edece9\';this.querySelector(\'.arch-btn\').style.opacity=\'1\'" '
-            f'onmouseout="this.style.background=\'\';this.querySelector(\'.arch-btn\').style.opacity=\'0\'">'
-            f'<span style="font-size:24px;flex-shrink:0;line-height:1.1;margin-top:2px">{_iicon}</span>'
+            f'onmouseover="this.style.background=\'#f5f2ed\'" '
+            f'onmouseout="this.style.background=\'\'">'
+            f'{_ifav_html}'
             f'<div style="flex:1;min-width:0">'
-            f'<div style="font-size:15px;font-weight:700;color:{_ilbl_color};line-height:1.3">'
-            f'{he(_ilbl)}'
-            + (f'<span style="font-size:13px;font-weight:500;color:#4b5563;margin-left:7px">{he(_ival_show)}</span>' if _ival_show else '')
-            + f'</div>'
-            f'<div style="font-size:12px;color:#9ca3af;margin-top:2px">{" · ".join(_isub_parts)}</div>'
-            + (f'<div>{_iexp_html}</div>' if _iexp_html else '')
-            + f'</div>'
-            f'<button class="arch-btn" onclick="archiveBenefit({_iarch_src},{_iarch_lbl},this)" '
-            f'title="Archive — hide from this list" '
-            f'style="flex-shrink:0;background:none;border:none;cursor:pointer;color:#9ca3af;'
-            f'font-size:11px;font-weight:500;padding:4px 6px;border-radius:4px;align-self:center;'
-            f'opacity:0;transition:opacity 0.15s;white-space:nowrap">Archive</button>'
+            f'<div style="font-size:12px;font-weight:600;color:#1c1917;white-space:nowrap;'
+            f'overflow:hidden;text-overflow:ellipsis">{he(_ilbl)}</div>'
+            f'<div style="font-size:11px;color:#6b7280;margin-top:1px">{he(_idisp)}</div>'
+            f'{_iexp_txt}'
+            f'</div>'
             f'</div>'
         )
     import json as _json_arch
@@ -9638,13 +9642,16 @@ def dashboard():
         f'<div id="arch-inline-panel" style="display:none;border-top:1px solid #f0ece8;margin-top:8px;padding-top:8px">'
         f'<div id="arch-inline-list"></div></div>'
     )
-    if _ins_rows_html:
+    if _ins_cards_html:
         insights_html = (
             _arch_js +
             f'<div style="margin-bottom:24px">'
-            f'<h2 style="font-size:10px;font-weight:700;color:#9ca3af;margin:0 0 2px;'
-            f'text-transform:uppercase;letter-spacing:.08em">Available Now</h2>'
-            + _ins_rows_html
+            f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
+            f'<span style="font-size:13px;font-weight:600;color:#1c1917">Benefits available now</span>'
+            f'</div>'
+            f'<div style="display:flex;gap:8px">'
+            + _ins_cards_html +
+            f'</div>'
             + _arch_footer +
             f'</div>'
         )
