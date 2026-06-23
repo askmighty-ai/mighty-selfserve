@@ -126,8 +126,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     || _DOMAIN_TO_SOURCE[hostname.split('.').slice(-2).join('.')];
   if (!source) return;
 
-  const isLoginPage = _LOGIN_URL_RE.test(pathname)
-    || /[?&](returnUrl|refreshURL|next|redirect|return)=/i.test(search);
+  // Only use path-based detection — query params like ?returnUrl= appear in
+  // authenticated SPA flows (e.g. United) and cause false login_required flags.
+  const isLoginPage = _LOGIN_URL_RE.test(pathname);
 
   if (isLoginPage) {
     // Debounce: don't re-report the same source within 5 minutes
@@ -1767,11 +1768,11 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
   // credentials: 'include' + <all_urls> host_permissions. Zero UI, zero tabs.
   const silentText = await _silentFetchPages(account.source, account);
   if (silentText) {
-    // Guard: if login wall is already active, don't overwrite it with a false 'ok' push.
-    // Sites like United return 200 HTML even when logged out, so we must check wall state first.
-    if (await _isLoginWall(account.source)) {
-      console.log(`[Mighty] ${account.name}: login wall active — skipping silent push, falling back to tab`);
-    } else {
+    // _silentFetchPages already verifies: non-login redirect URL, non-login page content,
+    // and sufficient text length. If it returned content, the user IS logged in —
+    // clear any stale login wall flag immediately.
+    await _clearLoginWall(account.source);
+    {
       console.log(`[Mighty] ${account.name}: silent fetch succeeded (${silentText.length} chars) — no tab needed`);
       const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
         method:  'POST',
