@@ -92,8 +92,7 @@
         "*://*.ticketmaster.com/*",
         "*://*.kp.org/*",
         "*://*.statefarm.com/*",
-        "*://*.cityofpaloalto.org/*",
-        "*://utilities.cityofpaloalto.org/*"
+        "*://*.cityofpaloalto.org/*"
       ],
       "js": [
         "content_scripts/api_interceptor.js"
@@ -152,8 +151,7 @@
         "*://*.ticketmaster.com/*",
         "*://*.kp.org/*",
         "*://*.statefarm.com/*",
-        "*://*.cityofpaloalto.org/*",
-        "*://utilities.cityofpaloalto.org/*"
+        "*://*.cityofpaloalto.org/*"
       ],
       "js": [
         "content_scripts/api_relay.js"

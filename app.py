@@ -306,7 +306,7 @@ def init_db():
             ('hyatt',      '/en-US/my-account/awards'),
             ('united',        '/en/us/myaccount/awards'),
             ('alaska_air',    '/account/wallet'),
-            # PA Utilities (utilities.cityofpaloalto.org)
+            # PA Utilities (mycpau.cityofpaloalto.org)
             ('pa_utilities',  '/Account/'),
             ('pa_utilities',  '/Account/Overview'),
             ('pa_utilities',  '/Billing/'),
@@ -3211,7 +3211,7 @@ SOURCE_CAPABILITIES: dict[str, dict] = {
         "category": "utility",
         "benefit_types": ["usage_kwh", "billing_amount", "autopay_status"],
         "key_pages": ["/account/"],
-        "login_url": "https://utilities.cityofpaloalto.org/",
+        "login_url": "https://mycpau.cityofpaloalto.org/",
     },
     "pg_and_e": {
         "display_name": "PG&E",
@@ -3355,7 +3355,7 @@ SOURCE_DOMAINS: dict[str, list[str]] = {
     "amtrak":            ["amtrak.com"],
     "global_entry":      ["ttp.dhs.gov"],
     # Utilities
-    "pa_utilities":      ["cityofpaloalto.org", "utilities.cityofpaloalto.org"],
+    "pa_utilities":      ["cityofpaloalto.org", "mycpau.cityofpaloalto.org"],
     "pg_and_e":          ["pge.com"],
     "con_ed":            ["coned.com"],
     "duke_energy":       ["duke-energy.com"],
@@ -12223,7 +12223,7 @@ SITE_ENTRY_URL = {
     "att":          "https://www.att.com/my/#/",
     "att_wireless": "https://myatt.att.com/exp/myconsumerdashboard/",
     "xfinity":      "https://customer.xfinity.com/#/billing",
-    "pa_utilities": "https://utilities.cityofpaloalto.org/",
+    "pa_utilities": "https://mycpau.cityofpaloalto.org/",
 }
 
 SUPPORTED_SITES = [

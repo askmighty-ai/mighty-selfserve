@@ -206,7 +206,7 @@ const ACCOUNT_ENTRY = {
   att:          'https://www.att.com/my/#/',
   att_wireless: 'https://myatt.att.com/exp/myconsumerdashboard/',
   xfinity:      'https://customer.xfinity.com/#/billing',
-  pa_utilities: 'https://utilities.cityofpaloalto.org/',
+  pa_utilities: 'https://mycpau.cityofpaloalto.org/',
 };
 
 /** Normalize a URL for deduplication: strip query + fragment, lowercase, no trailing slash. */
