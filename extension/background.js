@@ -1746,10 +1746,30 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       await waitForTabLoad(tabId, 15_000);
     }
 
-    // Abort if redirected to login
+    // Abort if domain is unreachable (DNS failure) or redirected to a different domain
     try {
       const currentTab = await chrome.tabs.get(tabId);
-      if (currentTab.url && _LOGIN_PATH_RE.test(new URL(currentTab.url).pathname)) {
+      const tabUrl = currentTab.url || '';
+      // Chrome error page means DNS failure or network error
+      if (tabUrl.startsWith('chrome-error://') || tabUrl.startsWith('about:neterror')) {
+        console.log(`[Mighty] ${account.name}: domain unreachable (${tabUrl}) — reporting`);
+        const { api_key: _ak } = await chrome.storage.local.get('api_key');
+        if (_ak) await reportSyncFailure(_ak, account.source, 'domain_unreachable');
+        return;
+      }
+      // Detect unexpected domain redirect (e.g. utilities.cityofpaloalto.org → paloalto.gov)
+      try {
+        const expectedDomain = baseDomain.split('.').slice(-2).join('.');
+        const landedDomain   = new URL(tabUrl).hostname.split('.').slice(-2).join('.');
+        if (landedDomain && expectedDomain && landedDomain !== expectedDomain) {
+          console.log(`[Mighty] ${account.name}: domain redirected ${expectedDomain} → ${landedDomain} — reporting`);
+          const { api_key: _ak } = await chrome.storage.local.get('api_key');
+          if (_ak) await reportSyncFailure(_ak, account.source, 'domain_moved');
+          return;
+        }
+      } catch (_) {}
+      // Abort if redirected to login
+      if (tabUrl && _LOGIN_PATH_RE.test(new URL(tabUrl).pathname)) {
         console.log(`[Mighty] ${account.name}: redirected to login — not logged in, skipping`);
         return;
       }

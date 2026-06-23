@@ -532,6 +532,21 @@ def init_db():
             db.commit()
         except Exception:
             pass
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS site_url_health (
+                    source      TEXT PRIMARY KEY,
+                    entry_url   TEXT NOT NULL,
+                    status      TEXT NOT NULL,
+                    final_url   TEXT,
+                    http_status INTEGER,
+                    error_msg   TEXT,
+                    checked_at  TEXT NOT NULL
+                )
+            """)
+            db.commit()
+        except Exception:
+            pass
 
 init_db()
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
@@ -1324,6 +1339,161 @@ def _start_alert_scheduler():
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
     print("[Mighty] Expiry alert scheduler started (daily at 08:00 UTC)", flush=True)
+
+
+# ── Site URL health check ──────────────────────────────────────────────────────
+# Proactively detects dead domains and domain migrations before users notice.
+# Checks all known account entry URLs weekly; stores results in site_url_health.
+# Mirrors ACCOUNT_ENTRY in extension/background.js — keep in sync when adding sites.
+
+_ACCOUNT_ENTRY_URLS = {
+    'southwest':    'https://www.southwest.com/loyalty/myaccount/',
+    'delta':        'https://www.delta.com/myprofile/',
+    'united':       'https://www.united.com/en/us/myunited',
+    'american_air': 'https://www.aa.com/loyalty/home.do',
+    'alaska_air':   'https://www.alaskaair.com/account/dashboard',
+    'sfcu':         'https://www.sfcu.org/accounts/online-banking',
+    'amex':         'https://www.americanexpress.com/en-us/account/',
+    'chase':        'https://secure.chase.com/web/auth/dashboard',
+    'wells_fargo':  'https://www.wellsfargo.com/change-the-way-you-bank/online-banking/jump/',
+    'bofa':         'https://www.bankofamerica.com/myaccounts/brain/render.go',
+    'capital_one':  'https://myaccounts.capitalone.com/accountSummary',
+    'discover':     'https://portal.discover.com/customer/en/portal/account-home',
+    'citi':         'https://online.citi.com/US/JRS/portal/Home.do',
+    'paypal':       'https://www.paypal.com/myaccount/summary',
+    'fidelity':     'https://digital.fidelity.com/ftgw/digital/portfolio/summary',
+    'schwab':       'https://client.schwab.com/app/accounts/#/',
+    'marriott':     'https://www.marriott.com/loyalty/myAccount/default.mi',
+    'hilton':       'https://www.hilton.com/en/hilton-honors/guest/my-account/',
+    'hyatt':        'https://www.hyatt.com/en-US/my-account/home',
+    'ihg':          'https://www.ihg.com/rewardsclub/content/us/en/member-home',
+    'wyndham':      'https://www.wyndhamhotels.com/registry',
+    'amazon':       'https://www.amazon.com/gp/css/order-history',
+    'target':       'https://www.target.com/account',
+    'costco':       'https://www.costco.com/OrderStatusCmd',
+    'starbucks':    'https://www.starbucks.com/rewards/',
+    'state_farm':   'https://www.statefarm.com/customer-care/my-accounts',
+    'ticketmaster': 'https://www.ticketmaster.com/member/orders',
+    'netflix':      'https://www.netflix.com/YourAccount',
+    'hulu':         'https://secure.hulu.com/account',
+    'spotify':      'https://www.spotify.com/us/account/overview/',
+    'disney_plus':  'https://www.disneyplus.com/identity/account',
+    'att':          'https://www.att.com/my/#/',
+    'xfinity':      'https://customer.xfinity.com/#/billing',
+    'pa_utilities': 'https://mycpau.cityofpaloalto.org/',
+}
+
+def _reg_domain(url):
+    """Extract registered domain (e.g. 'delta.com') from a URL string."""
+    try:
+        from urllib.parse import urlparse as _up
+        host = _up(url).hostname or ''
+        parts = host.split('.')
+        return '.'.join(parts[-2:]) if len(parts) >= 2 else host
+    except Exception:
+        return ''
+
+def _check_entry_url(source, url):
+    """HEAD-check a single entry URL. Returns dict with status + metadata.
+    Statuses: ok | dns_failed | domain_moved | http_error | timeout | error
+    """
+    import requests as _req
+    original_domain = _reg_domain(url)
+    try:
+        r = _req.head(
+            url, allow_redirects=True, timeout=12,
+            headers={'User-Agent': 'Mozilla/5.0 (compatible; MightyHealthBot/1.0)'}
+        )
+        final_url    = r.url
+        final_domain = _reg_domain(final_url)
+        if final_domain and original_domain and final_domain != original_domain:
+            return {
+                'status': 'domain_moved',
+                'final_url': final_url,
+                'http_status': r.status_code,
+                'error_msg': f'Moved from {original_domain} → {final_domain}',
+            }
+        if r.status_code >= 400:
+            return {
+                'status': 'http_error',
+                'final_url': final_url,
+                'http_status': r.status_code,
+                'error_msg': f'HTTP {r.status_code}',
+            }
+        return {'status': 'ok', 'final_url': final_url,
+                'http_status': r.status_code, 'error_msg': None}
+    except _req.exceptions.ConnectionError as e:
+        msg = str(e)
+        _dns_terms = ('NameResolution', 'NXDOMAIN', 'Name or service not known',
+                      'nodename nor servname', 'getaddrinfo', 'Name resolution')
+        if any(t in msg for t in _dns_terms):
+            return {'status': 'dns_failed', 'final_url': None,
+                    'http_status': None, 'error_msg': 'DNS resolution failed'}
+        return {'status': 'connection_error', 'final_url': None,
+                'http_status': None, 'error_msg': msg[:200]}
+    except _req.exceptions.Timeout:
+        return {'status': 'timeout', 'final_url': None,
+                'http_status': None, 'error_msg': 'Request timed out'}
+    except Exception as e:
+        return {'status': 'error', 'final_url': None,
+                'http_status': None, 'error_msg': str(e)[:200]}
+
+def run_site_url_healthcheck():
+    """Check all known account entry URLs concurrently. Stores results in DB."""
+    import concurrent.futures as _cf
+    now = iso()
+    results = {}
+
+    def _check(item):
+        src, url = item
+        r = _check_entry_url(src, url)
+        r['source'] = src
+        r['entry_url'] = url
+        return r
+
+    with _cf.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_check, item): item[0]
+                   for item in _ACCOUNT_ENTRY_URLS.items()}
+        for future in _cf.as_completed(futures):
+            try:
+                r = future.result()
+                results[r['source']] = r
+                icon = '✓' if r['status'] == 'ok' else '⚠'
+                extra = f" — {r['error_msg']}" if r['error_msg'] else ''
+                print(f"[URLHealth] {icon} {r['source']}: {r['status']}{extra}", flush=True)
+            except Exception as e:
+                src = futures[future]
+                print(f"[URLHealth] Error checking {src}: {e}", flush=True)
+
+    db = get_db()
+    for r in results.values():
+        db.execute(
+            """INSERT OR REPLACE INTO site_url_health
+               (source, entry_url, status, final_url, http_status, error_msg, checked_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (r['source'], r['entry_url'], r['status'],
+             r.get('final_url'), r.get('http_status'), r.get('error_msg'), now)
+        )
+    db.commit()
+    issues = [r for r in results.values() if r['status'] != 'ok']
+    print(f"[URLHealth] Done — {len(results)} checked, {len(issues)} issue(s) found", flush=True)
+    return results
+
+def _start_url_health_scheduler():
+    """Check all entry URLs on startup (5-min delay) then weekly."""
+    import time as _t
+    def _loop():
+        _t.sleep(300)  # 5-min delay so it doesn't slow boot
+        while True:
+            try:
+                with app.app_context():
+                    run_site_url_healthcheck()
+            except Exception as e:
+                print(f"[URLHealth] Scheduler error: {e}", flush=True)
+            _t.sleep(7 * 24 * 3600)  # weekly
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    print("[Mighty] Site URL health scheduler started (check in 5 min, then weekly)", flush=True)
 
 
 # ── VAPID key management (push notifications — optional) ─────────────────────
@@ -12178,6 +12348,7 @@ SYNC_FAILURE_MESSAGES = {
     "stale_date_only":     ("Dates only",      "Visit your account overview page — Mighty only found date fields."),
     "timeout":             ("Timed out",       "The sync took too long. Try clicking sync again."),
     "extension_missing":   ("Extension needed","Install the Mighty Chrome extension, then sync again."),
+    "domain_unreachable":  ("Site may have moved", "This account's website couldn't be reached — it may have changed its address. Check the Mighty admin URL health panel."),
 }
 
 # Direct account URLs — mirrors ACCOUNT_ENTRY in background.js.
@@ -15851,6 +16022,33 @@ def api_admin_site_health():
     return jsonify({"sites": result, "total_sites": len(result)})
 
 
+@app.route("/api/admin/site-url-health", methods=["GET", "POST"])
+def api_admin_site_url_health():
+    """GET: return last URL health check results.
+    POST: trigger a fresh check immediately (runs in background, returns 202).
+    No auth — returns no PII; health data is site-level only.
+    """
+    db = get_db()
+    if request.method == "POST":
+        def _run():
+            with app.app_context():
+                run_site_url_healthcheck()
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({"ok": True, "message": "Health check started in background"}), 202
+
+    rows = db.execute(
+        "SELECT * FROM site_url_health ORDER BY status DESC, source ASC"
+    ).fetchall()
+    results = [dict(r) for r in rows]
+    issues  = [r for r in results if r["status"] != "ok"]
+    return jsonify({
+        "checked":      len(results),
+        "issues":       len(issues),
+        "last_checked": max((r["checked_at"] for r in results), default=None),
+        "results":      results,
+    })
+
+
 @app.route("/api/debug/discover-now/<source>")
 @require_login
 def api_debug_discover_now(source):
@@ -16569,11 +16767,13 @@ def api_sync_failure():
     reason = (body or {}).get("reason", "").strip()
     # Map extension reason codes to known SYNC_FAILURE_MESSAGES keys
     _reason_map = {
-        "no_data":    "no_data",
-        "no_content": "no_data",
-        "timeout":    "timeout",
-        "login_wall": "login_required",
-        "login_required": "login_required",
+        "no_data":            "no_data",
+        "no_content":         "no_data",
+        "timeout":            "timeout",
+        "login_wall":         "login_required",
+        "login_required":     "login_required",
+        "domain_unreachable": "domain_unreachable",
+        "domain_moved":       "domain_unreachable",
     }
     reason = _reason_map.get(reason, "no_data")
     if not source:
@@ -16587,7 +16787,8 @@ def api_sync_failure():
         # Account never synced successfully — nothing to update
         return jsonify({"ok": True, "updated": False, "note": "no existing record"})
     payload = decrypt_account_data(uid, row["data_enc"] or "")
-    payload["sync_status"]         = "login_required" if reason == "login_required" else "no_data"
+    _status_for_reason = {"login_required": "login_required", "domain_unreachable": "no_data"}
+    payload["sync_status"]         = _status_for_reason.get(reason, "no_data")
     payload["sync_failure_reason"] = reason
     now = iso()
     db.execute(
@@ -18415,4 +18616,6 @@ if __name__ == "__main__":
     # Start expiry alert scheduler (opt-out via ENABLE_EXPIRY_ALERTS=false)
     if os.environ.get("ENABLE_EXPIRY_ALERTS", "true").lower() == "true":
         _start_alert_scheduler()
+    # Start site URL health scheduler (weekly; first check after 5 min)
+    _start_url_health_scheduler()
     app.run(host="0.0.0.0", port=PORT, debug=False)
