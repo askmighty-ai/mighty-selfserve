@@ -729,14 +729,21 @@ async function _silentFetchPages(source, account) {
   const entry = ACCOUNT_ENTRY[source];
   if (!entry) return null;
 
-  let entryHtml;
+  let entryHtml, finalUrl;
   try {
     const resp = await fetch(entry, { credentials: 'include' });
     if (!resp.ok) return null;
+    finalUrl  = resp.url;
     entryHtml = await resp.text();
   } catch {
     return null;
   }
+
+  // If the fetch was redirected to a login page URL, we're not logged in
+  try {
+    const finalPath = new URL(finalUrl).pathname;
+    if (_LOGIN_URL_RE.test(finalPath)) return null;
+  } catch {}
 
   const entryText = _htmlToText(entryHtml);
 
