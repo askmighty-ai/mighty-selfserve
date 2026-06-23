@@ -8665,11 +8665,19 @@ def dashboard():
                 )
                 status_color = "#a78bfa"
             elif sync_status == "login_required":
+                _lr_login_url = SOURCE_CAPABILITIES.get(src, {}).get("login_url") or _ACCOUNT_ENTRY_URLS.get(src, "")
+                _lr_btn = (
+                    f'<a href="{he(_lr_login_url)}" target="_blank" rel="noopener" '
+                    f'style="display:inline-block;margin-top:8px;padding:5px 12px;background:#ef4444;'
+                    f'color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none">'
+                    f'Sign in to {he(display_name)} →</a>'
+                ) if _lr_login_url else ""
                 card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
-                    f'<div style="color:#ef4444;font-size:12px;font-weight:500">⚠ You\'ve been logged out of {he(display_name)}</div>'
-                    f'<div style="color:#9ca3af;font-size:11px;margin-top:3px">Log back in via Chrome, then click the sync button ↻</div>'
+                    f'<div style="color:#ef4444;font-size:12px;font-weight:500">Session expired</div>'
+                    f'<div style="color:#9ca3af;font-size:11px;margin-top:3px">Sign back in — Mighty will sync automatically.</div>'
+                    f'{_lr_btn}'
                     f'</div>'
                 )
                 status_color = "#ef4444"

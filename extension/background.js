@@ -105,6 +105,9 @@ async function _clearLoginWall(source) {
   await chrome.storage.local.set({ login_wall_sources: login_wall_sources.filter(s => s !== source) });
 }
 
+// Track tabs that recently showed a login page, keyed by tabId → source
+const _tabLoginPending = {};
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'loading') return;
   const url = changeInfo.url || tab.url;
@@ -123,22 +126,38 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     || _DOMAIN_TO_SOURCE[hostname.split('.').slice(-2).join('.')];
   if (!source) return;
 
-  // Must look like a login page
   const isLoginPage = _LOGIN_URL_RE.test(pathname)
     || /[?&](returnUrl|refreshURL|next|redirect|return)=/i.test(search);
-  if (!isLoginPage) return;
 
-  // Debounce: don't re-report the same source within 5 minutes
-  const now = Date.now();
-  if (_loginReportedAt[source] && now - _loginReportedAt[source] < 300_000) return;
-  _loginReportedAt[source] = now;
+  if (isLoginPage) {
+    // Debounce: don't re-report the same source within 5 minutes
+    const now = Date.now();
+    if (_loginReportedAt[source] && now - _loginReportedAt[source] < 300_000) {
+      // Still mark tab as pending so we can detect successful login
+      _tabLoginPending[tabId] = source;
+      return;
+    }
+    _loginReportedAt[source] = now;
+    _tabLoginPending[tabId] = source;
 
-  const { api_key } = await chrome.storage.local.get('api_key');
-  if (!api_key) return;
+    const { api_key } = await chrome.storage.local.get('api_key');
+    if (!api_key) return;
 
-  console.log(`[Mighty] Detected login page for ${source} — marking login_required`);
-  _markLoginWall(source);
-  reportSyncFailure(api_key, source, 'login_wall');
+    console.log(`[Mighty] Detected login page for ${source} — marking login_required`);
+    _markLoginWall(source);
+    reportSyncFailure(api_key, source, 'login_wall');
+
+  } else if (_tabLoginPending[tabId] === source) {
+    // This tab was on a login page for this source and has now navigated away
+    // on the same domain — treat as successful login.
+    delete _tabLoginPending[tabId];
+    const { api_key } = await chrome.storage.local.get('api_key');
+    if (!api_key) return;
+    console.log(`[Mighty] Login success detected for ${source} — clearing wall and syncing`);
+    await _clearLoginWall(source);
+    // Small delay to let the session cookie settle before syncing
+    setTimeout(() => syncSingleAccount(source, api_key), 3000);
+  }
 });
 
 /** Report a fruitful path to the shared registry. Fire-and-forget. */
@@ -791,6 +810,24 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
   } catch (e) {
     console.warn('[Mighty] Could not create sync tab:', e.message);
     return null;
+  }
+}
+
+/** Sync a single account by source key after a successful re-login. */
+async function syncSingleAccount(source, apiKey) {
+  console.log(`[Mighty] Post-login sync for ${source}`);
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
+      headers: { 'X-Mighty-Key': apiKey }
+    });
+    if (!resp.ok) return;
+    const accounts = await resp.json();
+    const account = accounts.find(a => a.source === source);
+    if (!account) return;
+    await crawlAccount(apiKey, account, new Date().toISOString(), null, null);
+    chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+  } catch (e) {
+    console.warn(`[Mighty] Post-login sync failed for ${source}: ${e.message}`);
   }
 }
 
