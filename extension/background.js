@@ -4,7 +4,7 @@
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
 const SYNC_INTERVAL = 240; // minutes (every 4 hours)
-const _SKIP_PATH_RE = /\/(book|search|flight-search|find-flights|deals|shop|cart|checkout|help|faq|legal|careers|about|press|sitemap|accessibility|sign-?up|register|login|sign-?in)(\b|\/|$)/i;
+const _SKIP_PATH_RE = /\/(book|search|flight-search|find-flights|deals|shop|cart|checkout|help|faq|legal|careers|about|press|sitemap|accessibility|sign-?up|register|login|sign-?in|privacy|cookie|terms|policy|contact|feedback|newsroom|investor)(\b|\/|$)/i;
 
 // ── Path registry helpers ─────────────────────────────────────────────────────
 
@@ -821,8 +821,17 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
   }
 }
 
+// Debounce map for post-login syncs — prevent multiple triggers per source
+const _postLoginSyncedAt = {};
+
 /** Sync a single account by source key after a successful re-login. */
 async function syncSingleAccount(source, apiKey) {
+  const now = Date.now();
+  if (_postLoginSyncedAt[source] && now - _postLoginSyncedAt[source] < 300_000) {
+    console.log(`[Mighty] Post-login sync for ${source} debounced — already ran within 5 min`);
+    return;
+  }
+  _postLoginSyncedAt[source] = now;
   console.log(`[Mighty] Post-login sync for ${source}`);
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
