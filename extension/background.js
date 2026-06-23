@@ -859,15 +859,32 @@ async function syncSingleAccount(source, apiKey) {
 }
 
 async function runSync() {
-  // Prevent concurrent syncs — each would spawn its own tab set
+  // Prevent concurrent syncs — each would spawn its own tab set.
+  // _syncInProgress is in-memory only and resets on MV3 service worker restart.
+  // We also check a persistent storage lock so restarts don't trigger a second sync
+  // while the first is still running (service workers live ~5 min, syncs take longer).
   if (_syncInProgress) {
-    console.log('[Mighty] Sync already in progress — skipping duplicate trigger');
+    console.log('[Mighty] Sync already in progress (in-memory) — skipping');
     return;
   }
+  try {
+    const { _sync_lock_ts } = await chrome.storage.local.get('_sync_lock_ts');
+    if (_sync_lock_ts && (Date.now() - _sync_lock_ts) < 45 * 60 * 1000) {
+      console.log('[Mighty] Sync lock held (persistent) — skipping duplicate trigger');
+      return;
+    }
+    await chrome.storage.local.set({ _sync_lock_ts: Date.now() });
+  } catch {}
   _syncInProgress = true;
 
-  // Clean up any tab leaked by a previous crashed/interrupted sync run
+  // Clean up ALL tabs leaked by previous crashed/interrupted sync runs
   try {
+    const { _leaked_sync_tabs = [] } = await chrome.storage.local.get('_leaked_sync_tabs');
+    for (const tid of _leaked_sync_tabs) {
+      chrome.tabs.remove(tid).catch(() => {});
+    }
+    if (_leaked_sync_tabs.length) await chrome.storage.local.remove('_leaked_sync_tabs');
+    // Also handle old single-tab key for backwards compatibility
     const { _leaked_sync_tab } = await chrome.storage.local.get('_leaked_sync_tab');
     if (_leaked_sync_tab) {
       chrome.tabs.remove(_leaked_sync_tab).catch(() => {});
@@ -935,9 +952,14 @@ async function runSync() {
     if (sharedSync) return sharedSync.tabId;
     sharedSync = await _createSyncWindow();
     if (sharedSync) {
-      // Persist tab ID so we can clean it up even if service worker restarts mid-sync
-      await chrome.storage.local.set({ _leaked_sync_tab: sharedSync.tabId });
-      console.log('[Mighty] Created fallback shared tab (silent fetch unavailable for this account)');
+      // Persist tab ID so we can clean it up even if service worker restarts mid-sync.
+      // Use an array so multiple leaked tabs from concurrent restarts all get cleaned up.
+      try {
+        const { _leaked_sync_tabs = [] } = await chrome.storage.local.get('_leaked_sync_tabs');
+        _leaked_sync_tabs.push(sharedSync.tabId);
+        await chrome.storage.local.set({ _leaked_sync_tabs });
+      } catch {}
+      console.log('[Mighty] Created shared sync tab (tab-based fallback needed)');
     }
     return sharedSync?.tabId ?? null;
   }
@@ -1023,9 +1045,9 @@ async function runSync() {
     // Guaranteed cleanup — runs even if sync throws or times out
     if (sharedSync?.tabId) {
       chrome.tabs.remove(sharedSync.tabId).catch(() => {});
-      await chrome.storage.local.remove('_leaked_sync_tab');
       console.log('[Mighty] Shared sync tab closed');
     }
+    await chrome.storage.local.remove(['_leaked_sync_tabs', '_leaked_sync_tab', '_sync_lock_ts']);
     _syncInProgress = false;
   }
 }
