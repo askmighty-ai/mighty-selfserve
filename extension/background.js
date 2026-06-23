@@ -739,10 +739,13 @@ async function _silentFetchPages(source, account) {
     return null;
   }
 
-  // If the fetch was redirected to a login page URL, we're not logged in
+  // If the fetch was redirected to an explicit login page URL, we're not logged in.
+  // Use a conservative regex: exclude 'sso' and 'authenticate' since those paths
+  // appear in authenticated SSO flows (e.g. United /session/sso?...).
+  const _REDIRECT_LOGIN_RE = /\/(login|signin|sign-in|log-in|logon|log-on)(\/|$|\?)/i;
   try {
     const finalPath = new URL(finalUrl).pathname;
-    if (_LOGIN_URL_RE.test(finalPath)) return null;
+    if (_REDIRECT_LOGIN_RE.test(finalPath)) return null;
   } catch {}
 
   const entryText = _htmlToText(entryHtml);

@@ -15240,10 +15240,10 @@ def api_data_sync():
         data["sync_status"] = "no_data"
         data["sync_failure_reason"] = "no_data"
     else:
-        # Sticky login_required: if the account was previously marked login_required,
-        # require substantive content (1000+ chars) before clearing it. A login-page
-        # redirect that slipped through keyword detection is typically short.
-        if ex_data.get("sync_status") == "login_required" and len(raw_text.strip()) < 1000:
+        # Sticky login_required: if the account was previously marked login_required
+        # and the new content looks like a login page, stay red. The extension already
+        # filters out responses < 600 chars, so we only check for login page keywords here.
+        if ex_data.get("sync_status") == "login_required" and _is_login_page(raw_text):
             data["sync_status"] = "login_required"
             data["sync_failure_reason"] = "login_wall"
         else:
