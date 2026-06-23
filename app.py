@@ -351,6 +351,10 @@ def init_db():
         except Exception:
             pass
         try:
+            db.execute("ALTER TABLE account_data ADD COLUMN sync_status TEXT")
+        except Exception:
+            pass
+        try:
             db.execute("ALTER TABLE account_data ADD COLUMN entry_url TEXT")
         except Exception:
             pass
