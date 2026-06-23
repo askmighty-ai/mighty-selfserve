@@ -16580,7 +16580,7 @@ def api_sync_failure():
         return jsonify({"error": "source required"}), 400
     db  = get_db()
     row = db.execute(
-        "SELECT id, data_enc FROM account_data WHERE user_id=? AND source=?",
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
         (uid, source)
     ).fetchone()
     if not row:
