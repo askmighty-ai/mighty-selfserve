@@ -1626,10 +1626,10 @@ def _log_privacy_event(uid: str, event_type: str, source: str = None, domain: st
 
 
 def _sidebar_html(active: str, email: str, csrf: str) -> str:
-    """Generate the shared left sidebar HTML — icon-only, 48px."""
+    """Generate the shared left sidebar HTML — icon + label, 140px."""
     def _nav(href, label, icon_svg, page_key):
         cls = "sidebar-link sidebar-link-active" if active == page_key else "sidebar-link"
-        return f'<a href="{href}" class="{cls}">{icon_svg}<span class="sidebar-tip">{label}</span></a>'
+        return f'<a href="{href}" class="{cls}">{icon_svg}{label}</a>'
     icon_dash = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>'
     icon_acct = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>'
     icon_sett = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>'
@@ -1640,9 +1640,11 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         + _nav('/settings', 'Settings', icon_sett, 'settings')
     )
     _logout_form = (
-        f'<form method="POST" action="/logout" style="margin:0;display:flex;justify-content:center">'
+        f'<form method="POST" action="/logout" style="margin:0">'
         f'<input type="hidden" name="_csrf" value="{he(csrf)}">'
-        f'<button class="sidebar-avatar" type="submit" title="Sign out" onclick="return confirm(\'Sign out of Mighty?\')">{av}<span class="sidebar-tip">Sign out</span></button>'
+        f'<button class="sidebar-avatar" type="submit" title="Sign out" onclick="return confirm(\'Sign out of Mighty?\')">'
+        f'<span class="sidebar-avatar-dot">{av}</span>Sign out'
+        f'</button>'
         f'</form>'
     )
     return (
@@ -1651,7 +1653,7 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         '<div class="sidebar-header">'
         '<a href="/dashboard" class="sidebar-logo">'
         '<img src="/logo-icon.png" alt="Mighty" class="sidebar-logo-img">'
-        '<span class="sidebar-tip">Mighty</span>'
+        '<span class="sidebar-logo-name">Mighty</span>'
         '</a></div>'
         '<nav class="sidebar-nav">' + _nav_links + '</nav>'
         '<div class="sidebar-footer">' + _logout_form + '</div>'
@@ -5057,20 +5059,22 @@ button{font-family:inherit;cursor:pointer}
 .badge-approved{background:#d1fae5;color:#065f46;border:1px solid #a7f3d0}
 .badge-denied{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
 .badge-timeout{background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb}
-.sidebar{width:48px;flex-shrink:0;background:#0a0c12;border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;height:100vh;overflow:hidden;align-items:center}
-.sidebar-header{padding:14px 0 10px;border-bottom:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}
-.sidebar-logo{display:flex;align-items:center;justify-content:center;text-decoration:none}
+.sidebar{width:140px;flex-shrink:0;background:#0a0c12;border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.sidebar-header{padding:14px 12px 10px;border-bottom:1px solid rgba(255,255,255,0.06);width:100%;display:flex;align-items:center;gap:8px}
+.sidebar-logo{display:flex;align-items:center;gap:8px;text-decoration:none}
 .sidebar-logo:hover{text-decoration:none}
-.sidebar-logo-img{width:26px;height:26px;border-radius:7px;object-fit:cover}
-.sidebar-nav{flex:1;padding:8px 0;display:flex;flex-direction:column;align-items:center;gap:2px;overflow-y:auto;width:100%}
-.sidebar-link{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#3d4560;text-decoration:none;transition:background 0.1s,color 0.1s}
+.sidebar-logo-img{width:26px;height:26px;border-radius:7px;object-fit:cover;flex-shrink:0}
+.sidebar-logo-name{font-size:13px;font-weight:600;color:#c4cde0;letter-spacing:0.01em}
+.sidebar-nav{flex:1;padding:8px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;width:100%}
+.sidebar-link{width:100%;height:34px;display:flex;align-items:center;gap:9px;padding:0 10px;border-radius:8px;color:#5a6080;text-decoration:none;transition:background 0.1s,color 0.1s;font-size:12px;font-weight:500;white-space:nowrap}
 .sidebar-link:hover{background:rgba(255,255,255,0.07);color:#c4cde0;text-decoration:none}
 .sidebar-link svg{flex-shrink:0}
 .sidebar-link-active{background:rgba(129,140,248,0.15);color:#818cf8 !important}
-.sidebar-footer{padding:10px 0 12px;border-top:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}
-.sidebar-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;border:none;cursor:pointer;font-family:inherit;position:relative}
-.sidebar-tip{position:fixed;left:54px;background:#1a1d2e;color:#e2e8f0;font-size:12px;font-weight:500;padding:5px 10px;border-radius:7px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity 0.1s;z-index:999;border:1px solid rgba(255,255,255,0.08)}
-.sidebar-link:hover .sidebar-tip,.sidebar-logo:hover .sidebar-tip,.sidebar-avatar:hover .sidebar-tip{opacity:1}
+.sidebar-footer{padding:10px 8px 12px;border-top:1px solid rgba(255,255,255,0.06);width:100%}
+.sidebar-avatar{width:100%;height:34px;border-radius:8px;background:none;display:flex;align-items:center;gap:9px;padding:0 10px;font-size:12px;font-weight:500;color:#5a6080;border:none;cursor:pointer;font-family:inherit;transition:background 0.1s,color 0.1s}
+.sidebar-avatar:hover{background:rgba(255,255,255,0.07);color:#c4cde0}
+.sidebar-avatar-dot{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0}
+.sidebar-tip{display:none}
 """
 
 LANDING_HTML = """<!DOCTYPE html>
@@ -5800,10 +5804,10 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10)}
 /* Page body — single column: intelligence strip at top, accounts below */
 .page-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:0}
-.insight-panel{width:100%;padding:24px 32px 22px;background:#f7f4f0;border-bottom:1px solid #e5e0da;flex-shrink:0}
-.insight-inner{max-width:820px;margin:0 auto}
+.insight-panel{width:100%;padding:16px 32px 12px;background:#ffffff;flex-shrink:0}
+.insight-inner{max-width:1600px;margin:0 auto}
 /* Cards panel — full-width with generous max so wide monitors breathe */
-.cards-panel{flex:1;min-width:0;padding:20px 28px 40px}
+.cards-panel{flex:1;min-width:0;padding:0 32px 40px}
 .cards-panel-inner{max-width:1600px;margin:0 auto}
 .cards-panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 /* Compact (utility/low-value) account cards — subdued when not expanded */
@@ -5817,7 +5821,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .cat-label{font-size:11px;font-weight:600;color:#a09a94;text-transform:uppercase;letter-spacing:0.7px;white-space:nowrap}
 .cat-rule{flex:1;height:0.5px;background:rgba(0,0,0,0.08)}
 /* Card grid */
-.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px}
+.card-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 /* Account cards */
 .acct-card{background:#ffffff;border-radius:12px;overflow:hidden;border:0.5px solid rgba(0,0,0,0.08);box-shadow:0 1px 1px rgba(0,0,0,0.03),0 3px 12px rgba(0,0,0,0.05);transition:box-shadow 0.2s,border-color 0.2s,opacity 0.2s,transform 0.2s,filter 0.2s}
 .acct-card.is-syncing{border-color:rgba(99,102,241,0.3);box-shadow:0 0 0 2px rgba(99,102,241,0.08),0 3px 12px rgba(0,0,0,0.05);animation:card-pulse 1.8s ease-in-out infinite}
@@ -9183,19 +9187,30 @@ def dashboard():
                 f'</div>'
             )
         _n_sugg = len(_pending_not_connected)
-        _sugg_label = f"{_n_sugg} account{'s' if _n_sugg != 1 else ''} ready to connect"
+        _sugg_label = f"{_n_sugg} account{'s' if _n_sugg != 1 else ''} ready to connect from your email scan"
         _sugg_section = (
-            f'<div id="sugg-section" style="background:#fff;border:1.5px solid #e0e7ff;border-radius:12px;'
-            f'padding:16px 20px;margin-bottom:20px">'
-            f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
-            f'<div style="font-size:13px;font-weight:700;color:#3730a3">📬 {he(_sugg_label)} from your email scan</div>'
-            f'<div style="display:flex;gap:10px;align-items:center">'
-            f'<a href="/email-scan" style="font-size:11px;color:#6366f1;text-decoration:none">Edit list</a>'
-            f'<button onclick="dismissAllSugg()" style="font-size:11px;color:#9ca3af;background:none;'
-            f'border:none;cursor:pointer;font-family:inherit">Dismiss all</button>'
-            f'</div></div>'
-            f'<div id="sugg-list" style="max-height:320px;overflow-y:auto">{_sugg_items_html}</div>'
+            f'<div id="sugg-section" style="border:0.5px solid #e0e7ff;border-radius:10px;'
+            f'margin-bottom:20px;overflow:hidden">'
+            f'<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;'
+            f'background:#f5f3ff" onclick="toggleSuggPanel(this)">'
+            f'<span style="font-size:13px">📬</span>'
+            f'<span style="flex:1;font-size:13px;font-weight:600;color:#3730a3">{he(_sugg_label)}</span>'
+            f'<a href="/email-scan" onclick="event.stopPropagation()" '
+            f'style="font-size:11px;color:#6366f1;text-decoration:none;margin-right:6px">Edit list</a>'
+            f'<button onclick="event.stopPropagation();dismissAllSugg()" style="font-size:11px;color:#9ca3af;'
+            f'background:none;border:none;cursor:pointer;font-family:inherit;margin-right:6px">Dismiss all</button>'
+            f'<span id="sugg-chevron" style="font-size:11px;color:#9ca3af">▼</span>'
+            f'</div>'
+            f'<div id="sugg-list" style="display:none;max-height:260px;overflow-y:auto;'
+            f'padding:0 14px;background:#fff">{_sugg_items_html}</div>'
             f'<script>'
+            f'function toggleSuggPanel(hdr){{'
+            f'  var list=document.getElementById("sugg-list");'
+            f'  var chev=document.getElementById("sugg-chevron");'
+            f'  var open=list.style.display!=="none";'
+            f'  list.style.display=open?"none":"block";'
+            f'  if(chev)chev.textContent=open?"▼":"▲";'
+            f'}}'
             f'function dismissSuggRow(btn){{'
             f'  var row=btn.closest(".sugg-row");'
             f'  var sk=row?row.dataset.sk:"";'
@@ -9545,7 +9560,7 @@ def dashboard():
     _exp_color  = '#d97706' if total_expiring > 0 else '#1c1917'
     _sync_sub   = (f'{he(_global_sync_label)} &middot; ' if _global_sync_label else '')
     hero_section_html = (
-        f'<div style="margin-bottom:20px">'
+        f'<div style="margin-bottom:14px">'
         f'<div style="font-size:20px;font-weight:700;color:#1c1917" id="hero-greeting">'
         f'Hello, {he(_first_name)}'
         f'</div>'
@@ -9560,7 +9575,7 @@ def dashboard():
         f'<div style="font-size:13px;color:#6b7280;margin-top:4px">'
         f'{_sync_sub}{_n_accts} account{"s" if _n_accts != 1 else ""} connected'
         f'</div>'
-        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px">'
+        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px">'
         f'<div style="background:#f5f2ed;border-radius:8px;padding:12px 14px">'
         f'<div style="font-size:20px;font-weight:600;color:#1c1917">{_n_benefits}</div>'
         f'<div style="font-size:12px;color:#6b7280;margin-top:3px">Benefits available now</div>'
@@ -9645,7 +9660,7 @@ def dashboard():
     if _ins_cards_html:
         insights_html = (
             _arch_js +
-            f'<div style="margin-bottom:24px">'
+            f'<div style="margin-bottom:16px">'
             f'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
             f'<span style="font-size:13px;font-weight:600;color:#1c1917">Benefits available now</span>'
             f'</div>'
