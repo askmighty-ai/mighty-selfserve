@@ -16817,6 +16817,41 @@ def api_sync_failure():
     return jsonify({"ok": True, "updated": True})
 
 
+@app.route("/api/sync/login-cleared", methods=["POST"])
+def api_sync_login_cleared():
+    """Called by the extension immediately when it detects the user has successfully
+    logged back into an account (tab left login page). Clears login_required status
+    so the dashboard shows green immediately, before the full sync completes.
+    Auth: X-Mighty-Key header.
+    """
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    uid    = user["id"]
+    source = (body or {}).get("source", "").strip()
+    if not source:
+        return jsonify({"error": "source required"}), 400
+    db  = get_db()
+    row = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not row:
+        return jsonify({"ok": True, "updated": False})
+    payload = decrypt_account_data(uid, row["data_enc"] or "")
+    if payload.get("sync_status") != "login_required":
+        return jsonify({"ok": True, "updated": False, "note": "not login_required"})
+    payload["sync_status"] = "ok"
+    payload.pop("sync_failure_reason", None)
+    db.execute(
+        "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL WHERE user_id=? AND source=?",
+        (encrypt_account_data(uid, payload), "ok", uid, source)
+    )
+    db.commit()
+    print(f"[LoginCleared] uid={uid} source={source} — status reset to ok", flush=True)
+    return jsonify({"ok": True, "updated": True})
+
+
 @app.route("/api/reclassify", methods=["POST"])
 @require_login
 def api_reclassify():

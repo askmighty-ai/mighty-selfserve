@@ -155,8 +155,16 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (!api_key) return;
     console.log(`[Mighty] Login success detected for ${source} — clearing wall and syncing`);
     await _clearLoginWall(source);
-    // Small delay to let the session cookie settle before syncing
-    setTimeout(() => syncSingleAccount(source, api_key), 3000);
+    // Immediately clear login_required on the server so the dashboard updates right away
+    fetch(`${MIGHTY_URL}/api/sync/login-cleared`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key, source }),
+    }).catch(() => {});
+    // Reload the dashboard now so the user sees green immediately
+    chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+    // Then do a full sync after a short delay to refresh the actual data
+    setTimeout(() => syncSingleAccount(source, api_key), 4000);
   }
 });
 
