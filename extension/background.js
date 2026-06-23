@@ -1676,28 +1676,34 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
   // credentials: 'include' + <all_urls> host_permissions. Zero UI, zero tabs.
   const silentText = await _silentFetchPages(account.source, account);
   if (silentText) {
-    console.log(`[Mighty] ${account.name}: silent fetch succeeded (${silentText.length} chars) — no tab needed`);
-    const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        api_key:     apiKey,
-        source:      account.source,
-        sync_source: 'extension',
-        data: {
-          name:     account.name,
-          icon:     account.icon,
-          color:    account.color,
-          status:   'ok',
-          items:    [],
-          raw_text: silentText.slice(0, 40_000),
-        },
-        synced_at: syncSessionTime,
-      }),
-    });
-    if (pushResp.ok) return;
-    // Push failed — fall through to tab-based
-    console.warn(`[Mighty] ${account.name}: silent push failed, falling back to tab`);
+    // Guard: if login wall is already active, don't overwrite it with a false 'ok' push.
+    // Sites like United return 200 HTML even when logged out, so we must check wall state first.
+    if (await _isLoginWall(account.source)) {
+      console.log(`[Mighty] ${account.name}: login wall active — skipping silent push, falling back to tab`);
+    } else {
+      console.log(`[Mighty] ${account.name}: silent fetch succeeded (${silentText.length} chars) — no tab needed`);
+      const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          api_key:     apiKey,
+          source:      account.source,
+          sync_source: 'extension',
+          data: {
+            name:     account.name,
+            icon:     account.icon,
+            color:    account.color,
+            status:   'ok',
+            items:    [],
+            raw_text: silentText.slice(0, 40_000),
+          },
+          synced_at: syncSessionTime,
+        }),
+      });
+      if (pushResp.ok) return;
+      // Push failed — fall through to tab-based
+      console.warn(`[Mighty] ${account.name}: silent push failed, falling back to tab`);
+    }
   }
 
   // ── Tab-based fallback (SPA sites / login-gated / insufficient silent content) ─
@@ -1781,6 +1787,25 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     try {
       const [d] = await chrome.scripting.executeScript({ target: { tabId }, func: dismissSessionTimeouts });
       if (d?.result) { console.log(`[Mighty] ${account.name}: dismissed session modal`); await sleep(3_000); }
+    } catch (_) {}
+
+    // Detect visible login form (catches SPA login modals, e.g. United Airlines)
+    try {
+      const [pwResult] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => Array.from(document.querySelectorAll('input[type="password"]'))
+                       .some(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }),
+      });
+      if (pwResult?.result === true) {
+        console.log(`[Mighty] ${account.name}: login form detected in page — reporting login_required`);
+        const { api_key: _ak } = await chrome.storage.local.get('api_key');
+        if (_ak) {
+          await _markLoginWall(account.source);
+          await reportSyncFailure(_ak, account.source, 'login_wall');
+          chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+        }
+        return;
+      }
     } catch (_) {}
 
     // Extract entry page text

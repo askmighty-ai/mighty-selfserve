@@ -13136,6 +13136,8 @@ function dashBackToPicker() {{
 function dashOpenCredForm(key, name, icon, color) {{
   _dashCurrentSource = key;
   if (_dashModalPollInterval) {{ clearInterval(_dashModalPollInterval); _dashModalPollInterval = null; }}
+  // Ensure the modal overlay is open (needed when called directly from suggestion card buttons)
+  document.getElementById('dash-modal-overlay').classList.add('open');
   document.getElementById('dash-cred-name').textContent = name;
   var ic = document.getElementById('dash-cred-icon');
   ic.textContent = icon; ic.style.background = color;
