@@ -5824,6 +5824,8 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 @keyframes card-pulse{0%,100%{box-shadow:0 0 0 2px rgba(99,102,241,0.08),0 3px 12px rgba(0,0,0,0.05)}50%{box-shadow:0 0 0 3px rgba(99,102,241,0.18),0 3px 12px rgba(0,0,0,0.05)}}
 .acct-card:hover{border-color:rgba(0,0,0,0.14);box-shadow:0 2px 4px rgba(0,0,0,0.05),0 8px 28px rgba(0,0,0,0.08)}
 .acct-card-header{padding:12px 14px 10px;display:flex;align-items:center;gap:9px}
+.acct-favicon-wrap{width:26px;height:26px;border-radius:6px;border:0.5px solid #e8e4de;background:#f5f2ed;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
+.acct-favicon{width:18px;height:18px;object-fit:contain}
 .acct-name{font-size:13px;font-weight:700;color:#1c1917;line-height:1.2}
 .acct-sync-time{font-size:10px;color:#b8b2ac;margin-top:1px}
 .acct-controls{display:flex;align-items:center;gap:5px;margin-left:auto;flex-shrink:0}
@@ -9063,9 +9065,18 @@ def dashboard():
                 + f'</div>'
             )
 
+            _fav_domain = _reg_domain(_ACCOUNT_ENTRY_URLS.get(src, ''))
+            _fav_html = (
+                f'<div class="acct-favicon-wrap">'
+                f'<img src="https://www.google.com/s2/favicons?domain={_fav_domain}&sz=64"'
+                f' class="acct-favicon" alt="" onerror="this.parentElement.style.display=\'none\'">'
+                f'</div>'
+            ) if _fav_domain else ''
+
             grid_cards += (
                 f'<div class="acct-card{stale_cls}{expiring_cls}{_compact_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}">'
                 f'<div class="acct-card-header">'
+                f'{_fav_html}'
                 f'<div style="flex:1;min-width:0">'
                 f'<div class="acct-name">{he(display_name)}{completeness_badge}</div>'
                 f'{_status_inline_html}'
