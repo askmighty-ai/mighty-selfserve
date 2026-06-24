@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-23-v8'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-23-v9'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
@@ -1910,6 +1910,25 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     } catch (_) {}
 
     await sleep(ENTRY_SETTLE);
+
+    // Re-check URL after settle — catches JS-based auth redirects that fire
+    // after the initial page load (e.g. SPA checks session cookie then redirects).
+    // waitForTabLoad only fires on the first 'complete' event, so a JS redirect
+    // during ENTRY_SETTLE won't be caught by the pre-settle check above.
+    try {
+      const settledTab = await chrome.tabs.get(tabId);
+      const settledUrl = settledTab.url || '';
+      if (settledUrl && _LOGIN_PATH_RE.test(new URL(settledUrl).pathname)) {
+        console.log(`[Mighty] ${account.name}: JS-redirect to login URL after settle — reporting login_required`);
+        const { api_key: _ak } = await chrome.storage.local.get('api_key');
+        if (_ak) {
+          await _markLoginWall(account.source);
+          await reportSyncFailure(_ak, account.source, 'login_wall');
+          chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+        }
+        return;
+      }
+    } catch (_) {}
 
     // Dismiss session-timeout modals
     try {
