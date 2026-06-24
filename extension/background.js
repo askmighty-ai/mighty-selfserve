@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-23-v10'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-23-v11'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
@@ -770,12 +770,14 @@ async function _silentFetchPages(source, account) {
   }
 
   // If the fetch was redirected to an explicit login page URL, we're not logged in.
-  // Use a conservative regex: exclude 'sso' and 'authenticate' since those paths
-  // appear in authenticated SSO flows (e.g. United /session/sso?...).
+  // Also check for auth subdomains (login.marriott.com, sso.example.com) which use
+  // non-standard paths that don't match path-based regexes.
   const _REDIRECT_LOGIN_RE = /\/(login|signin|sign-in|log-in|logon|log-on)(\/|$|\?)/i;
   try {
-    const finalPath = new URL(finalUrl).pathname;
-    if (_REDIRECT_LOGIN_RE.test(finalPath)) return null;
+    const finalU = new URL(finalUrl);
+    const finalSub = finalU.hostname.split('.')[0].toLowerCase();
+    if (_REDIRECT_LOGIN_RE.test(finalU.pathname)) return null;
+    if (/^(login|sso|auth|signin|sign-in|logon|authenticate|identity)$/.test(finalSub)) return null;
   } catch {}
 
   const entryText = _htmlToText(entryHtml);
@@ -1874,6 +1876,18 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       await waitForTabLoad(tabId, 15_000);
     }
 
+    // Helper: detect login/auth URLs by path pattern OR auth subdomain prefix.
+    // Subdomain check catches SSO redirects (login.marriott.com/sso/XUI/) that
+    // use non-standard paths not matched by _LOGIN_PATH_RE.
+    const _isLoginUrl = (u) => {
+      try {
+        const { hostname, pathname } = new URL(u);
+        if (_LOGIN_PATH_RE.test(pathname)) return true;
+        const sub = hostname.split('.')[0].toLowerCase();
+        return /^(login|sso|auth|signin|sign-in|logon|authenticate|identity)$/.test(sub);
+      } catch { return false; }
+    };
+
     // Abort if domain is unreachable (DNS failure) or redirected to a different domain
     try {
       const currentTab = await chrome.tabs.get(tabId);
@@ -1896,8 +1910,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           return;
         }
       } catch (_) {}
-      // Abort if redirected to login — report login_wall so the card shows red
-      if (tabUrl && _LOGIN_PATH_RE.test(new URL(tabUrl).pathname)) {
+      if (tabUrl && _isLoginUrl(tabUrl)) {
         console.log(`[Mighty] ${account.name}: redirected to login URL — reporting login_required`);
         const { api_key: _ak } = await chrome.storage.local.get('api_key');
         if (_ak) {
@@ -1918,7 +1931,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     try {
       const settledTab = await chrome.tabs.get(tabId);
       const settledUrl = settledTab.url || '';
-      if (settledUrl && _LOGIN_PATH_RE.test(new URL(settledUrl).pathname)) {
+      if (settledUrl && _isLoginUrl(settledUrl)) {
         console.log(`[Mighty] ${account.name}: JS-redirect to login URL after settle — reporting login_required`);
         const { api_key: _ak } = await chrome.storage.local.get('api_key');
         if (_ak) {
