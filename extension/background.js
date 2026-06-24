@@ -81,8 +81,11 @@ const _DOMAIN_TO_SOURCE = {
   'cityofpaloalto.org':   'pa_utilities',
 };
 
-// URL path/hostname terms that reliably indicate a login wall
-const _LOGIN_URL_RE = /\/(login|signin|sign-in|log-in|logon|log-on|authenticate|sso)(\/|$|\?)/i;
+// URL path/hostname terms that reliably indicate a login wall.
+// Deliberately excludes 'sso' and 'authenticate' — those paths appear in
+// authenticated flows (e.g. United /session/sso?token=...) and cause false
+// login_required flags. /login, /signin etc. are unambiguous.
+const _LOGIN_URL_RE = /\/(login|signin|sign-in|log-in|logon|log-on)(\/|$|\?)/i;
 
 // Debounce per-source so rapid redirects don't fire multiple reports
 const _loginReportedAt = {};

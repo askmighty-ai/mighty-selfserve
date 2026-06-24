@@ -9382,7 +9382,7 @@ def dashboard():
         _priority = score_opportunity(_h_score_item, user_intent=_dash_user_intent, source=_disp,
                                       user_type_affinity=_dash_type_affinity)
         _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp, _btype))
-    _hero_candidates.sort(key=lambda x: (-x[0], x[1]))
+    _hero_candidates.sort(key=lambda x: (x[1], -x[0]))  # soonest expiry first; score as tiebreaker
 
     # Load archived benefits and filter them out of hero candidates
     _arch_rows = db.execute(
