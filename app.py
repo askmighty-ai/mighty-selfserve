@@ -6314,15 +6314,46 @@ function updateSyncTimes() {
 updateSyncTimes();
 setInterval(updateSyncTimes, 30000);
 
-// Auto-sync + auto-discover on page load if stale or never synced
+// ── Sync-state tracking via sessionStorage ─────────────────────────────────
+// Dots should only appear after a fresh sync, not from stale DB data.
+// We use a per-tab session timestamp to know if this page was loaded before
+// or after a recent sync. On "first load" we hide all dots and trigger sync.
+// After sync finishes and the page reloads, _syncTs is < 10 min old so dots show.
+var _syncTs = parseInt(sessionStorage.getItem('mighty-sync-ts') || '0');
+var _needsFreshSync = (Date.now() - _syncTs) > 10 * 60 * 1000; // > 10 min since last sync
+
+// On first load (no recent sync in this tab): hide all sync dots immediately
+// so the user never sees stale red/green state before the fresh check runs.
+if (_needsFreshSync) {
+  document.querySelectorAll('.sync-status-dot').forEach(function(d) {
+    d.style.background = '#d1d5db';
+    d.style.boxShadow = 'none';
+    d.title = 'Checking login state…';
+  });
+}
+
+// Auto-sync on page load — fires every time if >10 min since last sync.
+// If a sync is already running (extension mid-sync reloaded the page), restart
+// the completion poller instead of bailing out — so we still get the final reload.
 fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
-  if (s.running) return;
-  var lastSync = s.last ? new Date(s.last) : null;
-  var minsAgo = lastSync ? (Date.now() - lastSync.getTime()) / 60000 : Infinity;
-  if (minsAgo > 180) {
+  if (s.running) {
+    // Extension is mid-sync and reloaded this page — don't start another sync,
+    // but restart the poller so _finishSync fires when the current run completes.
+    if (_needsFreshSync) {
+      // Mark that a sync is in progress for this tab's session
+      sessionStorage.setItem('mighty-sync-ts', (Date.now() - 9*60*1000).toString()); // ~1 min of leeway
+    }
+    fetch('/api/latest-sync').then(function(r2){return r2.json();}).then(function(d2){
+      _startSyncPoller(d2.latest || null);
+    }).catch(function(){});
+    return;
+  }
+  if (_needsFreshSync) {
+    // Set timestamp before triggering so mid-sync reloads don't re-trigger
+    sessionStorage.setItem('mighty-sync-ts', Date.now().toString());
     cloudSync();
   } else {
-    // Still trigger auto-discovery for any account missing fields
+    // Sync is fresh — just run auto-discovery for any account missing fields
     fetch('/credentials/auto-discover', {method:'POST',
       headers:{'Content-Type':'application/x-www-form-urlencoded'},
       body:new URLSearchParams({_csrf: document.querySelector('[name="_csrf"]').value || ''})
@@ -6365,6 +6396,8 @@ function _finishSync() {
     if (btn) { btn.classList.remove('syncing'); btn.disabled = false; }
     _setSyncLabel('Sync');
     sessionStorage.setItem('mighty-post-sync', '1');
+    // Mark this tab as having fresh sync data — next load will show colored dots
+    sessionStorage.setItem('mighty-sync-ts', Date.now().toString());
     reloadWithScroll();
   });
 }
@@ -9074,7 +9107,7 @@ def dashboard():
                 f'{coverage_face}'
                 f'</div>'
                 f'<div class="acct-controls">'
-                f'<div style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;cursor:help" title="{synced_title}"></div>'
+                f'<div class="sync-status-dot" style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;cursor:help" data-status-color="{status_color}" title="{synced_title}"></div>'
                 + (
                     f'<a href="{he(_card_url)}" target="_blank" rel="noopener" title="Open {he(display_name)}" class="acct-refresh-btn" style="text-decoration:none;font-size:11px">'
                     f'<svg width="11" height="11" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 1h4v4M11 1L5.5 6.5M5 2H2a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
