@@ -1,7 +1,9 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-23-v11'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-23-v13'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
+// Write version to storage so popup.js can display it without DevTools
+chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
@@ -247,6 +249,62 @@ const ACCOUNT_ENTRY = {
   att_wireless: 'https://myatt.att.com/exp/myconsumerdashboard/',
   xfinity:      'https://customer.xfinity.com/#/billing',
   pa_utilities: 'https://mycpau.cityofpaloalto.org/',
+};
+
+/**
+ * Per-site login URL knowledge base.
+ * Keyed by source name (matching ACCOUNT_ENTRY keys).
+ * loginHostnames: exact hostnames that are unambiguously auth/SSO subdomains.
+ * loginPathRe:    regex matching login paths on the site's own domain.
+ * Either or both may be present. Checked before generic fallbacks.
+ * Keep entries alphabetical within each category.
+ */
+const SITE_LOGIN_CONFIG = {
+  // ── Airlines ──────────────────────────────────────────────────────────────
+  alaska_air:   { loginPathRe: /\/(account\/)?log-?in(\/|$|\?)/i },
+  american_air: { loginPathRe: /\/(loyalty\/)?(log-?in|sign-?in)(\/|$|\?)|\/login\.do/i },
+  delta:        { loginPathRe: /\/(sign-?in|log-?in)(\/|$|\?)/i },
+  southwest:    { loginPathRe: /\/(account|loyalty)\/(log-?in|sign-?in)/i },
+  // United: only match explicit /login path — NOT /session/sso which appears in authenticated SSO flows
+  united:       { loginPathRe: /\/(en\/us\/)?login(\/|$|\?)/i },
+
+  // ── Hotels ────────────────────────────────────────────────────────────────
+  hilton:       { loginPathRe: /\/en\/hilton-honors\/login/i },
+  hyatt:        { loginPathRe: /\/en-US\/(log-?in|sign-?in)(\/|$|\?)/i },
+  ihg:          { loginHostnames: ['login.ihg.com'], loginPathRe: /\/log-?in(\/|$|\?)/i },
+  marriott:     { loginHostnames: ['login.marriott.com'], loginPathRe: /\/(sign-in|log-in|login)(\.mi|\/|$|\?)/i },
+  wyndham:      { loginPathRe: /\/(account\/)?(log-?in|sign-?in)(\/|$|\?)/i },
+
+  // ── Banking & Finance ─────────────────────────────────────────────────────
+  amex:         { loginPathRe: /\/en-us\/account\/log-?in/i },
+  bofa:         { loginPathRe: /\/(log-?in|sign-?in)(\/|$|\?)/i },
+  capital_one:  { loginPathRe: /\/(log-?in|sign-?in)(\/|$|\?)/i },
+  chase:        { loginPathRe: /\/(log-?in|sign-?in)(\/|$|\?)/i },
+  citi:         { loginPathRe: /\/log-?in(\/|$|\?)/i },
+  coinbase:     { loginHostnames: ['login.coinbase.com'] },
+  discover:     { loginPathRe: /\/sign-?in(\/|$|\?)/i },
+  fidelity:     { loginPathRe: /\/(log-?in|sign-?in|nlcvauth)(\/|$|\?)/i },
+  paypal:       { loginPathRe: /\/(sign-?in|log-?in|authflow)(\/|$|\?)/i },
+  schwab:       { loginPathRe: /\/(log-?in|sign-?in)(\/|$|\?)/i },
+  wells_fargo:  { loginPathRe: /\/(log-?in|sign-?in|wfonlinebanking)(\/|$|\?)/i },
+
+  // ── Retail ────────────────────────────────────────────────────────────────
+  amazon:       { loginPathRe: /\/ap\/sign-?in/i },
+  costco:       { loginPathRe: /\/sign-?in(\.view)?(\/|$|\?)/i },
+  starbucks:    { loginPathRe: /\/account\/sign-?in(\/|$|\?)/i },
+  target:       { loginPathRe: /\/account\/sign-?in(\/|$|\?)/i },
+
+  // ── Streaming & Entertainment ─────────────────────────────────────────────
+  disney_plus:  { loginPathRe: /\/identity\/(log-?in|sign-?in)(\/|$|\?)/i },
+  hulu:         { loginHostnames: ['auth.hulu.com'], loginPathRe: /\/log-?in(\/|$|\?)/i },
+  netflix:      { loginPathRe: /\/log-?in(\/|$|\?)/i },
+  spotify:      { loginHostnames: ['accounts.spotify.com'] },
+  ticketmaster: { loginHostnames: ['auth.ticketmaster.com'], loginPathRe: /\/(log-?in|sign-?in)(\/|$|\?)/i },
+
+  // ── Telecom ───────────────────────────────────────────────────────────────
+  att:          { loginPathRe: /\/(log-?in|olam\/pub)(\/|$|\?)/i },
+  att_wireless: { loginPathRe: /\/(log-?in|sign-?in)(\/|$|\?)/i },
+  xfinity:      { loginHostnames: ['login.xfinity.com', 'oauth.xfinity.com', 'auth.xfinity.com'] },
 };
 
 /** Normalize a URL for deduplication: strip query + fragment, lowercase, no trailing slash. */
@@ -702,6 +760,13 @@ let _syncInProgress = false;
 
 // ── Silent fetch helpers (no tabs needed) ────────────────────────────────────
 
+// Sites where silent fetch cannot reliably detect auth state:
+// - SPA shells: same HTML is served regardless of auth (Hilton, Hyatt, United)
+// - .mi-extension paths: Marriott's redirect to /sign-in.mi evades generic regex
+// These sites are forced through the tab-based path, which executes JS + checks
+// post-settle URL and password fields in the actual rendered page.
+const SILENT_FETCH_SKIP = new Set(['hilton', 'marriott', 'hyatt', 'southwest', 'delta', 'american_air', 'alaska_air', 'united']);
+
 /** Strip HTML tags to plain text. Service workers have no DOM, so we use regex. */
 function _htmlToText(html) {
   return html
@@ -758,6 +823,8 @@ function _extractLinksFromHtml(html, baseUrl) {
 async function _silentFetchPages(source, account) {
   const entry = ACCOUNT_ENTRY[source];
   if (!entry) return null;
+  // Skip sites where the static HTML doesn't reflect auth state (SPAs, .mi-path sites)
+  if (SILENT_FETCH_SKIP.has(source)) return null;
 
   let entryHtml, finalUrl;
   try {
@@ -769,13 +836,15 @@ async function _silentFetchPages(source, account) {
     return null;
   }
 
-  // If the fetch was redirected to an explicit login page URL, we're not logged in.
-  // Also check for auth subdomains (login.marriott.com, sso.example.com) which use
-  // non-standard paths that don't match path-based regexes.
+  // If the fetch was redirected to a login page URL, we're not logged in.
+  // Checks: site-specific config → generic path regex → auth subdomain prefix.
   const _REDIRECT_LOGIN_RE = /\/(login|signin|sign-in|log-in|logon|log-on)(\/|$|\?)/i;
   try {
-    const finalU = new URL(finalUrl);
+    const finalU   = new URL(finalUrl);
     const finalSub = finalU.hostname.split('.')[0].toLowerCase();
+    const cfg = SITE_LOGIN_CONFIG[source];
+    if (cfg?.loginHostnames?.includes(finalU.hostname)) return null;
+    if (cfg?.loginPathRe?.test(finalU.pathname)) return null;
     if (_REDIRECT_LOGIN_RE.test(finalU.pathname)) return null;
     if (/^(login|sso|auth|signin|sign-in|logon|authenticate|identity)$/.test(finalSub)) return null;
   } catch {}
@@ -1876,13 +1945,22 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       await waitForTabLoad(tabId, 15_000);
     }
 
-    // Helper: detect login/auth URLs by path pattern OR auth subdomain prefix.
-    // Subdomain check catches SSO redirects (login.marriott.com/sso/XUI/) that
-    // use non-standard paths not matched by _LOGIN_PATH_RE.
+    // Helper: detect login/auth URLs using three layers (most→least specific):
+    //  1. Per-site SITE_LOGIN_CONFIG (exact hostname / curated path regex)
+    //  2. Generic path regex (_LOGIN_PATH_RE)
+    //  3. Auth subdomain prefix (login.*, sso.*, auth.*, ...)
     const _isLoginUrl = (u) => {
       try {
         const { hostname, pathname } = new URL(u);
+        // Layer 1 — site-specific config
+        const cfg = SITE_LOGIN_CONFIG[account.source];
+        if (cfg) {
+          if (cfg.loginHostnames?.includes(hostname)) return true;
+          if (cfg.loginPathRe?.test(pathname)) return true;
+        }
+        // Layer 2 — generic path patterns
         if (_LOGIN_PATH_RE.test(pathname)) return true;
+        // Layer 3 — auth subdomain (login.marriott.com, sso.example.com, …)
         const sub = hostname.split('.')[0].toLowerCase();
         return /^(login|sso|auth|signin|sign-in|logon|authenticate|identity)$/.test(sub);
       } catch { return false; }

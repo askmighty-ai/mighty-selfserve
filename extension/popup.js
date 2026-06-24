@@ -8,11 +8,12 @@ function timeAgo(isoStr) {
   return Math.floor(diff / 86400) + 'd ago';
 }
 
-chrome.storage.local.get(['api_key', 'last_sync', 'sync_status', 'captured_accounts'], function(data) {
+chrome.storage.local.get(['api_key', 'last_sync', 'sync_status', 'captured_accounts', 'ext_version'], function(data) {
   const api_key          = data.api_key;
   const last_sync        = data.last_sync;
   const sync_status      = data.sync_status;
   const captured_accounts = data.captured_accounts || {};
+  const ext_version      = data.ext_version || '';
 
   const dot        = document.getElementById('status-dot');
   const label      = document.getElementById('status-label');
@@ -46,8 +47,15 @@ chrome.storage.local.get(['api_key', 'last_sync', 'sync_status', 'captured_accou
   const ago = timeAgo(last_sync);
   if (ago) {
     lastSyncEl.classList.remove('hidden');
-    lastSyncEl.innerHTML = 'Last synced <strong>' + ago + '</strong>';
+    lastSyncEl.innerHTML = 'Last synced <strong>' + ago + '</strong>'
+      + (ext_version ? ' &nbsp;·&nbsp; <span style="color:#d1d5db">' + ext_version + '</span>' : '');
   }
 
   autoBadge.classList.remove('hidden');
+
+  // Show version even if no sync yet
+  if (!ago && ext_version) {
+    lastSyncEl.classList.remove('hidden');
+    lastSyncEl.innerHTML = '<span style="color:#d1d5db">' + ext_version + '</span>';
+  }
 });
