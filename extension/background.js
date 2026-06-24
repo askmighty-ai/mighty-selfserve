@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-23-v9'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-23-v10'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
@@ -1936,17 +1936,17 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       if (d?.result) { console.log(`[Mighty] ${account.name}: dismissed session modal`); await sleep(3_000); }
     } catch (_) {}
 
-    // Detect visible login form (catches SPA login modals, e.g. United Airlines)
-    // Double-check pattern: if a password field is found, wait 5s and look again.
+    // Detect login form via password field EXISTENCE (not visibility rect).
+    // getBoundingClientRect() returns zero in minimized windows, so we rely on
+    // DOM presence instead. Double-check pattern: if found, wait 5s and look again.
     // SPAs like United briefly render a login form while verifying the session cookie —
-    // if the form disappears on the second check, it was transient (user IS logged in).
+    // if the form disappears, it was transient (user IS logged in).
     // Sites where the user is genuinely logged out keep the form → correctly reported.
     const _pwCheck = async () => {
       try {
         const [r] = await chrome.scripting.executeScript({
           target: { tabId },
-          func: () => Array.from(document.querySelectorAll('input[type="password"]'))
-                           .some(el => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0; }),
+          func: () => document.querySelectorAll('input[type="password"]').length > 0,
         });
         return r?.result === true;
       } catch { return false; }
@@ -1976,6 +1976,20 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
     if (BOT_DETECTION_PHRASES.some(p => entryText.toLowerCase().includes(p))) {
       console.warn(`[Mighty] ${account.name}: bot detection on entry page — skipping`);
+      return;
+    }
+
+    // Check entry page content for login page signals — catches cases where
+    // URL checks miss (non-standard login URLs, JS redirects that settle after
+    // our URL check) and where getBoundingClientRect() returns 0 in minimized windows.
+    if (entryText.length >= 100 && _isSilentLoginPage(entryText)) {
+      console.log(`[Mighty] ${account.name}: login page content detected in tab — reporting login_required`);
+      const { api_key: _ak } = await chrome.storage.local.get('api_key');
+      if (_ak) {
+        await _markLoginWall(account.source);
+        await reportSyncFailure(_ak, account.source, 'login_wall');
+        chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+      }
       return;
     }
 
