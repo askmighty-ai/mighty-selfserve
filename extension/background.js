@@ -839,14 +839,16 @@ async function _silentFetchPages(source, account) {
  *  Returns { win: { id }, tabId } or null on failure. */
 async function _createSyncWindow(initialUrl = 'about:blank') {
   try {
-    // Create a minimized POPUP window — completely separate from the user's
+    // Create a small unfocused POPUP window — completely separate from the user's
     // browser window so sync tabs never appear in their tab strip.
-    // The supplement watcher already skips popup windows, and the login
-    // detection listener below also skips them.
+    // IMPORTANT: Do NOT use state:'minimized' — Chrome throttles JavaScript in
+    // minimized windows, which prevents React SPAs (e.g. United) from rendering
+    // their authenticated content within the settle timeout.
+    // 'focused:false' keeps it from stealing keyboard focus.
     const win = await chrome.windows.create({
       url: initialUrl,
       type: 'popup',
-      state: 'minimized',
+      focused: false,
       width: 100,
       height: 100,
     });
@@ -1030,9 +1032,10 @@ async function runSync() {
     } catch (e) {
       console.warn(`[Mighty] ${account.name}: sync skipped — ${e.message}`);
       failed++;
-      const _crawlReason = e.message === 'timeout' ? 'timeout'
-        : e.message.includes('not logged in') ? 'login_wall'
-        : 'no_data';
+      // Only report 'timeout' for explicit timeouts; everything else is 'no_data'.
+      // login_wall is reported explicitly inside crawlAccount when a login form
+      // is detected — not inferred from error messages here, to avoid false reds.
+      const _crawlReason = e.message === 'timeout' ? 'timeout' : 'no_data';
       reportSyncFailure(api_key, account.source, _crawlReason);
     }
   }
@@ -2050,7 +2053,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
     // ── Push to server ──────────────────────────────────────────────────────────
     if (allText.length === 0) {
-      throw new Error('No usable content captured — possibly not logged in');
+      throw new Error('No usable content captured (page may not have rendered)');
     }
 
     // If we got here with content, the tab-based path already verified:
