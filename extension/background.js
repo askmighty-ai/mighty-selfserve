@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-23-v6'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-23-v7'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
@@ -1912,21 +1912,25 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     } catch (_) {}
 
     // Detect visible login form (catches SPA login modals, e.g. United Airlines)
-    // Skip if document.hidden — minimized sync popup windows set hidden=true, but
-    // getBoundingClientRect() still returns real dimensions, causing false positives
-    // when React briefly renders a login form before resolving the session cookie.
-    // In hidden tabs we rely on api_relay.js (which skips hidden tabs) + URL detection.
-    try {
-      const [pwResult] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => {
-          if (document.hidden) return false; // minimized window — skip, avoid false positives
-          return Array.from(document.querySelectorAll('input[type="password"]'))
-                      .some(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
-        },
-      });
-      if (pwResult?.result === true) {
-        console.log(`[Mighty] ${account.name}: login form detected in page — reporting login_required`);
+    // Double-check pattern: if a password field is found, wait 5s and look again.
+    // SPAs like United briefly render a login form while verifying the session cookie —
+    // if the form disappears on the second check, it was transient (user IS logged in).
+    // Sites where the user is genuinely logged out keep the form → correctly reported.
+    const _pwCheck = async () => {
+      try {
+        const [r] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => Array.from(document.querySelectorAll('input[type="password"]'))
+                           .some(el => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0; }),
+        });
+        return r?.result === true;
+      } catch { return false; }
+    };
+    if (await _pwCheck()) {
+      // Possibly a transient SPA auth flash — wait and verify it's still there
+      await sleep(5_000);
+      if (await _pwCheck()) {
+        console.log(`[Mighty] ${account.name}: login form persists after recheck — reporting login_required`);
         const { api_key: _ak } = await chrome.storage.local.get('api_key');
         if (_ak) {
           await _markLoginWall(account.source);
@@ -1935,7 +1939,8 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         }
         return;
       }
-    } catch (_) {}
+      console.log(`[Mighty] ${account.name}: login form was transient (session resolved) — continuing`);
+    }
 
     // Extract entry page text
     let entryText = '';
