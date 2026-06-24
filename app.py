@@ -1611,7 +1611,7 @@ def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
         else:
             return ("Stale", "#dc2626", "!")
     except Exception:
-        return ("Unknown", "#9ca3af", "?")
+        return ("Not yet synced", "#9ca3af", "—")
 
 def _log_privacy_event(uid: str, event_type: str, source: str = None, domain: str = None, detail: str = None):
     """Log a privacy-relevant event for the user's audit log."""
@@ -8406,7 +8406,8 @@ def dashboard():
     _global_last_synced = max(_all_synced_ats) if _all_synced_ats else None
     if _global_last_synced:
         _glbl, _glbc, _glbi = _freshness_label(_global_last_synced)
-        _global_sync_label = f'Synced {_glbl}'
+        # Only build "Synced X" for actual relative-time labels; hide for fallback states
+        _global_sync_label = f'Synced {_glbl}' if _glbl not in ("Not yet synced", "No data") else ""
     else:
         _global_sync_label = ""
 
