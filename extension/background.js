@@ -1161,7 +1161,7 @@ async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date()
 const _ACCOUNT_PATH_RE = /\/(my[-_]?account|myaccount|myunited|account[-_/]|dashboard|my[-_]?profile|profile\/|loyalty|rewards|member[-_/]|membership|portal|billing|overview|summary|wallet|benefits|perks|certificates|ecredits|statement|transactions)/i;
 
 // URL patterns that indicate a login/auth page — skip these
-const _LOGIN_PATH_RE = /\/(login|log[-_]in|signin|sign[-_]in|auth\/(login|signin|sso)|sso\/|oauth|forgot|reset[-_]password|register|signup|sign[-_]up|create[-_]account)/i;
+const _LOGIN_PATH_RE = /\/(login|log[-_]in|signin|sign[-_]in|auth\/(login|signin)|oauth|forgot|reset[-_]password|register|signup|sign[-_]up|create[-_]account)/i;
 
 // Domains belonging to known scheduled accounts — don't auto-capture (already synced)
 const _KNOWN_DOMAINS = new Set(
@@ -2053,13 +2053,10 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       throw new Error('No usable content captured — possibly not logged in');
     }
 
-    // If a login wall was detected for this source (either via URL redirect or
-    // content script password-field detection), don't push — public-page content
-    // would overwrite the login_required status we already set on the server.
-    if (await _isLoginWall(account.source)) {
-      console.log(`[Mighty] ${account.name}: login wall confirmed — skipping push to preserve login_required status`);
-      throw new Error('Login wall detected — skipping push');
-    }
+    // If we got here with content, the tab-based path already verified:
+    // (1) tab did not redirect to a login URL, (2) no visible password field.
+    // Trust the content — clear any stale login wall and push.
+    await _clearLoginWall(account.source);
 
     const rawText = allText.join('').slice(0, 40_000);
     console.log(`[Mighty] ${account.name}: ${rawText.length} chars across ${allText.length} page(s) — pushing`);

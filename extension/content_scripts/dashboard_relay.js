@@ -11,10 +11,12 @@
     if (event.origin !== _ALLOWED_ORIGIN) return;
     if (!event.data || event.data.type !== '__mighty_dashboard__') return;
 
-    const action = event.data.action;
+    // Forward the full message data (excluding type) so source/payload fields are preserved
+    const { type: _type, ...msgData } = event.data;
+    const action = msgData.action;
     if (!action) return;
 
-    chrome.runtime.sendMessage({ action }, (resp) => {
+    chrome.runtime.sendMessage(msgData, (resp) => {
       // Relay response back to page
       window.postMessage({ type: '__mighty_dashboard_reply__', action, resp }, '*');
     });
