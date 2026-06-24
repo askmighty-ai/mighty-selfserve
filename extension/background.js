@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-23-v13'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-24-v14'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -912,16 +912,32 @@ async function _silentFetchPages(source, account) {
  *  Returns { win: { id }, tabId } or null on failure. */
 async function _createSyncWindow(initialUrl = 'about:blank') {
   try {
-    // Create a minimized POPUP window — completely separate from the user's
-    // browser window so sync tabs never appear in their tab strip.
-    // Minimized → document.hidden=true inside the tab → api_relay.js login-detection
-    // poll is suppressed, preventing false login_wall reports from the sync popup.
+    // Create an off-screen POPUP window (NOT minimized).
+    //
+    // Why NOT minimized: when state='minimized', document.hidden=true inside the tab.
+    // SPAs (United, Hilton, etc.) check document.hidden and skip or defer their auth
+    // flow when the tab is hidden — so the login redirect/form never fires and the
+    // extension sees generic content instead of a login page, causing false greens.
+    //
+    // By positioning the window off-screen (left/top far negative) instead of
+    // minimizing it, document.hidden stays false.  SPAs run their full auth check:
+    //   • If NOT logged in → redirect to login URL (caught by post-settle URL check)
+    //                      → login form rendered in DOM (caught by _pwCheck)
+    //   • If logged in    → auth resolves quickly, any transient form disappears
+    //                        before _pwCheck's 5-second double-check fires
+    //
+    // api_relay.js login detection also runs correctly (document.hidden=false),
+    // with its 6-second consecutive check filtering transient SPA auth flashes.
+    //
+    // Chrome may clamp the window to screen bounds on some configurations; if so,
+    // a tiny 1×1 popup may briefly appear in a corner during sync — acceptable trade-off.
     const win = await chrome.windows.create({
-      url: initialUrl,
-      type: 'popup',
-      state: 'minimized',
-      width: 100,
-      height: 100,
+      url:    initialUrl,
+      type:   'popup',
+      left:   -9999,
+      top:    -9999,
+      width:  800,
+      height: 600,
     });
     const tabId = win.tabs?.[0]?.id;
     if (!tabId) throw new Error('no tab in popup');
