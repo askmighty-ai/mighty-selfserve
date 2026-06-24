@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-23-v7'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-23-v8'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
@@ -1896,9 +1896,15 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           return;
         }
       } catch (_) {}
-      // Abort if redirected to login
+      // Abort if redirected to login — report login_wall so the card shows red
       if (tabUrl && _LOGIN_PATH_RE.test(new URL(tabUrl).pathname)) {
-        console.log(`[Mighty] ${account.name}: redirected to login — not logged in, skipping`);
+        console.log(`[Mighty] ${account.name}: redirected to login URL — reporting login_required`);
+        const { api_key: _ak } = await chrome.storage.local.get('api_key');
+        if (_ak) {
+          await _markLoginWall(account.source);
+          await reportSyncFailure(_ak, account.source, 'login_wall');
+          chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+        }
         return;
       }
     } catch (_) {}
