@@ -15198,10 +15198,21 @@ def api_credentials_fetch():
 # ── Login-page detection ──────────────────────────────────────────────────────
 
 _LOGIN_SIGNALS_HIGH = [
+    # Generic login-page indicators
     "forgot password", "forgot your password", "enter your password",
     "remember me", "email or member number", "member number or email",
     "username and password", "sign in with your", "log in with your",
     "join for free", "continue with google",
+    # Help text that only appears on login forms
+    "need help signing in", "need help logging in",
+    # "forgot your X" — catches "forgot your password", "forgot your info?" (Hilton), etc.
+    "forgot your",
+    # First-time / create-password (Hilton: "First time signing in?", "Create your password")
+    "first time signing in", "create your password",
+    # Phone/SMS login option (United: "Login with phone number")
+    "login with phone",
+    # Visible password field toggle (Hilton renders "Show password" in main content)
+    "show password",
 ]
 _LOGIN_SIGNALS_LOW = [
     "sign in to", "sign in with", "log in to", "log in with",

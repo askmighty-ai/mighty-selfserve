@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-24-v14'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-24-v15'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -784,9 +784,22 @@ function _isSilentLoginPage(text) {
   const lower = text.slice(0, 3000).toLowerCase();
   // High-confidence signals: any single match is enough — these almost never
   // appear on real authenticated account pages.
-  const highConf = ['forgot password', 'enter your password', 'enter your email',
-                    'continue with google', 'remember me', 'sign in with your',
-                    'log in with your', 'create an account', 'join for free'];
+  const highConf = [
+    // Generic login-page indicators
+    'forgot password', 'enter your password', 'enter your email',
+    'continue with google', 'remember me', 'sign in with your',
+    'log in with your', 'create an account', 'join for free',
+    // Help text that only appears on login forms
+    'need help signing in', 'need help logging in',
+    // "forgot your X" — "forgot your password", "forgot your info?" (Hilton), etc.
+    'forgot your',
+    // First-time / create-password (Hilton: "First time signing in?", "Create your password")
+    'first time signing in', 'create your password',
+    // Phone/SMS login option (United: "Login with phone number")
+    'login with phone',
+    // Visible password field label (Hilton renders "Show password" toggle in main content)
+    'show password',
+  ];
   if (highConf.some(s => lower.includes(s))) return true;
   // Lower-confidence signals: require 2+ (they can appear in logged-in nav/footers).
   const lowConf = ['sign in', 'log in', 'create account'];
