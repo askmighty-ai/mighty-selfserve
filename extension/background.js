@@ -116,6 +116,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab.url;
   if (!url || !url.startsWith('http')) return;
 
+  // Skip popup windows used for background sync — we don't want sync tab
+  // navigations to trigger login detection or syncSingleAccount calls.
+  try {
+    const winInfo = await chrome.windows.get(tab.windowId);
+    if (winInfo.type === 'popup') return;
+  } catch { return; }
+
   let hostname, pathname, search;
   try {
     const u = new URL(url);
@@ -660,6 +667,23 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     })();
     return false;
   }
+  if (msg.action === 'clear_login_wall') {
+    // Dashboard "I'm signed in" button — clears the local login wall flag and
+    // kicks off a single-account sync so the dot turns green immediately.
+    (async () => {
+      const source = msg.source;
+      if (!source) { sendResponse({ ok: false, error: 'no source' }); return; }
+      await _clearLoginWall(source);
+      const { api_key } = await chrome.storage.local.get('api_key');
+      if (api_key) {
+        // Reset debounce so the sync runs even if we synced recently
+        delete _postLoginSyncedAt[source];
+        syncSingleAccount(source, api_key);
+      }
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
   if (msg.action === 'remove_captured') {
     chrome.storage.local.get('captured_accounts', ({ captured_accounts = {} }) => {
       delete captured_accounts[msg.source];
@@ -815,22 +839,22 @@ async function _silentFetchPages(source, account) {
  *  Returns { win: { id }, tabId } or null on failure. */
 async function _createSyncWindow(initialUrl = 'about:blank') {
   try {
-    // Prefer an existing normal window so no new window is ever created
-    let windowId;
-    try {
-      const wins = await chrome.windows.getAll({ windowTypes: ['normal'] });
-      const normal = wins.find(w => w.type === 'normal');
-      if (normal) windowId = normal.id;
-    } catch (_) {}
-
-    const tab = await chrome.tabs.create({
+    // Create a minimized POPUP window — completely separate from the user's
+    // browser window so sync tabs never appear in their tab strip.
+    // The supplement watcher already skips popup windows, and the login
+    // detection listener below also skips them.
+    const win = await chrome.windows.create({
       url: initialUrl,
-      active: false,           // never steals focus or switches the visible tab
-      ...(windowId ? { windowId } : {}),
+      type: 'popup',
+      state: 'minimized',
+      width: 100,
+      height: 100,
     });
-    return { win: { id: tab.windowId }, tabId: tab.id };
+    const tabId = win.tabs?.[0]?.id;
+    if (!tabId) throw new Error('no tab in popup');
+    return { win, tabId };
   } catch (e) {
-    console.warn('[Mighty] Could not create sync tab:', e.message);
+    console.warn('[Mighty] Could not create sync window:', e.message);
     return null;
   }
 }

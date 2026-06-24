@@ -8672,12 +8672,19 @@ def dashboard():
                     f'color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none">'
                     f'Sign in to {he(display_name)} →</a>'
                 ) if _lr_login_url else ""
+                _lr_src_js = src.replace("'", "\\'")
+                _lr_force_btn = (
+                    f'<button onclick="forceClearLoginWall(\'{_lr_src_js}\', this)" '
+                    f'style="display:inline-block;margin-top:6px;margin-left:6px;padding:5px 10px;'
+                    f'background:none;border:1px solid #d1d5db;color:#6b7280;border-radius:6px;'
+                    f'font-size:11px;font-weight:500;cursor:pointer">Already signed in?</button>'
+                )
                 card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
                     f'<div style="color:#ef4444;font-size:12px;font-weight:500">Session expired</div>'
                     f'<div style="color:#9ca3af;font-size:11px;margin-top:3px">Sign back in — Mighty will sync automatically.</div>'
-                    f'{_lr_btn}'
+                    f'<div style="margin-top:4px">{_lr_btn}{_lr_force_btn}</div>'
                     f'</div>'
                 )
                 status_color = "#ef4444"
@@ -9548,9 +9555,7 @@ def dashboard():
         f'  if(el) el.textContent=g+", {he(_first_name)}";'
         f'}})();'
         f'</script>'
-        f'<div style="font-size:13px;color:#6b7280;margin-top:4px">'
-        f'{_sync_sub}{_n_accts} account{"s" if _n_accts != 1 else ""} connected'
-        f'</div>'
+        f''
         f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px">'
         f'<div style="background:#f5f2ed;border-radius:8px;padding:12px 14px">'
         f'<div style="font-size:20px;font-weight:600;color:#1c1917">{_n_benefits}</div>'
@@ -13339,6 +13344,20 @@ function _updateArchivedFooter() {{
     var panel = document.getElementById('arch-inline-panel');
     if (panel) panel.style.display = 'none';
   }}
+}}
+function forceClearLoginWall(source, btn) {{
+  btn.disabled = true;
+  btn.textContent = 'Syncing…';
+  // 1. Clear server-side login_required status
+  fetch('/api/sync/login-cleared', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{source}})
+  }}).catch(() => {{}});
+  // 2. Tell the extension to clear its local login-wall flag and re-sync
+  window.postMessage({{type: '__mighty_dashboard__', action: 'clear_login_wall', source}}, '*');
+  // 3. Reload after a short delay so the card reflects the updated status
+  setTimeout(() => location.reload(), 5000);
 }}
 function toggleArchivedPanel() {{
   var panel = document.getElementById('arch-inline-panel');
