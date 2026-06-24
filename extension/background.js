@@ -839,16 +839,14 @@ async function _silentFetchPages(source, account) {
  *  Returns { win: { id }, tabId } or null on failure. */
 async function _createSyncWindow(initialUrl = 'about:blank') {
   try {
-    // Create a small unfocused POPUP window — completely separate from the user's
+    // Create a minimized POPUP window — completely separate from the user's
     // browser window so sync tabs never appear in their tab strip.
-    // IMPORTANT: Do NOT use state:'minimized' — Chrome throttles JavaScript in
-    // minimized windows, which prevents React SPAs (e.g. United) from rendering
-    // their authenticated content within the settle timeout.
-    // 'focused:false' keeps it from stealing keyboard focus.
+    // Minimized → document.hidden=true inside the tab → api_relay.js login-detection
+    // poll is suppressed, preventing false login_wall reports from the sync popup.
     const win = await chrome.windows.create({
       url: initialUrl,
       type: 'popup',
-      focused: false,
+      state: 'minimized',
       width: 100,
       height: 100,
     });

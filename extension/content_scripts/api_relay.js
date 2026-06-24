@@ -18,21 +18,33 @@
   // Write a heartbeat so we can verify the content script is actually running
   chrome.storage.local.set({ mighty_cs_alive: { href: window.location.href, ts: Date.now() } });
   var _loginPollCount = 0;
+  var _loginSeenConsecutive = 0; // must see field N times in a row before reporting
+  var _LOGIN_CONSECUTIVE_REQUIRED = 3; // 3 × 2s = 6s minimum — filters transient SPA login flashes
   var _loginPollId = setInterval(function() {
     if (_loginReported) { clearInterval(_loginPollId); return; }
+    // Skip entirely when tab is minimized/hidden — prevents false-positives from
+    // background sync popup tabs where United's SPA briefly shows a login form
+    // during initialization before the session cookie resolves.
+    if (document.hidden) { _loginSeenConsecutive = 0; return; }
     _loginPollCount++;
     var pwFields = document.querySelectorAll('input[type="password"]');
     var rects = Array.from(pwFields).map(function(el) {
       var r = el.getBoundingClientRect();
-      return { w: r.width, h: r.height, display: getComputedStyle(el).display, visibility: getComputedStyle(el).visibility };
+      return { w: r.width, h: r.height };
     });
     // Log every 5 polls (every 10s) so we can see what's happening
     if (_loginPollCount % 5 === 1) {
       console.log('[Mighty] poll #' + _loginPollCount + ' — pw fields:', pwFields.length, rects);
     }
     var visible = rects.some(function(r) { return r.w > 0 && r.h > 0; });
-    if (!visible) return;
-    console.log('[Mighty] visible password field detected — reporting login_wall');
+    if (!visible) {
+      _loginSeenConsecutive = 0; // reset streak — form disappeared (session resolved)
+      return;
+    }
+    _loginSeenConsecutive++;
+    console.log('[Mighty] pw field visible (streak: ' + _loginSeenConsecutive + '/' + _LOGIN_CONSECUTIVE_REQUIRED + ')');
+    if (_loginSeenConsecutive < _LOGIN_CONSECUTIVE_REQUIRED) return; // not persistent enough yet
+    console.log('[Mighty] persistent password field confirmed — reporting login_wall');
     _loginReported = true;
     clearInterval(_loginPollId);
     // Use storage instead of sendMessage — storage.onChanged reliably wakes
