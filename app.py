@@ -14925,6 +14925,53 @@ def _credentials_discover_impl(source):
 
 
 
+@app.route("/api/debug/sync-status", methods=["GET"])
+@require_login
+def api_debug_sync_status():
+    """Show sync_status and sync_failure_reason for every connected account."""
+    uid = session["user_id"]
+    rows = get_db().execute(
+        "SELECT source, sync_status, sync_failure_reason, synced_at, data_enc FROM account_data WHERE user_id=?",
+        (uid,)
+    ).fetchall()
+    result = []
+    for r in rows:
+        d = decrypt_account_data(uid, r["data_enc"] or "")
+        result.append({
+            "source":              r["source"],
+            "sync_status_col":     r["sync_status"],          # standalone column
+            "sync_status_enc":     d.get("sync_status"),      # inside encrypted blob
+            "sync_failure_reason": r["sync_failure_reason"],
+            "synced_at":           r["synced_at"],
+        })
+    return jsonify({"accounts": result})
+
+
+@app.route("/api/admin/force-ok/<source>", methods=["POST"])
+@require_login
+def api_admin_force_ok(source):
+    """Manually reset a source's sync_status to 'ok'. Use to unstick false login_required."""
+    uid = session["user_id"]
+    db  = get_db()
+    row = db.execute(
+        "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+        (uid, source)
+    ).fetchone()
+    if not row:
+        return jsonify({"ok": False, "error": "source not found"}), 404
+    d = decrypt_account_data(uid, row["data_enc"] or "")
+    prev = d.get("sync_status", "unknown")
+    d["sync_status"] = "ok"
+    d.pop("sync_failure_reason", None)
+    db.execute(
+        "UPDATE account_data SET data_enc=?, sync_status='ok', sync_failure_reason=NULL WHERE user_id=? AND source=?",
+        (encrypt_account_data(uid, d), uid, source)
+    )
+    db.commit()
+    print(f"[ForceOK] uid={uid} source={source} prev={prev}", flush=True)
+    return jsonify({"ok": True, "source": source, "prev_status": prev})
+
+
 @app.route("/api/debug/raw/<source>", methods=["GET"])
 @require_login
 def api_debug_raw(source):

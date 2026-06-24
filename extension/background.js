@@ -1,5 +1,7 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
+const MIGHTY_EXT_VERSION = '2026-06-23-v5'; // bump on each deploy to confirm reload
+console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
