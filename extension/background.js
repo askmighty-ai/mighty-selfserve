@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-23-v5'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-23-v6'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
@@ -1912,11 +1912,18 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     } catch (_) {}
 
     // Detect visible login form (catches SPA login modals, e.g. United Airlines)
+    // Skip if document.hidden — minimized sync popup windows set hidden=true, but
+    // getBoundingClientRect() still returns real dimensions, causing false positives
+    // when React briefly renders a login form before resolving the session cookie.
+    // In hidden tabs we rely on api_relay.js (which skips hidden tabs) + URL detection.
     try {
       const [pwResult] = await chrome.scripting.executeScript({
         target: { tabId },
-        func: () => Array.from(document.querySelectorAll('input[type="password"]'))
-                       .some(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }),
+        func: () => {
+          if (document.hidden) return false; // minimized window — skip, avoid false positives
+          return Array.from(document.querySelectorAll('input[type="password"]'))
+                      .some(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+        },
       });
       if (pwResult?.result === true) {
         console.log(`[Mighty] ${account.name}: login form detected in page — reporting login_required`);
