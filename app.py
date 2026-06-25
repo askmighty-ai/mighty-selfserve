@@ -8547,6 +8547,13 @@ def dashboard():
             else:
                 cand_notice = ""
             status_color = "#30d158"
+            # Override dot color based on sync_status — independent of whether
+            # we have old hero data to display. This prevents stale ok-data from
+            # masking a login_required or no_data state with a green dot.
+            if sync_status == "login_required":
+                status_color = "#ef4444"
+            elif sync_status in ("no_data", "needs_first_visit"):
+                status_color = "#f59e0b"
 
             # For utility/telecom sources, promote billing fields to the front
             _UTILITY_SOURCES_CARD = {
