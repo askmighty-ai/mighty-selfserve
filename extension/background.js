@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-24-v17'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-24-v18'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -630,6 +630,14 @@ async function runSessionKeepalive() {
 // Login detection via storage — more reliable than sendMessage for waking a sleeping service worker
 chrome.storage.onChanged.addListener(async function(changes, area) {
   if (area !== 'local' || !changes.mighty_login_detected) return;
+  // During an active sync, ignore api_relay.js login detections — the sync popup
+  // window is visible (needed for SPAs) so api_relay sees Hilton's login form and
+  // writes mighty_login_detected, which would reload the dashboard and re-trigger sync.
+  // crawlAccount already handles login detection via _isSilentLoginPage + server-side.
+  if (_syncInProgress) {
+    chrome.storage.local.remove('mighty_login_detected');
+    return;
+  }
   const { href } = changes.mighty_login_detected.newValue || {};
   if (!href) return;
   let hostname;
