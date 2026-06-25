@@ -1,9 +1,13 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-24-v20'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-24-v21'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
+// Clear the persistent sync lock on every service worker startup.
+// When the SW restarts (extension reload or 5-min idle kill), any in-progress
+// sync is already dead — the lock just blocks the next sync forever if left set.
+chrome.storage.local.remove(['_sync_lock_ts', 'sync_status']).catch(() => {});
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
