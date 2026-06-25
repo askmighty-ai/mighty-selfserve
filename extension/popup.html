@@ -108,6 +108,23 @@
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     @keyframes spin  { to { transform: rotate(360deg); } }
     .hidden { display: none !important; }
+
+    .btn-reset {
+      display: block;
+      width: 100%;
+      padding: 9px;
+      background: transparent;
+      color: #ef4444;
+      border: 1px solid #fca5a5;
+      border-radius: 9px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.15s;
+      font-family: inherit;
+    }
+    .btn-reset:hover { background: #fef2f2; }
   </style>
 </head>
 <body>
@@ -142,6 +159,9 @@
       <div class="auto-badge-dot"></div>
       Auto-capturing account pages as you browse
     </div>
+
+    <!-- Shown only when sync is stuck (>5 min) -->
+    <button class="btn-reset hidden" id="reset-sync-btn">Reset stuck sync</button>
 
     <a class="btn-dashboard" href="https://mighty-selfserve-production.up.railway.app/dashboard" target="_blank">
       Open Dashboard →
