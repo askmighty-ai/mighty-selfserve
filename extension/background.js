@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-24-v21'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-24-v22'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -2148,10 +2148,29 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       console.log(`[Mighty] ${account.name}: login form was transient (session resolved) — continuing`);
     }
 
-    // Extract entry page text
+    // Extract entry page text — poll up to 10s for SPA rendering (same pattern as subpages).
+    // A single extractPageText call can miss content if the SPA hasn't finished rendering
+    // by the time ENTRY_SETTLE expires (e.g. United resolves the auth cookie check late).
+    // If stripped text stays <100 chars, fall back to full body innerText — the content
+    // may be inside a <header> or <nav> element that extractPageText strips.
     let entryText = '';
     try {
-      const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: extractPageText });
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: async function waitForEntryContent() {
+          for (let i = 0; i < 20; i++) {
+            if (document.body) {
+              const clone = document.body.cloneNode(true);
+              clone.querySelectorAll('script, style, noscript, header, footer, nav').forEach(el => el.remove());
+              const stripped = (clone.innerText || clone.textContent || '').slice(0, 15000);
+              if (stripped.trim().length >= 100) return stripped;
+            }
+            await new Promise(res => setTimeout(res, 500));
+          }
+          // Fallback: full body text in case content lives in a stripped element
+          return document.body ? (document.body.innerText || '').slice(0, 15000) : '';
+        },
+      });
       entryText = r?.result || '';
     } catch (_) {}
 
