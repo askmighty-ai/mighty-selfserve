@@ -11,7 +11,7 @@ chrome.storage.local.remove(['_sync_lock_ts', 'sync_status']).catch(() => {});
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
-const SYNC_INTERVAL = 240; // minutes (every 4 hours)
+const SYNC_INTERVAL = 60; // minutes (every 1 hour)
 const _SKIP_PATH_RE = /\/(book|search|flight-search|find-flights|deals|shop|cart|checkout|help|faq|legal|careers|about|press|sitemap|accessibility|sign-?up|register|login|sign-?in|privacy|cookie|terms|policy|contact|feedback|newsroom|investor)(\b|\/|$)/i;
 
 // ── Path registry helpers ─────────────────────────────────────────────────────

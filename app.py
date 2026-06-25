@@ -1603,7 +1603,10 @@ def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
         elif age_h < 2:
             return (f"{int(age_h*60)}m ago", "#22c55e", "✓")
         elif age_h < 24:
-            return (f"{int(age_h)}h ago", "#6b7280", "✓")
+            # Amber from 2h onward — triggers dot promotion to red (line ~8941).
+            # With hourly background sync + auto-sync on dashboard open, data >2h
+            # old means the sync hasn't run recently, so we can't trust the login state.
+            return (f"{int(age_h)}h ago", "#f59e0b", "~")
         elif age_h < 48:
             return ("Yesterday", "#f59e0b", "~")
         elif age_h < 72:
@@ -6603,6 +6606,19 @@ setInterval(checkForUpdates, 4000);
 document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'visible') checkForUpdates();
 });
+
+// Auto-sync on dashboard open — triggers once per tab session so the user
+// always sees fresh data. Without this, dots could be stale for up to 1 hour
+// (the background alarm interval) after a logout or login.
+// sessionStorage guard prevents re-triggering on the reload after sync completes.
+setTimeout(function() {
+  if (!_extPresent) return;           // extension not installed
+  if (window._syncPoll) return;       // sync already running
+  if (sessionStorage.getItem('mighty-auto-synced')) return; // already ran this tab
+  sessionStorage.setItem('mighty-auto-synced', '1');
+  console.log('[Mighty] Auto-syncing on dashboard open');
+  cloudSync();
+}, 3000); // 3s delay to let dashboard_relay.js deliver __mighty_ext_present__
 
 // Register SW for push delivery (notifications managed in /settings)
 if ('serviceWorker' in navigator) {
