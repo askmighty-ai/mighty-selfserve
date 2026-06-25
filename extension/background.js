@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-24-v18'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-24-v20'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -955,17 +955,37 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
     // "Invalid value for bounds"). Instead: create a small 100×100 popup at the
     // top-left corner with focused:false so it doesn't steal focus.
     // document.hidden stays false (not minimized) so SPAs run their full auth check.
+    // Position the popup behind the user's current window so it's invisible
+    // but NOT minimized (minimized → document.hidden=true → SPAs skip auth).
+    // Strategy: find the focused browser window, spawn the popup at the same
+    // coordinates, then immediately re-focus the original window.
+    let spawnLeft = 0, spawnTop = 0;
+    try {
+      const focusedWin = await chrome.windows.getLastFocused({ windowTypes: ['normal'] });
+      if (focusedWin && focusedWin.left != null) {
+        spawnLeft = focusedWin.left;
+        spawnTop  = focusedWin.top;
+      }
+    } catch (_) {}
+
     const win = await chrome.windows.create({
       url:     initialUrl,
       type:    'popup',
-      left:    0,
-      top:     0,
+      left:    spawnLeft,
+      top:     spawnTop,
       width:   100,
       height:  100,
       focused: false,
     });
     const tabId = win.tabs?.[0]?.id;
     if (!tabId) throw new Error('no tab in popup');
+
+    // Bring the original browser window back to front — popup stays behind it
+    try {
+      const focusedWin = await chrome.windows.getLastFocused({ windowTypes: ['normal'] });
+      if (focusedWin?.id) chrome.windows.update(focusedWin.id, { focused: true }).catch(() => {});
+    } catch (_) {}
+
     return { win, tabId };
   } catch (e) {
     console.warn('[Mighty] Could not create sync window:', e.message);
@@ -1975,6 +1995,15 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     tabId = created.tabId;
   }
 
+  // Close any tabs spawned BY the sync tab (e.g. Hilton's privacy statement page
+  // opens in the user's main browser via target=_blank / window.open).
+  const _closeRogueTab = (newTab) => {
+    if (newTab.openerTabId === tabId) {
+      chrome.tabs.remove(newTab.id).catch(() => {});
+    }
+  };
+  chrome.tabs.onCreated.addListener(_closeRogueTab);
+
   try {
     // Helper: mark the sync tab in the ISOLATED world so api_relay.js skips
     // its login-detection poll — otherwise api_relay.js detects the login form
@@ -2292,6 +2321,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     _clearLoginWall(account.source);
 
   } finally {
+    chrome.tabs.onCreated.removeListener(_closeRogueTab);
     if (!useShared) {
       chrome.tabs.remove(tabId).catch(() => {});
     } else {

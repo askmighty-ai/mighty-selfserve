@@ -8514,6 +8514,12 @@ def dashboard():
 
             synced_at   = row["synced_at"] if row else ""
             sync_status = data.get("sync_status", "ok") if row else ""
+            # The standalone column is updated by sync-failure reports AFTER the blob
+            # is written. If it records a worse state than the blob, trust the column.
+            _col_st = (row["sync_status"] if row and row["sync_status"] else "") or ""
+            _SEVERITY = {"": 0, "ok": 0, "needs_first_visit": 1, "no_data": 1, "login_required": 2}
+            if _SEVERITY.get(_col_st, 0) > _SEVERITY.get(sync_status, 0):
+                sync_status = _col_st
 
             # Batch-fetch field_observations for the Why? modal (one query per card)
             obs_map: dict = {}
