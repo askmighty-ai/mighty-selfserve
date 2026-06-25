@@ -26,6 +26,10 @@
     // background sync popup tabs where United's SPA briefly shows a login form
     // during initialization before the session cookie resolves.
     if (document.hidden) { _loginSeenConsecutive = 0; return; }
+    // Skip if this is a background sync tab — background.js injects __mightySyncTab
+    // into the ISOLATED world after page load to prevent this loop:
+    // api_relay detects login in popup → dashboard reload → new sync → repeat.
+    if (window.__mightySyncTab) { _loginSeenConsecutive = 0; return; }
     _loginPollCount++;
     var pwFields = document.querySelectorAll('input[type="password"]');
     var rects = Array.from(pwFields).map(function(el) {

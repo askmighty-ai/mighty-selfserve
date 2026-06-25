@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-24-v16'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-24-v17'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1968,14 +1968,30 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
   }
 
   try {
+    // Helper: mark the sync tab in the ISOLATED world so api_relay.js skips
+    // its login-detection poll — otherwise api_relay.js detects the login form
+    // in the sync popup (document.hidden=false) and triggers a dashboard reload
+    // which auto-starts another sync, creating an infinite loop of Hilton tabs.
+    const _markSyncTab = async () => {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world:  'ISOLATED',
+          func:   () => { window.__mightySyncTab = true; },
+        });
+      } catch (_) {}
+    };
+
     // Navigate to the entry URL (always — shared tab may be on a different domain)
     await chrome.tabs.update(tabId, { url: warmup || entry });
     await waitForTabLoad(tabId, 15_000);
+    await _markSyncTab(); // prevent api_relay.js from detecting login in this tab
 
     if (warmup) {
       await sleep(3_000);
       await chrome.tabs.update(tabId, { url: entry });
       await waitForTabLoad(tabId, 15_000);
+      await _markSyncTab();
     }
 
     // Helper: detect login/auth URLs using three layers (most→least specific):
