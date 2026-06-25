@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-24-v15'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-24-v16'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -942,15 +942,19 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
     // api_relay.js login detection also runs correctly (document.hidden=false),
     // with its 6-second consecutive check filtering transient SPA auth flashes.
     //
-    // Chrome may clamp the window to screen bounds on some configurations; if so,
-    // a tiny 1×1 popup may briefly appear in a corner during sync — acceptable trade-off.
+    // Chrome requires windows to be at least 50% within visible screen space —
+    // negative coordinates are rejected outright (v14's approach failed with
+    // "Invalid value for bounds"). Instead: create a small 100×100 popup at the
+    // top-left corner with focused:false so it doesn't steal focus.
+    // document.hidden stays false (not minimized) so SPAs run their full auth check.
     const win = await chrome.windows.create({
-      url:    initialUrl,
-      type:   'popup',
-      left:   -9999,
-      top:    -9999,
-      width:  800,
-      height: 600,
+      url:     initialUrl,
+      type:    'popup',
+      left:    0,
+      top:     0,
+      width:   100,
+      height:  100,
+      focused: false,
     });
     const tabId = win.tabs?.[0]?.id;
     if (!tabId) throw new Error('no tab in popup');
