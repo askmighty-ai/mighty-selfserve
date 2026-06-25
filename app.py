@@ -8556,10 +8556,8 @@ def dashboard():
             # Override dot color based on sync_status — independent of whether
             # we have old hero data to display. This prevents stale ok-data from
             # masking a login_required or no_data state with a green dot.
-            if sync_status == "login_required":
+            if sync_status in ("login_required", "no_data", "needs_first_visit"):
                 status_color = "#ef4444"
-            elif sync_status in ("no_data", "needs_first_visit"):
-                status_color = "#f59e0b"
 
             # For utility/telecom sources, promote billing fields to the front
             _UTILITY_SOURCES_CARD = {
@@ -8939,10 +8937,9 @@ def dashboard():
             _flabel, _fcolor, _ficon = _freshness_label(synced_at, sync_status)
             _fw = "700" if _fcolor == "#dc2626" else "500"
             _fprefix = f"{_ficon} " if _ficon else ""
-            # Promote status_color to amber/red when data is stale, even if sync_status="ok".
-            # This ensures the dot reflects actual freshness, not just last-known sync state.
+            # Promote dot to red when data is stale, even if sync_status="ok".
             if status_color == "#30d158" and _fcolor in ("#f59e0b", "#dc2626"):
-                status_color = _fcolor
+                status_color = "#ef4444"
             synced_title = (
                 f"Synced {_fmt_sync(synced_at)}" if synced_at else "Not yet synced"
             )
