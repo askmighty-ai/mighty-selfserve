@@ -6388,7 +6388,27 @@ function _showToast(msg, duration) {
 // Extension presence detection — dashboard_relay.js sends this on load
 var _extPresent = false;
 window.addEventListener('message', function(e) {
-  if (e.data && e.data.type === '__mighty_ext_present__') _extPresent = true;
+  if (!e.data) return;
+  if (e.data.type === '__mighty_ext_present__') {
+    _extPresent = true;
+    // On extension connect, check which login_required accounts already have
+    // credentials stored so the "Auto-login enabled" state is shown correctly.
+    document.querySelectorAll('[id^="ali-"][id$="-btn"]').forEach(function(el) {
+      var src = el.id.replace(/^ali-/, '').replace(/-btn$/, '');
+      window.postMessage({type:'__mighty_dashboard__', action:'has_credential', source:src}, '*');
+    });
+    return;
+  }
+  // Auto-login: handle has_credential reply from extension
+  if (e.data.type === '__mighty_dashboard_reply__' && e.data.action === 'has_credential') {
+    var resp = e.data.resp || {};
+    if (resp.has && resp.source) {
+      var onEl  = document.getElementById('ali-' + resp.source + '-on');
+      var btnEl = document.getElementById('ali-' + resp.source + '-btn');
+      if (onEl)  onEl.style.display  = '';
+      if (btnEl) btnEl.style.display = 'none';
+    }
+  }
 });
 
 function _finishSync() {
@@ -8740,12 +8760,41 @@ def dashboard():
                     f'background:none;border:1px solid #d1d5db;color:#6b7280;border-radius:6px;'
                     f'font-size:11px;font-weight:500;cursor:pointer">Already signed in?</button>'
                 )
+                _lr_ali = (
+                    f'<div id="ali-{src}-wrap" style="margin-top:8px">'
+                    f'<button id="ali-{src}-btn" onclick="showAutoLoginForm(\'{_lr_src_js}\',this)" '
+                    f'style="padding:4px 10px;background:none;border:1px solid #6366f1;color:#6366f1;'
+                    f'border-radius:6px;font-size:11px;font-weight:500;cursor:pointer">⚡ Enable auto-login</button>'
+                    f'<span id="ali-{src}-on" style="display:none;font-size:11px;font-weight:500;color:#22c55e">'
+                    f'⚡ Auto-login enabled '
+                    f'<a href="#" onclick="removeAutoLoginCred(\'{_lr_src_js}\');return false" '
+                    f'style="color:#ef4444;font-size:10px;text-decoration:underline">Remove</a></span>'
+                    f'<div id="ali-{src}-form" style="display:none;margin-top:8px">'
+                    f'<div style="color:#6b7280;font-size:10px;margin-bottom:6px;line-height:1.4">'
+                    f'Stored locally in the extension — never sent to servers.</div>'
+                    f'<input id="ali-{src}-user" type="email" placeholder="Username / email" autocomplete="off" '
+                    f'style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #d1d5db;'
+                    f'border-radius:5px;font-size:12px;margin-bottom:4px">'
+                    f'<input id="ali-{src}-pw" type="password" placeholder="Password" autocomplete="off" '
+                    f'style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #d1d5db;'
+                    f'border-radius:5px;font-size:12px">'
+                    f'<div style="margin-top:6px">'
+                    f'<button onclick="saveAutoLoginCred(\'{_lr_src_js}\')" '
+                    f'style="padding:5px 12px;background:#6366f1;color:#fff;border:none;border-radius:5px;'
+                    f'font-size:11px;font-weight:600;cursor:pointer">Save on this device</button>'
+                    f'<button onclick="document.getElementById(\'ali-{src}-form\').style.display=\'none\';'
+                    f'document.getElementById(\'ali-{src}-btn\').style.display=\'\'" '
+                    f'style="margin-left:6px;padding:5px 10px;background:none;border:1px solid #d1d5db;'
+                    f'color:#6b7280;border-radius:5px;font-size:11px;cursor:pointer">Cancel</button>'
+                    f'</div></div></div>'
+                )
                 card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
                     f'<div style="color:#ef4444;font-size:12px;font-weight:500">Session expired</div>'
                     f'<div style="color:#9ca3af;font-size:11px;margin-top:3px">Sign back in — Mighty will sync automatically.</div>'
                     f'<div style="margin-top:4px">{_lr_btn}{_lr_force_btn}</div>'
+                    f'{_lr_ali}'
                     f'</div>'
                 )
                 status_color = "#ef4444"
@@ -13418,6 +13467,37 @@ function forceClearLoginWall(source, btn) {{
   window.postMessage({{type: '__mighty_dashboard__', action: 'clear_login_wall', source}}, '*');
   // 3. Reload after a short delay so the card reflects the updated status
   setTimeout(() => location.reload(), 5000);
+}}
+// ── Auto-login credential management ──────────────────────────────────────────
+function showAutoLoginForm(source, btn) {{
+  if (!_extPresent) {{
+    alert('The Mighty extension is required for auto-login. Please install and configure it first.');
+    return;
+  }}
+  btn.style.display = 'none';
+  var form = document.getElementById('ali-' + source + '-form');
+  if (form) form.style.display = 'block';
+}}
+function saveAutoLoginCred(source) {{
+  var uEl = document.getElementById('ali-' + source + '-user');
+  var pEl = document.getElementById('ali-' + source + '-pw');
+  var u = (uEl && uEl.value) ? uEl.value.trim() : '';
+  var p = (pEl && pEl.value) ? pEl.value : '';
+  if (!u || !p) {{ alert('Please enter both username and password.'); return; }}
+  window.postMessage({{type:'__mighty_dashboard__', action:'store_credential', source:source, username:u, password:p}}, '*');
+  var form = document.getElementById('ali-' + source + '-form');
+  var btn  = document.getElementById('ali-' + source + '-btn');
+  var on   = document.getElementById('ali-' + source + '-on');
+  if (form) form.style.display = 'none';
+  if (btn)  btn.style.display  = 'none';
+  if (on)   on.style.display   = '';
+}}
+function removeAutoLoginCred(source) {{
+  window.postMessage({{type:'__mighty_dashboard__', action:'delete_credential', source:source}}, '*');
+  var btn = document.getElementById('ali-' + source + '-btn');
+  var on  = document.getElementById('ali-' + source + '-on');
+  if (on)  on.style.display  = 'none';
+  if (btn) btn.style.display = '';
 }}
 function toggleArchivedPanel() {{
   var panel = document.getElementById('arch-inline-panel');

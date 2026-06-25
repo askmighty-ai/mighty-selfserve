@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-24-v23'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-25-v24'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -654,9 +654,33 @@ chrome.storage.onChanged.addListener(async function(changes, area) {
   console.log(`[Mighty] Storage-based login detected for ${source} (${hostname})`);
   await _markLoginWall(source);
   await reportSyncFailure(api_key, source, 'login_wall');
-  // Clear the flag so it can fire again next time
   chrome.storage.local.remove('mighty_login_detected');
-  // Reload dashboard AFTER the server has processed the update
+
+  // If credentials are stored, attempt auto-login immediately instead of
+  // leaving the user with a red dot and asking them to sign in manually.
+  const cred = await _getCred(api_key, source);
+  if (cred) {
+    console.log(`[Mighty] Credentials stored for ${source} — attempting auto-login`);
+    // Reload dashboard now so it shows "Session expired" while we work
+    chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+    const result = await autoLogin(source, api_key).catch(() => 'error');
+    console.log(`[Mighty] Auto-login result for ${source}: ${result}`);
+    if (result === 'success') {
+      await _clearLoginWall(source);
+      fetch(`${MIGHTY_URL}/api/sync/login-cleared`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key, source }),
+      }).catch(() => {});
+      // Reload dashboard so dot turns green
+      chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+      setTimeout(() => syncSingleAccount(source, api_key), 2000);
+    }
+    // If 2fa/failed/error: dashboard already shows "Session expired" — user will need to sign in
+    return;
+  }
+
+  // No credentials stored — just reload dashboard to show the "Session expired" card
   chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, (tabs) => {
     tabs.forEach(t => chrome.tabs.reload(t.id));
   });
@@ -796,6 +820,33 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
       delete captured_accounts[msg.source];
       chrome.storage.local.set({ captured_accounts }, () => sendResponse({ ok: true }));
     });
+    return true;
+  }
+  if (msg.action === 'store_credential') {
+    (async () => {
+      const { api_key } = await chrome.storage.local.get('api_key');
+      if (!api_key || !msg.source || !msg.username || !msg.password) {
+        sendResponse({ ok: false, error: 'missing fields' }); return;
+      }
+      await _storeCred(api_key, msg.source, msg.username, msg.password);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+  if (msg.action === 'delete_credential') {
+    (async () => {
+      await _deleteCred(msg.source);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+  if (msg.action === 'has_credential') {
+    (async () => {
+      const { api_key } = await chrome.storage.local.get('api_key');
+      if (!api_key) { sendResponse({ has: false, source: msg.source }); return; }
+      const cred = await _getCred(api_key, msg.source);
+      sendResponse({ has: !!cred, source: msg.source });
+    })();
     return true;
   }
 });
@@ -1029,6 +1080,232 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
   } catch (e) {
     console.warn('[Mighty] Could not create sync window:', e.message);
     return null;
+  }
+}
+
+// ── Credential storage (AES-GCM encrypted, local extension only) ──────────────
+// Credentials are derived-key encrypted using HKDF from the user's API key and
+// stored only in chrome.storage.local — they are never sent to Mighty servers.
+
+async function _credKey(apiKey) {
+  const km = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(apiKey), { name: 'HKDF' }, false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new TextEncoder().encode('mighty-creds-v1'),
+      info: new TextEncoder().encode('credential-encryption'),
+    },
+    km,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function _encryptCred(apiKey, data) {
+  const key = await _credKey(apiKey);
+  const iv  = crypto.getRandomValues(new Uint8Array(12));
+  const enc = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    new TextEncoder().encode(JSON.stringify(data))
+  );
+  const out = new Uint8Array(12 + enc.byteLength);
+  out.set(iv);
+  out.set(new Uint8Array(enc), 12);
+  return btoa(String.fromCharCode(...out));
+}
+
+async function _decryptCred(apiKey, b64) {
+  try {
+    const key   = await _credKey(apiKey);
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const plain = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: bytes.slice(0, 12) },
+      key,
+      bytes.slice(12)
+    );
+    return JSON.parse(new TextDecoder().decode(plain));
+  } catch { return null; }
+}
+
+async function _storeCred(apiKey, source, username, password) {
+  const blob = await _encryptCred(apiKey, { username, password });
+  const { _creds = {} } = await chrome.storage.local.get('_creds');
+  _creds[source] = blob;
+  await chrome.storage.local.set({ _creds });
+  console.log(`[Mighty] Credentials stored for ${source}`);
+}
+
+async function _getCred(apiKey, source) {
+  const { _creds = {} } = await chrome.storage.local.get('_creds');
+  if (!_creds[source]) return null;
+  return _decryptCred(apiKey, _creds[source]);
+}
+
+async function _deleteCred(source) {
+  const { _creds = {} } = await chrome.storage.local.get('_creds');
+  delete _creds[source];
+  await chrome.storage.local.set({ _creds });
+  console.log(`[Mighty] Credentials removed for ${source}`);
+}
+
+// ── Auto-login (fills login form in a background popup window) ────────────────
+
+let _autoLoginInProgress = false;
+
+// Per-site login page URLs. We navigate here directly rather than letting the
+// site redirect from the account page, which can be slower and less reliable.
+const _AUTO_LOGIN_URLS = {
+  delta:        'https://www.delta.com/us/en/sign-in/start',
+  united:       'https://www.united.com/ux/en/login',
+  southwest:    'https://www.southwest.com/account/login',
+  american_air: 'https://www.aa.com/login.do',
+  alaska_air:   'https://www.alaskaair.com/account/login',
+  marriott:     'https://www.marriott.com/sign-in.mi',
+  hilton:       'https://www.hilton.com/en/hilton-honors/sign-in/',
+  hyatt:        'https://world.hyatt.com/content/gp/en/member/loginRegister.html',
+  ihg:          'https://login.ihg.com/',
+  amex:         'https://www.americanexpress.com/en-us/account/login',
+  chase:        'https://secure.chase.com/web/auth/dashboard#/dashboard/loginWithChaseButton/index',
+  amazon:       'https://www.amazon.com/ap/signin',
+  starbucks:    'https://www.starbucks.com/account/signin',
+};
+
+/**
+ * Fill visible login form fields. Works for both native inputs and
+ * React/Vue controlled inputs (uses native prototype setter to bypass
+ * framework value interception, then dispatches events to notify the framework).
+ *
+ * Handles single-step (email+password together) and two-step (email first,
+ * password on the next step) login flows.
+ */
+function _fillFormScript(username, password) {
+  function setVal(el, val) {
+    try {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(el, val);
+    } catch { el.value = val; }
+    ['input', 'change', 'keyup'].forEach(t => el.dispatchEvent(new Event(t, { bubbles: true })));
+  }
+
+  function vis(el) {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && !el.disabled;
+  }
+
+  const allPw   = Array.from(document.querySelectorAll('input[type="password"]')).filter(vis);
+  const allUser = Array.from(document.querySelectorAll('input[type="email"], input[type="text"]')).filter(vis);
+
+  let filledUser = false, filledPw = false;
+  if (allUser.length > 0 && allPw.length === 0) {
+    setVal(allUser[0], username); filledUser = true;
+  } else if (allUser.length > 0 && allPw.length > 0) {
+    setVal(allUser[0], username); setVal(allPw[0], password);
+    filledUser = true; filledPw = true;
+  } else if (allPw.length > 0) {
+    setVal(allPw[0], password); filledPw = true;
+  }
+
+  let submitted = false;
+  if (filledUser || filledPw) {
+    const btn = document.querySelector('button[type="submit"], input[type="submit"]')
+      || Array.from(document.querySelectorAll('button')).find(
+           b => /log.?in|sign.?in|continue|next|submit/i.test(b.textContent)
+         );
+    if (btn) { btn.click(); submitted = true; }
+  }
+  return { filledUser, filledPw, submitted };
+}
+
+function _checkOutcomeScript() {
+  const text = (document.body && document.body.innerText) || '';
+  const has2FA = /verification code|one.time password|authenticator|check your (phone|email|text)|enter.the.code|security code|two.factor|2-step/i.test(text)
+    || Array.from(document.querySelectorAll('input[type="tel"]')).some(e => {
+         const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0;
+       });
+  const hasPw = Array.from(document.querySelectorAll('input[type="password"]')).some(e => {
+    const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0;
+  });
+  return { url: location.href, has2FA, hasPw };
+}
+
+/**
+ * Attempt automatic login for `source` using stored credentials.
+ * Returns: 'success' | '2fa' | 'failed' | 'error' | null (no creds)
+ */
+async function autoLogin(source, apiKey) {
+  if (_autoLoginInProgress || _syncInProgress) return null;
+  const cred = await _getCred(apiKey, source);
+  if (!cred) return null;
+
+  _autoLoginInProgress = true;
+  const loginUrl = _AUTO_LOGIN_URLS[source] || ACCOUNT_ENTRY[source];
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  const created = await _createSyncWindow(loginUrl);
+  if (!created) { _autoLoginInProgress = false; return 'error'; }
+  const { win, tabId } = created;
+
+  try {
+    console.log(`[Mighty] autoLogin: navigating to ${loginUrl} for ${source}`);
+    await sleep(5000); // allow SPA to settle + auth check to complete
+
+    // Tag tab as sync popup so api_relay.js login polling skips it
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => { window.__mightySyncTab = true; },
+    }).catch(() => {});
+
+    // Step 1: fill whatever form fields are visible
+    const [r1] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: _fillFormScript,
+      args: [cred.username, cred.password],
+    });
+    console.log(`[Mighty] autoLogin ${source} step1:`, r1?.result);
+
+    if (!r1?.result?.submitted) {
+      console.log(`[Mighty] autoLogin ${source}: no submit on step1 — aborting`);
+      return 'failed';
+    }
+
+    await sleep(4000); // wait for navigation / SPA transition
+
+    const [c1] = await chrome.scripting.executeScript({
+      target: { tabId }, func: _checkOutcomeScript,
+    });
+    console.log(`[Mighty] autoLogin ${source} after step1:`, c1?.result);
+    if (c1?.result?.has2FA) return '2fa';
+
+    if (c1?.result?.hasPw) {
+      // Two-step login: password field now visible — fill it
+      const [r2] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: _fillFormScript,
+        args: [cred.username, cred.password],
+      });
+      console.log(`[Mighty] autoLogin ${source} step2:`, r2?.result);
+      await sleep(4000);
+    }
+
+    const [c2] = await chrome.scripting.executeScript({
+      target: { tabId }, func: _checkOutcomeScript,
+    });
+    console.log(`[Mighty] autoLogin ${source} final:`, c2?.result);
+    if (c2?.result?.has2FA) return '2fa';
+    if (c2?.result?.hasPw)  return 'failed';
+    return 'success';
+
+  } catch (e) {
+    console.warn(`[Mighty] autoLogin ${source} error:`, e.message);
+    return 'error';
+  } finally {
+    _autoLoginInProgress = false;
+    chrome.windows.remove(win.id).catch(() => {});
   }
 }
 
