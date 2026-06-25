@@ -62,6 +62,27 @@
         console.log('[Mighty] mighty_login_detected written to storage ✓');
       }
     });
+
+    // Phase 2: now watch for the form to DISAPPEAR — that signals successful login.
+    // This covers SPA routing (no tabs.onUpdated) and survives service worker restarts
+    // because both phases run inside the content script, not the background.
+    var _successPollId = setInterval(function() {
+      if (document.hidden) return;
+      var pwVisible = Array.from(document.querySelectorAll('input[type="password"]'))
+        .some(function(el) { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+      if (pwVisible) return; // still showing
+
+      // Form gone — check we're not just on another login/MFA step
+      var isLoginPath = /\/(login|signin|sign-in|log-in|sso|auth|logon)/i.test(location.pathname);
+      var hasContent  = document.body && document.body.innerText.trim().length > 300;
+      if (isLoginPath || !hasContent) return; // mid-flow, keep waiting
+
+      clearInterval(_successPollId);
+      console.log('[Mighty] Login form gone — reporting login success');
+      chrome.storage.local.set({ mighty_login_succeeded: { href: location.href, ts: Date.now() } });
+    }, 2000);
+    // Stop success-poll after 10 minutes
+    setTimeout(function() { clearInterval(_successPollId); }, 600000);
   }, 2000);
   // Stop polling after 3 minutes — if no login form by then, user is logged in
   setTimeout(function() { clearInterval(_loginPollId); }, 180000);

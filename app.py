@@ -16987,12 +16987,13 @@ def api_sync_login_cleared():
         return jsonify({"ok": True, "updated": False, "note": "not login_required"})
     payload["sync_status"] = "ok"
     payload.pop("sync_failure_reason", None)
+    now = iso()
     db.execute(
-        "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL WHERE user_id=? AND source=?",
-        (encrypt_account_data(uid, payload), "ok", uid, source)
+        "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL, synced_at=? WHERE user_id=? AND source=?",
+        (encrypt_account_data(uid, payload), "ok", now, uid, source)
     )
     db.commit()
-    print(f"[LoginCleared] uid={uid} source={source} — status reset to ok", flush=True)
+    print(f"[LoginCleared] uid={uid} source={source} — status reset to ok, synced_at={now}", flush=True)
     return jsonify({"ok": True, "updated": True})
 
 

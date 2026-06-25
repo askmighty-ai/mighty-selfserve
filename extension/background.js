@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-24-v22'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-24-v23'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -660,6 +660,41 @@ chrome.storage.onChanged.addListener(async function(changes, area) {
   chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, (tabs) => {
     tabs.forEach(t => chrome.tabs.reload(t.id));
   });
+});
+
+// Login SUCCESS detection — fired by api_relay.js when the password field disappears
+// after having been confirmed present, indicating the user just logged in.
+// Uses storage (not sendMessage) so it wakes the service worker reliably,
+// and works even for SPAs where tabs.onUpdated never fires for client-side routing.
+chrome.storage.onChanged.addListener(async function(changes, area) {
+  if (area !== 'local' || !changes.mighty_login_succeeded) return;
+  const { href } = changes.mighty_login_succeeded.newValue || {};
+  if (!href) return;
+  chrome.storage.local.remove('mighty_login_succeeded');
+
+  let hostname;
+  try { hostname = new URL(href).hostname.replace(/^www\./, ''); } catch { return; }
+  const source = _DOMAIN_TO_SOURCE[hostname]
+    || _DOMAIN_TO_SOURCE[hostname.split('.').slice(-2).join('.')];
+  if (!source) return;
+
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+  console.log(`[Mighty] Login success detected for ${source} (content script) — clearing wall`);
+  await _clearLoginWall(source);
+
+  // Immediately flip server status to ok so dashboard shows green
+  fetch(`${MIGHTY_URL}/api/sync/login-cleared`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key, source }),
+  }).catch(() => {});
+
+  // Reload dashboard so the green dot appears right away
+  chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+
+  // Full data sync for this account after a short delay (lets SSO finish before crawling)
+  setTimeout(() => syncSingleAccount(source, api_key), 4000);
 });
 
 // Messages from popup
