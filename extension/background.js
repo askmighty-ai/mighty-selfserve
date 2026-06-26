@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-25-v24'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-25-v25'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1053,8 +1053,11 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
     try {
       const focusedWin = await chrome.windows.getLastFocused({ windowTypes: ['normal'] });
       if (focusedWin && focusedWin.left != null) {
-        spawnLeft = focusedWin.left;
-        spawnTop  = focusedWin.top;
+        // Position at the BOTTOM-RIGHT corner of the user's window, well away from
+        // the tab strip (top-left).  Even if Chrome briefly focuses the popup before
+        // the user's window is restored, it won't overlap the tab strip area.
+        spawnLeft = Math.max(0, (focusedWin.left || 0) + (focusedWin.width  || 1000) - 110);
+        spawnTop  = Math.max(0, (focusedWin.top  || 0) + (focusedWin.height ||  800) - 110);
       }
     } catch (_) {}
 
@@ -1070,11 +1073,11 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
     const tabId = win.tabs?.[0]?.id;
     if (!tabId) throw new Error('no tab in popup');
 
-    // Bring the original browser window back to front — popup stays behind it
-    try {
-      const focusedWin = await chrome.windows.getLastFocused({ windowTypes: ['normal'] });
-      if (focusedWin?.id) chrome.windows.update(focusedWin.id, { focused: true }).catch(() => {});
-    } catch (_) {}
+    // NOTE: we intentionally do NOT call windows.update(..., {focused:true}) here.
+    // Chrome MV3 does not reliably honour focused:false on windows.create — the popup
+    // may briefly steal focus — but calling windows.update immediately after causes its
+    // own visual artifact (the user's window "flashes" to the foreground).  The
+    // bottom-right positioning above ensures any brief appearance is unobtrusive.
 
     return { win, tabId };
   } catch (e) {
@@ -2344,22 +2347,31 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     } catch (_) {}
   };
 
-  // Re-inject on every navigation of the sync tab so new pages also get blocked
+  // Re-inject on every navigation of the sync tab so new pages also get blocked.
+  // Fire on BOTH 'loading' (catches window.open calls that happen early during page
+  // load, before 'complete' fires) and 'complete' (re-blocks after any late injection).
   const _blockOpenOnLoad = (updatedTabId, changeInfo) => {
-    if (updatedTabId === tabId && changeInfo.status === 'complete') {
+    if (updatedTabId !== tabId) return;
+    if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
       _blockWindowOpen();
     }
   };
   chrome.tabs.onUpdated.addListener(_blockOpenOnLoad);
 
-  // Backup: close any rogue tab that still slips through
+  // Backup: close any rogue tab that still slips through.
+  // Capture win?.id now — win is null when useShared=true (shared popup window), and
+  // referencing win.id inside the async listener would throw a TypeError that the
+  // catch block silently swallows, skipping the deactivation step entirely.
+  const _syncWinId = win?.id ?? null;
   const _closeRogueTab = async (newTab) => {
     if (newTab.openerTabId !== tabId) return;
     try {
-      // If opened in the user's main window (not the sync popup), deactivating it
-      // first causes Chrome to restore the previous tab before we remove it,
-      // preventing the visible "jump to rightmost tab" glitch.
-      if (newTab.windowId !== win.id) {
+      // If opened outside the sync popup window, deactivate it first so Chrome
+      // restores the user's previous tab before we remove it — preventing the
+      // visible "jump to rightmost tab" glitch.
+      // When useShared=true (_syncWinId=null) we always deactivate because we
+      // don't have a dedicated sync window to compare against.
+      if (_syncWinId == null || newTab.windowId !== _syncWinId) {
         await chrome.tabs.update(newTab.id, { active: false }).catch(() => {});
       }
     } catch (_) {}
