@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-25-v25'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-25-v26'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -8,6 +8,33 @@ chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
 // When the SW restarts (extension reload or 5-min idle kill), any in-progress
 // sync is already dead — the lock just blocks the next sync forever if left set.
 chrome.storage.local.remove(['_sync_lock_ts', 'sync_status']).catch(() => {});
+
+// ── Debug event log ──────────────────────────────────────────────────────────
+// Writes timestamped entries to chrome.storage.local['_dbg'].
+// Read from the service worker console: chrome.storage.local.get('_dbg', console.log)
+// Clear: chrome.storage.local.remove('_dbg')
+const DBG_MAX = 200; // keep last N entries
+async function _dbg(event, data) {
+  try {
+    const ts = new Date().toISOString().slice(11,23); // HH:MM:SS.mmm
+    const entry = `${ts} ${event}${data ? ' ' + JSON.stringify(data) : ''}`;
+    console.log('[MightyDbg]', entry);
+    const { _dbg: prev = [] } = await chrome.storage.local.get('_dbg');
+    const next = [...prev, entry].slice(-DBG_MAX);
+    await chrome.storage.local.set({ _dbg: next });
+  } catch (_) {}
+}
+
+// Global listeners — fire for ALL tabs/windows, not just sync tabs.
+// This lets us see if Chrome is switching tabs outside of sync code.
+chrome.tabs.onCreated.addListener(t =>
+  _dbg('TAB_CREATED', { id: t.id, windowId: t.windowId, openerTabId: t.openerTabId, url: t.pendingUrl || t.url }));
+chrome.tabs.onActivated.addListener(info =>
+  _dbg('TAB_ACTIVATED', { tabId: info.tabId, windowId: info.windowId }));
+chrome.windows.onFocusChanged.addListener(wId =>
+  _dbg('WIN_FOCUS', { windowId: wId }));
+chrome.tabs.onRemoved.addListener((id, info) =>
+  _dbg('TAB_REMOVED', { id, windowId: info.windowId }));
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
@@ -1061,6 +1088,7 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
       }
     } catch (_) {}
 
+    _dbg('CREATE_SYNC_WIN', { spawnLeft, spawnTop, initialUrl });
     const win = await chrome.windows.create({
       url:     initialUrl,
       type:    'popup',
@@ -1072,6 +1100,7 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
     });
     const tabId = win.tabs?.[0]?.id;
     if (!tabId) throw new Error('no tab in popup');
+    _dbg('SYNC_WIN_CREATED', { winId: win.id, tabId });
 
     // NOTE: we intentionally do NOT call windows.update(..., {focused:true}) here.
     // Chrome MV3 does not reliably honour focused:false on windows.create — the popup
@@ -2363,8 +2392,10 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
   // referencing win.id inside the async listener would throw a TypeError that the
   // catch block silently swallows, skipping the deactivation step entirely.
   const _syncWinId = win?.id ?? null;
+  _dbg('CRAWL_START', { source, tabId, syncWinId: _syncWinId, useShared });
   const _closeRogueTab = async (newTab) => {
     if (newTab.openerTabId !== tabId) return;
+    _dbg('ROGUE_TAB', { rogueId: newTab.id, rogueWin: newTab.windowId, syncWin: _syncWinId, url: newTab.pendingUrl || newTab.url });
     try {
       // If opened outside the sync popup window, deactivate it first so Chrome
       // restores the user's previous tab before we remove it — preventing the
@@ -2373,8 +2404,9 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       // don't have a dedicated sync window to compare against.
       if (_syncWinId == null || newTab.windowId !== _syncWinId) {
         await chrome.tabs.update(newTab.id, { active: false }).catch(() => {});
+        _dbg('ROGUE_DEACTIVATED', { rogueId: newTab.id });
       }
-    } catch (_) {}
+    } catch (e) { _dbg('ROGUE_ERR', { err: e.message }); }
     chrome.tabs.remove(newTab.id).catch(() => {});
   };
   chrome.tabs.onCreated.addListener(_closeRogueTab);
