@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-25-v26'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-25-v27'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -35,6 +35,15 @@ chrome.windows.onFocusChanged.addListener(wId =>
   _dbg('WIN_FOCUS', { windowId: wId }));
 chrome.tabs.onRemoved.addListener((id, info) =>
   _dbg('TAB_REMOVED', { id, windowId: info.windowId }));
+// Track first URL a newly-created tab navigates to — tells us which link/button opened it
+const _newTabsSeen = new Set();
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'loading') return;
+  if (!changeInfo.url) return;
+  if (_newTabsSeen.has(tabId)) return; // only log first navigation
+  _newTabsSeen.add(tabId);
+  _dbg('TAB_FIRST_URL', { id: tabId, windowId: tab.windowId, url: changeInfo.url });
+});
 
 const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
@@ -2392,7 +2401,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
   // referencing win.id inside the async listener would throw a TypeError that the
   // catch block silently swallows, skipping the deactivation step entirely.
   const _syncWinId = win?.id ?? null;
-  _dbg('CRAWL_START', { source, tabId, syncWinId: _syncWinId, useShared });
+  _dbg('CRAWL_START', { source: account.source, tabId, syncWinId: _syncWinId, useShared });
   const _closeRogueTab = async (newTab) => {
     if (newTab.openerTabId !== tabId) return;
     _dbg('ROGUE_TAB', { rogueId: newTab.id, rogueWin: newTab.windowId, syncWin: _syncWinId, url: newTab.pendingUrl || newTab.url });
