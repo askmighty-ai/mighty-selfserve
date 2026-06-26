@@ -25,41 +25,62 @@
     .header-text p  { font-size: 11px; opacity: 0.7; margin-top: 1px; }
 
     .body {
-      padding: 20px 18px 18px;
+      padding: 16px 16px 16px;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 12px;
     }
 
-    .status-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
+    /* ── Status card ── */
+    .status-card {
       background: #f9fafb;
       border: 1px solid #e5e7eb;
       border-radius: 10px;
-      padding: 10px 12px;
+      padding: 11px 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .status-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
     .status-dot {
-      width: 9px; height: 9px;
+      width: 8px; height: 8px;
       border-radius: 50%;
       flex-shrink: 0;
       background: #d1d5db;
     }
-    .status-dot.active  { background: #10b981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
-    .status-dot.warning { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
-    .status-dot.error   { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,0.15); }
+    .status-dot.green  { background: #10b981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+    .status-dot.amber  { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
+    .status-dot.red    { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,0.15); }
+    .status-dot.pulse  { animation: pulse 1.6s ease-in-out infinite; }
     .status-label { font-size: 13px; font-weight: 600; color: #111827; }
-    .status-sub   { font-size: 11px; color: #9ca3af; margin-top: 1px; }
 
-    .last-sync {
+    .status-detail {
       font-size: 11.5px;
-      color: #9ca3af;
-      text-align: center;
-      line-height: 1.4;
+      color: #6b7280;
+      line-height: 1.5;
+      padding-left: 16px;  /* align with label text */
     }
-    .last-sync strong { color: #6b7280; }
+    .status-detail .dim { color: #9ca3af; }
 
+    /* ── Setup box ── */
+    .setup-box {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 12px;
+      color: #92400e;
+      line-height: 1.5;
+      text-align: center;
+    }
+    .setup-box a { color: #b45309; font-weight: 600; text-decoration: none; }
+    .setup-box a:hover { text-decoration: underline; }
+
+    /* ── Buttons ── */
     .btn-dashboard {
       display: block;
       width: 100%;
@@ -78,37 +99,6 @@
     }
     .btn-dashboard:hover { background: #6d28d9; }
 
-    .setup-box {
-      background: #fffbeb;
-      border: 1px solid #fde68a;
-      border-radius: 10px;
-      padding: 12px 14px;
-      font-size: 12px;
-      color: #92400e;
-      line-height: 1.5;
-      text-align: center;
-    }
-    .setup-box a { color: #b45309; font-weight: 600; text-decoration: none; }
-    .setup-box a:hover { text-decoration: underline; }
-
-    .auto-badge {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-      font-size: 11px;
-      color: #9ca3af;
-    }
-    .auto-badge-dot {
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: #10b981;
-      animation: pulse 2s ease-in-out infinite;
-    }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-    @keyframes spin  { to { transform: rotate(360deg); } }
-    .hidden { display: none !important; }
-
     .btn-reset {
       display: block;
       width: 100%;
@@ -125,6 +115,10 @@
       font-family: inherit;
     }
     .btn-reset:hover { background: #fef2f2; }
+
+    .hidden { display: none !important; }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   </style>
 </head>
 <body>
@@ -133,18 +127,19 @@
     <img src="icons/icon48.png" alt="M">
     <div class="header-text">
       <h1>Mighty Sync</h1>
-      <p>Running in the background</p>
+      <p id="header-sub">Background sync active</p>
     </div>
   </div>
 
   <div class="body">
 
-    <div class="status-row" id="status-row">
-      <div class="status-dot" id="status-dot"></div>
-      <div>
+    <!-- Status card — shows current sync state and last result -->
+    <div class="status-card" id="status-card">
+      <div class="status-top">
+        <div class="status-dot" id="status-dot"></div>
         <div class="status-label" id="status-label">Loading…</div>
-        <div class="status-sub"  id="status-sub"></div>
       </div>
+      <div class="status-detail hidden" id="status-detail"></div>
     </div>
 
     <!-- Shown only when no API key -->
@@ -152,15 +147,7 @@
       Visit your <a href="https://mighty-selfserve-production.up.railway.app/extension-setup" target="_blank">Mighty dashboard</a> in Chrome and the extension will configure itself automatically.
     </div>
 
-    <!-- Shown when configured -->
-    <div class="last-sync hidden" id="last-sync-row"></div>
-
-    <div class="auto-badge hidden" id="auto-badge">
-      <div class="auto-badge-dot"></div>
-      Auto-capturing account pages as you browse
-    </div>
-
-    <!-- Shown only when sync is stuck (>5 min) -->
+    <!-- Shown only when sync is stuck (>5 min with lock held) -->
     <button class="btn-reset hidden" id="reset-sync-btn">Reset stuck sync</button>
 
     <a class="btn-dashboard" href="https://mighty-selfserve-production.up.railway.app/dashboard" target="_blank">

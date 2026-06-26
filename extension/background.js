@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v29'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v30'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1563,7 +1563,11 @@ async function runSync() {
 
   const ts = new Date(syncSessionTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const msg = `Synced at ${ts} — ${ok} ok${failed ? `, ${failed} failed` : ''}`;
-  await chrome.storage.local.set({ last_sync: syncSessionTime });
+  await chrome.storage.local.set({
+    last_sync: syncSessionTime,
+    last_sync_ok: ok,
+    last_sync_failed: failed,
+  });
   await setStatus(msg);
   console.log('[Mighty]', msg);
 
