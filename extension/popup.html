@@ -66,6 +66,31 @@
     }
     .status-detail .dim { color: #9ca3af; }
 
+    /* ── Progress bar ── */
+    .progress-wrap {
+      padding-left: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .progress-track {
+      height: 4px;
+      background: #e5e7eb;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: #7c3aed;
+      border-radius: 2px;
+      transition: width 0.4s ease;
+      width: 0%;
+    }
+    .progress-label {
+      font-size: 11px;
+      color: #9ca3af;
+    }
+
     /* ── Setup box ── */
     .setup-box {
       background: #fffbeb;
@@ -140,6 +165,13 @@
         <div class="status-label" id="status-label">Loading…</div>
       </div>
       <div class="status-detail hidden" id="status-detail"></div>
+      <!-- Progress bar — shown only during active sync -->
+      <div class="progress-wrap hidden" id="progress-wrap">
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-label" id="progress-label"></div>
+      </div>
     </div>
 
     <!-- Shown only when no API key -->

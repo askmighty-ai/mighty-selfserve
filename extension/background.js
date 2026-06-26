@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v31'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v32'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1469,6 +1469,16 @@ async function runSync() {
   console.log(`[Mighty] Syncing ${accounts.length} accounts + ${capturedList.length} captured…`);
   let ok = 0, failed = 0;
 
+  // Progress tracking — written to storage so the popup can poll and display it
+  const _totalAccounts = crawlAccounts.length + tabAccounts.length + capturedList.length;
+  let _syncDone = 0;
+  async function _setProgress(name) {
+    try {
+      await chrome.storage.local.set({ sync_progress: { done: _syncDone, total: _totalAccounts, name } });
+    } catch {}
+  }
+  await _setProgress('');
+
   // Create ONE shared minimized window for the entire sync run.
   // All per-account crawls reuse this single tab — no new windows appear mid-sync.
   // TAB_SYNC_SOURCES (xfinity etc.) are excluded: they rely on the supplement watcher
@@ -1506,6 +1516,7 @@ async function runSync() {
   // Tab-based accounts (xfinity etc.) — supplement watcher handles these passively;
   // open a real tab only to warm up the session and let supplement fire.
   for (const account of tabAccounts) {
+    await _setProgress(account.name || account.source);
     try {
       await Promise.race([
         syncAccountViaTab(api_key, account, [ACCOUNT_ENTRY[account.source]], syncSessionTime),
@@ -1518,10 +1529,12 @@ async function runSync() {
       const _tabReason = e.message === 'timeout' ? 'timeout' : 'no_data';
       reportSyncFailure(api_key, account.source, _tabReason);
     }
+    _syncDone++;
   }
 
   // Crawl-based accounts — silent fetch first; shared tab only as fallback
   for (const account of crawlAccounts) {
+    await _setProgress(account.name || account.source);
     try {
       // Patch crawlAccount to use lazy shared tab
       const _lazySharedTabId = { get: getSharedTab };
@@ -1547,12 +1560,14 @@ async function runSync() {
       const _crawlReason = e.message === 'timeout' ? 'timeout' : 'no_data';
       reportSyncFailure(api_key, account.source, _crawlReason);
     }
+    _syncDone++;
   }
 
   // Re-sync captured accounts — try silent fetch for each URL, tab as fallback
   for (const [source, info] of capturedList) {
     if (!info.urls || !info.urls.length) continue;
     console.log(`[Mighty] Re-syncing captured: ${info.name} (${info.urls.length} URL(s))`);
+    await _setProgress(info.name || source);
     try {
       const tabId = await getSharedTab();
       await resyncCaptured(api_key, source, info, syncSessionTime, tabId);
@@ -1561,8 +1576,10 @@ async function runSync() {
       console.warn(`[Mighty] ${info.name}: captured re-sync skipped — ${e.message}`);
       failed++;
     }
+    _syncDone++;
   }
 
+  await chrome.storage.local.remove('sync_progress');
   const ts = new Date(syncSessionTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const msg = `Synced at ${ts} — ${ok} ok${failed ? `, ${failed} failed` : ''}`;
   await chrome.storage.local.set({

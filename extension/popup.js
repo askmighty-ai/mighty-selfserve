@@ -72,6 +72,37 @@ chrome.storage.local.get(
       headerSub.textContent = 'Updating your accounts';
       const ago = last_sync ? `Last completed ${timeAgo(last_sync)}` : 'First sync running';
       showDetail(ago);
+
+      // Show progress bar and poll storage for per-account updates
+      const progressWrap  = document.getElementById('progress-wrap');
+      const progressFill  = document.getElementById('progress-fill');
+      const progressLabel = document.getElementById('progress-label');
+      if (progressWrap) progressWrap.classList.remove('hidden');
+
+      function updateProgress() {
+        chrome.storage.local.get(['sync_progress', 'sync_status'], function(d) {
+          // If sync ended, reload popup to show final state
+          if (!d.sync_status || !d.sync_status.startsWith('Syncing')) {
+            clearInterval(pollId);
+            window.location.reload();
+            return;
+          }
+          const p = d.sync_progress;
+          if (p && p.total > 0) {
+            const pct = Math.round((p.done / p.total) * 100);
+            if (progressFill)  progressFill.style.width = pct + '%';
+            if (progressLabel) {
+              progressLabel.textContent = p.name
+                ? p.name + ' (' + (p.done + 1) + ' of ' + p.total + ')'
+                : p.done + ' of ' + p.total + ' done';
+            }
+          }
+        });
+      }
+
+      updateProgress();
+      var pollId = setInterval(updateProgress, 900);
+      window.addEventListener('unload', function() { clearInterval(pollId); });
       return;
     }
 
