@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v36'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v37'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1476,10 +1476,11 @@ async function runSync() {
   const crawlAccounts = accounts.filter(a => (ACCOUNT_ENTRY[a.source] || a.entry_url) && !TAB_SYNC_SOURCES.has(a.source));
   const tabAccounts   = accounts.filter(a => ACCOUNT_ENTRY[a.source] &&  TAB_SYNC_SOURCES.has(a.source));
 
-  // Progress tracking — written to storage so the popup can poll and display it.
+  // Progress + failure tracking — written to storage so the popup can display them.
   // Must come AFTER crawlAccounts/tabAccounts are defined.
   const _totalAccounts = crawlAccounts.length + tabAccounts.length + capturedList.length;
   let _syncDone = 0;
+  const _syncFailures = []; // { name, reason } — per-account failures for popup display
   async function _setProgress(name) {
     try {
       await chrome.storage.local.set({ sync_progress: { done: _syncDone, total: _totalAccounts, name } });
@@ -1528,6 +1529,7 @@ async function runSync() {
       console.warn(`[Mighty] ${account.name}: sync skipped — ${e.message}`);
       failed++;
       const _tabReason = e.message === 'timeout' ? 'timeout' : 'no_data';
+      _syncFailures.push({ name: account.name || account.source, reason: _tabReason });
       reportSyncFailure(api_key, account.source, _tabReason);
     }
     _syncDone++;
@@ -1559,6 +1561,7 @@ async function runSync() {
       // login_wall is reported explicitly inside crawlAccount when a login form
       // is detected — not inferred from error messages here, to avoid false reds.
       const _crawlReason = e.message === 'timeout' ? 'timeout' : 'no_data';
+      _syncFailures.push({ name: account.name || account.source, reason: _crawlReason });
       reportSyncFailure(api_key, account.source, _crawlReason);
     }
     _syncDone++;
@@ -1576,6 +1579,7 @@ async function runSync() {
     } catch (e) {
       console.warn(`[Mighty] ${info.name}: captured re-sync skipped — ${e.message}`);
       failed++;
+      _syncFailures.push({ name: info.name || source, reason: 'no_data' });
     }
     _syncDone++;
   }
@@ -1587,6 +1591,7 @@ async function runSync() {
     last_sync: syncSessionTime,
     last_sync_ok: ok,
     last_sync_failed: failed,
+    last_sync_failures: _syncFailures,  // per-account failure details for popup
   });
   await setStatus(msg);
   console.log('[Mighty]', msg);
