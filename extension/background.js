@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v33'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v34'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1469,7 +1469,15 @@ async function runSync() {
   console.log(`[Mighty] Syncing ${accounts.length} accounts + ${capturedList.length} captured…`);
   let ok = 0, failed = 0;
 
-  // Progress tracking — written to storage so the popup can poll and display it
+  // Create ONE shared minimized window for the entire sync run.
+  // All per-account crawls reuse this single tab — no new windows appear mid-sync.
+  // TAB_SYNC_SOURCES (xfinity etc.) are excluded: they rely on the supplement watcher
+  // which needs a real tab in the user's main window.
+  const crawlAccounts = accounts.filter(a => (ACCOUNT_ENTRY[a.source] || a.entry_url) && !TAB_SYNC_SOURCES.has(a.source));
+  const tabAccounts   = accounts.filter(a => ACCOUNT_ENTRY[a.source] &&  TAB_SYNC_SOURCES.has(a.source));
+
+  // Progress tracking — written to storage so the popup can poll and display it.
+  // Must come AFTER crawlAccounts/tabAccounts are defined.
   const _totalAccounts = crawlAccounts.length + tabAccounts.length + capturedList.length;
   let _syncDone = 0;
   async function _setProgress(name) {
@@ -1478,13 +1486,6 @@ async function runSync() {
     } catch {}
   }
   await _setProgress('');
-
-  // Create ONE shared minimized window for the entire sync run.
-  // All per-account crawls reuse this single tab — no new windows appear mid-sync.
-  // TAB_SYNC_SOURCES (xfinity etc.) are excluded: they rely on the supplement watcher
-  // which needs a real tab in the user's main window.
-  const crawlAccounts = accounts.filter(a => (ACCOUNT_ENTRY[a.source] || a.entry_url) && !TAB_SYNC_SOURCES.has(a.source));
-  const tabAccounts   = accounts.filter(a => ACCOUNT_ENTRY[a.source] &&  TAB_SYNC_SOURCES.has(a.source));
 
   // Shared tab is only created if needed (crawl fallback) — most accounts will use
   // silent fetch and never need it. Created lazily on first tab-based fallback.
