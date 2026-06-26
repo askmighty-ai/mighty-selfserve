@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v28'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v29'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1399,6 +1399,20 @@ async function runSync() {
     await chrome.storage.local.set({ _sync_lock_ts: Date.now() });
   } catch {}
   _syncInProgress = true;
+
+  // Notify the server that a sync is starting so /sync/status returns running:true.
+  // This lets the dashboard header update to "Syncing..." immediately on page load
+  // or when the user opens the dashboard while a background sync is underway.
+  // Fire-and-forget — don't let a network failure block the sync.
+  chrome.storage.local.get('api_key').then(({ api_key: _notifyKey }) => {
+    if (_notifyKey) {
+      fetch(`${MIGHTY_URL}/api/sync/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': _notifyKey },
+        body: JSON.stringify({}),
+      }).catch(() => {});
+    }
+  }).catch(() => {});
 
   // Clean up ALL tabs leaked by previous crashed/interrupted sync runs
   try {

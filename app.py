@@ -6327,6 +6327,7 @@ var _syncTs = parseInt(sessionStorage.getItem('mighty-sync-ts') || '0');
 // We do NOT start a new sync here — sync is driven by the alarm or Sync button.
 fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
   if (s.running) {
+    _showSyncingHeader();
     fetch('/api/latest-sync').then(function(r2){return r2.json();}).then(function(d2){
       _startSyncPoller(d2.latest || null);
     }).catch(function(){});
@@ -6336,6 +6337,10 @@ fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
 function _setSyncLabel(text) {
   var lbl = document.getElementById('sync-label');
   if (lbl) lbl.textContent = text;
+}
+function _showSyncingHeader() {
+  var el = document.getElementById('global-sync-time');
+  if (el) { el.textContent = 'Syncing…'; el.style.color = '#6366f1'; }
 }
 function _triggerRescan(onDone) {
   fetch('/api/data/rediscover-all', {method:'POST',
@@ -6423,6 +6428,7 @@ function cloudSync() {
   if (!btn) return;
   btn.classList.add('syncing');
   _setSyncLabel('Syncing…');
+  _showSyncingHeader();
   btn.disabled = true;
   // Set sentinel immediately so checkForUpdates is blocked before the async fetch returns
   window._syncPoll = window._syncPoll || true;
@@ -16905,6 +16911,23 @@ def api_latest_sync():
         (uid,)
     ).fetchone()
     return jsonify({"latest": row["ts"] if row else None})
+
+
+@app.route("/api/sync/start", methods=["POST"])
+def api_sync_start():
+    """Called by the extension when it begins a sync run.
+    Sets running=True in _sync_status so /sync/status returns running:true,
+    which lets the dashboard header update to 'Syncing...' immediately.
+    Auth: X-Mighty-Key header.
+    """
+    user, _body = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    uid = user["id"]
+    # Preserve the last-known timestamp if we have one
+    existing = _sync_status.get(uid, {})
+    _sync_status[uid] = {"running": True, "last": existing.get("last")}
+    return jsonify({"ok": True})
 
 
 @app.route("/api/sync/finalize", methods=["POST"])
