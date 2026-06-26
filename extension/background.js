@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v37'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v38'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1557,12 +1557,17 @@ async function runSync() {
     } catch (e) {
       console.warn(`[Mighty] ${account.name}: sync skipped — ${e.message}`);
       failed++;
-      // Only report 'timeout' for explicit timeouts; everything else is 'no_data'.
-      // login_wall is reported explicitly inside crawlAccount when a login form
-      // is detected — not inferred from error messages here, to avoid false reds.
-      const _crawlReason = e.message === 'timeout' ? 'timeout' : 'no_data';
+      // Map error message to a popup reason code.
+      // login_required and domain_unreachable are already reported to the server
+      // inside crawlAccount — don't double-report them here.
+      const _crawlReason = e.message === 'timeout' ? 'timeout'
+        : e.message === 'login_required' ? 'login_required'
+        : e.message === 'domain_unreachable' ? 'domain_unreachable'
+        : 'no_data';
       _syncFailures.push({ name: account.name || account.source, reason: _crawlReason });
-      reportSyncFailure(api_key, account.source, _crawlReason);
+      if (_crawlReason !== 'login_required' && _crawlReason !== 'domain_unreachable') {
+        reportSyncFailure(api_key, account.source, _crawlReason);
+      }
     }
     _syncDone++;
   }
@@ -2518,6 +2523,8 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     };
 
     // Abort if domain is unreachable (DNS failure) or redirected to a different domain
+    // Use a flag variable — raw throw would be swallowed by the outer catch (_) {}
+    let _urlCheckFailure = null;
     try {
       const currentTab = await chrome.tabs.get(tabId);
       const tabUrl = currentTab.url || '';
@@ -2526,30 +2533,32 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         console.log(`[Mighty] ${account.name}: domain unreachable (${tabUrl}) — reporting`);
         const { api_key: _ak } = await chrome.storage.local.get('api_key');
         if (_ak) await reportSyncFailure(_ak, account.source, 'domain_unreachable');
-        return;
-      }
-      // Detect unexpected domain redirect (e.g. utilities.cityofpaloalto.org → paloalto.gov)
-      try {
-        const expectedDomain = baseDomain.split('.').slice(-2).join('.');
-        const landedDomain   = new URL(tabUrl).hostname.split('.').slice(-2).join('.');
-        if (landedDomain && expectedDomain && landedDomain !== expectedDomain) {
-          console.log(`[Mighty] ${account.name}: domain redirected ${expectedDomain} → ${landedDomain} — reporting`);
+        _urlCheckFailure = 'domain_unreachable';
+      } else {
+        // Detect unexpected domain redirect (e.g. utilities.cityofpaloalto.org → paloalto.gov)
+        try {
+          const expectedDomain = baseDomain.split('.').slice(-2).join('.');
+          const landedDomain   = new URL(tabUrl).hostname.split('.').slice(-2).join('.');
+          if (landedDomain && expectedDomain && landedDomain !== expectedDomain) {
+            console.log(`[Mighty] ${account.name}: domain redirected ${expectedDomain} → ${landedDomain} — reporting`);
+            const { api_key: _ak } = await chrome.storage.local.get('api_key');
+            if (_ak) await reportSyncFailure(_ak, account.source, 'domain_moved');
+            _urlCheckFailure = 'domain_unreachable';
+          }
+        } catch (_) {}
+        if (!_urlCheckFailure && tabUrl && _isLoginUrl(tabUrl)) {
+          console.log(`[Mighty] ${account.name}: redirected to login URL — reporting login_required`);
           const { api_key: _ak } = await chrome.storage.local.get('api_key');
-          if (_ak) await reportSyncFailure(_ak, account.source, 'domain_moved');
-          return;
+          if (_ak) {
+            await _markLoginWall(account.source);
+            await reportSyncFailure(_ak, account.source, 'login_wall');
+            chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+          }
+          _urlCheckFailure = 'login_required';
         }
-      } catch (_) {}
-      if (tabUrl && _isLoginUrl(tabUrl)) {
-        console.log(`[Mighty] ${account.name}: redirected to login URL — reporting login_required`);
-        const { api_key: _ak } = await chrome.storage.local.get('api_key');
-        if (_ak) {
-          await _markLoginWall(account.source);
-          await reportSyncFailure(_ak, account.source, 'login_wall');
-          chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
-        }
-        return;
       }
     } catch (_) {}
+    if (_urlCheckFailure) throw new Error(_urlCheckFailure);
 
     await sleep(ENTRY_SETTLE);
 
@@ -2557,6 +2566,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     // after the initial page load (e.g. SPA checks session cookie then redirects).
     // waitForTabLoad only fires on the first 'complete' event, so a JS redirect
     // during ENTRY_SETTLE won't be caught by the pre-settle check above.
+    let _settledUrlFailure = null;
     try {
       const settledTab = await chrome.tabs.get(tabId);
       const settledUrl = settledTab.url || '';
@@ -2568,9 +2578,10 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           await reportSyncFailure(_ak, account.source, 'login_wall');
           chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
         }
-        return;
+        _settledUrlFailure = 'login_required';
       }
     } catch (_) {}
+    if (_settledUrlFailure) throw new Error(_settledUrlFailure);
 
     // Dismiss session-timeout modals
     try {
@@ -2604,7 +2615,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           await reportSyncFailure(_ak, account.source, 'login_wall');
           chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
         }
-        return;
+        throw new Error('login_required');
       }
       console.log(`[Mighty] ${account.name}: login form was transient (session resolved) — continuing`);
     }
@@ -2637,7 +2648,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
     if (BOT_DETECTION_PHRASES.some(p => entryText.toLowerCase().includes(p))) {
       console.warn(`[Mighty] ${account.name}: bot detection on entry page — skipping`);
-      return;
+      throw new Error('no_data');
     }
 
     // Check entry page content for login page signals — catches cases where
@@ -2651,7 +2662,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         await reportSyncFailure(_ak, account.source, 'login_wall');
         chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
       }
-      return;
+      throw new Error('login_required');
     }
 
     if (entryText.length >= 100) {
