@@ -89,7 +89,9 @@ chrome.storage.local.get(
           }
           const p = d.sync_progress;
           if (p && p.total > 0) {
-            const pct = Math.round((p.done / p.total) * 100);
+            // Use done + 0.5 so the bar jumps to the midpoint of each account's
+            // slot as soon as it starts, rather than waiting for it to finish.
+            const pct = Math.min(99, Math.round(((p.done + (p.name ? 0.5 : 0)) / p.total) * 100));
             if (progressFill)  progressFill.style.width = pct + '%';
             if (progressLabel) {
               progressLabel.textContent = p.name

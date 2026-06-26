@@ -81,10 +81,16 @@
     }
     .progress-fill {
       height: 100%;
-      background: #7c3aed;
+      background: linear-gradient(90deg, #7c3aed, #a78bfa, #7c3aed);
+      background-size: 200% 100%;
       border-radius: 2px;
-      transition: width 0.4s ease;
+      transition: width 0.6s ease;
       width: 0%;
+      animation: shimmer 1.6s linear infinite;
+    }
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
     }
     .progress-label {
       font-size: 11px;
