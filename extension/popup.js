@@ -115,6 +115,11 @@ function renderStuck() {
 
 // ── Main render ───────────────────────────────────────────────────────────────
 function render(data) {
+  // Reset transient elements before each render so stale state doesn't leak
+  // across transitions (e.g. stuck→idle should hide the reset button).
+  resetBtn.classList.add('hidden');
+  progressWrap.classList.add('hidden');
+
   if (!data.api_key) {
     setDot('amber');
     label.textContent = 'Setup needed';
