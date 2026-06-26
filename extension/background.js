@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v30'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v31'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -610,11 +610,13 @@ const KEEPALIVE_ALARM    = 'mighty-keepalive';
 const KEEPALIVE_INTERVAL = 20; // minutes — short enough to beat most session timeouts
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.get(SYNC_ALARM, (existing) => {
-    if (!existing) chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_INTERVAL });
+  // Always recreate alarms on install/reload to fix any stale periods from old versions.
+  // onStartup keeps existing alarms (browser restart shouldn't reset timing).
+  chrome.alarms.clear(SYNC_ALARM, () => {
+    chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_INTERVAL });
   });
-  chrome.alarms.get(KEEPALIVE_ALARM, (existing) => {
-    if (!existing) chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
+  chrome.alarms.clear(KEEPALIVE_ALARM, () => {
+    chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
   });
   console.log('[Mighty] Extension installed/reloaded, sync every', SYNC_INTERVAL, 'min, keepalive every', KEEPALIVE_INTERVAL, 'min');
   // Sync immediately on install/reload so data is fresh right away
