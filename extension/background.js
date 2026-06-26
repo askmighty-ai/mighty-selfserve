@@ -2311,12 +2311,59 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     tabId = created.tabId;
   }
 
-  // Close any tabs spawned BY the sync tab (e.g. Hilton's privacy statement page
-  // opens in the user's main browser via target=_blank / window.open).
-  const _closeRogueTab = (newTab) => {
-    if (newTab.openerTabId === tabId) {
-      chrome.tabs.remove(newTab.id).catch(() => {});
+  // ── Rogue-tab containment ────────────────────────────────────────────────────
+  // Some sites (e.g. Hilton privacy banner) call window.open() or click target=_blank
+  // links, spawning new tabs in the user's main Chrome window.  Even with active:false
+  // the newly created tab briefly becomes the active tab (rightmost position), causing
+  // the user's view to jump.  Two-layer defence:
+  //
+  //   Layer 1 (proactive): on every page load inside the sync tab, inject a MAIN-world
+  //   script that overrides window.open → no-op and suppresses _blank link clicks.
+  //   This prevents the rogue tab from being created at all.
+  //
+  //   Layer 2 (reactive): onCreated listener closes any tab that slips through before
+  //   Layer 1 runs (e.g. during the very first page load before injection completes).
+  //   When the rogue tab opened in the user's main window we try to deactivate it first
+  //   so Chrome re-activates the user's previous tab before we remove the rogue one.
+
+  const _blockWindowOpen = async () => {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: () => {
+          // Suppress any attempt to open a new window or tab
+          window.open = function() { return null; };
+          // Suppress _blank link clicks that bypass window.open
+          document.addEventListener('click', function(e) {
+            var t = e.target && e.target.closest('a[target="_blank"]');
+            if (t) { e.preventDefault(); e.stopImmediatePropagation(); }
+          }, true);
+        },
+      });
+    } catch (_) {}
+  };
+
+  // Re-inject on every navigation of the sync tab so new pages also get blocked
+  const _blockOpenOnLoad = (updatedTabId, changeInfo) => {
+    if (updatedTabId === tabId && changeInfo.status === 'complete') {
+      _blockWindowOpen();
     }
+  };
+  chrome.tabs.onUpdated.addListener(_blockOpenOnLoad);
+
+  // Backup: close any rogue tab that still slips through
+  const _closeRogueTab = async (newTab) => {
+    if (newTab.openerTabId !== tabId) return;
+    try {
+      // If opened in the user's main window (not the sync popup), deactivating it
+      // first causes Chrome to restore the previous tab before we remove it,
+      // preventing the visible "jump to rightmost tab" glitch.
+      if (newTab.windowId !== win.id) {
+        await chrome.tabs.update(newTab.id, { active: false }).catch(() => {});
+      }
+    } catch (_) {}
+    chrome.tabs.remove(newTab.id).catch(() => {});
   };
   chrome.tabs.onCreated.addListener(_closeRogueTab);
 
@@ -2333,6 +2380,8 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           func:   () => { window.__mightySyncTab = true; },
         });
       } catch (_) {}
+      // Simultaneously block window.open in the MAIN world
+      await _blockWindowOpen();
     };
 
     // Navigate to the entry URL (always — shared tab may be on a different domain)
@@ -2657,6 +2706,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
   } finally {
     chrome.tabs.onCreated.removeListener(_closeRogueTab);
+    chrome.tabs.onUpdated.removeListener(_blockOpenOnLoad);
     if (!useShared) {
       chrome.tabs.remove(tabId).catch(() => {});
     } else {
