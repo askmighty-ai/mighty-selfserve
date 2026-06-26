@@ -15433,17 +15433,18 @@ def api_data_sync():
     db = get_db()
     db.execute(
         """INSERT INTO account_data
-           (user_id, source, display_name, icon, color, data_enc, synced_at, sync_failure_reason)
-           VALUES (?,?,?,?,?,?,?,?)
+           (user_id, source, display_name, icon, color, data_enc, synced_at, sync_failure_reason, sync_status)
+           VALUES (?,?,?,?,?,?,?,?,?)
            ON CONFLICT(user_id, source) DO UPDATE SET
                display_name        = excluded.display_name,
                icon                = excluded.icon,
                color               = excluded.color,
                data_enc            = excluded.data_enc,
                synced_at           = excluded.synced_at,
-               sync_failure_reason = excluded.sync_failure_reason""",
+               sync_failure_reason = excluded.sync_failure_reason,
+               sync_status         = excluded.sync_status""",
         (user["id"], source, display, icon, color, data_enc, synced_at,
-         data.get("sync_failure_reason")),
+         data.get("sync_failure_reason"), data.get("sync_status", "ok")),
     )
     db.commit()
     _log_privacy_event(user["id"], "data_synced", source=source, detail=f"{len(raw_text)} chars")
