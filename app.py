@@ -15291,15 +15291,37 @@ _LOGIN_SIGNALS_LOW = [
 ]
 
 def _is_login_page(raw_text: str) -> bool:
-    """Return True if raw_text looks like a login/sign-in page rather than account data."""
+    """Return True if raw_text looks like a login/sign-in page rather than account data.
+
+    Works on both single-page and combined multi-page content (sections separated by
+    '\\n\\n--- <url> ---\\n' markers, as sent by the extension).  Each section is checked
+    independently so a login page buried in subpage #3 is still caught.
+    """
     if not raw_text:
         return False
+
+    # ── Check the leading slice first (fast path, handles single-page content) ──
     sample = raw_text[:3000].lower()
-    # Any single high-confidence signal is sufficient
     if any(sig in sample for sig in _LOGIN_SIGNALS_HIGH):
         return True
-    # Lower-confidence signals require 2+
-    return sum(1 for sig in _LOGIN_SIGNALS_LOW if sig in sample) >= 2
+    if sum(1 for sig in _LOGIN_SIGNALS_LOW if sig in sample) >= 2:
+        return True
+
+    # ── Per-section check for combined multi-page pushes ──────────────────────
+    # Extension sends combined text as:
+    #   \n\n--- https://site.com/page ---\n[page content]
+    # Split on these markers and check each section with high-confidence signals only.
+    # Low-confidence signals (e.g. "sign in") can appear in authenticated page navs/footers,
+    # so we skip them here to avoid false positives.
+    sections = re.split(r'\n\n---[^\n]+---\n', raw_text)
+    for section in sections:
+        if not section.strip():
+            continue
+        sec_sample = section[:3000].lower()
+        if any(sig in sec_sample for sig in _LOGIN_SIGNALS_HIGH):
+            return True
+
+    return False
 
 
 # ── Account data sync API ─────────────────────────────────────────────────────
@@ -15348,6 +15370,10 @@ def api_data_sync():
     if is_gap_fill and existing_row and ex_data.get("sync_status") == "ok":
         old_raw = ex_data.get("raw_text", "")
         if raw_text and raw_text.strip():
+            # Reject gap-fill payloads that are login pages — don't contaminate good data
+            if _is_login_page(raw_text):
+                print(f"[Mighty] Gap-fill login page detected for {source} — skipping merge", flush=True)
+                return jsonify({"ok": True, "gap_fill": True, "skipped": True, "reason": "login_page"})
             # Prepend new text so it takes priority in AI extraction; cap total
             merged = (raw_text.strip() + "\n\n" + old_raw).strip()
             ex_data["raw_text"] = merged[:40_000]
