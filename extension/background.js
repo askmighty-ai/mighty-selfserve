@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v38'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v39'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -2204,6 +2204,11 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
               },
             });
             const pageText = r?.result || '';
+            // Skip login pages — target path redirected to login wall
+            if (pageText && _isSilentLoginPage(pageText)) {
+              console.log(`[Mighty] gap-fill ${source} → ${fullUrl}: login page content detected — skipping`);
+              continue;
+            }
             if (pageText && pageText.length > 200) {
               newText += `\n\n--- ${fullUrl} ---\n${pageText}`;
               reportPathToRegistry(source, fullUrl);
@@ -2716,6 +2721,11 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     console.log(`[Mighty] ${account.name}: ${scored.length} candidates → visiting top ${toVisit.length}`);
 
     // ── Visit subpages ──────────────────────────────────────────────────────────
+    // Track login redirects vs successes to detect "user not logged in" state.
+    // If every subpage we attempted redirected to a login page, the session is gone.
+    let _subLoginRedirects = 0;
+    let _subSuccesses = 0;
+
     for (const link of toVisit) {
       try {
         // Skip paths that have been bot-detected 2+ times
@@ -2735,6 +2745,16 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         // Extra settle time for SPA pages that render content after load
         const extraSettle = isSpaUrl(link.href) ? 4000 : 1000;
         await sleep(SUBPAGE_SETTLE + extraSettle);
+
+        // Quick URL check — catch login redirects before paying for content extraction
+        try {
+          const _subTabInfo = await chrome.tabs.get(tabId);
+          if (_subTabInfo.url && _isLoginUrl(_subTabInfo.url)) {
+            console.log(`[Mighty] ${account.name} → ${link.href}: subpage redirected to login URL — skipping`);
+            _subLoginRedirects++;
+            continue;
+          }
+        } catch (_) {}
 
         try {
           const [d] = await chrome.scripting.executeScript({ target: { tabId }, func: dismissSessionTimeouts });
@@ -2765,13 +2785,35 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           continue;
         }
 
+        // Detect login page content — catches SPAs that render a login modal without
+        // changing the URL (e.g. Delta shows a login overlay while URL stays /en/us/...)
+        if (_isSilentLoginPage(text)) {
+          console.log(`[Mighty] ${account.name} → ${link.href}: login page content in subpage — skipping`);
+          _subLoginRedirects++;
+          continue;
+        }
+
         console.log(`[Mighty] ${account.name} → ${link.href}: ${text.length} chars`);
         allText.push(`\n\n--- ${link.href} ---\n${text}`);
         reportPathToRegistry(account.source, link.href);
+        _subSuccesses++;
 
       } catch (e) {
         console.warn(`[Mighty] ${account.name} → ${link.href}: ${e.message}`);
       }
+    }
+
+    // If every subpage we attempted was a login redirect and none returned real content,
+    // the session has expired — report login_required and abort.
+    if (_subLoginRedirects > 0 && _subSuccesses === 0 && toVisit.length > 0) {
+      console.log(`[Mighty] ${account.name}: all ${_subLoginRedirects}/${toVisit.length} subpages were login redirects — session expired`);
+      const { api_key: _ak } = await chrome.storage.local.get('api_key');
+      if (_ak) {
+        await _markLoginWall(account.source);
+        await reportSyncFailure(_ak, account.source, 'login_wall');
+        chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+      }
+      throw new Error('login_required');
     }
 
     // ── Push to server ──────────────────────────────────────────────────────────
