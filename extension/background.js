@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v39'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v40'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -228,6 +228,10 @@ function reportPathToRegistry(site, url) {
   try {
     const path = normalizePath(new URL(url).pathname);
     if (!path || path === '/') return;
+    // Never store static assets, analytics endpoints, or infrastructure — these
+    // pollute the registry and get visited on every future sync as junk pages.
+    if (/\.(css|js|woff2?|ttf|eot|png|jpg|jpeg|gif|svg|ico|map)(\?|$)/i.test(path)) return;
+    if (/_next\/static\/|_next\/webpack|\/v1\/interact|graphql\/customer/i.test(path)) return;
     fetch(`${MIGHTY_URL}/api/registry/report`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -378,6 +382,12 @@ const _LINK_SKIP = [
   'logout', 'log-out', 'log_out', 'signout', 'sign-out', 'sign_out',
   'sign-up', 'signup', 'register', 'create-account', 'create_account',
   'help', 'faq', 'support', 'contact', 'careers', 'about', 'press', 'legal',
+  // Static assets — never account data
+  '_next/static/', '_next/webpack',
+  // Specific API/analytics paths that appear as scoreable links
+  'graphql/customer', '/v1/interact',
+  // Public marketing comparison pages
+  'credit-card-rewards', 'credit-cards.mi',
   'terms', 'privacy', 'cookie', 'sitemap', 'accessibility', 'advertise',
   'shop', 'book', 'buy', 'cart', 'purchase', 'search', 'find-flights',
   'flight-status', 'check-in', 'baggage', 'travel-info', 'destinations',
@@ -400,11 +410,24 @@ function _scoreLink(href, text, baseDomain) {
   const hostname = url.hostname.replace(/^www\./, '');
   if (!hostname.endsWith(baseDomain)) return -1;
   if (!url.pathname || url.pathname === '/') return -1;
+
+  // Skip static file assets — never contain account data
+  if (/\.(css|js|woff2?|ttf|eot|png|jpg|jpeg|gif|svg|ico|map)(\?|$)/i.test(url.pathname)) return -1;
+
   const combined = (href + ' ' + text).toLowerCase();
   if (_LINK_SKIP.some(t => combined.includes(t))) return -1;
+
   let score = 0;
   if (_LINK_HIGH_VALUE.some(t => combined.includes(t))) score += 10;
   if (_LINK_ACCOUNT.some(t => combined.includes(t))) score += 3;
+
+  // Penalize public informational/marketing paths — these contain loyalty keywords
+  // (miles, status, reward, etc.) but are not authenticated account pages.
+  // A -10 penalty cancels a single high-value match, ensuring these are skipped
+  // unless the page is also clearly inside a personal account section.
+  const _INFORMATIONAL = ['/how-to', '/fly/products/', '/earn/credit-card'];
+  if (_INFORMATIONAL.some(t => url.pathname.toLowerCase().includes(t))) score -= 10;
+
   return score;
 }
 
@@ -2294,6 +2317,24 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
               },
             });
             const pageText = r?.result || '';
+
+            // Check for login redirect — cert paths require auth; if they redirect to
+            // login, the session has expired and we must not push login page content.
+            let _certLoginDetected = false;
+            try {
+              const _certTab = await chrome.tabs.get(tabId);
+              const _certUrl = _certTab.url || '';
+              if (_certUrl && /\/(sign-?in|log-?in|login)(\/|$|\?)/i.test(new URL(_certUrl).pathname)) {
+                console.log(`[Mighty] cert pass ${source} → ${fullUrl}: redirected to login URL — skipping`);
+                _certLoginDetected = true;
+              }
+            } catch (_) {}
+            if (!_certLoginDetected && pageText && _isSilentLoginPage(pageText)) {
+              console.log(`[Mighty] cert pass ${source} → ${fullUrl}: login page content detected — skipping`);
+              _certLoginDetected = true;
+            }
+            if (_certLoginDetected) continue;
+
             if (pageText && pageText.length > 200) {
               certText += `\n\n--- ${fullUrl} ---\n${pageText}`;
               reportPathToRegistry(source, fullUrl);
