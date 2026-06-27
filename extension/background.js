@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v40'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-26-v41'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -2736,12 +2736,24 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       .sort((a, b) => b.score - a.score);
 
     const toVisit = [];
-    for (const link of scored) {
-      if (toVisit.length >= MAX_SUBPAGES) break;
-      const norm = _normUrl(link.href);
-      if (visitedNorm.has(norm)) continue;
-      visitedNorm.add(norm);
-      toVisit.push(link);
+
+    // For SPA sites (SILENT_FETCH_SKIP), homepage link scoring is unreliable —
+    // the homepage loads the same public marketing content whether logged in or not,
+    // and high-value terms like "benefit", "status", "reward" appear on public pages.
+    // Use ONLY registry paths for these sites: they come from prior successful logged-in
+    // syncs and are known authenticated pages. When the session is expired, they redirect
+    // to login and the all-login-redirects check fires correctly.
+    // For non-SPA sites and first syncs (empty registry), fall back to scored homepage links.
+    const _useRegistryOnly = SILENT_FETCH_SKIP.has(account.source);
+
+    if (!_useRegistryOnly) {
+      for (const link of scored) {
+        if (toVisit.length >= MAX_SUBPAGES) break;
+        const norm = _normUrl(link.href);
+        if (visitedNorm.has(norm)) continue;
+        visitedNorm.add(norm);
+        toVisit.push(link);
+      }
     }
 
     // Supplement with registry-known paths not already discovered
