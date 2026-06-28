@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-26-v41'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-27-v42'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -2606,18 +2606,53 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     } catch (_) {}
     if (_urlCheckFailure) throw new Error(_urlCheckFailure);
 
-    await sleep(ENTRY_SETTLE);
+    // Settle while actively watching for login redirects.
+    // SPA sites (e.g. Delta) serve an initial shell page that fires 'complete' immediately,
+    // then run a JS auth check and redirect to login seconds later. A fixed sleep + single
+    // URL snapshot misses redirects that fire mid-settle. The active listener below catches
+    // them the instant Chrome reports changeInfo.url — regardless of timing.
+    // For SILENT_FETCH_SKIP sites we wait up to 12s (vs 5s) to accommodate slow auth checks.
+    const _settleMs = SILENT_FETCH_SKIP.has(account.source) ? 12_000 : ENTRY_SETTLE;
+    const _settledState = await new Promise(resolve => {
+      let _resolved = false;
+      const _settleListener = (updatedTabId, changeInfo) => {
+        if (updatedTabId !== tabId || _resolved) return;
+        const url = changeInfo.url || '';
+        if (url && _isLoginUrl(url)) {
+          _resolved = true;
+          chrome.tabs.onUpdated.removeListener(_settleListener);
+          resolve('login_redirect');
+        }
+      };
+      chrome.tabs.onUpdated.addListener(_settleListener);
+      sleep(_settleMs).then(() => {
+        if (!_resolved) {
+          _resolved = true;
+          chrome.tabs.onUpdated.removeListener(_settleListener);
+          resolve('settled');
+        }
+      });
+    });
 
-    // Re-check URL after settle — catches JS-based auth redirects that fire
-    // after the initial page load (e.g. SPA checks session cookie then redirects).
-    // waitForTabLoad only fires on the first 'complete' event, so a JS redirect
-    // during ENTRY_SETTLE won't be caught by the pre-settle check above.
+    if (_settledState === 'login_redirect') {
+      console.log(`[Mighty] ${account.name}: login redirect detected during settle — reporting login_required`);
+      const { api_key: _ak } = await chrome.storage.local.get('api_key');
+      if (_ak) {
+        await _markLoginWall(account.source);
+        await reportSyncFailure(_ak, account.source, 'login_wall');
+        chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+      }
+      throw new Error('login_required');
+    }
+
+    // Also snapshot URL after settle — catches redirects that completed before the listener
+    // was registered (gap between pre-settle check and listener attachment).
     let _settledUrlFailure = null;
     try {
       const settledTab = await chrome.tabs.get(tabId);
       const settledUrl = settledTab.url || '';
       if (settledUrl && _isLoginUrl(settledUrl)) {
-        console.log(`[Mighty] ${account.name}: JS-redirect to login URL after settle — reporting login_required`);
+        console.log(`[Mighty] ${account.name}: login URL detected after settle — reporting login_required`);
         const { api_key: _ak } = await chrome.storage.local.get('api_key');
         if (_ak) {
           await _markLoginWall(account.source);
@@ -2795,11 +2830,39 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         await chrome.tabs.update(tabId, { url: link.href });
         await waitForTabLoad(tabId, 15_000);
 
-        // Extra settle time for SPA pages that render content after load
+        // Settle while watching for login redirect — catches slow JS auth checks.
+        // Same race condition as the entry page: SPA shell fires 'complete' first,
+        // then redirects to login via JavaScript after a variable delay.
         const extraSettle = isSpaUrl(link.href) ? 4000 : 1000;
-        await sleep(SUBPAGE_SETTLE + extraSettle);
+        const _subSettleMs = SUBPAGE_SETTLE + extraSettle;
+        const _subState = await new Promise(resolve => {
+          let _done = false;
+          const _subSettleListener = (updatedTabId, changeInfo) => {
+            if (updatedTabId !== tabId || _done) return;
+            const url = changeInfo.url || '';
+            if (url && _isLoginUrl(url)) {
+              _done = true;
+              chrome.tabs.onUpdated.removeListener(_subSettleListener);
+              resolve('login_redirect');
+            }
+          };
+          chrome.tabs.onUpdated.addListener(_subSettleListener);
+          sleep(_subSettleMs).then(() => {
+            if (!_done) {
+              _done = true;
+              chrome.tabs.onUpdated.removeListener(_subSettleListener);
+              resolve('settled');
+            }
+          });
+        });
 
-        // Quick URL check — catch login redirects before paying for content extraction
+        if (_subState === 'login_redirect') {
+          console.log(`[Mighty] ${account.name} → ${link.href}: login redirect detected during settle — skipping`);
+          _subLoginRedirects++;
+          continue;
+        }
+
+        // Also snapshot URL — catches redirects that completed before listener registration
         try {
           const _subTabInfo = await chrome.tabs.get(tabId);
           if (_subTabInfo.url && _isLoginUrl(_subTabInfo.url)) {
