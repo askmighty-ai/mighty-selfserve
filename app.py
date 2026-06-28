@@ -8984,12 +8984,15 @@ def dashboard():
             synced_title = (
                 f"Synced {_fmt_sync(synced_at)}" if synced_at else "Not yet synced"
             )
-            # Show freshness text whenever data is amber/red or missing
+            # Always show when last synced; use color/icon only when there's a problem
             _is_sync_problem = _fcolor in ("#f59e0b", "#dc2626") or not synced_at
-            freshness_html = (
-                f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
-                if _is_sync_problem else ""
-            )
+            if _is_sync_problem:
+                freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
+            elif synced_at:
+                _ago = _fmt_sync(synced_at)
+                freshness_html = f'<span style="font-size:11px;color:#6b7280">Synced {_ago}</span>'
+            else:
+                freshness_html = ""
 
             # Consistent footer for all cards
             _BAD_VALUES = {"", "—", "–", "—", "no data", "none", "n/a", "-"}
