@@ -15,7 +15,7 @@ Env vars (all optional):
   PORT          — Port to listen on (default: 5004)
 """
 
-import os, io, csv, json, re, secrets, hashlib, sqlite3, threading, urllib.request, urllib.error, html, time, base64
+import os, io, csv, json, re, secrets, hashlib, hmac, sqlite3, threading, urllib.request, urllib.error, html, time, base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
@@ -34,6 +34,8 @@ def he(s):
     return html.escape(str(s)) if s is not None else ""
 
 app = Flask(__name__)
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 _secret_key = os.environ.get("SECRET_KEY", "")
 if not _secret_key:
     if os.environ.get("RAILWAY_ENVIRONMENT") == "production":
@@ -64,8 +66,8 @@ def _rate_limit(ip: str, name: str, limit: int = 10, window: int = 60) -> bool:
         else:
             _rl_store.pop(key, None)  # evict empty buckets
         # Periodic cleanup: prune stale keys every ~1000 requests to prevent memory leak
-        if len(_rl_store) > 5000:
-            _stale = [k for k, v in _rl_store.items() if not v or now - v[-1] > 3600]
+        if len(_rl_store) > 1000:
+            _stale = [k for k, v in _rl_store.items() if not v or now - v[-1] > window]
             for _k in _stale:
                 _rl_store.pop(_k, None)
         return True
@@ -452,7 +454,7 @@ def init_db():
                     dismissed_at  TEXT,
                     snoozed_until TEXT,
                     completed_at  TEXT,
-                    UNIQUE(user_id, field_key)
+                    UNIQUE(user_id, source, field_key)
                 )
             """)
             db.execute("CREATE INDEX IF NOT EXISTS idx_ai_user ON action_items(user_id, dismissed_at)")
@@ -544,6 +546,50 @@ def init_db():
                     checked_at  TEXT NOT NULL
                 )
             """)
+            db.commit()
+        except Exception:
+            pass
+        try:
+            # Migrate action_items UNIQUE constraint to include source
+            # action_items are rebuilt on every sync, so dropping them is safe
+            existing_constraint = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='action_items'"
+            ).fetchone()
+            if existing_constraint and "UNIQUE(user_id, field_key)" in (existing_constraint["sql"] or ""):
+                db.execute("DROP TABLE IF EXISTS action_items_old")
+                db.execute("ALTER TABLE action_items RENAME TO action_items_old")
+                db.execute("""
+                    CREATE TABLE action_items (
+                        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id       TEXT NOT NULL,
+                        source        TEXT NOT NULL,
+                        field_key     TEXT NOT NULL,
+                        label         TEXT NOT NULL,
+                        value         TEXT NOT NULL,
+                        btype         TEXT NOT NULL,
+                        urgency       TEXT NOT NULL,
+                        days_left     INTEGER,
+                        exp_date      TEXT,
+                        created_at    TEXT NOT NULL,
+                        dismissed_at  TEXT,
+                        snoozed_until TEXT,
+                        completed_at  TEXT,
+                        UNIQUE(user_id, source, field_key)
+                    )
+                """)
+                db.execute("INSERT OR IGNORE INTO action_items SELECT * FROM action_items_old")
+                db.execute("DROP TABLE action_items_old")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_ai_user ON action_items(user_id, dismissed_at)")
+                db.commit()
+        except Exception:
+            pass
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN sync_running INTEGER DEFAULT 0")
+            db.commit()
+        except Exception:
+            pass
+        try:
+            db.execute("ALTER TABLE users ADD COLUMN sync_started_at TEXT")
             db.commit()
         except Exception:
             pass
@@ -1553,7 +1599,8 @@ def check_pw(stored, provided):
     if stored and ":" in stored and not stored.startswith("$2"):
         try:
             salt, h = stored.split(":", 1)
-            return hashlib.sha256(f"{salt}{provided}".encode()).hexdigest() == h
+            computed = hashlib.sha256(f"{salt}{provided}".encode()).hexdigest()
+            return hmac.compare_digest(computed, h)
         except Exception:
             return False
     try:
@@ -1726,15 +1773,24 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
 # Key is derived from SECRET_KEY + user_id so each user's data uses a distinct key.
 # This protects against raw database theft; the server itself can decrypt (v1 trade-off).
 
+def _fernet_base_material() -> bytes:
+    """Return raw bytes for Fernet key derivation.
+    Prefers ENCRYPTION_KEY env var so SECRET_KEY can rotate without destroying stored data."""
+    enc_key = os.environ.get("ENCRYPTION_KEY", "")
+    if enc_key:
+        return enc_key.encode()
+    sk = app.secret_key
+    return sk.encode() if isinstance(sk, str) else sk
+
 def _data_fernet(user_id: str):
     """Return a Fernet instance keyed to this user. Returns None if cryptography not installed."""
     if not _FERNET_AVAILABLE:
         return None
     raw = hashlib.pbkdf2_hmac(
         "sha256",
-        (app.secret_key + user_id).encode(),
+        _fernet_base_material() + user_id.encode(),
         b"mighty-account-data-v1",
-        100_000,
+        600_000,
     )
     return Fernet(base64.urlsafe_b64encode(raw))
 
@@ -1744,9 +1800,9 @@ def _cred_fernet(user_id: str):
         return None
     raw = hashlib.pbkdf2_hmac(
         "sha256",
-        (app.secret_key + user_id).encode(),
+        _fernet_base_material() + user_id.encode(),
         b"mighty-credentials-v1",
-        100_000,
+        600_000,
     )
     return Fernet(base64.urlsafe_b64encode(raw))
 
@@ -5946,6 +6002,10 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
       <span id="sync-label">Sync</span>
     </button>
+    <a id="ext-install-link" href="https://chromewebstore.google.com/detail/mighty/placeholder" target="_blank"
+       style="display:none;font-size:11px;color:#6366f1;white-space:nowrap;text-decoration:none;padding:4px 8px;background:rgba(99,102,241,0.08);border-radius:6px;border:1px solid rgba(99,102,241,0.2)">
+      ↓ Install extension
+    </a>
   </div>
 
   <div id="mighty-toast"></div>
@@ -6146,7 +6206,7 @@ function decide(actionId, decision) {
   if (card) { card.querySelectorAll(".btn-authorize, .btn-reject").forEach(function(b) { b.disabled = true; }); }
   fetch('/dashboard/decide/' + actionId, {
     method: 'POST',
-    headers: {'Content-Type':'application/json'},
+    headers: {'Content-Type':'application/json', 'X-CSRF-Token': (document.querySelector('[name="_csrf"]') || {value:''}).value},
     body: JSON.stringify({decision})
   }).then(() => location.reload());
 }
@@ -6318,21 +6378,48 @@ updateSyncTimes();
 setInterval(updateSyncTimes, 30000);
 
 // ── Sync-state tracking via sessionStorage ─────────────────────────────────
-// Used only to know whether a manual sync was triggered in this tab session,
-// so _finishSync can set the timestamp and the page reload shows fresh dots.
 var _syncTs = parseInt(sessionStorage.getItem('mighty-sync-ts') || '0');
 
-// On load: if a sync is already running (alarm-triggered or from another tab),
-// hook into the poller so the page reloads when it finishes.
-// We do NOT start a new sync here — sync is driven by the alarm or Sync button.
-fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
-  if (s.running) {
-    _showSyncingHeader();
-    fetch('/api/latest-sync').then(function(r2){return r2.json();}).then(function(d2){
-      _startSyncPoller(d2.latest || null);
-    }).catch(function(){});
-  }
-}).catch(function(){});
+// Update #global-sync-time from a UTC ISO timestamp (when not in syncing state)
+function _updateGlobalSyncTime(ts) {
+  var el = document.getElementById('global-sync-time');
+  if (!el) return;
+  if (!ts) return;  // never blank it if we don't have a timestamp
+  var rel = fmtRelative(ts);
+  if (rel) { el.textContent = 'Synced ' + rel; el.style.color = '#9ca3af'; }
+}
+
+// ── Unified sync-status poll ────────────────────────────────────────────────
+// Polls /sync/status every 10s. Keeps the header in sync whether the sync was
+// triggered from the extension, the dashboard, or the background alarm.
+// • running:true  → show "Syncing…" + hook the finalize poller
+// • running:false → keep #global-sync-time updated from s.last
+var _syncStatusWasRunning = false;
+function _pollSyncStatus() {
+  fetch('/sync/status').then(function(r){return r.json();}).then(function(s){
+    if (s.running) {
+      _syncStatusWasRunning = true;
+      _showSyncingHeader();
+      // Start the finalize poller if it isn't already watching
+      if (!window._syncPoll) {
+        fetch('/api/latest-sync').then(function(r2){return r2.json();}).then(function(d2){
+          _startSyncPoller(d2.latest || null);
+        }).catch(function(){});
+      }
+    } else {
+      if (_syncStatusWasRunning) {
+        // Sync just finished between status polls — the sync poller should have
+        // already triggered _finishSync; if it didn't (race), do it now.
+        _syncStatusWasRunning = false;
+        if (!window._syncPoll) { _finishSync(); return; }
+      }
+      // Keep the header timestamp current while idle
+      if (s.last && !window._syncPoll) { _updateGlobalSyncTime(s.last); }
+    }
+  }).catch(function(){});
+}
+_pollSyncStatus();
+setInterval(_pollSyncStatus, 10000);
 
 function _setSyncLabel(text) {
   var lbl = document.getElementById('sync-label');
@@ -6359,6 +6446,25 @@ function _showToast(msg, duration) {
   setTimeout(function(){ t.className = 'hide'; }, (duration || 3000) - 200);
   setTimeout(function(){ t.className = ''; }, duration || 3000);
 }
+// Detect mobile browsers — they can't run the extension so sync works differently
+var _isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+// On mobile: replace the sync button with a read-only nudge
+if (_isMobile) {
+  document.addEventListener('DOMContentLoaded', function() {
+    var btn = document.getElementById('cloud-sync-btn');
+    var lbl = document.getElementById('sync-label');
+    if (btn) {
+      btn.onclick = function() {
+        _showToast('Use the Mighty app or desktop browser to sync your accounts.', 4000);
+      };
+      btn.title = 'Sync requires the Mighty extension or mobile app';
+      btn.style.opacity = '0.55';
+    }
+    if (lbl) lbl.textContent = 'View only';
+  });
+}
+
 // Extension presence detection — dashboard_relay.js sends this on load
 var _extPresent = false;
 window.addEventListener('message', function(e) {
@@ -6424,8 +6530,25 @@ function _startSyncPoller(baseline) {
 }
 
 function cloudSync() {
+  // Mobile browsers can never run the extension — show a helpful message instead
+  if (_isMobile) {
+    _showToast('Use the Mighty app or desktop browser to sync your accounts.', 4000);
+    return;
+  }
+
   var btn = document.getElementById('cloud-sync-btn');
   if (!btn) return;
+
+  // Desktop without extension — nudge to install rather than attempt a server-side sync
+  // that won't be able to log into any of the major loyalty sites
+  if (!_extPresent) {
+    _showToast('Install the Mighty Chrome extension to sync your accounts.', 4000);
+    // Show install link if it exists on the page
+    var installLink = document.getElementById('ext-install-link');
+    if (installLink) installLink.style.display = '';
+    return;
+  }
+
   btn.classList.add('syncing');
   _setSyncLabel('Syncing…');
   _showSyncingHeader();
@@ -6438,28 +6561,12 @@ function cloudSync() {
   // Fetch current latest-sync baseline before triggering, so we can detect the change
   fetch('/api/latest-sync').then(function(r){ return r.json(); }).then(function(d) {
     var baseline = d.latest || null;
-    if (_extPresent) {
-      // Ask the extension to run sync, then poll the server for completion
-      window.postMessage({type:'__mighty_dashboard__', action:'sync_now'}, '*');
-      _startSyncPoller(baseline);
-    } else {
-      // Fallback: Railway cloud sync (for users without the extension)
-      fetch('/sync/now', {method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:'_csrf=' + encodeURIComponent(document.querySelector('input[name="_csrf"]') ?
-          document.querySelector('input[name="_csrf"]').value : '')
-      }).then(function(r){return r.json();}).then(function(d2){
-        if (d2.ok) {
-          _startSyncPoller(baseline);
-        } else { _finishSync(); }
-      }).catch(_finishSync);
-    }
+    // Ask the extension to run sync, then poll the server for completion
+    window.postMessage({type:'__mighty_dashboard__', action:'sync_now'}, '*');
+    _startSyncPoller(baseline);
   }).catch(function() {
-    // If we can't even get baseline, fall back to extension trigger with blind polling
-    if (_extPresent) {
-      window.postMessage({type:'__mighty_dashboard__', action:'sync_now'}, '*');
-      _startSyncPoller(null);
-    } else { _finishSync(); }
+    window.postMessage({type:'__mighty_dashboard__', action:'sync_now'}, '*');
+    _startSyncPoller(null);
   });
 }
 
@@ -7427,6 +7534,9 @@ def signup():
 
 @app.route("/enterprise-interest", methods=["POST"])
 def enterprise_interest():
+    _rl_ip = request.remote_addr or ""
+    if not _rate_limit(_rl_ip, "enterprise_lead", limit=3, window=60):
+        return jsonify({"error": "Too many requests"}), 429
     data    = request.get_json(force=True)
     name    = data.get("name", "").strip()
     email   = data.get("email", "").strip()
@@ -7478,7 +7588,8 @@ def login():
 @app.route("/logout", methods=["GET", "POST"])
 def logout():
     if request.method == "GET":
-        session.clear()
+        # GET logout is a CSRF vector — don't clear session on GET.
+        # Legitimate logout uses the POST form in the nav.
         return redirect("/login")
     check_csrf()
     session.clear()
@@ -8435,6 +8546,27 @@ def dashboard():
     # missing from older production DB schemas (e.g. sync_status, sync_failure_reason).
     synced_map = {r["source"]: dict(r) for r in acct_rows}
 
+    # Pre-fetch field_observations and pending candidate counts for ALL sources in two queries
+    # so the card rendering loop doesn't fire N+1 queries (one pair per account).
+    _obs_by_source: dict = {}
+    _cand_counts_by_source: dict = {}
+    try:
+        for _or in get_db().execute(
+            "SELECT source, field_key, first_seen, last_seen, seen_count "
+            "FROM field_observations WHERE user_id=?", (user["id"],)
+        ).fetchall():
+            _obs_by_source.setdefault(_or["source"], {})[_or["field_key"]] = _or
+    except Exception:
+        pass
+    try:
+        for _cr in get_db().execute(
+            "SELECT source, COUNT(*) AS cnt FROM field_candidates "
+            "WHERE user_id=? AND status='pending' GROUP BY source", (user["id"],)
+        ).fetchall():
+            _cand_counts_by_source[_cr["source"]] = _cr["cnt"]
+    except Exception:
+        pass
+
     # Global "last synced" — most recent sync across all accounts
     _all_synced_ats = [v["synced_at"] for v in synced_map.values() if v.get("synced_at")]
     _global_last_synced = max(_all_synced_ats) if _all_synced_ats else None
@@ -8522,26 +8654,9 @@ def dashboard():
             if _SEVERITY.get(_col_st, 0) > _SEVERITY.get(sync_status, 0):
                 sync_status = _col_st
 
-            # Batch-fetch field_observations for the Why? modal (one query per card)
-            obs_map: dict = {}
-            try:
-                _obs_rows = get_db().execute(
-                    "SELECT field_key, first_seen, last_seen, seen_count "
-                    "FROM field_observations WHERE user_id=? AND source=?",
-                    (uid, src)
-                ).fetchall()
-                obs_map = {r["field_key"]: r for r in _obs_rows}
-            except Exception:
-                pass
-
-            cand_count = 0
-            try:
-                cand_count = get_db().execute(
-                    "SELECT COUNT(*) FROM field_candidates WHERE user_id=? AND source=? AND status='pending'",
-                    (uid, src)
-                ).fetchone()[0] or 0
-            except Exception:
-                pass
+            # Use pre-fetched data (avoids N+1 — two bulk queries run before the loop)
+            obs_map: dict = _obs_by_source.get(src, {})
+            cand_count: int = _cand_counts_by_source.get(src, 0)
             if cand_count > 0:
                 plural = "s" if cand_count > 1 else ""
                 _cand_url = f"/candidates/{src}"
@@ -8595,7 +8710,7 @@ def dashboard():
                 it.get("_type") in ("certificate","travel_credit","cash_credit","elite_status")
                 for it in items
             )
-            _compact_cls = "" if _has_highval else " is-compact"
+            _compact_cls = ""  # always show secondary fields — compact mode was hiding too much data
 
             # Status/level — show tier as a colored chip directly below the account name
             _status_item = next((it for it in items if it.get("_type") == "elite_status"), None)
@@ -8832,11 +8947,11 @@ def dashboard():
             _sec_noise   = [i for i in secondary_items if _is_noise(i)]
             secondary_items = _sec_signal + _sec_noise
 
-            # Build secondary stats (up to 3 visible)
+            # Build secondary stats (up to 6 visible)
             sec_html = ""
             if secondary_items:
                 sec_row_parts = []
-                for i in secondary_items[:3]:
+                for i in secondary_items[:6]:
                     review_badge = (
                         '<span style="font-size:10px;color:#f59e0b;margin-left:4px;cursor:help" '
                         'title="Lower confidence — may need verification">⚠ review</span>'
@@ -8887,7 +9002,7 @@ def dashboard():
                 shown_keys.add(hero_item.get("key"))
             if alert_item:
                 shown_keys.add(alert_item.get("key"))
-            for i in secondary_items[:3]:
+            for i in secondary_items[:6]:
                 shown_keys.add(i.get("key"))
             extra_items = [i for i in items if i.get("key") not in shown_keys]
             expanded_html = ""
@@ -10874,8 +10989,14 @@ def export_csv():
 @require_login
 def delete_activity():
     check_csrf()
+    uid = session["user_id"]
     db = get_db()
-    db.execute("DELETE FROM actions WHERE user_id=?", (session["user_id"],))
+    db.execute("DELETE FROM actions WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM action_items WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM field_history WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM field_candidates WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM intent_history WHERE user_id=?", (uid,))
+    db.execute("DELETE FROM field_observations WHERE user_id=?", (uid,))
     db.commit()
     return jsonify({"ok": True})
 
@@ -10955,6 +11076,8 @@ def delete_account():
     db.execute("DELETE FROM archived_benefits WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM action_items WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM benefit_corrections WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM email_connections WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM pending_2fa WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM users WHERE id=?", (user_id,))
     db.commit()
     session.clear()
@@ -10989,6 +11112,7 @@ def download_mcp():
 @app.route("/dashboard/decide/<action_id>", methods=["POST"])
 @require_login
 def decide(action_id):
+    check_csrf()
     data     = request.get_json(force=True)
     decision = data.get("decision")
     if decision not in ("approve", "deny"):
@@ -11286,6 +11410,9 @@ def onboarding_skip():
 
 @app.route("/approve/<token>", methods=["GET"])
 def approve_page(token):
+    _rl_ip = request.remote_addr or ""
+    if not _rate_limit(_rl_ip, "approve_token", limit=5, window=60):
+        return jsonify({"error": "Too many requests"}), 429
     expire_pending()
     db  = get_db()
     row = db.execute("SELECT * FROM actions WHERE approval_token=?", (token,)).fetchone()
@@ -11384,6 +11511,9 @@ def approve_page(token):
 
 @app.route("/approve/<token>", methods=["POST"])
 def approve_submit(token):
+    _rl_ip = request.remote_addr or ""
+    if not _rate_limit(_rl_ip, "approve_token", limit=5, window=60):
+        return jsonify({"error": "Too many requests"}), 429
     data     = request.get_json(force=True, silent=True) or {}
     decision = data.get("decision")
     if decision not in ("approve", "deny"):
@@ -12933,14 +13063,20 @@ def _promote_pending_candidates(uid: str) -> None:
         print(f"[Mighty] _promote_pending_candidates error: {_ppc_err}", flush=True)
 
 
-def _field_config_html(source: str, configured: set, extra_data: dict = None) -> str:
-    """Render AI-discovered field checkboxes. New fields are highlighted."""
+def _field_config_html(source: str, configured: set, extra_data: dict = None,
+                       candidates: list = None) -> str:
+    """Render AI-discovered field checkboxes. New fields are highlighted.
+    candidates: list of field_candidate dicts (lower-confidence fields from DB)."""
     if source not in configured:
         return ""
     extra        = extra_data or {}
     discovered   = extra.get("discovered_fields", [])
     enabled      = set(extra.get("enabled_fields", []))
     new_keys     = set(extra.get("new_fields", []))
+    candidates   = candidates or []
+    # Filter candidates to exclude keys already in discovered_fields
+    discovered_keys = {f.get("key") for f in discovered}
+    candidates   = [c for c in candidates if c.get("field_key") not in discovered_keys]
     src          = he(source)
 
     if discovered:
@@ -12991,12 +13127,44 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None) ->
             f'background:#7c3aed;color:#fff;margin-left:6px">{len(_new_present)} new</span>'
             if _new_present else ""
         )
+        # Candidates section — lower-confidence fields the user can opt into
+        candidates_html = ""
+        if candidates:
+            cand_rows = ""
+            for c in candidates:
+                ckey  = he(c.get("field_key", ""))
+                clbl  = he(c.get("field_label", c.get("field_key", "")))
+                cval  = he(str(c.get("field_value", "")))
+                chkd  = "checked" if c.get("field_key") in enabled else ""
+                conf  = c.get("confidence", 0)
+                cand_rows += (
+                    f'<label style="display:flex;align-items:center;gap:8px;font-size:12px;'
+                    f'padding:5px 0;cursor:pointer;border-bottom:1px solid #f9f7f5;color:#6b7280">'
+                    f'<input type="checkbox" id="field-{src}-{ckey}" '
+                    f'data-source="{src}" data-key="{ckey}" data-candidate="1" {chkd} '
+                    f'style="width:14px;height:14px;cursor:pointer;flex-shrink:0">'
+                    f'<span style="flex:1">{clbl}</span>'
+                    f'<span style="color:#9ca3af;font-size:11px">{cval}</span>'
+                    f'<span style="font-size:10px;color:#d1d5db;margin-left:4px" '
+                    f'title="Lower confidence field">{int(conf*100)}%</span></label>'
+                )
+            candidates_html = (
+                f'<details style="margin-top:10px">'
+                f'<summary style="font-size:11px;color:#9ca3af;cursor:pointer;padding:4px 0;'
+                f'list-style:none;display:flex;align-items:center;gap:6px">'
+                f'<span style="font-size:10px">▸</span>'
+                f'More extracted fields ({len(candidates)} lower-confidence)</summary>'
+                f'<div style="padding-top:4px">{cand_rows}</div>'
+                f'</details>'
+            )
+
         return (
             f'<div id="fields-panel-{src}" style="display:none">'
             f'<div style="font-size:13px;font-weight:700;color:#1a1a1a;margin-bottom:10px">'
             f'Field selection{new_count_badge}</div>'
             f'{new_banner}'
             f'{checkboxes}'
+            f'{candidates_html}'
             f'<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
             f'<button class="btn-save" style="font-size:12px;padding:6px 14px" '
             f'onclick="saveFieldsModal(\'{src}\')">Save</button>'
@@ -14944,6 +15112,48 @@ def credentials_fields_save():
         except Exception: pass
     extra["enabled_fields"] = enabled
     extra.pop("new_fields", None)  # clear new-field notification once user saves
+
+    # Promote any user-enabled field_candidates into discovered_fields so they
+    # render on cards and their confidence is boosted for future auto-selection.
+    # This is the training signal: explicit user opt-in = high-value field.
+    try:
+        discovered = extra.get("discovered_fields", [])
+        discovered_keys = {f.get("key") for f in discovered}
+        cand_rows = db.execute(
+            "SELECT field_key, field_label, field_value, confidence, source_snippet "
+            "FROM field_candidates WHERE user_id=? AND source=? AND status != 'dismissed'",
+            (uid, source)
+        ).fetchall()
+        for cr in cand_rows:
+            key = cr["field_key"]
+            if key in enabled and key not in discovered_keys:
+                # Promote: add to discovered_fields with boosted confidence
+                discovered.append({
+                    "key":           key,
+                    "label":         cr["field_label"] or key,
+                    "value":         cr["field_value"] or "",
+                    "confidence":    min(1.0, (cr["confidence"] or 0.5) + 0.2),
+                    "source_snippet": cr["source_snippet"] or "",
+                    "user_promoted": True,
+                })
+                discovered_keys.add(key)
+                # Boost confidence in field_candidates table for future auto-selection
+                db.execute(
+                    "UPDATE field_candidates SET confidence = MIN(1.0, confidence + 0.2), "
+                    "status = 'accepted' WHERE user_id=? AND source=? AND field_key=?",
+                    (uid, source, key)
+                )
+            elif key not in enabled and key in discovered_keys:
+                # User explicitly disabled a field — mark candidate as dismissed
+                db.execute(
+                    "UPDATE field_candidates SET status = 'dismissed' "
+                    "WHERE user_id=? AND source=? AND field_key=?",
+                    (uid, source, key)
+                )
+        extra["discovered_fields"] = discovered
+    except Exception as _e:
+        print(f"[Mighty] candidate promotion error: {_e}", flush=True)
+
     new_enc = encrypt_cred(uid, json.dumps(extra)) if extra else ""
     db.execute(
         "UPDATE account_credentials SET extra_enc=?, updated_at=? WHERE user_id=? AND source=?",
@@ -15181,8 +15391,20 @@ def api_fields_panel(source):
             extra_data = json.loads(decrypt_cred(uid, row["extra_enc"]))
         except Exception:
             pass
+    # Fetch lower-confidence candidates for this source
+    candidates = []
+    try:
+        cand_rows = get_db().execute(
+            "SELECT field_key, field_label, field_value, confidence FROM field_candidates "
+            "WHERE user_id=? AND source=? AND status != 'dismissed' ORDER BY confidence DESC",
+            (uid, source)
+        ).fetchall()
+        candidates = [dict(r) for r in cand_rows]
+    except Exception:
+        pass
+
     # Build inner HTML of the panel — strip the outer hidden div wrapper since we inline it
-    raw = _field_config_html(source, configured, extra_data)
+    raw = _field_config_html(source, configured, extra_data, candidates=candidates)
     # raw looks like: <div id="fields-panel-{src}" style="display:none">...content...</div>
     # Strip outer div so we can use content directly in the modal body
     inner = _re_mod.sub(r'^<div[^>]*>', '', raw.strip(), count=1)
@@ -16062,7 +16284,14 @@ def registry_paths():
 
 @app.route("/api/registry/remove", methods=["POST"])
 def registry_remove():
-    """Zero-out a known-bad path so it stops being served. No auth — paths aren't personal data."""
+    """Zero-out a known-bad path so it stops being served."""
+    # Require either session login or valid API key
+    _is_authed = session.get("user_id") is not None
+    if not _is_authed:
+        _reg_user, _ = api_user()
+        _is_authed = _reg_user is not None
+    if not _is_authed:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
     ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
     if not _rate_limit(ip, "registry_remove", limit=10, window=60):
         return jsonify({"ok": False, "error": "rate limited"}), 429
@@ -16967,6 +17196,8 @@ def api_sync_start():
     # Preserve the last-known timestamp if we have one
     existing = _sync_status.get(uid, {})
     _sync_status[uid] = {"running": True, "last": existing.get("last")}
+    get_db().execute("UPDATE users SET sync_running=1, sync_started_at=? WHERE id=?", (iso(), uid))
+    get_db().commit()
     return jsonify({"ok": True})
 
 
@@ -17011,6 +17242,8 @@ def api_sync_finalize():
     # Tell the dashboard's auto-sync check that a fresh sync just landed so it
     # doesn't immediately re-trigger cloudSync() on the next page load.
     _sync_status[user["id"]] = {"running": False, "last": session_ts}
+    get_db().execute("UPDATE users SET sync_running=0, sync_started_at=NULL WHERE id=?", (user["id"],))
+    get_db().commit()
     return jsonify({"ok": True, "updated": result.rowcount, "session_ts": session_ts})
 
 
@@ -17739,19 +17972,27 @@ def sync_account_cloud(source):
 @app.route("/sync/status")
 @require_login
 def sync_status():
-    """Return current sync status for the logged-in user."""
-    uid    = session["user_id"]
-    status = _sync_status.get(uid, {})
-    # _sync_status is in-memory and lost on worker restart / multi-instance deploys.
-    # Fall back to the DB so the dashboard auto-sync check sees a real last-sync time
-    # even after Railway restarts or when the extension synced via a different worker.
-    if not status.get("last"):
-        row = get_db().execute(
-            "SELECT MAX(synced_at) AS ts FROM account_data WHERE user_id=?", (uid,)
-        ).fetchone()
-        if row and row["ts"]:
-            status = {"running": status.get("running", False), "last": row["ts"]}
-    return jsonify({"ok": True, **status})
+    uid = session["user_id"]
+    db  = get_db()
+    user_row = db.execute("SELECT sync_running, sync_started_at FROM users WHERE id=?", (uid,)).fetchone()
+    running = bool(user_row and user_row["sync_running"])
+    # Safety: auto-clear if stuck > 20 minutes (handles crashed syncs)
+    if running and user_row and user_row["sync_started_at"]:
+        try:
+            age_mins = (datetime.now(timezone.utc) -
+                        datetime.fromisoformat(user_row["sync_started_at"].replace("Z", "+00:00"))
+                       ).total_seconds() / 60
+            if age_mins > 20:
+                db.execute("UPDATE users SET sync_running=0, sync_started_at=NULL WHERE id=?", (uid,))
+                db.commit()
+                running = False
+        except Exception:
+            pass
+    last_ts = None
+    row = db.execute("SELECT MAX(synced_at) AS ts FROM account_data WHERE user_id=?", (uid,)).fetchone()
+    if row and row["ts"]:
+        last_ts = row["ts"]
+    return jsonify({"ok": True, "running": running, "last": last_ts})
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────

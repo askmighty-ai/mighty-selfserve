@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-28-v55'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-28-v56'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -2941,14 +2941,15 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         func: async function waitForEntryContent() {
           for (let i = 0; i < 20; i++) {
             if (document.body) {
+              // First try stripping chrome/nav to get account-specific content
               const clone = document.body.cloneNode(true);
-              clone.querySelectorAll('script, style, noscript, header, footer, nav').forEach(el => el.remove());
+              clone.querySelectorAll('script, style, noscript').forEach(el => el.remove());
               const stripped = (clone.innerText || clone.textContent || '').slice(0, 15000);
               if (stripped.trim().length >= 100) return stripped;
             }
             await new Promise(res => setTimeout(res, 500));
           }
-          // Fallback: full body text in case content lives in a stripped element
+          // Fallback: full body text
           return document.body ? (document.body.innerText || '').slice(0, 15000) : '';
         },
       });
