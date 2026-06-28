@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-28-v52'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-28-v53'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1012,6 +1012,7 @@ const _AUTH_PROBE_PATHS = {
 const _AUTH_COOKIE_SIGNALS = {
   southwest: { name: 'id_token',   minLen: 100 }, // JWT; absent when logged out
   united:    { name: 'AuthCookie', minLen: 32  }, // session auth token; absent when logged out
+  delta:     { name: 'isin',       minLen: 1   }, // "Y" when signed in; absent when logged out
 };
 
 /** Strip HTML tags to plain text. Service workers have no DOM, so we use regex. */
