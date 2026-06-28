@@ -8711,6 +8711,10 @@ def dashboard():
                 )
                 status_color = "#a78bfa"
             elif sync_status == "login_required":
+                _lr_mfa_sites = {'delta','united','southwest','american_air','alaska_air',
+                                 'hilton','marriott','hyatt','ihg','amex','chase',
+                                 'citi','capital_one','wellsfargo','bank_of_america'}
+                _lr_is_mfa = src in _lr_mfa_sites
                 _lr_login_url = SOURCE_CAPABILITIES.get(src, {}).get("login_url") or _ACCOUNT_ENTRY_URLS.get(src, "")
                 _lr_btn = (
                     f'<a href="{he(_lr_login_url)}" target="_blank" rel="noopener" '
@@ -8725,18 +8729,25 @@ def dashboard():
                     f'background:none;border:1px solid #d1d5db;color:#6b7280;border-radius:6px;'
                     f'font-size:11px;font-weight:500;cursor:pointer">Already signed in?</button>'
                 )
+                _lr_ali_btn_label  = "⚡ Auto-fill + open for MFA" if _lr_is_mfa else "⚡ Enable auto-login"
+                _lr_ali_on_label   = "⚡ Auto-fill enabled (MFA still required)" if _lr_is_mfa else "⚡ Auto-login enabled"
+                _lr_ali_form_note  = (
+                    f'Save your password — Mighty will auto-fill the login form, then open a tab for you to complete the {he(display_name)} MFA step. Stored locally, never sent to servers.'
+                    if _lr_is_mfa else
+                    'Mighty will log you in automatically when your session expires. Stored locally in the extension — never sent to servers.'
+                )
                 _lr_ali = (
                     f'<div id="ali-{src}-wrap" style="margin-top:8px">'
                     f'<button id="ali-{src}-btn" onclick="showAutoLoginForm(\'{_lr_src_js}\',this)" '
                     f'style="padding:4px 10px;background:none;border:1px solid #6366f1;color:#6366f1;'
-                    f'border-radius:6px;font-size:11px;font-weight:500;cursor:pointer">⚡ Enable auto-login</button>'
+                    f'border-radius:6px;font-size:11px;font-weight:500;cursor:pointer">{he(_lr_ali_btn_label)}</button>'
                     f'<span id="ali-{src}-on" style="display:none;font-size:11px;font-weight:500;color:#22c55e">'
-                    f'⚡ Auto-login enabled '
+                    f'{he(_lr_ali_on_label)} '
                     f'<a href="#" onclick="removeAutoLoginCred(\'{_lr_src_js}\');return false" '
                     f'style="color:#ef4444;font-size:10px;text-decoration:underline">Remove</a></span>'
                     f'<div id="ali-{src}-form" style="display:none;margin-top:8px">'
                     f'<div style="color:#6b7280;font-size:10px;margin-bottom:6px;line-height:1.4">'
-                    f'Stored locally in the extension — never sent to servers.</div>'
+                    f'{he(_lr_ali_form_note)}</div>'
                     f'<input id="ali-{src}-user" type="email" placeholder="Username / email" autocomplete="off" '
                     f'style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #d1d5db;'
                     f'border-radius:5px;font-size:12px;margin-bottom:4px">'

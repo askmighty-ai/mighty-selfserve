@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-27-v47'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-27-v48'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -663,23 +663,59 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === KEEPALIVE_ALARM) runSessionKeepalive();
 });
 
+// Sites that require MFA — auto-login fills username/password but the user must
+// complete the MFA step manually. When auto-login detects MFA, Mighty opens the
+// partially-authenticated login page in a real browser tab so the user can finish.
+// Credentials are still worth storing for these sites: they skip the typing step.
+const MFA_SITES = new Set([
+  'delta', 'united', 'southwest', 'american_air', 'alaska_air',
+  'hilton', 'marriott', 'hyatt', 'ihg', 'amex', 'chase',
+  'citi', 'capital_one', 'wellsfargo', 'bank_of_america',
+]);
+
 /**
- * Silently ping each connected account's entry URL to keep sessions alive.
+ * Silently ping each CONNECTED, LOGGED-IN account's entry URL to keep sessions alive.
  * Uses credentials: 'include' so the browser sends the user's cookies —
  * the site sees an authenticated request and resets its session expiry timer.
- * No tabs, no page rendering, no data extracted.
+ * Only pings accounts the user has actually connected AND that are in ok status,
+ * avoiding wasteful pings to 50+ sites the user hasn't connected or is logged out of.
  */
 async function runSessionKeepalive() {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
 
-  // Sites to skip: bot-detection-heavy (Akamai) or already login_required
+  // Sites where a headless fetch won't refresh sessions reliably
   const KEEPALIVE_SKIP = new Set(['xfinity', 'pa_utilities']);
+
+  // Fetch the user's actual connected accounts — only ping those with active sessions
+  let accounts = [];
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
+      headers: { 'X-Mighty-Key': api_key },
+    });
+    if (resp.ok) accounts = await resp.json();
+  } catch (e) {
+    console.log('[Mighty] Keepalive: failed to fetch accounts —', e.message);
+    return;
+  }
+
+  const toKeepAlive = accounts.filter(a => {
+    if (KEEPALIVE_SKIP.has(a.source)) return false;
+    const status = a.sync_status || '';
+    // Only ping accounts with an active session — skip login_required ones
+    return status === 'ok' || status === '' || status === 'needs_first_visit';
+  });
+
+  if (toKeepAlive.length === 0) {
+    console.log('[Mighty] Keepalive: no logged-in accounts to ping');
+    return;
+  }
 
   // Stagger pings to avoid a burst of simultaneous requests
   let delay = 0;
-  for (const [source, url] of Object.entries(ACCOUNT_ENTRY)) {
-    if (KEEPALIVE_SKIP.has(source)) continue;
+  for (const account of toKeepAlive) {
+    const url = ACCOUNT_ENTRY[account.source];
+    if (!url) continue;
     setTimeout(async () => {
       try {
         await fetch(url, {
@@ -687,12 +723,12 @@ async function runSessionKeepalive() {
           cache: 'no-store',
           mode: 'no-cors',  // opaque response — we only need the request to reach the server
         });
-        console.log(`[Mighty] Keepalive: ${source}`);
+        console.log(`[Mighty] Keepalive: ${account.source}`);
       } catch (e) {
-        console.log(`[Mighty] Keepalive: ${source} failed — ${e.message}`);
+        console.log(`[Mighty] Keepalive: ${account.source} failed — ${e.message}`);
       }
     }, delay);
-    delay += 1500 + Math.floor(Math.random() * 1000); // stagger by ~1.5–2.5s each
+    delay += 2000 + Math.floor(Math.random() * 1000); // stagger by ~2–3s each
   }
 }
 
@@ -740,8 +776,15 @@ chrome.storage.onChanged.addListener(async function(changes, area) {
       // Reload dashboard so dot turns green
       chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
       setTimeout(() => syncSingleAccount(source, api_key), 2000);
+    } else if (result === '2fa') {
+      // Auto-login filled the form but hit an MFA prompt — open the login page in a
+      // real browser tab so the user can complete the MFA step. api_relay.js will detect
+      // the successful login and auto-sync the account.
+      console.log(`[Mighty] ${source}: MFA required — opening login tab for user to complete`);
+      const loginUrl = _AUTO_LOGIN_URLS[source] || ACCOUNT_ENTRY[source];
+      chrome.tabs.create({ url: loginUrl, active: true });
     }
-    // If 2fa/failed/error: dashboard already shows "Session expired" — user will need to sign in
+    // If failed/error: dashboard shows "Session expired" with manual sign-in button
     return;
   }
 
