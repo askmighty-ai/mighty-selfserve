@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-27-v49'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-27-v50'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -3143,8 +3143,10 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     // syncs, so a login redirect on any of them is definitive proof.
     // For other sites: require ALL subpages to have been login redirects (more lenient,
     // because public marketing pages might redirect while account pages succeed).
+    // If cookie auth confirmed the session above, don't let _isSilentLoginPage false-positives
+    // (e.g. United's SPA showing login UI elements on authenticated pages) override it.
     const _loginWallCondition = SILENT_FETCH_SKIP.has(account.source)
-      ? (_subLoginRedirects > 0 && toVisit.length > 0)
+      ? (!_cookieAuthConfirmed && _subLoginRedirects > 0 && toVisit.length > 0)
       : (_subLoginRedirects > 0 && _subSuccesses === 0 && toVisit.length > 0);
     if (_loginWallCondition) {
       console.log(`[Mighty] ${account.name}: ${_subLoginRedirects}/${toVisit.length} subpages were login redirects — session expired`);
