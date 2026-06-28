@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-27-v44'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-27-v45'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -2468,6 +2468,28 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       if (pushResp.ok) return;
       // Push failed — fall through to tab-based
       console.warn(`[Mighty] ${account.name}: silent push failed, falling back to tab`);
+    }
+  }
+
+  // ── Cookie diagnostic dump (v45) — identify auth cookie names per site ──────
+  // Dumps ALL cookies for SILENT_FETCH_SKIP sites to _dbg so we can identify
+  // which cookie names signal a valid logged-in session. Remove after analysis.
+  if (SILENT_FETCH_SKIP.has(account.source)) {
+    try {
+      const entryUrl = ACCOUNT_ENTRY[account.source];
+      const allCookies = await chrome.cookies.getAll({ url: entryUrl });
+      const cookieSummary = allCookies.map(c => ({
+        name: c.name,
+        httpOnly: c.httpOnly,
+        secure: c.secure,
+        valueLen: c.value.length,
+        valuePfx: c.value.slice(0, 30),
+        domain: c.domain,
+        session: c.session,
+      }));
+      await _dbg(`COOKIES_${account.source.toUpperCase()}`, cookieSummary);
+    } catch (e) {
+      await _dbg(`COOKIES_${account.source.toUpperCase()}_ERR`, e.message);
     }
   }
 
