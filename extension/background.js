@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-27-v48'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-27-v49'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1001,6 +1001,14 @@ const _AUTH_PROBE_PATHS = {
   southwest:    '/loyalty/myaccount/',
   alaska_air:   '/account/dashboard',
   american_air: '/loyalty/home.do',
+};
+
+// Definitive auth cookie per site — present when logged in, absent when not.
+// Checked before any tab crawl; faster and more reliable than page-content heuristics.
+// To add a new site: compare COOKIES_* debug dumps between logged-in and logged-out runs.
+const _AUTH_COOKIE_SIGNALS = {
+  southwest: { name: 'id_token',   minLen: 100 }, // JWT; absent when logged out
+  united:    { name: 'AuthCookie', minLen: 32  }, // session auth token; absent when logged out
 };
 
 /** Strip HTML tags to plain text. Service workers have no DOM, so we use regex. */
@@ -2536,11 +2544,38 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     }
   }
 
+  // ── Cookie-based auth check ────────────────────────────────────────────────
+  // For sites with a known auth cookie signal, check it before any tab crawl.
+  // Cookie presence/absence is definitive and instant — no page load needed.
+  // To add a site: compare COOKIES_* debug dumps logged-in vs logged-out above.
+  let _cookieAuthConfirmed = false;
+  if (SILENT_FETCH_SKIP.has(account.source) && _AUTH_COOKIE_SIGNALS[account.source]) {
+    const sig = _AUTH_COOKIE_SIGNALS[account.source];
+    try {
+      const entryUrl = ACCOUNT_ENTRY[account.source];
+      const cookies  = await chrome.cookies.getAll({ url: entryUrl, name: sig.name });
+      const authCookie = cookies.find(c => c.value.length >= sig.minLen);
+      if (!authCookie) {
+        console.log(`[Mighty] ${account.name}: auth cookie "${sig.name}" absent — login_required`);
+        await _markLoginWall(account.source);
+        await reportSyncFailure(apiKey, account.source, 'login_wall');
+        chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+        throw new Error('login_required');
+      }
+      _cookieAuthConfirmed = true;
+      console.log(`[Mighty] ${account.name}: auth cookie "${sig.name}" present (${authCookie.value.length} chars) — session confirmed`);
+    } catch (e) {
+      if (e.message === 'login_required') throw e;
+      console.warn(`[Mighty] ${account.name}: cookie auth check failed — ${e.message} — falling through to pre-flight`);
+    }
+  }
+
   // ── Pre-flight login check for SILENT_FETCH_SKIP sites ────────────────────────
   // Before opening any tab, do a quick credentialed fetch to the entry URL.
   // If the server HTTP-redirects to a login page (HTTP 302), we catch it here
   // without the complexity of tab-based URL monitoring.
-  if (SILENT_FETCH_SKIP.has(account.source)) {
+  // Skipped when cookie check already confirmed the session above.
+  if (SILENT_FETCH_SKIP.has(account.source) && !_cookieAuthConfirmed) {
     const _isLoginWall = await _prefetchLoginCheck(account.source);
     if (_isLoginWall) {
       console.log(`[Mighty] ${account.name}: pre-flight fetch detected login redirect — skipping tab crawl`);
