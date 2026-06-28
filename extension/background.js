@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-27-v43'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-27-v44'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -929,6 +929,36 @@ let _syncInProgress = false;
 // These sites are forced through the tab-based path, which executes JS + checks
 // post-settle URL and password fields in the actual rendered page.
 const SILENT_FETCH_SKIP = new Set(['hilton', 'marriott', 'hyatt', 'southwest', 'delta', 'american_air', 'alaska_air', 'united']);
+
+// ── Authenticated path knowledge for SILENT_FETCH_SKIP (SPA) sites ────────────
+// Registry paths for these sites are filtered to only include paths that are
+// under KNOWN authenticated prefixes. Public marketing pages can end up in the
+// registry from old syncs and would otherwise pass as successful auth pages.
+
+// Path prefixes that are unambiguously behind auth for each SPA site.
+const _AUTH_PATH_PREFIXES = {
+  delta:        ['/myprofile', '/my-profile', '/us/en/my-account', '/en/us/my-account', '/delta-vacations'],
+  united:       ['/en/us/myunited', '/en/US/mileageplus', '/en/us/mileageplus'],
+  hilton:       ['/en/hilton-honors/guest/my-account'],
+  marriott:     ['/loyalty/myaccount', '/loyalty/registrations', '/loyalty/my-account'],
+  hyatt:        ['/en-US/my-account', '/en-us/my-account'],
+  southwest:    ['/loyalty/myaccount', '/rapid-rewards'],
+  alaska_air:   ['/account'],
+  american_air: ['/loyalty/home', '/myprofile', '/aadvantage'],
+};
+
+// When the registry has no valid auth paths, probe these known auth pages.
+// If the probe redirects to login, the session is expired.
+const _AUTH_PROBE_PATHS = {
+  delta:        '/myprofile/certificates',
+  united:       '/en/US/mileageplus/account',
+  hilton:       '/en/hilton-honors/guest/my-account/',
+  marriott:     '/loyalty/myAccount/default.mi',
+  hyatt:        '/en-US/my-account/home',
+  southwest:    '/loyalty/myaccount/',
+  alaska_air:   '/account/dashboard',
+  american_air: '/loyalty/home.do',
+};
 
 /** Strip HTML tags to plain text. Service workers have no DOM, so we use regex. */
 function _htmlToText(html) {
@@ -2712,8 +2742,14 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
     // Dismiss session-timeout modals
     try {
-      const [d] = await chrome.scripting.executeScript({ target: { tabId }, func: dismissSessionTimeouts });
-      if (d?.result) { console.log(`[Mighty] ${account.name}: dismissed session modal`); await sleep(3_000); }
+      // For SILENT_FETCH_SKIP (SPA) sites, skip dismissSessionTimeouts entirely.
+      // Their popup modals are login prompts, not session-keepalive dialogs — clicking
+      // them away allows the page to show public marketing content and falsely succeed.
+      // The login modal content is caught below by _isSilentLoginPage(entryText).
+      if (!SILENT_FETCH_SKIP.has(account.source)) {
+        const [d] = await chrome.scripting.executeScript({ target: { tabId }, func: dismissSessionTimeouts });
+        if (d?.result) { console.log(`[Mighty] ${account.name}: dismissed session modal`); await sleep(3_000); }
+      }
     } catch (_) {}
 
     // Detect login form via password field EXISTENCE (not visibility rect).
@@ -2837,12 +2873,26 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       }
     }
 
-    // Supplement with registry-known paths not already discovered
+    // Supplement with registry-known paths not already discovered.
+    // For SILENT_FETCH_SKIP (SPA) sites: filter registry paths to only those under
+    // known authenticated path prefixes. Public marketing pages can accumulate in the
+    // registry from old syncs and will load without any login redirect, falsely
+    // signalling a successful session.
     try {
       const regPaths = await fetchRegistryPaths(account.source);
       const entryOrigin = new URL(entry).origin;
+      const _authPrefixes = _useRegistryOnly ? (_AUTH_PATH_PREFIXES[account.source] || null) : null;
       for (const path of regPaths) {
         if (toVisit.length >= MAX_SUBPAGES) break;
+        // Auth-prefix filter for SPA sites
+        if (_authPrefixes) {
+          const pathLower = path.toLowerCase();
+          const isAuthPath = _authPrefixes.some(p => pathLower.startsWith(p.toLowerCase()));
+          if (!isAuthPath) {
+            console.log(`[Mighty] ${account.name}: skipping public registry path ${path}`);
+            continue;
+          }
+        }
         const regUrl = entryOrigin + path;
         const norm   = _normUrl(regUrl);
         if (!visitedNorm.has(norm)) {
@@ -2851,6 +2901,24 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         }
       }
     } catch (_) {}
+
+    // For SILENT_FETCH_SKIP sites with no valid auth paths in the registry:
+    // inject a hardcoded probe path. If the probe redirects to login, the session
+    // is expired. If it succeeds, we get at least one page of authenticated content.
+    if (_useRegistryOnly && toVisit.length === 0) {
+      const probePath = _AUTH_PROBE_PATHS[account.source];
+      if (probePath) {
+        try {
+          const probeUrl = new URL(entry).origin + probePath;
+          const probeNorm = _normUrl(probeUrl);
+          if (!visitedNorm.has(probeNorm)) {
+            visitedNorm.add(probeNorm);
+            toVisit.push({ href: probeUrl, text: '', score: 5, fromRegistry: false });
+            console.log(`[Mighty] ${account.name}: no auth registry paths — probing ${probeUrl}`);
+          }
+        } catch (_) {}
+      }
+    }
 
     console.log(`[Mighty] ${account.name}: ${scored.length} candidates → visiting top ${toVisit.length}`);
 
