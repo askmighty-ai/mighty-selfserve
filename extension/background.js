@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-28-v53'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-28-v55'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -2606,12 +2606,21 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     }
   }
 
-  // ── Pre-flight login check for SILENT_FETCH_SKIP sites ────────────────────────
-  // Before opening any tab, do a quick credentialed fetch to the entry URL.
-  // If the server HTTP-redirects to a login page (HTTP 302), we catch it here
-  // without the complexity of tab-based URL monitoring.
+  // ── Pre-flight login check (disabled for SPA/bot-protected sites) ────────────
+  // Headless fetch-based pre-flight only works for simple sites that do server-side
+  // HTTP 302 redirects on unauthenticated access. SPA sites (everything in
+  // SILENT_FETCH_SKIP) do auth in JavaScript, so the fetch lands on a page shell
+  // that looks fine — or worse, Akamai/bot-protection intercepts the headless fetch
+  // and returns a redirect that looks like a login wall even when logged in.
+  //
+  // For SILENT_FETCH_SKIP sites, the tab crawl is the universal reliable check:
+  //   - post-settle URL check catches JS-driven login redirects
+  //   - _isSilentLoginPage catches login form content
+  //   - zero _subSuccesses catches error-frame responses (e.g. PA Utilities)
+  // Cookie signals (_AUTH_COOKIE_SIGNALS) provide a fast-path to skip the tab
+  // entirely when we already know the session is live — but they're optional.
   // Skipped when cookie check already confirmed the session above.
-  if (SILENT_FETCH_SKIP.has(account.source) && !_cookieAuthConfirmed) {
+  if (false && SILENT_FETCH_SKIP.has(account.source) && !_cookieAuthConfirmed) {
     const _isLoginWall = await _prefetchLoginCheck(account.source);
     if (_isLoginWall) {
       console.log(`[Mighty] ${account.name}: pre-flight fetch detected login redirect — skipping tab crawl`);
