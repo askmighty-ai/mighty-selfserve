@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-27-v46'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-27-v47'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -950,7 +950,7 @@ const _AUTH_PATH_PREFIXES = {
 // When the registry has no valid auth paths, probe these known auth pages.
 // If the probe redirects to login, the session is expired.
 const _AUTH_PROBE_PATHS = {
-  delta:        '/myprofile/certificates',
+  delta:        '/my-profile/certificates',
   united:       '/en/US/mileageplus/account',
   hilton:       '/en/hilton-honors/guest/my-account/',
   marriott:     '/loyalty/myAccount/default.mi',
@@ -2924,10 +2924,12 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       }
     } catch (_) {}
 
-    // For SILENT_FETCH_SKIP sites with no valid auth paths in the registry:
-    // inject a hardcoded probe path. If the probe redirects to login, the session
-    // is expired. If it succeeds, we get at least one page of authenticated content.
-    if (_useRegistryOnly && toVisit.length === 0) {
+    // For SILENT_FETCH_SKIP sites: always prepend the probe path so it is visited
+    // FIRST, regardless of how many registry paths exist. This catches cases like
+    // Delta where registry paths (/us/en/my-account/*) get Akamai bot-detected
+    // instead of login-redirecting, while the probe (/my-profile/certificates)
+    // correctly SPA-redirects to login when not authenticated.
+    if (_useRegistryOnly) {
       const probePath = _AUTH_PROBE_PATHS[account.source];
       if (probePath) {
         try {
@@ -2935,8 +2937,8 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           const probeNorm = _normUrl(probeUrl);
           if (!visitedNorm.has(probeNorm)) {
             visitedNorm.add(probeNorm);
-            toVisit.push({ href: probeUrl, text: '', score: 5, fromRegistry: false });
-            console.log(`[Mighty] ${account.name}: no auth registry paths — probing ${probeUrl}`);
+            toVisit.unshift({ href: probeUrl, text: '', score: 10, fromRegistry: false });
+            console.log(`[Mighty] ${account.name}: prepending auth probe ${probeUrl}`);
           }
         } catch (_) {}
       }
