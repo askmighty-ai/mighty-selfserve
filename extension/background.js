@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-27-v50'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-28-v51'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -963,6 +963,9 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 
 // Prevent concurrent sync runs (each would open its own tab set)
 let _syncInProgress = false;
+// Sources that hit login_required during the current sync run and have credentials
+// stored — processed for proactive auto-login after _syncInProgress clears.
+const _pendingAutoLogins = new Set();
 
 // ── Silent fetch helpers (no tabs needed) ────────────────────────────────────
 
@@ -1751,6 +1754,37 @@ async function runSync() {
     }
     await chrome.storage.local.remove(['_leaked_sync_tabs', '_leaked_sync_tab', '_sync_lock_ts']);
     _syncInProgress = false;
+
+    // ── Proactive auto-login ──────────────────────────────────────────────────
+    // For any account that hit login_required during this sync AND has stored
+    // credentials, attempt auto-login now that _syncInProgress is cleared.
+    // Runs sequentially so windows don't overlap.
+    if (_pendingAutoLogins.size > 0) {
+      const pending = [..._pendingAutoLogins];
+      _pendingAutoLogins.clear();
+      const { api_key: _alApiKey } = await chrome.storage.local.get('api_key');
+      if (_alApiKey) {
+        for (const source of pending) {
+          const cred = await _getCred(_alApiKey, source).catch(() => null);
+          if (!cred) continue;
+          console.log(`[Mighty] ${source}: session expired — attempting proactive auto-login`);
+          const result = await autoLogin(source, _alApiKey).catch(() => 'error');
+          console.log(`[Mighty] ${source}: proactive auto-login result: ${result}`);
+          if (result === 'success') {
+            await _clearLoginWall(source);
+            chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+            setTimeout(() => syncSingleAccount(source, _alApiKey), 2000);
+          } else if (result === '2fa') {
+            // MFA site: fill was successful, open real tab for user to complete MFA step.
+            // api_relay.js will detect login success and fire syncSingleAccount automatically.
+            const loginUrl = _AUTO_LOGIN_URLS[source] || ACCOUNT_ENTRY[source];
+            console.log(`[Mighty] ${source}: MFA required — opening login tab`);
+            chrome.tabs.create({ url: loginUrl, active: true });
+          }
+          // 'failed' / 'error' / null: leave as login_required, user sees the red dot
+        }
+      }
+    }
   }
 }
 
@@ -2560,6 +2594,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         await _markLoginWall(account.source);
         await reportSyncFailure(apiKey, account.source, 'login_wall');
         chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+        _pendingAutoLogins.add(account.source);
         throw new Error('login_required');
       }
       _cookieAuthConfirmed = true;
@@ -2582,6 +2617,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       await _markLoginWall(account.source);
       await reportSyncFailure(apiKey, account.source, 'login_wall');
       chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+      _pendingAutoLogins.add(account.source);
       throw new Error('login_required');
     }
     console.log(`[Mighty] ${account.name}: pre-flight fetch OK (no login redirect) — proceeding with tab crawl`);
@@ -3156,6 +3192,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         await reportSyncFailure(_ak, account.source, 'login_wall');
         chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
       }
+      _pendingAutoLogins.add(account.source);
       throw new Error('login_required');
     }
 
