@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-27-v42'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-27-v43'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -307,7 +307,7 @@ const SITE_LOGIN_CONFIG = {
   // ── Airlines ──────────────────────────────────────────────────────────────
   alaska_air:   { loginPathRe: /\/(account\/)?log-?in(\/|$|\?)/i },
   american_air: { loginPathRe: /\/(loyalty\/)?(log-?in|sign-?in)(\/|$|\?)|\/login\.do/i },
-  delta:        { loginPathRe: /\/(sign-?in|log-?in)(\/|$|\?)/i },
+  delta:        { loginPathRe: /\/(sign-?in|log-?in|skymiles\/login)(\/|$|\?|$)/i },
   southwest:    { loginPathRe: /\/(account|loyalty)\/(log-?in|sign-?in)/i },
   // United: only match explicit /login path — NOT /session/sso which appears in authenticated SSO flows
   united:       { loginPathRe: /\/(en\/us\/)?login(\/|$|\?)/i },
@@ -1082,6 +1082,32 @@ async function _silentFetchPages(source, account) {
   }
 
   return allText.length > 600 ? allText : null;
+}
+
+/**
+ * Pre-flight login redirect check for SILENT_FETCH_SKIP sites.
+ * Does a credentialed fetch to the entry URL and checks whether the server
+ * HTTP-redirects to a login page before any JavaScript runs.
+ * Returns true if a login redirect is detected, false otherwise.
+ * Fast (~200ms) because it needs no tab. Only catches server-side 302s, not JS redirects.
+ */
+async function _prefetchLoginCheck(source) {
+  const url = ACCOUNT_ENTRY[source];
+  if (!url) return false;
+  try {
+    const resp = await fetch(url, { credentials: 'include', redirect: 'follow' });
+    const finalUrl = resp.url;
+    if (!finalUrl || finalUrl === url) return false; // no redirect
+    const finalU = new URL(finalUrl);
+    const cfg = SITE_LOGIN_CONFIG[source];
+    if (cfg?.loginHostnames?.includes(finalU.hostname)) return true;
+    if (cfg?.loginPathRe?.test(finalU.pathname)) return true;
+    // Generic fallbacks
+    const _re = /\/(login|signin|sign-in|log-in|logon)(\/|$|\?)/i;
+    if (_re.test(finalU.pathname)) return true;
+    const sub = finalU.hostname.split('.')[0].toLowerCase();
+    return /^(login|sso|auth|signin|sign-in|logon)$/.test(sub);
+  } catch { return false; }
 }
 
 /** Create a hidden background tab for sync work (fallback when silent fetch fails).
@@ -2415,6 +2441,22 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     }
   }
 
+  // ── Pre-flight login check for SILENT_FETCH_SKIP sites ────────────────────────
+  // Before opening any tab, do a quick credentialed fetch to the entry URL.
+  // If the server HTTP-redirects to a login page (HTTP 302), we catch it here
+  // without the complexity of tab-based URL monitoring.
+  if (SILENT_FETCH_SKIP.has(account.source)) {
+    const _isLoginWall = await _prefetchLoginCheck(account.source);
+    if (_isLoginWall) {
+      console.log(`[Mighty] ${account.name}: pre-flight fetch detected login redirect — skipping tab crawl`);
+      await _markLoginWall(account.source);
+      await reportSyncFailure(apiKey, account.source, 'login_wall');
+      chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+      throw new Error('login_required');
+    }
+    console.log(`[Mighty] ${account.name}: pre-flight fetch OK (no login redirect) — proceeding with tab crawl`);
+  }
+
   // ── Tab-based fallback (SPA sites / login-gated / insufficient silent content) ─
   // Resolve the shared tab lazily — only created now if actually needed
   if (_lazySharedTab) {
@@ -2540,7 +2582,11 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     await waitForTabLoad(tabId, 15_000);
     await _markSyncTab(); // prevent api_relay.js from detecting login in this tab
 
-    if (warmup) {
+    // Only do warmup re-navigation when warmup is a DIFFERENT URL from entry.
+    // When warmup === entry (e.g. Delta), skipping the redundant re-navigation avoids
+    // a 3-second blind window where the auth redirect fires before the settle listener
+    // is registered.
+    if (warmup && warmup !== entry) {
       await sleep(3_000);
       await chrome.tabs.update(tabId, { url: entry });
       await waitForTabLoad(tabId, 15_000);
@@ -2921,8 +2967,17 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
     // If every subpage we attempted was a login redirect and none returned real content,
     // the session has expired — report login_required and abort.
-    if (_subLoginRedirects > 0 && _subSuccesses === 0 && toVisit.length > 0) {
-      console.log(`[Mighty] ${account.name}: all ${_subLoginRedirects}/${toVisit.length} subpages were login redirects — session expired`);
+    //
+    // For SILENT_FETCH_SKIP (SPA sites): even ONE login redirect from a registry path
+    // means the session is expired — all registry paths come from prior authenticated
+    // syncs, so a login redirect on any of them is definitive proof.
+    // For other sites: require ALL subpages to have been login redirects (more lenient,
+    // because public marketing pages might redirect while account pages succeed).
+    const _loginWallCondition = SILENT_FETCH_SKIP.has(account.source)
+      ? (_subLoginRedirects > 0 && toVisit.length > 0)
+      : (_subLoginRedirects > 0 && _subSuccesses === 0 && toVisit.length > 0);
+    if (_loginWallCondition) {
+      console.log(`[Mighty] ${account.name}: ${_subLoginRedirects}/${toVisit.length} subpages were login redirects — session expired`);
       const { api_key: _ak } = await chrome.storage.local.get('api_key');
       if (_ak) {
         await _markLoginWall(account.source);
