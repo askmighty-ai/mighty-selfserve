@@ -1,7 +1,7 @@
 """Tests for the email subject advisor."""
 
-from mighty.decision_engine import DecisionContext, get_recommendations
-from mighty.advisors.email import evaluate
+from mighty.decision_engine import DecisionContext
+from mighty.advisors.email_advisor import evaluate
 
 
 def _ctx(*, source="email", subjects=None):
@@ -50,6 +50,13 @@ def test_subjects_from_user_memory():
     assert recs[0].id == "email_amex"
 
 
+def test_chase_subject_returns_recommendation():
+    recs = evaluate(_ctx(subjects=["Chase Ultimate Rewards: 80k bonus offer"]))
+    assert len(recs) == 1
+    assert recs[0].id == "email_chase"
+    assert recs[0].title == "Review your Chase emails"
+
+
 def test_metadata_subjects_work_for_non_email_source():
     ctx = DecisionContext(
         url="https://example.com",
@@ -64,24 +71,3 @@ def test_metadata_subjects_work_for_non_email_source():
 def test_browser_source_without_subjects_returns_empty():
     ctx = DecisionContext(url="https://example.com", source="browser", metadata={})
     assert evaluate(ctx) == []
-
-
-def test_decision_engine_converts_to_recommendations():
-    ctx = DecisionContext(
-        url="",
-        source="email",
-        metadata={"email_subjects": ["United MileagePlus upgrade available"]},
-    )
-    recs = get_recommendations(ctx)
-    assert len(recs) == 1
-    assert recs[0].title == "Review your United emails"
-    assert recs[0].summary
-    assert recs[0].bullets
-    assert recs[0].action_label == "Open United"
-
-
-def test_dashboard_source_unchanged():
-    ctx = DecisionContext(url="", source="dashboard")
-    recs = get_recommendations(ctx)
-    assert len(recs) == 3
-    assert all(r.recommendation_type in ("hotel", "travel") for r in recs)

@@ -1,6 +1,6 @@
 """
-mighty.advisors.email
-─────────────────────
+mighty.advisors.email_advisor
+─────────────────────────────
 Email-subject contextual opportunity advisor.
 
 Deterministic keyword matching on recent email subjects — no database, AI,
@@ -159,6 +159,22 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         ),
         action_label="Open Amex",
         action_url="https://www.americanexpress.com/",
+    ),
+    _KeywordRule(
+        id="email_chase",
+        keywords=("chase", "ultimate rewards"),
+        title="Review your Chase emails",
+        summary="Recent Chase messages may include card benefits or Ultimate Rewards updates.",
+        category="credit_card",
+        confidence="medium",
+        rationale="A recent email subject mentioned Chase.",
+        bullets=(
+            "Check for new Chase Offers",
+            "Review expiring credits or bonus categories",
+            "Compare Ultimate Rewards transfer partners",
+        ),
+        action_label="Open Chase",
+        action_url="https://www.chase.com/",
     ),
 )
 

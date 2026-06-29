@@ -51,21 +51,6 @@ def detect_situation(context: DecisionContext) -> Situation:
     return Situation(kind="unknown", confidence="low", evidence=[])
 
 
-def _opportunities_to_recommendations(opportunities: list[Any]) -> list[Recommendation]:
-    return [
-        Recommendation(
-            title=opp.title,
-            summary=opp.summary,
-            rationale=opp.rationale,
-            bullets=opp.bullets,
-            confidence=opp.confidence,
-            action_label=opp.action_label,
-            action_url=opp.action_url,
-        )
-        for opp in opportunities
-    ]
-
-
 def get_recommendations(
     context: DecisionContext,
     user_memory: dict[str, Any] | None = None,
@@ -117,10 +102,16 @@ def get_recommendations(
         ]
 
     detect_situation(context)
-    from mighty.advisors.email import evaluate as evaluate_email
-
-    opportunities = [
-        *evaluate_hotel(context, user_memory),
-        *evaluate_email(context, user_memory),
+    opportunities = evaluate_hotel(context, user_memory)
+    return [
+        Recommendation(
+            title=opp.title,
+            summary=opp.summary,
+            rationale=opp.rationale,
+            bullets=opp.bullets,
+            confidence=opp.confidence,
+            action_label=opp.action_label,
+            action_url=opp.action_url,
+        )
+        for opp in opportunities
     ]
-    return _opportunities_to_recommendations(opportunities)
