@@ -10,11 +10,14 @@ for an LLM or rules engine without changing callers.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from mighty.decision_engine import DecisionContext
 from mighty.advisors.base import Opportunity
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -225,11 +228,51 @@ def evaluate(
     context: DecisionContext,
     user_memory: dict[str, Any] | None = None,
 ) -> list[Opportunity]:
-    if context.source != "email" and "email_subjects" not in context.metadata:
+    metadata_has_subjects = "email_subjects" in context.metadata
+    memory_has_subjects = bool(
+        user_memory and isinstance(user_memory.get("email_subjects"), list)
+    )
+    logger.info(
+        "[email_advisor_debug] evaluate called: source=%r "
+        "metadata_has_subjects=%s user_memory_has_subjects=%s",
+        context.source,
+        metadata_has_subjects,
+        memory_has_subjects,
+    )
+
+    if context.source != "email" and not metadata_has_subjects:
+        logger.info(
+            "[email_advisor_debug] returning 0 recommendations: "
+            "source=%r is not 'email' and metadata has no email_subjects",
+            context.source,
+        )
         return []
 
     subjects = _recent_subjects(context, user_memory)
     if not subjects:
+        logger.info(
+            "[email_advisor_debug] returning 0 recommendations: "
+            "no email subjects in metadata or user_memory "
+            "(metadata_has_subjects=%s user_memory_has_subjects=%s)",
+            metadata_has_subjects,
+            memory_has_subjects,
+        )
         return []
 
-    return _match_subjects(subjects)
+    matched = _match_subjects(subjects)
+    if matched:
+        logger.info(
+            "[email_advisor_debug] returning %d recommendation(s): ids=%s "
+            "from %d subject(s)",
+            len(matched),
+            [opp.id for opp in matched],
+            len(subjects),
+        )
+    else:
+        logger.info(
+            "[email_advisor_debug] returning 0 recommendations: "
+            "%d subject(s) had no keyword matches (sample=%r)",
+            len(subjects),
+            subjects[:3],
+        )
+    return matched

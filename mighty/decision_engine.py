@@ -9,8 +9,11 @@ Vertical-specific logic (hotels, cards, airlines, etc.) is added later.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,7 +47,25 @@ class Recommendation:
     recommendation_type: str = "general"
 
 
+from mighty.advisors.email_advisor import evaluate as evaluate_email
 from mighty.advisors.hotel import evaluate as evaluate_hotel
+
+
+def _debug_probe_email_advisor(
+    context: DecisionContext,
+    user_memory: dict[str, Any] | None,
+    *,
+    merged_into_response: bool,
+) -> int:
+    """Temporary debug hook — logs email advisor output without changing responses."""
+    email_opportunities = evaluate_email(context, user_memory)
+    logger.info(
+        "[email_advisor_debug] decision_engine probe: merged_into_response=%s "
+        "email_advisor_returned=%d",
+        merged_into_response,
+        len(email_opportunities),
+    )
+    return len(email_opportunities)
 
 
 def detect_situation(context: DecisionContext) -> Situation:
@@ -55,7 +76,22 @@ def get_recommendations(
     context: DecisionContext,
     user_memory: dict[str, Any] | None = None,
 ) -> list[Recommendation]:
+    logger.info(
+        "[email_advisor_debug] get_recommendations called: source=%r "
+        "metadata_keys=%s has_user_memory=%s",
+        context.source,
+        sorted(context.metadata.keys()),
+        user_memory is not None,
+    )
+
     if context.source == "dashboard":
+        logger.info(
+            "[email_advisor_debug] email advisor not merged for dashboard source "
+            "(demo recommendations only); running debug probe"
+        )
+        _debug_probe_email_advisor(
+            context, user_memory, merged_into_response=False
+        )
         return [
             Recommendation(
                 title="Book this hotel through Amex Travel",
@@ -103,6 +139,12 @@ def get_recommendations(
 
     detect_situation(context)
     opportunities = evaluate_hotel(context, user_memory)
+    logger.info(
+        "[email_advisor_debug] hotel advisor returned %d recommendation(s); "
+        "email advisor not merged into response; running debug probe",
+        len(opportunities),
+    )
+    _debug_probe_email_advisor(context, user_memory, merged_into_response=False)
     return [
         Recommendation(
             title=opp.title,
