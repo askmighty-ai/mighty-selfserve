@@ -33,8 +33,10 @@ chrome.tabs.onActivated.addListener(info =>
   _dbg('TAB_ACTIVATED', { tabId: info.tabId, windowId: info.windowId }));
 chrome.windows.onFocusChanged.addListener(wId =>
   _dbg('WIN_FOCUS', { windowId: wId }));
-chrome.tabs.onRemoved.addListener((id, info) =>
-  _dbg('TAB_REMOVED', { id, windowId: info.windowId }));
+chrome.tabs.onRemoved.addListener((id, info) => {
+  _dbg('TAB_REMOVED', { id, windowId: info.windowId });
+  _newTabsSeen.delete(id); // prune — Set would otherwise grow for every tab ever opened
+});
 // Track first URL a newly-created tab navigates to — tells us which link/button opened it
 const _newTabsSeen = new Set();
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -133,6 +135,18 @@ const _LOGIN_URL_RE = /\/(login|signin|sign-in|log-in|logon|log-on)(\/|$|\?)/i;
 
 // Debounce per-source so rapid redirects don't fire multiple reports
 const _loginReportedAt = {};
+
+// Periodically prune stale entries from per-source timestamp maps to prevent
+// unbounded growth during long browser sessions.
+setInterval(() => {
+  const _cutoff = Date.now() - 600_000; // prune entries older than 10 minutes
+  for (const k of Object.keys(_loginReportedAt)) {
+    if (_loginReportedAt[k] < _cutoff) delete _loginReportedAt[k];
+  }
+  for (const k of Object.keys(_postLoginSyncedAt)) {
+    if (_postLoginSyncedAt[k] < _cutoff) delete _postLoginSyncedAt[k];
+  }
+}, 10 * 60 * 1000); // run every 10 minutes
 
 // ── Persistent login-wall tracking ──────────────────────────────────────────
 // Stored in chrome.storage.local so it survives service worker restarts.
@@ -1695,9 +1709,13 @@ async function runSync() {
       ok++;
       // Always run gap-fill — this visits wallet/certificate sub-pages that silent
       // fetch of the entry page misses. Creates a tab only if one doesn't exist yet.
+      // Hard cap: gap-fill is best-effort; don't let it block the rest of the sync.
       try {
         const gfTabId = await getSharedTab();
-        await gapFillAccount(api_key, account, syncSessionTime, 2, gfTabId);
+        await Promise.race([
+          gapFillAccount(api_key, account, syncSessionTime, 2, gfTabId),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('gap-fill timeout')), 60_000)),
+        ]);
       } catch(gfe) {
         console.log(`[Mighty] ${account.name}: gap-fill skipped: ${gfe.message}`);
       }
@@ -3315,8 +3333,6 @@ function extractPageText() {
 
 function waitForTabLoad(tabId, timeout = 20_000) {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, timeout); // resolve anyway on timeout
-
     function listener(id, info) {
       if (id === tabId && info.status === 'complete') {
         clearTimeout(timer);
@@ -3325,6 +3341,12 @@ function waitForTabLoad(tabId, timeout = 20_000) {
       }
     }
     chrome.tabs.onUpdated.addListener(listener);
+    // Always remove the listener on timeout — otherwise it leaks and fires
+    // for future tab updates long after this call has resolved.
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, timeout);
   });
 }
 
@@ -3400,12 +3422,53 @@ function detectIntent(url) {
   return null;
 }
 
+// Per-URL cooldown for intent detection — prevents re-firing when the user refreshes
+// a search results page or the tab reloads during an SPA navigation.
+const _intentCooldown = new Map();
+const _INTENT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes per URL
+
+// Cached notification preference — fetched once and refreshed every 15 minutes.
+// Avoids a round-trip to the server on every matching tab load.
+let _cachedNotifPref = null;
+let _cachedNotifPrefAt = 0;
+const _NOTIF_PREF_TTL = 15 * 60 * 1000;
+
+async function _getNotifPref(apiKey) {
+  const now = Date.now();
+  if (_cachedNotifPref !== null && now - _cachedNotifPrefAt < _NOTIF_PREF_TTL) {
+    return _cachedNotifPref;
+  }
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/settings/notifications`, {
+      headers: { 'X-Mighty-Key': apiKey }, credentials: 'include',
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      _cachedNotifPref = data.pref || 'quiet';
+      _cachedNotifPrefAt = now;
+      return _cachedNotifPref;
+    }
+  } catch (_) {}
+  return _cachedNotifPref || 'quiet';
+}
+
 // Tab intent detection — runs when a tab finishes loading
 chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
   if (changeInfo.status !== 'complete' || !tab.url) return;
 
   const intent = detectIntent(tab.url);
   if (!intent) return;
+
+  // Per-URL cooldown — skip if we already fired for this URL recently
+  const _normIntentUrl = _normUrl(tab.url);
+  const _lastIntent = _intentCooldown.get(_normIntentUrl);
+  if (_lastIntent && Date.now() - _lastIntent < _INTENT_COOLDOWN_MS) return;
+  _intentCooldown.set(_normIntentUrl, Date.now());
+  // Prune stale entries to avoid unbounded growth
+  if (_intentCooldown.size > 500) {
+    const _cutoff = Date.now() - _INTENT_COOLDOWN_MS;
+    for (const [k, t] of _intentCooldown) { if (t < _cutoff) _intentCooldown.delete(k); }
+  }
 
   // Get API key from storage (key name is 'api_key')
   const stored = await chrome.storage.local.get(['api_key']);
@@ -3420,19 +3483,6 @@ chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
     if (!resp.ok) return;
     const data = await resp.json();
     if (!data.count || data.count === 0) return;
-
-    // Fetch notification pref
-    let notifPref = 'quiet';
-    try {
-      const prefResp = await fetch(`${MIGHTY_URL}/api/settings/notifications`, {
-        headers: { 'X-Mighty-Key': apiKey },
-        credentials: 'include'
-      });
-      if (prefResp.ok) {
-        const prefData = await prefResp.json();
-        notifPref = prefData.pref || 'quiet';
-      }
-    } catch(e) {}
 
     if (notifPref === 'never') return;
 

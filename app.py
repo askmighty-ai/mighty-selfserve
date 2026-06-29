@@ -15407,6 +15407,7 @@ def api_debug_sync_status():
 @require_login
 def api_admin_force_ok(source):
     """Manually reset a source's sync_status to 'ok'. Use to unstick false login_required."""
+    check_csrf()
     uid = session["user_id"]
     db  = get_db()
     row = db.execute(
@@ -15775,6 +15776,12 @@ def api_data_sync():
                     if fields:
                         _save_discovered_fields(_gf_uid, _gf_src, fields)
                         print(f"[GapFill] {_gf_src}: re-discovered {len(fields)} fields on merged text", flush=True)
+                        # Refresh action items so newly discovered fields appear without
+                        # waiting for the next full sync.
+                        try:
+                            populate_action_items(_gf_uid, _gf_src, {"items": fields, "status": "ok"})
+                        except Exception as _pai_e:
+                            print(f"[GapFill] {_gf_src}: populate_action_items error: {_pai_e}", flush=True)
                 except Exception as _e:
                     print(f"[GapFill] {_gf_src}: re-discovery error: {_e}", flush=True)
         threading.Thread(target=_bg_gf_discover, daemon=True).start()
