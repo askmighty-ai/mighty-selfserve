@@ -9925,91 +9925,119 @@ def dashboard():
     def _render_recommendation_cards(recs):
         if not recs:
             return ""
-        _cards_html = ""
+        _rec_type_labels = {
+            "hotel": "Hotels",
+            "travel": "Flights",
+            "flight": "Flights",
+            "credit_card": "Credit Cards",
+            "card": "Credit Cards",
+        }
+        _groups = {}
+        _group_order = []
         for _rec in recs:
-            _title = he(str(getattr(_rec, "title", "") or "").strip())
-            _summary = str(
-                getattr(_rec, "summary", "")
-                or getattr(_rec, "detail", "")
-                or ""
-            ).strip()
-            _rationale = str(getattr(_rec, "rationale", "") or "").strip()
-            _bullets = getattr(_rec, "bullets", None) or []
-            _confidence = str(getattr(_rec, "confidence", "") or "").strip().lower()
-            _action_label = str(getattr(_rec, "action_label", "") or "").strip()
-            _action_url = str(getattr(_rec, "action_url", "") or "").strip()
+            _rtype = str(getattr(_rec, "recommendation_type", "") or "general").strip().lower() or "general"
+            if _rtype not in _groups:
+                _groups[_rtype] = []
+                _group_order.append(_rtype)
+            _groups[_rtype].append(_rec)
 
-            _badge_html = ""
-            if _confidence == "high":
-                _badge_html = (
-                    f'<span style="font-size:10px;font-weight:700;color:#059669;'
-                    f'background:rgba(5,150,105,0.1);border:0.5px solid rgba(5,150,105,0.25);'
-                    f'border-radius:20px;padding:2px 7px;text-transform:uppercase;'
-                    f'letter-spacing:.04em;flex-shrink:0;line-height:1.4">High</span>'
-                )
+        _groups_html = ""
+        for _rtype in _group_order:
+            _cards_html = ""
+            for _rec in _groups[_rtype]:
+                _title = he(str(getattr(_rec, "title", "") or "").strip())
+                _summary = str(
+                    getattr(_rec, "summary", "")
+                    or getattr(_rec, "detail", "")
+                    or ""
+                ).strip()
+                _rationale = str(getattr(_rec, "rationale", "") or "").strip()
+                _bullets = getattr(_rec, "bullets", None) or []
+                _confidence = str(getattr(_rec, "confidence", "") or "").strip().lower()
+                _action_label = str(getattr(_rec, "action_label", "") or "").strip()
+                _action_url = str(getattr(_rec, "action_url", "") or "").strip()
 
-            _summary_html = ""
-            if _summary:
-                _summary_html = (
-                    f'<div style="font-size:12px;color:#6b7280;margin-top:4px;line-height:1.4">'
-                    f'{he(_summary)}</div>'
-                )
-            _rationale_html = ""
-            if _rationale and _rationale != _summary:
-                _rationale_html = (
-                    f'<div style="font-size:11px;color:#9ca3af;margin-top:3px;line-height:1.4">'
-                    f'{he(_rationale)}</div>'
-                )
-
-            _bullets_html = ""
-            if _bullets:
-                _bullet_items = "".join(
-                    f'<div style="display:flex;align-items:flex-start;gap:6px;margin:0 0 2px">'
-                    f'<span style="color:#059669;font-size:11px;line-height:1.4;flex-shrink:0">'
-                    f'&#10003;</span>'
-                    f'<span style="font-size:11px;color:#4b5563;line-height:1.4">'
-                    f'{he(str(_b).strip())}</span></div>'
-                    for _b in _bullets
-                    if str(_b or "").strip()
-                )
-                if _bullet_items:
-                    _bullets_html = (
-                        f'<div style="margin:6px 0 0;display:flex;flex-direction:column;'
-                        f'gap:1px">{_bullet_items}</div>'
+                _badge_html = ""
+                if _confidence == "high":
+                    _badge_html = (
+                        f'<span style="font-size:10px;font-weight:700;color:#059669;'
+                        f'background:rgba(5,150,105,0.1);border:0.5px solid rgba(5,150,105,0.25);'
+                        f'border-radius:20px;padding:2px 7px;text-transform:uppercase;'
+                        f'letter-spacing:.04em;flex-shrink:0;line-height:1.4">High</span>'
                     )
 
-            _cta_html = ""
-            if _action_label and _action_url:
-                _cta_html = (
-                    f'<div style="display:flex;justify-content:flex-end;margin-top:8px">'
-                    f'<a href="{he(_action_url)}" target="_blank" rel="noopener noreferrer" '
-                    f'style="display:inline-block;font-size:12px;font-weight:600;'
-                    f'color:#fff;background:#1c1917;border-radius:8px;padding:7px 14px;'
-                    f'text-decoration:none;line-height:1">{he(_action_label)}</a>'
+                _summary_html = ""
+                if _summary:
+                    _summary_html = (
+                        f'<div style="font-size:12px;color:#6b7280;margin-top:4px;line-height:1.4">'
+                        f'{he(_summary)}</div>'
+                    )
+                _rationale_html = ""
+                if _rationale and _rationale != _summary:
+                    _rationale_html = (
+                        f'<div style="font-size:11px;color:#9ca3af;margin-top:3px;line-height:1.4">'
+                        f'{he(_rationale)}</div>'
+                    )
+
+                _bullets_html = ""
+                if _bullets:
+                    _bullet_items = "".join(
+                        f'<div style="display:flex;align-items:flex-start;gap:6px;margin:0 0 2px">'
+                        f'<span style="color:#059669;font-size:11px;line-height:1.4;flex-shrink:0">'
+                        f'&#10003;</span>'
+                        f'<span style="font-size:11px;color:#4b5563;line-height:1.4">'
+                        f'{he(str(_b).strip())}</span></div>'
+                        for _b in _bullets
+                        if str(_b or "").strip()
+                    )
+                    if _bullet_items:
+                        _bullets_html = (
+                            f'<div style="margin:6px 0 0;display:flex;flex-direction:column;'
+                            f'gap:1px">{_bullet_items}</div>'
+                        )
+
+                _cta_html = ""
+                if _action_label and _action_url:
+                    _cta_html = (
+                        f'<div style="display:flex;justify-content:flex-end;margin-top:8px">'
+                        f'<a href="{he(_action_url)}" target="_blank" rel="noopener noreferrer" '
+                        f'style="display:inline-block;font-size:12px;font-weight:600;'
+                        f'color:#fff;background:#1c1917;border-radius:8px;padding:7px 14px;'
+                        f'text-decoration:none;line-height:1">{he(_action_label)}</a>'
+                        f'</div>'
+                    )
+
+                _cards_html += (
+                    f'<div style="background:#ffffff;border:1px solid rgba(0,0,0,0.08);'
+                    f'border-radius:16px;padding:12px 14px;'
+                    f'box-shadow:0 1px 3px rgba(0,0,0,0.06),0 4px 12px rgba(0,0,0,0.04)">'
+                    f'<div style="display:flex;align-items:center;justify-content:space-between;'
+                    f'gap:10px">'
+                    f'<div style="font-size:16px;font-weight:700;color:#1c1917;line-height:1.3">'
+                    f'{_title}</div>'
+                    f'{_badge_html}'
+                    f'</div>'
+                    f'{_summary_html}'
+                    f'{_rationale_html}'
+                    f'{_bullets_html}'
+                    f'{_cta_html}'
                     f'</div>'
                 )
-
-            _cards_html += (
-                f'<div style="background:#ffffff;border:1px solid rgba(0,0,0,0.08);'
-                f'border-radius:16px;padding:12px 14px;'
-                f'box-shadow:0 1px 3px rgba(0,0,0,0.06),0 4px 12px rgba(0,0,0,0.04)">'
-                f'<div style="display:flex;align-items:center;justify-content:space-between;'
-                f'gap:10px">'
-                f'<div style="font-size:16px;font-weight:700;color:#1c1917;line-height:1.3">'
-                f'{_title}</div>'
-                f'{_badge_html}'
-                f'</div>'
-                f'{_summary_html}'
-                f'{_rationale_html}'
-                f'{_bullets_html}'
-                f'{_cta_html}'
+            _category_label = _rec_type_labels.get(
+                _rtype, _rtype.replace("_", " ").title()
+            )
+            _groups_html += (
+                f'<div>'
+                f'<div style="font-size:13px;font-weight:700;color:#1c1917;margin:0 0 8px">'
+                f'{he(_category_label)}</div>'
+                f'<div style="display:flex;flex-direction:column;gap:12px">{_cards_html}</div>'
                 f'</div>'
             )
         return (
             f'<div style="flex:1;min-width:0">'
             f'<div style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
             f'text-transform:uppercase;letter-spacing:.06em">Recommendations</div>'
-            f'<div style="display:flex;flex-direction:column;gap:18px">{_cards_html}</div>'
+            f'<div style="display:flex;flex-direction:column;gap:18px">{_groups_html}</div>'
             f'</div>'
         )
 
