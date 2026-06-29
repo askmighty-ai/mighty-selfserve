@@ -54,6 +54,23 @@ def get_recommendations(
     context: DecisionContext,
     user_memory: dict[str, Any] | None = None,
 ) -> list[Recommendation]:
+    if context.source == "dashboard":
+        return [
+            Recommendation(
+                title="Book this hotel through Amex Travel",
+                summary="Your Platinum benefits may unlock breakfast, upgrades and late checkout.",
+                rationale="Demo recommendation.",
+                confidence="high",
+                bullets=[
+                    "Fine Hotels + Resorts eligible",
+                    "Potential room upgrade",
+                    "Late checkout when available",
+                ],
+                action_label="Open Amex Travel",
+                action_url="https://www.americanexpress.com/travel/",
+            )
+        ]
+
     detect_situation(context)
     opportunities = evaluate_hotel(context, user_memory)
     return [
