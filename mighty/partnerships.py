@@ -411,7 +411,8 @@ PARTNERSHIPS: dict[str, dict[str, list[dict]]] = {
 }
 
 # Alias: "aadvantage" source keys also match the American Airlines rules
-PARTNERSHIPS["aadvantage"] = PARTNERSHIPS["american_air"]
+import copy as _copy_part
+PARTNERSHIPS["aadvantage"] = _copy_part.deepcopy(PARTNERSHIPS["american_air"])
 
 
 # ── Card recommendations ─────────────────────────────────────────────────────

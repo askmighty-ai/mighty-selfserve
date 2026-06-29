@@ -67,7 +67,7 @@ _BT_RULES = [
      [r"\b\d[\d,]*\s+of\s+\d[\d,]*\b"], []),
 
     # ── Earned status tier ────────────────────────────────────────────────────
-    # NOTE: "account status", "active", "enabled" intentionally removed from excludes —
+    # NOTE: "active" and "enabled" are NOT in excludes —
     # loyalty programs often surface these alongside tier names (e.g. "Account Status: Gold").
     # Utility/telecom sources are filtered at the dashboard level via _STATUS_SKIP_SOURCES.
     ("elite_status",
@@ -80,7 +80,7 @@ _BT_RULES = [
       "upgrade","award","free night","points","miles","balance","reservation","booking",
       "autopay","auto-pay","auto pay","payment","bill","subscription","service",
       "paperless","loyalty number","member id","member since","member number",
-      "enrolled","active","enabled","disconnected"]),
+      "enrolled","disconnected"]),
 
     # ── Redeemable certificates and awards ────────────────────────────────────
     ("certificate",
@@ -190,6 +190,14 @@ def is_upcoming(btype: str) -> bool:
 def classify_benefit(label: str, value: str, source: str = "") -> str:
     """Return a canonical BENEFIT_TYPES key. First matching rule wins."""
     import re as _bt_re
+
+    # Skip loyalty classifications for utility/telecom sources
+    _UTILITY_SOURCES = {
+        "pa_utilities", "city_water", "electric", "gas", "water", "internet",
+        "phone", "cable", "telecom", "comcast", "spectrum", "att_internet",
+        "verizon_fios", "xfinity"
+    }
+
     combined = (label + " " + value).lower()
     lbl_lc   = label.lower()
     val_lc   = value.lower()
@@ -199,5 +207,7 @@ def classify_benefit(label: str, value: str, source: str = "") -> str:
         lbl_match = any(kw in lbl_lc for kw in label_kws)
         val_match  = any(_bt_re.search(p, val_lc) for p in val_patterns) if val_patterns else False
         if lbl_match or (val_patterns and val_match):
+            if source in _UTILITY_SOURCES and btype in {"elite_status", "points_balance", "companion_pass", "travel_credit"}:
+                return "other"
             return btype
     return "other"
