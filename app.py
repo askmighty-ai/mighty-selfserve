@@ -29,6 +29,11 @@ try:
 except ImportError:
     build_daily_brief = None
 
+try:
+    from mighty.decision_engine import get_recommendations
+except ImportError:
+    get_recommendations = None
+
 import bcrypt as _bcrypt
 
 from datetime import datetime, timezone, timedelta
@@ -9691,6 +9696,14 @@ def dashboard():
     daily_brief = None
     try:
         if build_daily_brief is not None:
+            recommendations = []
+            try:
+                recommendations = get_recommendations(
+                    context=decision_context,
+                    user_memory=None,
+                )
+            except Exception:
+                recommendations = []
             daily_brief = build_daily_brief(
                 account_count=_account_count,
                 benefit_count=len(_hero_candidates),
@@ -9699,6 +9712,7 @@ def dashboard():
                 action_items=_all_action_items,
                 hero_candidates=_hero_candidates,
                 acct_rows=acct_rows,
+                recommendations=recommendations,
             )
     except Exception:
         daily_brief = None
