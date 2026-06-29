@@ -9765,9 +9765,65 @@ def dashboard():
     if daily_brief is not None:
         _brief_headline = daily_brief.headline
         _brief_summary = daily_brief.summary
+        _brief_attention = daily_brief.attention
+        _brief_discoveries = daily_brief.discoveries
+        _brief_completed = daily_brief.completed
     else:
         _brief_headline = "Everything looks good."
         _brief_summary = "I'm keeping an eye on things."
+        _brief_attention = []
+        _brief_discoveries = []
+        _brief_completed = []
+
+    def _render_brief_section(title, items, empty_msg):
+        if items:
+            _items_html = ""
+            for _item in items:
+                _detail_html = (
+                    f'<div style="font-size:12px;color:#6b7280;margin-top:2px;line-height:1.4">'
+                    f'{he(_item.detail)}</div>'
+                ) if _item.detail else ""
+                _items_html += (
+                    f'<div style="padding:6px 0">'
+                    f'<div style="font-size:13px;font-weight:600;color:#1c1917;line-height:1.4">'
+                    f'{he(_item.title)}</div>'
+                    f'{_detail_html}'
+                    f'</div>'
+                )
+            _body = _items_html
+        else:
+            _body = (
+                f'<div style="font-size:13px;color:#9ca3af;line-height:1.5">{empty_msg}</div>'
+            )
+        return (
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
+            f'text-transform:uppercase;letter-spacing:.06em">{title}</div>'
+            f'{_body}'
+            f'</div>'
+        )
+
+    _brief_sections_html = (
+        f'<div id="daily-brief-expanded" style="display:none;margin-top:14px;padding-top:14px;'
+        f'border-top:0.5px solid #e8e4de">'
+        f'<div style="display:flex;flex-direction:column;gap:16px">'
+        + _render_brief_section(
+            "Needs Your Attention",
+            _brief_attention,
+            "Nothing needs you right now.",
+        )
+        + _render_brief_section(
+            "What I Found",
+            _brief_discoveries,
+            "No new discoveries yet. I\u2019m still watching.",
+        )
+        + _render_brief_section(
+            "Working For You",
+            _brief_completed,
+            "I\u2019ll show completed checks here as Mighty watches more.",
+        )
+        + f'</div></div>'
+    )
 
     hero_section_html = (
         f'<div style="margin-bottom:14px">'
@@ -9781,6 +9837,14 @@ def dashboard():
         f'  var el=document.getElementById("hero-greeting");'
         f'  if(el) el.textContent=g+", {he(_first_name)}";'
         f'}})();'
+        f'function toggleDailyBrief(){{'
+        f'  var panel=document.getElementById("daily-brief-expanded");'
+        f'  var btn=document.getElementById("daily-brief-toggle");'
+        f'  if(!panel||!btn)return;'
+        f'  var open=panel.style.display!=="none";'
+        f'  panel.style.display=open?"none":"block";'
+        f'  btn.textContent=open?"Read today\u2019s brief":"Hide today\u2019s brief";'
+        f'}}'
         f'</script>'
         f''
         f'<div style="background:#f5f2ed;border-radius:8px;padding:14px 16px;margin-top:10px">'
@@ -9789,6 +9853,11 @@ def dashboard():
         f'<div style="font-size:12px;color:#9ca3af;margin-top:10px;line-height:1.4">'
         f'I\u2019ll keep watching and surface anything that needs you.'
         f'</div>'
+        f'<button type="button" id="daily-brief-toggle" onclick="toggleDailyBrief()" '
+        f'style="margin-top:12px;font-size:12px;font-weight:500;color:#6b7280;background:none;'
+        f'border:none;padding:0;cursor:pointer;font-family:inherit;text-decoration:underline;'
+        f'text-underline-offset:2px">Read today\u2019s brief</button>'
+        f'{_brief_sections_html}'
         f'</div>'
         f'</div>'
     )
