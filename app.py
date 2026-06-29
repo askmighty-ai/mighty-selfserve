@@ -9761,11 +9761,14 @@ def dashboard():
     else:
         _value_lead = "No accounts connected yet."
 
-    # Greeting + stat strip
-    _n_accts    = len(configured)
-    _n_benefits = len(_hero_candidates)
-    _exp_color  = '#d97706' if total_expiring > 0 else '#1c1917'
-    _sync_sub   = (f'{he(_global_sync_label)} &middot; ' if _global_sync_label else '')
+    # Greeting + Daily Brief card
+    if daily_brief is not None:
+        _brief_headline = daily_brief.headline
+        _brief_summary = daily_brief.summary
+    else:
+        _brief_headline = "Everything looks good."
+        _brief_summary = "I'm keeping an eye on things."
+
     hero_section_html = (
         f'<div style="margin-bottom:14px">'
         f'<div style="font-size:20px;font-weight:700;color:#1c1917" id="hero-greeting">'
@@ -9780,18 +9783,11 @@ def dashboard():
         f'}})();'
         f'</script>'
         f''
-        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px">'
-        f'<div style="background:#f5f2ed;border-radius:8px;padding:12px 14px">'
-        f'<div style="font-size:20px;font-weight:600;color:#1c1917">{_n_benefits}</div>'
-        f'<div style="font-size:12px;color:#6b7280;margin-top:3px">Benefits available now</div>'
-        f'</div>'
-        f'<div style="background:#f5f2ed;border-radius:8px;padding:12px 14px">'
-        f'<div style="font-size:20px;font-weight:600;color:{_exp_color}">{total_expiring}</div>'
-        f'<div style="font-size:12px;color:#6b7280;margin-top:3px">Expiring within 45 days</div>'
-        f'</div>'
-        f'<div style="background:#f5f2ed;border-radius:8px;padding:12px 14px">'
-        f'<div style="font-size:20px;font-weight:600;color:#1c1917">{_n_accts}</div>'
-        f'<div style="font-size:12px;color:#6b7280;margin-top:3px">Accounts connected</div>'
+        f'<div style="background:#f5f2ed;border-radius:8px;padding:14px 16px;margin-top:10px">'
+        f'<div style="font-size:16px;font-weight:600;color:#1c1917;line-height:1.4">{he(_brief_headline)}</div>'
+        f'<div style="font-size:13px;color:#6b7280;margin-top:6px;line-height:1.5">{he(_brief_summary)}</div>'
+        f'<div style="font-size:12px;color:#9ca3af;margin-top:10px;line-height:1.4">'
+        f'I\u2019ll keep watching and surface anything that needs you.'
         f'</div>'
         f'</div>'
         f'</div>'
