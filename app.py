@@ -9698,14 +9698,33 @@ def dashboard():
     _dashboard_recommendations = []
     if get_recommendations is not None and DecisionContext is not None:
         try:
+            _dash_email_subjects = [
+                r["display_name"]
+                for r in db.execute(
+                    "SELECT display_name FROM email_suggestions "
+                    "WHERE user_id=? AND dismissed=0 ORDER BY email_count DESC",
+                    (uid,),
+                ).fetchall()
+                if r["display_name"]
+            ]
+            _dash_user_memory = {
+                "email_subjects": _dash_email_subjects,
+                "available_benefits": [
+                    {"label": lbl, "value": val, "source": disp}
+                    for disp, lbl, val, _, _, _btype in value_items
+                ],
+            }
+            if _dash_user_intent:
+                _dash_user_memory["intent"] = _dash_user_intent
             _dashboard_recommendations = get_recommendations(
                 DecisionContext(
                     url="",
                     page_title="",
                     page_text="",
                     source="dashboard",
+                    metadata={"email_subjects": _dash_email_subjects},
                 ),
-                user_memory=None,
+                user_memory=_dash_user_memory,
             ) or []
         except Exception:
             _dashboard_recommendations = []

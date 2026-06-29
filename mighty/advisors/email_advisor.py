@@ -240,10 +240,11 @@ def evaluate(
         memory_has_subjects,
     )
 
-    if context.source != "email" and not metadata_has_subjects:
+    has_subjects = metadata_has_subjects or memory_has_subjects
+    if context.source not in ("email", "dashboard") and not has_subjects:
         logger.info(
             "[email_advisor_debug] returning 0 recommendations: "
-            "source=%r is not 'email' and metadata has no email_subjects",
+            "source=%r has no email_subjects in metadata or user_memory",
             context.source,
         )
         return []
