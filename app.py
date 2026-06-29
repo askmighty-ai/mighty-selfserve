@@ -9887,14 +9887,12 @@ def dashboard():
         _brief_attention = daily_brief.attention
         _brief_discoveries = daily_brief.discoveries
         _brief_completed = daily_brief.completed
-        _brief_recommendations = daily_brief.recommendations
     else:
         _brief_headline = "Everything looks good."
         _brief_summary = "I'm keeping an eye on things."
         _brief_attention = []
         _brief_discoveries = []
         _brief_completed = []
-        _brief_recommendations = []
 
     def _render_brief_section(title, items, empty_msg):
         if items:
@@ -10026,9 +10024,7 @@ def dashboard():
             _brief_completed,
             "I\u2019ll show completed checks here as Mighty watches more.",
         )
-        + _render_recommendation_cards(
-            _dashboard_recommendations or _brief_recommendations
-        )
+        + _render_recommendation_cards(_dashboard_recommendations)
         + f'</div></div>'
     )
 
