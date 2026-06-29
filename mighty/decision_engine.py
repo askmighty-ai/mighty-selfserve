@@ -43,6 +43,9 @@ class Recommendation:
     action_url: str = ""
 
 
+from mighty.advisors.hotel import evaluate as evaluate_hotel
+
+
 def detect_situation(context: DecisionContext) -> Situation:
     return Situation(kind="unknown", confidence="low", evidence=[])
 
@@ -52,4 +55,16 @@ def get_recommendations(
     user_memory: dict[str, Any] | None = None,
 ) -> list[Recommendation]:
     detect_situation(context)
-    return []
+    opportunities = evaluate_hotel(context, user_memory)
+    return [
+        Recommendation(
+            title=opp.title,
+            summary=opp.summary,
+            rationale=opp.rationale,
+            bullets=opp.bullets,
+            confidence=opp.confidence,
+            action_label=opp.action_label,
+            action_url=opp.action_url,
+        )
+        for opp in opportunities
+    ]
