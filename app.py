@@ -9696,21 +9696,21 @@ def dashboard():
 
     daily_brief = None
     _dashboard_recommendations = []
+    if get_recommendations is not None and DecisionContext is not None:
+        try:
+            _dashboard_recommendations = get_recommendations(
+                DecisionContext(
+                    url="",
+                    page_title="",
+                    page_text="",
+                    source="dashboard",
+                ),
+                user_memory=None,
+            ) or []
+        except Exception:
+            _dashboard_recommendations = []
     try:
         if build_daily_brief is not None:
-            recommendations = []
-            try:
-                if "decision_context" not in locals():
-                    decision_context = DecisionContext(
-                        url="",
-                        page_title="",
-                        page_text="",
-                        source="dashboard",
-                    )
-                recommendations = get_recommendations(decision_context, user_memory=None)
-            except Exception:
-                recommendations = []
-            _dashboard_recommendations = recommendations
             daily_brief = build_daily_brief(
                 account_count=_account_count,
                 benefit_count=len(_hero_candidates),
@@ -9719,7 +9719,7 @@ def dashboard():
                 action_items=_all_action_items,
                 hero_candidates=_hero_candidates,
                 acct_rows=acct_rows,
-                recommendations=recommendations,
+                recommendations=_dashboard_recommendations,
             )
     except Exception:
         daily_brief = None
@@ -9887,12 +9887,14 @@ def dashboard():
         _brief_attention = daily_brief.attention
         _brief_discoveries = daily_brief.discoveries
         _brief_completed = daily_brief.completed
+        _brief_recommendations = daily_brief.recommendations
     else:
         _brief_headline = "Everything looks good."
         _brief_summary = "I'm keeping an eye on things."
         _brief_attention = []
         _brief_discoveries = []
         _brief_completed = []
+        _brief_recommendations = []
 
     def _render_brief_section(title, items, empty_msg):
         if items:
@@ -9928,7 +9930,11 @@ def dashboard():
         _cards_html = ""
         for _rec in recs:
             _title = he(str(getattr(_rec, "title", "") or "").strip())
-            _summary = str(getattr(_rec, "summary", "") or "").strip()
+            _summary = str(
+                getattr(_rec, "summary", "")
+                or getattr(_rec, "detail", "")
+                or ""
+            ).strip()
             _rationale = str(getattr(_rec, "rationale", "") or "").strip()
             _bullets = getattr(_rec, "bullets", None) or []
             _confidence = str(getattr(_rec, "confidence", "") or "").strip().lower()
@@ -10020,7 +10026,9 @@ def dashboard():
             _brief_completed,
             "I\u2019ll show completed checks here as Mighty watches more.",
         )
-        + _render_recommendation_cards(_dashboard_recommendations)
+        + _render_recommendation_cards(
+            _dashboard_recommendations or _brief_recommendations
+        )
         + f'</div></div>'
     )
 
