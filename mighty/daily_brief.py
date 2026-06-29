@@ -27,6 +27,7 @@ class DailyBrief:
     summary: str
     attention: list[BriefItem] = field(default_factory=list)
     discoveries: list[BriefItem] = field(default_factory=list)
+    recommendations: list[BriefItem] = field(default_factory=list)
     completed: list[BriefItem] = field(default_factory=list)
 
 
@@ -48,6 +49,7 @@ def build_daily_brief(
     hero_candidates: list[tuple] | None = None,
     acct_rows: list[Any] | None = None,
     email_suggestion_count: int = 0,
+    recommendations: list[Any] | None = None,
 ) -> DailyBrief:
     """Build a Daily Brief from data already assembled by app.py.
 
@@ -191,10 +193,23 @@ def build_daily_brief(
     if expiring_count:
         summary_bits.append(f"{_plural(expiring_count, 'item')} expiring soon")
 
+    recommendation_items: list[BriefItem] = []
+    for recommendation in recommendations or []:
+        summary = _clean(getattr(recommendation, "summary", ""))
+        rationale = _clean(getattr(recommendation, "rationale", ""))
+        recommendation_items.append(
+            BriefItem(
+                title=_clean(getattr(recommendation, "title", "")),
+                detail=summary or rationale,
+                tone="discovery",
+            )
+        )
+
     return DailyBrief(
         headline=headline,
         summary=" · ".join(summary_bits) + ".",
         attention=attention,
         discoveries=discoveries,
+        recommendations=recommendation_items,
         completed=completed[:4],
     )
