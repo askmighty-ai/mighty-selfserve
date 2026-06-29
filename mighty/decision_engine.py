@@ -41,6 +41,7 @@ class Recommendation:
     confidence: str = "low"
     action_label: str = ""
     action_url: str = ""
+    recommendation_type: str = "general"
 
 
 from mighty.advisors.hotel import evaluate as evaluate_hotel
@@ -60,6 +61,7 @@ def get_recommendations(
                 title="Book this hotel through Amex Travel",
                 summary="Your Platinum benefits may unlock breakfast, upgrades and late checkout.",
                 rationale="Demo recommendation.",
+                recommendation_type="hotel",
                 confidence="high",
                 bullets=[
                     "Fine Hotels + Resorts eligible",
