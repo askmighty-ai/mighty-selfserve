@@ -23,6 +23,12 @@ try:
     _FERNET_AVAILABLE = True
 except ImportError:
     _FERNET_AVAILABLE = False
+
+try:
+    from mighty.daily_brief import build_daily_brief
+except ImportError:
+    build_daily_brief = None
+
 import bcrypt as _bcrypt
 
 from datetime import datetime, timezone, timedelta
@@ -9601,6 +9607,21 @@ def dashboard():
     _archived_keys = {(r["source"], r["label"]) for r in _arch_rows}
     _archived_list  = [{"source": r["source"], "label": r["label"]} for r in _arch_rows]
     _hero_candidates = [c for c in _hero_candidates if (c[2], c[3]) not in _archived_keys]
+
+    daily_brief = None
+    try:
+        if build_daily_brief is not None:
+            daily_brief = build_daily_brief(
+                account_count=_account_count,
+                benefit_count=len(_hero_candidates),
+                expiring_count=total_expiring,
+                global_sync_label=_global_sync_label,
+                action_items=_all_action_items,
+                hero_candidates=_hero_candidates,
+                acct_rows=acct_rows,
+            )
+    except Exception:
+        daily_brief = None
 
     # Build display_name → synced_ago lookup for evidence lines
     import datetime as _hdt_ev
