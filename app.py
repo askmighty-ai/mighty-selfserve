@@ -9695,6 +9695,7 @@ def dashboard():
     _hero_candidates = [c for c in _hero_candidates if (c[2], c[3]) not in _archived_keys]
 
     daily_brief = None
+    _dashboard_recommendations = []
     try:
         if build_daily_brief is not None:
             recommendations = []
@@ -9709,6 +9710,7 @@ def dashboard():
                 recommendations = get_recommendations(decision_context, user_memory=None)
             except Exception:
                 recommendations = []
+            _dashboard_recommendations = recommendations
             daily_brief = build_daily_brief(
                 account_count=_account_count,
                 benefit_count=len(_hero_candidates),
@@ -9920,6 +9922,85 @@ def dashboard():
             f'</div>'
         )
 
+    def _render_recommendation_cards(recs):
+        if not recs:
+            return ""
+        _cards_html = ""
+        for _rec in recs:
+            _title = he(str(getattr(_rec, "title", "") or "").strip())
+            _summary = str(getattr(_rec, "summary", "") or "").strip()
+            _rationale = str(getattr(_rec, "rationale", "") or "").strip()
+            _bullets = getattr(_rec, "bullets", None) or []
+            _confidence = str(getattr(_rec, "confidence", "") or "").strip().lower()
+            _action_label = str(getattr(_rec, "action_label", "") or "").strip()
+            _action_url = str(getattr(_rec, "action_url", "") or "").strip()
+
+            _badge_html = ""
+            if _confidence == "high":
+                _badge_html = (
+                    f'<span style="font-size:10px;font-weight:700;color:#059669;'
+                    f'background:rgba(5,150,105,0.1);border:0.5px solid rgba(5,150,105,0.25);'
+                    f'border-radius:20px;padding:3px 8px;text-transform:uppercase;'
+                    f'letter-spacing:.04em;flex-shrink:0">High</span>'
+                )
+
+            _summary_html = ""
+            if _summary:
+                _summary_html = (
+                    f'<div style="font-size:13px;color:#374151;margin-top:8px;line-height:1.5">'
+                    f'{he(_summary)}</div>'
+                )
+            _rationale_html = ""
+            if _rationale and _rationale != _summary:
+                _rationale_html = (
+                    f'<div style="font-size:12px;color:#6b7280;margin-top:6px;line-height:1.5">'
+                    f'{he(_rationale)}</div>'
+                )
+
+            _bullets_html = ""
+            if _bullets:
+                _bullet_items = "".join(
+                    f'<li style="margin:0 0 4px">{he(str(_b).strip())}</li>'
+                    for _b in _bullets
+                    if str(_b or "").strip()
+                )
+                if _bullet_items:
+                    _bullets_html = (
+                        f'<ul style="margin:10px 0 0;padding-left:18px;font-size:12px;'
+                        f'color:#4b5563;line-height:1.5">{_bullet_items}</ul>'
+                    )
+
+            _cta_html = ""
+            if _action_label and _action_url:
+                _cta_html = (
+                    f'<a href="{he(_action_url)}" target="_blank" rel="noopener noreferrer" '
+                    f'style="display:inline-block;margin-top:14px;font-size:13px;font-weight:600;'
+                    f'color:#fff;background:#1c1917;border-radius:8px;padding:10px 16px;'
+                    f'text-decoration:none;line-height:1">{he(_action_label)}</a>'
+                )
+
+            _cards_html += (
+                f'<div style="background:#eef2ff;border-radius:10px;padding:16px 18px">'
+                f'<div style="display:flex;align-items:flex-start;justify-content:space-between;'
+                f'gap:10px">'
+                f'<div style="font-size:14px;font-weight:700;color:#1c1917;line-height:1.4">'
+                f'{_title}</div>'
+                f'{_badge_html}'
+                f'</div>'
+                f'{_summary_html}'
+                f'{_rationale_html}'
+                f'{_bullets_html}'
+                f'{_cta_html}'
+                f'</div>'
+            )
+        return (
+            f'<div style="flex:1;min-width:0">'
+            f'<div style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
+            f'text-transform:uppercase;letter-spacing:.06em">Recommendations</div>'
+            f'<div style="display:flex;flex-direction:column;gap:12px">{_cards_html}</div>'
+            f'</div>'
+        )
+
     _brief_sections_html = (
         f'<div id="daily-brief-expanded" style="display:none;margin-top:14px;padding-top:14px;'
         f'border-top:0.5px solid #e8e4de">'
@@ -9939,6 +10020,7 @@ def dashboard():
             _brief_completed,
             "I\u2019ll show completed checks here as Mighty watches more.",
         )
+        + _render_recommendation_cards(_dashboard_recommendations)
         + f'</div></div>'
     )
 
