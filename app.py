@@ -30,8 +30,9 @@ except ImportError:
     build_daily_brief = None
 
 try:
-    from mighty.decision_engine import get_recommendations
+    from mighty.decision_engine import DecisionContext, get_recommendations
 except ImportError:
+    DecisionContext = None
     get_recommendations = None
 
 import bcrypt as _bcrypt
@@ -9698,10 +9699,14 @@ def dashboard():
         if build_daily_brief is not None:
             recommendations = []
             try:
-                recommendations = get_recommendations(
-                    context=decision_context,
-                    user_memory=None,
-                )
+                if "decision_context" not in locals():
+                    decision_context = DecisionContext(
+                        url="",
+                        page_title="",
+                        page_text="",
+                        source="dashboard",
+                    )
+                recommendations = get_recommendations(decision_context, user_memory=None)
             except Exception:
                 recommendations = []
             daily_brief = build_daily_brief(
