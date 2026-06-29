@@ -313,6 +313,9 @@ def init_db():
             ('hilton',     '/en/hilton-honors/profile/benefits'),
             ('hyatt',      '/en-US/my-account/awards'),
             ('united',        '/en/us/myaccount/awards'),
+            ('southwest',      '/loyalty/myaccount/'),
+            ('southwest',      '/loyalty/myaccount/mytrips/'),
+            ('southwest',      '/loyalty/myaccount/upcoming-trips/'),
             ('alaska_air',    '/account/wallet'),
             # PA Utilities (mycpau.cityofpaloalto.org)
             ('pa_utilities',  '/Account/'),
@@ -332,20 +335,24 @@ def init_db():
                 pass
         try:
             db.execute("ALTER TABLE actions ADD COLUMN consequence_level TEXT DEFAULT 'routine'")
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         try:
             db.execute("ALTER TABLE users ADD COLUMN notify_email INTEGER DEFAULT 1")
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         try:
             db.execute("ALTER TABLE users ADD COLUMN notify_ntfy INTEGER DEFAULT 1")
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         try:
             db.execute("ALTER TABLE users ADD COLUMN notify_push INTEGER DEFAULT 1")
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         try:
             db.execute("ALTER TABLE users ADD COLUMN onboarded INTEGER DEFAULT 0")
         except Exception:
@@ -387,13 +394,15 @@ def init_db():
         try:
             db.execute("ALTER TABLE users ADD COLUMN notification_pref TEXT NOT NULL DEFAULT 'quiet'")
             db.commit()
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         try:
             db.execute("ALTER TABLE users ADD COLUMN preferred_name TEXT")
             db.commit()
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         try:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS benefit_feedback (
@@ -441,8 +450,9 @@ def init_db():
         try:
             db.execute("ALTER TABLE users ADD COLUMN alert_expiry_emails INTEGER DEFAULT 1")
             db.commit()
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         try:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS action_items (
@@ -471,14 +481,16 @@ def init_db():
         try:
             db.execute("ALTER TABLE action_items ADD COLUMN completed_at TEXT")
             db.commit()
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         # Migration: intent aggregation summary on users
         try:
             db.execute("ALTER TABLE users ADD COLUMN intent_summary TEXT")
             db.commit()
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         # Benefit type corrections — user-supplied overrides for misclassified items
         try:
             db.execute("""
@@ -499,8 +511,9 @@ def init_db():
         try:
             db.execute("ALTER TABLE users ADD COLUMN type_affinity TEXT")
             db.commit()
-        except Exception:
-            pass  # column already exists
+        except Exception as _e:
+            if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                raise
         # Email scan — connected providers (tokens stored encrypted)
         try:
             db.execute("""
@@ -697,81 +710,89 @@ def populate_action_items(uid: str, source: str, data: dict):
     live_keys: list[str] = []
 
     db = get_db()
-    for item in items:
-        label = item.get("label", "").strip()
-        value = str(item.get("value", "")).strip()
-        if not label or not value or value in {"—", "-", "N/A", "None", "TBD", "0"}:
-            continue
+    try:
+        for item in items:
+            label = item.get("label", "").strip()
+            value = str(item.get("value", "")).strip()
+            if not label or not value or value in {"—", "-", "N/A", "None", "TBD", "0"}:
+                continue
 
-        field_key = f"{source}::{label}"
+            field_key = f"{source}::{(label or '')[:80]}"
 
-        # Priority: user correction > stored _type > on-the-fly classify
-        if field_key in corrections:
-            btype = corrections[field_key]
+            # Priority: user correction > stored _type > on-the-fly classify
+            if field_key in corrections:
+                btype = corrections[field_key]
+            else:
+                btype = item.get("_type") or classify_benefit(label, value, source)
+
+            # Only persist actionable or attention types
+            if not (is_actionable(btype) or is_needs_attention(btype)):
+                continue
+
+            days_left = _parse_expiry_days(label, value)
+            exp_date  = None
+            if days_left is not None and days_left >= 0:
+                exp_date = (today + _dt_ai.timedelta(days=days_left)).isoformat()
+
+            # Attention types (payment_due, renewal) use time-based urgency — their
+            # urgency IS the time pressure, not composite value/intent.
+            # Actionable types use the composite score engine.
+            if is_needs_attention(btype):
+                should_add = True
+                urgency    = urgency_for_attention(days_left)
+            else:
+                _score_item = {"label": label, "value": value, "btype": btype, "days_left": days_left}
+                score   = score_opportunity(_score_item, user_intent=user_intent, source=source,
+                                            user_type_affinity=user_type_affinity)
+                urgency = urgency_from_score(score)
+                should_add = score >= _ENTRY_THRESHOLD
+
+            if not should_add:
+                continue
+
+            live_keys.append(field_key)
+
+            db.execute(
+                """
+                INSERT INTO action_items
+                    (user_id, source, field_key, label, value, btype, urgency, days_left,
+                     exp_date, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(user_id, field_key) DO UPDATE SET
+                    label       = excluded.label,
+                    value       = excluded.value,
+                    btype       = excluded.btype,
+                    urgency     = excluded.urgency,
+                    days_left   = excluded.days_left,
+                    exp_date    = excluded.exp_date
+                """,
+                (uid, source, field_key, label, value, btype, urgency, days_left,
+                 exp_date, now)
+            )
+
+        # Remove stale rows for this source that no longer appear in the data.
+        # Preserve completed rows — they're training signal even if the field disappeared.
+        if live_keys:
+            placeholders = ",".join("?" * len(live_keys))
+            db.execute(
+                f"DELETE FROM action_items WHERE user_id=? AND source=? AND field_key NOT IN ({placeholders})"
+                f" AND completed_at IS NULL",
+                [uid, source] + live_keys
+            )
         else:
-            btype = item.get("_type") or classify_benefit(label, value, source)
+            db.execute(
+                "DELETE FROM action_items WHERE user_id=? AND source=? AND completed_at IS NULL",
+                (uid, source)
+            )
 
-        # Only persist actionable or attention types
-        if not (is_actionable(btype) or is_needs_attention(btype)):
-            continue
-
-        days_left = _parse_expiry_days(label, value)
-        exp_date  = None
-        if days_left is not None and days_left >= 0:
-            exp_date = (today + _dt_ai.timedelta(days=days_left)).isoformat()
-
-        # Attention types (payment_due, renewal) use time-based urgency — their
-        # urgency IS the time pressure, not composite value/intent.
-        # Actionable types use the composite score engine.
-        if is_needs_attention(btype):
-            should_add = True
-            urgency    = urgency_for_attention(days_left)
-        else:
-            _score_item = {"label": label, "value": value, "btype": btype, "days_left": days_left}
-            score   = score_opportunity(_score_item, user_intent=user_intent, source=source,
-                                        user_type_affinity=user_type_affinity)
-            urgency = urgency_from_score(score)
-            should_add = score >= _ENTRY_THRESHOLD
-
-        if not should_add:
-            continue
-
-        live_keys.append(field_key)
-
-        db.execute(
-            """
-            INSERT INTO action_items
-                (user_id, source, field_key, label, value, btype, urgency, days_left,
-                 exp_date, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(user_id, field_key) DO UPDATE SET
-                label       = excluded.label,
-                value       = excluded.value,
-                btype       = excluded.btype,
-                urgency     = excluded.urgency,
-                days_left   = excluded.days_left,
-                exp_date    = excluded.exp_date
-            """,
-            (uid, source, field_key, label, value, btype, urgency, days_left,
-             exp_date, now)
-        )
-
-    # Remove stale rows for this source that no longer appear in the data.
-    # Preserve completed rows — they're training signal even if the field disappeared.
-    if live_keys:
-        placeholders = ",".join("?" * len(live_keys))
-        db.execute(
-            f"DELETE FROM action_items WHERE user_id=? AND source=? AND field_key NOT IN ({placeholders})"
-            f" AND completed_at IS NULL",
-            [uid, source] + live_keys
-        )
-    else:
-        db.execute(
-            "DELETE FROM action_items WHERE user_id=? AND source=? AND completed_at IS NULL",
-            (uid, source)
-        )
-
-    db.commit()
+        db.commit()
+    except Exception as _e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        print(f"[Mighty] populate_action_items rollback: {_e}", flush=True)
+        raise
 
 
 def _open_action_items(uid: str) -> list[dict]:
@@ -2092,6 +2113,33 @@ def _get_category_schema(source: str) -> dict | None:
     for schema in _CATEGORY_SCHEMAS.values():
         if source in schema.get("sources", set()):
             return schema
+
+    # Utility sources — suppress loyalty fields
+    _UTILITY_SOURCES_SCHEMA = {
+        "pa_utilities", "electric", "gas", "water", "internet", "phone", "cable"
+    }
+    if source in _UTILITY_SOURCES_SCHEMA:
+        return {
+            "name": "Utility Account",
+            "priority_fields": "current balance, amount due, payment due date, usage stats"
+        }
+
+    # Streaming services
+    _STREAMING_SOURCES = {"netflix", "hulu", "disney_plus", "hbo_max", "apple_tv", "spotify", "pandora"}
+    if source in _STREAMING_SOURCES:
+        return {
+            "name": "Streaming Service",
+            "priority_fields": "subscription plan, billing amount, renewal date, payment method"
+        }
+
+    # Banking
+    _BANKING_SOURCES = {"chase", "wellsfargo", "bank_of_america", "citi", "capital_one", "amex", "barclays"}
+    if source in _BANKING_SOURCES:
+        return {
+            "name": "Financial Account",
+            "priority_fields": "available credit, credit limit, current balance, payment due date, minimum payment, annual fee, statement credit"
+        }
+
     return None
 
 
@@ -4441,6 +4489,9 @@ def _post_filter_fields(fields: list, source: str = "") -> list:
             if any(t in lbl_low for t in _BOOKING_TERMS):
                 continue
 
+        if "source_snippet" in f and f["source_snippet"]:
+            f["source_snippet"] = str(f["source_snippet"])[:150]
+
         out.append(f)
     return out
 
@@ -4539,7 +4590,7 @@ Rules:
 - confidence: float 0.0–1.0 — how certain you are this is a real personalized user fact (not generic copy). Aim for >0.85 on solid data; below 0.70 means you are guessing.
 - source_snippet: verbatim excerpt (≤15 words) from the page text that most directly supports this value
 - Each concept ONCE, no duplicates
-- Max 15 fields
+- Max 25 fields
 - If you find zero fields that pass the hard-exclude test, return an empty array []
 
 ORDERING — sort fields in this exact priority order (most important first):
@@ -4869,7 +4920,7 @@ def check_csrf():
     """Abort 403 if CSRF token is missing or wrong (form or header)."""
     from flask import abort
     token = request.form.get("_csrf") or request.headers.get("X-CSRF-Token", "")
-    if not token or token != session.get("_csrf", ""):
+    if not token or not hmac.compare_digest(str(token), str(session.get("_csrf", ""))):
         abort(403)
 
 def api_user():
@@ -4913,6 +4964,7 @@ STATUS_BADGE = {
 
 def send_authorization_email(to_email, label, action_type, fields, approval_url):
     """Send an authorization request email via Postmark API. Runs in a background thread."""
+    import html as _html_mod
     if not POSTMARK_API_KEY:
         print("[Mighty] Email skipped — POSTMARK_API_KEY not set", flush=True)
         return
@@ -4940,8 +4992,8 @@ def send_authorization_email(to_email, label, action_type, fields, approval_url)
         <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#5b21b6">Authorization Required</span>
       </div>
       <div style="padding:20px">
-        <div style="font-size:18px;font-weight:700;color:#1a1a1a;line-height:1.4;margin-bottom:4px">{label}</div>
-        <div style="font-size:12px;color:#aaa;font-family:monospace;margin-bottom:8px">{action_type}</div>
+        <div style="font-size:18px;font-weight:700;color:#1a1a1a;line-height:1.4;margin-bottom:4px">{_html_mod.escape(str(label))}</div>
+        <div style="font-size:12px;color:#aaa;font-family:monospace;margin-bottom:8px">{_html_mod.escape(str(action_type))}</div>
         {fields_section}
         <div style="font-size:12px;color:#888;margin-bottom:20px">Your AI agent is waiting. This request expires in 5 minutes.</div>
         <a href="{approval_url}" style="display:block;padding:14px;background:#7c3aed;color:#fff;text-decoration:none;border-radius:10px;font-size:15px;font-weight:700;text-align:center">
@@ -4957,7 +5009,7 @@ def send_authorization_email(to_email, label, action_type, fields, approval_url)
     payload = json.dumps({
         "From":     POSTMARK_FROM,
         "To":       to_email,
-        "Subject":  f"Action needed: {label}",
+        "Subject":  f"Action needed: {_html_mod.escape(str(label))}",
         "HtmlBody": html,
     }).encode()
 
@@ -5017,7 +5069,7 @@ def send_ntfy_notification(api_key, label, action_type, approval_url):
 def send_password_reset_email(to_email, reset_url):
     """Send a password reset email via Postmark. Falls back to console log if not configured."""
     if not POSTMARK_API_KEY:
-        print(f"[Mighty] Password reset link (Postmark not configured): {reset_url}", flush=True)
+        print(f"[Mighty] Password reset skipped (Postmark not configured) — configure POSTMARK_API_KEY", flush=True)
         return
     html_body = (
         '<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f8f7f5;font-family:Arial,sans-serif">'
@@ -6008,9 +6060,9 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
       <span id="sync-label">Sync</span>
     </button>
-    <a id="ext-install-link" href="https://chromewebstore.google.com/detail/mighty/placeholder" target="_blank"
+    <a id="ext-install-link" href="javascript:void(0)" onclick="return false;"
        style="display:none;font-size:11px;color:#6366f1;white-space:nowrap;text-decoration:none;padding:4px 8px;background:rgba(99,102,241,0.08);border-radius:6px;border:1px solid rgba(99,102,241,0.2)">
-      ↓ Install extension
+      Get Chrome Extension (coming soon)
     </a>
   </div>
 
@@ -6037,6 +6089,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
           'payment_due': '💳',
           'unused_credit': '💡'
         };
+        function _esc(s){var d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML;}
         function renderActionCenter(items, themesHtml) {
           themesHtml = themesHtml || '';
           var panel = document.getElementById('action-center-panel');
@@ -6058,15 +6111,16 @@ body{display:flex;flex-direction:row;background:#eee9e2}
             var name = r.account_name || r.source || '';
             html += '<div style="background:' + bg + ';border-left:3px solid ' + border + ';border-radius:0 8px 8px 0;padding:10px 14px;display:flex;align-items:center;gap:10px;font-size:13px;margin-bottom:6px">'
               + '<span style="font-size:16px">' + icon + '</span>'
-              + '<div style="flex:1"><strong style="color:#111">' + name + '</strong>'
+              + '<div style="flex:1"><strong style="color:#111">' + _esc(name) + '</strong>'
               + '<span style="color:#6b7280;margin:0 4px">·</span>'
-              + '<span style="color:#374151">' + r.message + '</span>'
+              + '<span style="color:#374151">' + _esc(r.message) + '</span>'
               + (days ? '<span style="color:#9ca3af;font-size:12px">' + days + '</span>' : '')
               + '</div></div>';
           });
           panel.innerHTML = themesHtml + html;
         }
         async function loadActionCenter() {
+          if (!document.getElementById('action-center-section')) return;
           try {
             var remResp = fetch('/api/reminders');
             var summResp = fetch('/api/reminders/summary');
@@ -6214,8 +6268,16 @@ function decide(actionId, decision) {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRF-Token': (document.querySelector('[name="_csrf"]') || {value:''}).value},
     body: JSON.stringify({decision})
-  }).then(() => location.reload());
+  }).then(function() {
+    var scrollY = window.scrollY || document.documentElement.scrollTop;
+    sessionStorage.setItem('mighty-scroll', scrollY);
+    location.reload();
+  });
 }
+(function(){
+  var s = sessionStorage.getItem('mighty-scroll');
+  if (s) { sessionStorage.removeItem('mighty-scroll'); setTimeout(function(){ window.scrollTo(0, parseInt(s)||0); }, 50); }
+})();
 // Restore scroll position after any reload — wait 300ms so async content (action center etc.)
 // finishes painting before we set scrollTop, otherwise layout shifts reset it to 0.
 (function() {
@@ -6254,6 +6316,7 @@ function reloadWithScroll() {
 
 // ── 2FA pending challenges ────────────────────────────────────────────────────
 function load2FAChallenges() {
+  function _esc2fa(s){var d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML;}
   fetch('/api/2fa/pending').then(function(r){return r.json();}).then(function(d){
     if (!d.ok || !d.challenges.length) {
       document.getElementById('twofa-banner').style.display = 'none';
@@ -6266,9 +6329,9 @@ function load2FAChallenges() {
       var isCode = c.challenge_type === 'sms' || c.challenge_type === 'email_code';
       html += '<div style="background:#ffffff;border:1px solid #e8e4de;border-radius:10px;padding:14px 16px;margin-bottom:8px">'
         + '<div style="font-size:13px;font-weight:600;color:#1c1917;margin-bottom:4px">'
-        + '🔐 ' + c.account_name + ' needs ' + (isCode ? 'a verification code' : 'push approval')
+        + '🔐 ' + _esc2fa(c.account_name) + ' needs ' + (isCode ? 'a verification code' : 'push approval')
         + '</div>'
-        + (c.message ? '<div style="font-size:12px;color:#6b7280;margin-bottom:8px">' + c.message + '</div>' : '')
+        + (c.message ? '<div style="font-size:12px;color:#6b7280;margin-bottom:8px">' + _esc2fa(c.message) + '</div>' : '')
         + (isCode
           ? '<div style="display:flex;gap:8px;align-items:center">'
             + '<input type="text" id="code-' + c.id + '" placeholder="Enter code" maxlength="8" '
@@ -6448,9 +6511,8 @@ function _showToast(msg, duration) {
   var t = document.getElementById('mighty-toast');
   if (!t) return;
   t.textContent = msg;
-  t.className = 'show';
-  setTimeout(function(){ t.className = 'hide'; }, (duration || 3000) - 200);
-  setTimeout(function(){ t.className = ''; }, duration || 3000);
+  t.classList.add('show');
+  setTimeout(function(){ t.classList.remove('show'); }, duration || 3000);
 }
 // Detect mobile browsers — they can't run the extension so sync works differently
 var _isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -6850,7 +6912,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
         <button class="btn-copy" id="copy-btn" onclick="copyPrompt(this)">Copy</button>
       </div>
       <button class="btn btn-primary" onclick="goTo(2)">I've pasted it — continue →</button>
-      <div class="skip"><a href="/onboarding/skip">Skip to dashboard</a></div>
+      <div class="skip"><form method="POST" action="/onboarding/skip" style="display:inline"><input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit" style="background:none;border:none;padding:0;color:inherit;font:inherit;cursor:pointer;text-decoration:underline">Skip to dashboard</button></form></div>
     </div>
 
     <!-- Step 2: All done -->
@@ -6860,7 +6922,7 @@ body{font-family:'Inter',sans-serif;background:#f8f7f5;color:#1a1a1a;min-height:
         <div class="step-title" style="text-align:center;margin-bottom:12px">You're all set</div>
         <div class="step-sub" style="text-align:center;margin-bottom:0">Open your AI tool and ask it to do something consequential — like send an email or book a meeting. Mighty will pause it and ask for your approval first.</div>
       </div>
-      <a href="/onboarding/skip" class="btn btn-primary" style="margin-top:8px;display:block;text-align:center;text-decoration:none">Go to my dashboard →</a>
+      <form method="POST" action="/onboarding/skip"><input type="hidden" name="_csrf" value="{{ csrf }}"><button type="submit" class="btn btn-primary" style="margin-top:8px;display:block;width:100%;text-align:center;cursor:pointer">Go to my dashboard →</button></form>
     </div>
 
   </div>
@@ -7082,11 +7144,11 @@ body{display:flex;flex-direction:row}
     <div class="section-title">Security</div>
     <div style="font-size:13px;color:#8892a4;margin-bottom:16px">Change your account password.</div>
     <label class="settings-label">Current password</label>
-    <input type="password" id="pw-current" placeholder="Your current password" class="settings-input" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;margin-bottom:12px"><input type="password" id="pw-current" placeholder="Your current password" class="settings-input" style="margin-bottom:0;flex:1"><button type="button" onclick="togglePw(this)" style="background:none;border:none;cursor:pointer;color:#6b7280;margin-left:4px;font-size:16px" title="Show/hide">👁</button></div>
     <label class="settings-label">New password</label>
-    <input type="password" id="pw-new" placeholder="At least 6 characters" class="settings-input" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;margin-bottom:12px"><input type="password" id="pw-new" placeholder="At least 6 characters" class="settings-input" style="margin-bottom:0;flex:1"><button type="button" onclick="togglePw(this)" style="background:none;border:none;cursor:pointer;color:#6b7280;margin-left:4px;font-size:16px" title="Show/hide">👁</button></div>
     <label class="settings-label">Confirm new password</label>
-    <input type="password" id="pw-confirm" placeholder="Repeat new password" class="settings-input" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;margin-bottom:12px"><input type="password" id="pw-confirm" placeholder="Repeat new password" class="settings-input" style="margin-bottom:0;flex:1"><button type="button" onclick="togglePw(this)" style="background:none;border:none;cursor:pointer;color:#6b7280;margin-left:4px;font-size:16px" title="Show/hide">👁</button></div>
     <div style="display:flex;align-items:center;gap:12px">
       <button class="btn-settings-primary" onclick="changePassword()">Update password</button>
       <span id="pw-msg" style="font-size:12px;display:none"></span>
@@ -7201,7 +7263,7 @@ function onEmailToggle() {
 function save() {
   fetch('/dashboard/notifications', {
     method: 'POST',
-    headers: {'Content-Type':'application/json'},
+    headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF},
     body: JSON.stringify({
       ntfy: document.getElementById('notif-ntfy').checked,
       push: document.getElementById('notif-push').checked,
@@ -7226,7 +7288,7 @@ function saveExpiryPref() {
 function savePrivacy() {
   fetch('/settings/privacy', {
     method: 'POST',
-    headers: {'Content-Type':'application/json'},
+    headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF},
     body: JSON.stringify({minimal_logging: document.getElementById('minimal-logging').checked})
   }).then(function() {
     var ind = document.getElementById('privacy-ind');
@@ -7236,7 +7298,7 @@ function savePrivacy() {
 function saveDeleteRaw() {
   fetch('/settings/privacy', {
     method: 'POST',
-    headers: {'Content-Type':'application/json'},
+    headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF},
     body: JSON.stringify({
       minimal_logging: document.getElementById('minimal-logging').checked,
       delete_raw_after_extract: document.getElementById('delete-raw-after-extract').checked
@@ -7253,10 +7315,9 @@ function initNotifPref() {
   document.querySelectorAll('input[name="notif_pref"]').forEach(function(el) {
     if (el.value === current) el.checked = true;
     el.addEventListener('change', function() {
-      var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
       fetch('/api/settings/notifications', {
         method: 'POST',
-        headers: {'Content-Type':'application/json','X-CSRF-Token': csrf},
+        headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF},
         body: JSON.stringify({pref: this.value})
       }).then(function() {
         var ind = document.getElementById('notif-pref-ind');
@@ -7287,7 +7348,7 @@ function changeEmail() {
   if (!newEmail || !pw) { msg.textContent = 'Please fill in both fields.'; msg.style.color='#dc2626'; msg.style.display='inline'; return; }
   fetch('/settings/change-email', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json','X-CSRF-Token': CSRF},
     body: JSON.stringify({email: newEmail, password: pw})
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) {
@@ -7358,6 +7419,11 @@ function toggleRevealKey(btn) {
     btn.title = 'Show API key';
   }
 }
+function togglePw(btn) {
+    var inp = btn.previousElementSibling;
+    if (inp.type === 'password') { inp.type = 'text'; btn.textContent = '🙈'; }
+    else { inp.type = 'password'; btn.textContent = '👁'; }
+}
 function changePassword() {
   var cur = document.getElementById('pw-current').value;
   var nw  = document.getElementById('pw-new').value;
@@ -7368,7 +7434,7 @@ function changePassword() {
   if (nw !== cnf) { msg.textContent = 'New passwords do not match.'; msg.style.color='#dc2626'; msg.style.display='inline'; return; }
   fetch('/settings/change-password', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json','X-CSRF-Token': CSRF},
     body: JSON.stringify({current: cur, password: nw})
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) {
@@ -7393,7 +7459,7 @@ function deleteActivity() {
   if (!confirm("This will permanently delete your entire activity log. This cannot be undone.")) return;
   var btn = document.getElementById('del-activity-btn');
   if (btn) btn.disabled = true;
-  fetch('/settings/delete-activity', {method: 'POST'}).then(function(r) { return r.json(); }).then(function(d) {
+  fetch('/settings/delete-activity', {method: 'POST', headers: {'X-CSRF-Token': CSRF}}).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) {
       var msg = document.getElementById('del-activity-msg');
       if (msg) { msg.style.display = 'inline'; setTimeout(function() { msg.style.display = 'none'; }, 3000); }
@@ -7419,7 +7485,7 @@ function deleteAccount() {
   if (!pw) { errEl.textContent = 'Please enter your password to confirm.'; errEl.style.display = 'block'; return; }
   fetch('/settings/delete-account', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json','X-CSRF-Token': CSRF},
     body: JSON.stringify({password: pw})
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) { window.location.href = '/'; }
@@ -7587,9 +7653,22 @@ def login():
         get_db().execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(password), row["id"]))
         get_db().commit()
     nxt = request.form.get("next", "").strip()
-    if nxt and nxt.startswith("/") and not nxt.startswith("//"):
-        return redirect(nxt)
-    return redirect("/dashboard")
+    from urllib.parse import urlparse as _urlparse_login
+    def _safe_redirect(url):
+        if not url:
+            return "/dashboard"
+        try:
+            parsed = _urlparse_login(url)
+            if parsed.netloc or not url.startswith("/"):
+                return "/dashboard"
+            # Block //evil.com and /\evil.com (backslash-normalized)
+            if url.startswith("//") or url.startswith("/\\"):
+                return "/dashboard"
+            return url
+        except Exception:
+            return "/dashboard"
+    nxt = _safe_redirect(nxt)
+    return redirect(nxt)
 
 @app.route("/logout", methods=["GET", "POST"])
 def logout():
@@ -8324,7 +8403,8 @@ def dashboard():
     ).fetchone()[0]
     pending_display = "flex" if pending_count > 0 else "none"
     is_connected    = len(acts) > 0
-    debug_mode      = request.args.get("debug") == "1"
+    _admin_email = os.environ.get("ADMIN_EMAIL", "")
+    debug_mode = request.args.get("debug") == "1" and bool(_admin_email) and user.get("email") == _admin_email
 
     onboarding_banner = ""
     # Onboarding banner takes priority — only show the active (non-empty) state
@@ -8647,9 +8727,9 @@ def dashboard():
             else:
                 items = data.get("items", [])
                 # Reclassify items that are missing _type (older stored data)
-                for _ci in items:
-                    if not _ci.get("_type") or _ci.get("_type") == "other":
-                        _ci["_type"] = classify_benefit(_ci.get("label",""), str(_ci.get("value","")), src)
+                for _item in items:
+                    if not _item.get("_type") or _item.get("_type") == "other":
+                        _item["_type"] = classify_benefit(_item.get("label",""), str(_item.get("value","")), src)
 
             synced_at   = row["synced_at"] if row else ""
             sync_status = data.get("sync_status", "ok") if row else ""
@@ -9598,7 +9678,7 @@ def dashboard():
         _priority = score_opportunity(_h_score_item, user_intent=_dash_user_intent, source=_disp,
                                       user_type_affinity=_dash_type_affinity)
         _hero_candidates.append((_priority, _exp or 9999, _disp, _lbl, _val, _exp, _btype))
-    _hero_candidates.sort(key=lambda x: (x[1], -x[0]))  # soonest expiry first; score as tiebreaker
+    _hero_candidates.sort(key=lambda x: (-x[0], x[1] if x[1] < 9000 else 9999))  # score descending; expiry ascending for expiring items; no-expiry items grouped last within ties
 
     # Load archived benefits and filter them out of hero candidates
     _arch_rows = db.execute(
@@ -9629,8 +9709,13 @@ def dashboard():
         if not synced_at_str: return ""
         try:
             _dt2 = _hdt_ev.datetime.fromisoformat(synced_at_str.replace("Z",""))
-            _h2  = int((_hdt_ev.datetime.utcnow() - _dt2).total_seconds() / 3600)
-            if _h2 < 1:  return "just now"
+            total_seconds = (_hdt_ev.datetime.utcnow() - _dt2).total_seconds()
+            _h2  = int(total_seconds / 3600)
+            if _h2 < 1:
+                _m = int(total_seconds / 60)
+                if _m < 2:
+                    return "just now"
+                return f"{_m}m ago"
             if _h2 < 24: return f"{_h2}h ago"
             return f"{_h2 // 24}d ago"
         except Exception: return ""
@@ -9640,6 +9725,16 @@ def dashboard():
     _seen_hero = set()
     import json as _json_hero
     import datetime as _hdt
+    import re as _re_fmt
+    def _fmt_num(v):
+        """Add comma separators to large numeric strings (e.g. loyalty balances)."""
+        if isinstance(v, (int, float)):
+            return f"{v:,}"
+        s = str(v).strip()
+        if _re_fmt.match(r'^\d{4,}$', s):
+            try: return f"{int(s):,}"
+            except: pass
+        return s
     for _pr, _, _hdisp, _hlbl, _hval, _hexp, _btype in _hero_candidates[:5]:
         _dedup_key = (_hdisp, _hlbl[:30])
         if _dedup_key in _seen_hero: continue
@@ -9664,7 +9759,7 @@ def dashboard():
         _skip_vals = {'available', 'active', 'yes', 'enabled', 'valid', 'earned', ''}
         _show_val = ""
         if _hval and _hval.lower().strip() not in _skip_vals:
-            _show_val = f'<span style="font-size:13px;color:#6b7280;margin-left:6px">{he(_hval)}</span>'
+            _show_val = f'<span style="font-size:13px;color:#6b7280;margin-left:6px">{he(_fmt_num(_hval))}</span>'
         # Why-shown line — context-aware one-liner above the evidence trail
         _why_line_txt = _why_shown(_btype, _hexp, _hdisp)
         _why_line_html = (
@@ -9735,8 +9830,11 @@ def dashboard():
         if not lbl:
             return ""
         last_word = lbl.rsplit(None, 1)[-1].lower().rstrip(".")
-        if last_word.endswith("s") and not last_word.endswith("ss"):
-            return ""
+        # Exception: words ending in 's' that are NOT actually plural
+        _NOT_PLURAL_S = {"status", "progress", "pass", "bonus", "access", "class", "address"}
+        if last_word not in _NOT_PLURAL_S:
+            if last_word.endswith("s") and not last_word.endswith("ss"):
+                return ""
         return "an " if lbl[0].lower() in "aeiou" else "a "
 
     _n_hc = len(_hero_candidates)
@@ -9984,10 +10082,12 @@ def dashboard():
 
         # Action buttons — only for persisted items (not transient login_required)
         if _ai_id is not None:
-            # Shared: remove item from DOM, hide wrap if empty
+            # Shared: remove item from DOM (both sections), hide wrap if empty
             _rm_js = (
-                f"document.getElementById('ai-{_ai_id}').remove();"
-                f"if(!document.querySelector('[id^=\"ai-\"]'))document.getElementById('action-center-wrap').remove();"
+                f"var _el1=document.getElementById('ai-{_ai_id}');if(_el1)_el1.remove();"
+                f"var _el2=document.getElementById('avail-ai-{_ai_id}');if(_el2)_el2.remove();"
+                f"if(!document.querySelector('[id^=\"ai-\"]')){{var _acw=document.getElementById('action-center-wrap');if(_acw)_acw.remove();}}"
+                f"if(!document.querySelector('[id^=\"avail-ai-\"]')){{var _aas=document.getElementById('avail-attn-section');if(_aas)_aas.remove();}}"
             )
             _done_js = (
                 f"fetch('/api/action-items/{_ai_id}/complete',{{"
@@ -10365,8 +10465,10 @@ def dashboard():
         # Action buttons for persisted items
         if _ai_id is not None:
             _rm_js = (
-                f"document.getElementById('avail-ai-{_ai_id}').remove();"
-                f"if(!document.querySelector('[id^=\"avail-ai-\"]'))document.getElementById('avail-attn-section').remove();"
+                f"var _el1=document.getElementById('avail-ai-{_ai_id}');if(_el1)_el1.remove();"
+                f"var _el2=document.getElementById('ai-{_ai_id}');if(_el2)_el2.remove();"
+                f"if(!document.querySelector('[id^=\"avail-ai-\"]')){{var _aas=document.getElementById('avail-attn-section');if(_aas)_aas.remove();}}"
+                f"if(!document.querySelector('[id^=\"ai-\"]')){{var _acw=document.getElementById('action-center-wrap');if(_acw)_acw.remove();}}"
             )
             _done_js = (
                 f"fetch('/api/action-items/{_ai_id}/complete',{{"
@@ -11334,6 +11436,7 @@ def privacy_audit_log():
   </div>
 </div>"""
 
+    _paug_csrf = get_csrf_token()
     delete_btn = """
 <div style="margin-bottom:20px;display:flex;gap:10px;align-items:center">
   <button onclick="deleteAllRaw()" style="padding:8px 14px;background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;border-radius:6px;font-size:13px;cursor:pointer;font-weight:500">
@@ -11344,7 +11447,10 @@ def privacy_audit_log():
 <script>
 async function deleteAllRaw() {
   if (!confirm('Delete all stored raw page text? Extracted fields will not be affected.')) return;
-  const r = await fetch('/api/privacy/delete-raw-captures', {method:'POST'});
+  const r = await fetch('/api/privacy/delete-raw-captures', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': '""" + _paug_csrf + """'}
+  });
   const d = await r.json();
   alert(d.deleted + ' raw captures deleted.');
 }
@@ -11353,9 +11459,14 @@ async function deleteAllRaw() {
     return render_template_string("""<!DOCTYPE html><html><head><title>Audit Log — Mighty</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>body{font-family:-apple-system,sans-serif;margin:0;background:#f9fafb}
-    .container{max-width:900px;margin:0 auto;padding:24px}</style></head>
-    <body><div class="container">
-    <div style="margin-bottom:20px"><a href="/settings" style="color:#6b7280;text-decoration:none;font-size:13px">← Settings</a></div>
+    .container{max-width:900px;margin:0 auto;padding:24px}
+    .pg-nav{background:#fff;border-bottom:1px solid #e5e7eb;padding:10px 24px;display:flex;gap:20px}
+    .pg-nav a{color:#6b7280;text-decoration:none;font-size:13px;font-weight:500}
+    .pg-nav a:hover{color:#111}</style></head>
+    <body>
+    <nav class="pg-nav"><a href="/dashboard">Dashboard</a><a href="/settings">Settings</a><a href="/credentials">Credentials</a></nav>
+    <div class="container">
+    <div style="margin-bottom:20px"><a href="/settings" style="color:#6b7280;text-decoration:none;font-size:13px">&larr; Settings</a></div>
     <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 4px">Privacy Audit Log</h2>
     <p style="font-size:13px;color:#6b7280;margin:0 0 20px">All data capture and sync events for your account.</p>
     """ + stats_bar + delete_btn + """
@@ -11409,12 +11520,18 @@ def privacy_domains():
 
     items_html = ""
     for r in rows:
+        _src_key = r["source"]
+        _badge = (
+            '<span style="color:#059669;font-size:11px">✓ Approved</span>'
+            if _src_key in approved else
+            '<span style="color:#9ca3af;font-size:11px">Pending</span>'
+        )
         items_html += (
             f'<div style="display:flex;align-items:center;justify-content:space-between;'
             f'padding:10px 0;border-bottom:1px solid #f3f4f6">'
             f'<div><div style="font-size:13px;font-weight:500;color:#111">{he(r["display_name"])}</div>'
             f'<div style="font-size:12px;color:#9ca3af">{he(r["source"])}</div></div>'
-            f'<span style="font-size:12px;color:#22c55e;font-weight:500">✓ Approved</span></div>'
+            f'{_badge}</div>'
         )
     if not items_html:
         items_html = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:13px">No captured accounts yet</div>'
@@ -11422,9 +11539,14 @@ def privacy_domains():
     return render_template_string("""<!DOCTYPE html><html><head><title>Domains — Mighty</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>body{font-family:-apple-system,sans-serif;margin:0;background:#f9fafb}
-    .container{max-width:700px;margin:0 auto;padding:24px}</style></head>
-    <body><div class="container">
-    <div style="margin-bottom:20px"><a href="/settings" style="color:#6b7280;text-decoration:none;font-size:13px">← Settings</a></div>
+    .container{max-width:700px;margin:0 auto;padding:24px}
+    .pg-nav{background:#fff;border-bottom:1px solid #e5e7eb;padding:10px 24px;display:flex;gap:20px}
+    .pg-nav a{color:#6b7280;text-decoration:none;font-size:13px;font-weight:500}
+    .pg-nav a:hover{color:#111}</style></head>
+    <body>
+    <nav class="pg-nav"><a href="/dashboard">Dashboard</a><a href="/settings">Settings</a><a href="/credentials">Credentials</a></nav>
+    <div class="container">
+    <div style="margin-bottom:20px"><a href="/settings" style="color:#6b7280;text-decoration:none;font-size:13px">&larr; Settings</a></div>
     <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 4px">Captured Domains</h2>
     <p style="font-size:13px;color:#6b7280;margin:0 0 20px">Accounts whose data has been captured. Unknown domains are restricted to 500-character snippets only.</p>
     <div style="background:#fff;border-radius:10px;padding:0 16px;box-shadow:0 1px 3px rgba(0,0,0,.08)">""" + items_html + """</div>
@@ -11484,9 +11606,10 @@ def onboarding_generate_prompt():
     except Exception:
         return jsonify({"prompt": build_prompt(api_key, url), "warning": None})
 
-@app.route("/onboarding/skip")
+@app.route("/onboarding/skip", methods=["POST"])
 @require_login
 def onboarding_skip():
+    check_csrf()
     get_db().execute("UPDATE users SET onboarded=1 WHERE id=?", (session["user_id"],))
     get_db().commit()
     return redirect("/dashboard")
@@ -12858,6 +12981,11 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
     # Re-discover REPLACES fields entirely — no merging with stale data.
     # Apply filter first to strip noise (past flights, ticket IDs, etc.)
     fresh = _post_filter_fields(fields)
+
+    # Truncate source_snippet to prevent oversized storage
+    for _f in fresh:
+        if _f.get("source_snippet"):
+            _f["source_snippet"] = str(_f["source_snippet"])[:150]
 
     # Classify why discovery yielded nothing (for failure tracking)
     _failure_reason: str | None = None
@@ -15365,6 +15493,7 @@ def api_debug_sync_status():
 @require_login
 def api_admin_force_ok(source):
     """Manually reset a source's sync_status to 'ok'. Use to unstick false login_required."""
+    check_csrf()
     uid = session["user_id"]
     db  = get_db()
     row = db.execute(
@@ -15421,10 +15550,11 @@ def api_force_discover(source):
         return jsonify({"ok": False, "error": f"Server error: {str(e)[:100]}"}), 500
 
 
-@app.route("/api/data/rediscover-all", methods=["POST", "GET"])
+@app.route("/api/data/rediscover-all", methods=["POST"])
 @require_login
 def api_rediscover_all():
     """Re-run field discovery on ALL accounts' existing raw_text in a background thread."""
+    check_csrf()
     try:
         uid = session["user_id"]
         db  = get_db()
@@ -15535,14 +15665,23 @@ def credentials_fields_load():
 def credentials_delete(source):
     check_csrf()
     db = get_db()
+    uid = session["user_id"]
     db.execute(
         "DELETE FROM account_credentials WHERE user_id=? AND source=?",
-        (session["user_id"], source)
+        (uid, source)
     )
     db.execute(
         "DELETE FROM account_data WHERE user_id=? AND source=?",
-        (session["user_id"], source)
+        (uid, source)
     )
+    # Clean up orphaned field data for this source
+    try:
+        db.execute("DELETE FROM field_candidates WHERE user_id=? AND source=?", (uid, source))
+        db.execute("DELETE FROM field_history WHERE user_id=? AND source=?", (uid, source))
+        db.execute("DELETE FROM action_items WHERE user_id=? AND source=?", (uid, source))
+        db.execute("DELETE FROM field_observations WHERE user_id=? AND source=?", (uid, source))
+    except Exception as _ce:
+        print(f"[Mighty] cleanup error on disconnect {source}: {_ce}", flush=True)
     db.commit()
     return jsonify({"ok": True})
 
@@ -15636,11 +15775,14 @@ def _is_login_page(raw_text: str) -> bool:
     # Low-confidence signals (e.g. "sign in") can appear in authenticated page navs/footers,
     # so we skip them here to avoid false positives.
     sections = re.split(r'\n\n---[^\n]+---\n', raw_text)
-    for section in sections:
-        if not section.strip():
+    for _sec in sections:
+        if not _sec.strip():
             continue
-        sec_sample = section[:3000].lower()
+        sec_sample = _sec[:2000].lower()
         if any(sig in sec_sample for sig in _LOGIN_SIGNALS_HIGH):
+            return True
+        # Cumulative low-signal check per section
+        if sum(1 for sig in _LOGIN_SIGNALS_LOW if sig in sec_sample) >= 2:
             return True
 
     return False
@@ -15720,6 +15862,12 @@ def api_data_sync():
                     if fields:
                         _save_discovered_fields(_gf_uid, _gf_src, fields)
                         print(f"[GapFill] {_gf_src}: re-discovered {len(fields)} fields on merged text", flush=True)
+                        # Refresh action items so newly discovered fields appear without
+                        # waiting for the next full sync.
+                        try:
+                            populate_action_items(_gf_uid, _gf_src, {"items": fields, "status": "ok"})
+                        except Exception as _pai_e:
+                            print(f"[GapFill] {_gf_src}: populate_action_items error: {_pai_e}", flush=True)
                 except Exception as _e:
                     print(f"[GapFill] {_gf_src}: re-discovery error: {_e}", flush=True)
         threading.Thread(target=_bg_gf_discover, daemon=True).start()
@@ -16373,11 +16521,19 @@ def registry_remove():
     """Zero-out a known-bad path so it stops being served."""
     # Require either session login or valid API key
     _is_authed = session.get("user_id") is not None
+    _reg_user = None
     if not _is_authed:
         _reg_user, _ = api_user()
         _is_authed = _reg_user is not None
     if not _is_authed:
         return jsonify({"ok": False, "error": "unauthorized"}), 401
+    # Admin-only
+    _admin_email = os.environ.get("ADMIN_EMAIL", "")
+    if _reg_user is None and session.get("user_id"):
+        _reg_user = get_db().execute("SELECT email FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    if _admin_email and (not _reg_user or _reg_user.get("email") != _admin_email):
+        return jsonify({"error": "admin only"}), 403
+    check_csrf()
     ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
     if not _rate_limit(ip, "registry_remove", limit=10, window=60):
         return jsonify({"ok": False, "error": "rate limited"}), 429
@@ -16400,6 +16556,7 @@ def registry_remove():
 def api_debug_scrub_fields():
     """Apply _post_filter_fields to all stored discovered fields directly in the DB,
     without needing to call Gemini. Useful when the filter was added after initial discovery."""
+    check_csrf()
     uid = session["user_id"]
     db = get_db()
     rows = db.execute(
@@ -16498,13 +16655,28 @@ def api_admin_site_health():
     if not uid:
         return jsonify({"error": "unauthorized"}), 401
 
+    # Admin-only: this endpoint decrypts all users' data
+    _admin_email = os.environ.get("ADMIN_EMAIL", "")
+    _cur_user = get_db().execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+    if not _admin_email or not _cur_user or _cur_user["email"] != _admin_email:
+        # Non-admin: only return current user's data
+        _admin_mode = False
+    else:
+        _admin_mode = True
+
     db = get_db()
 
     # Gather all account_data rows (all users in multi-user mode, just this user otherwise)
     # For privacy, we only expose aggregate counts, never individual values.
-    rows = db.execute(
-        "SELECT user_id, source, data_enc, synced_at FROM account_data ORDER BY source"
-    ).fetchall()
+    if _admin_mode:
+        rows = db.execute(
+            "SELECT user_id, source, data_enc, synced_at FROM account_data ORDER BY source"
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT user_id, source, data_enc, synced_at FROM account_data WHERE user_id=? ORDER BY source",
+            (uid,)
+        ).fetchall()
 
     # Group by source
     from collections import defaultdict as _dd
@@ -16592,6 +16764,11 @@ def api_admin_site_url_health():
     """
     db = get_db()
     if request.method == "POST":
+        _admin_email = os.environ.get("ADMIN_EMAIL", "")
+        _uh_user, _ = api_user()
+        if not _admin_email or not _uh_user or _uh_user.get("email") != _admin_email:
+            return jsonify({"error": "admin only"}), 403
+        check_csrf()
         def _run():
             with app.app_context():
                 run_site_url_healthcheck()
@@ -17423,6 +17600,7 @@ def api_sync_login_cleared():
 @require_login
 def api_reclassify():
     """Backfill _type on all existing account_data items for this user."""
+    check_csrf()
     uid  = session["user_id"]
     db   = get_db()
     rows = db.execute("SELECT source, data_enc FROM account_data WHERE user_id=?", (uid,)).fetchall()
@@ -17785,11 +17963,15 @@ def _send_2fa_email(to_email: str, account_name: str, challenge_type: str,
     if not POSTMARK_API_KEY:
         print(f"[2FA] Email skipped (no Postmark): {account_name} needs {challenge_type}", flush=True)
         return
-    subject = f"Action needed: 2FA required for {account_name}"
+    import html as _html_mod_2fa
+    subject = f"Action needed: 2FA required for {_html_mod_2fa.escape(str(account_name))}"
+    _esc_account = _html_mod_2fa.escape(str(account_name))
+    _esc_message = _html_mod_2fa.escape(str(message)) if message else ""
+    _msg_para = f"<p style='color:#555'>{_esc_message}</p>" if _esc_message else ""
     body_html = f"""<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px">
 <h2 style="color:#7c3aed">⚡ Mighty needs your help</h2>
-<p>Your <strong>{account_name}</strong> account requires {"a verification code" if challenge_type=="sms" else "push approval"} to sync.</p>
-{"<p style='color:#555'>" + message + "</p>" if message else ""}
+<p>Your <strong>{_esc_account}</strong> account requires {"a verification code" if challenge_type=="sms" else "push approval"} to sync.</p>
+{_msg_para}
 <a href="{dashboard_url}" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#7c3aed;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Enter code in Mighty →</a>
 <p style="color:#9ca3af;font-size:12px;margin-top:24px">This request expires in 10 minutes.</p>
 </div>"""
@@ -19171,6 +19353,17 @@ def api_email_scan_imap():
     port   = int(data.get("port", preset.get("port", 993)))
     use_ssl = preset.get("ssl", True)
 
+    # SSRF prevention: validate host against allowlist or reject private ranges
+    import ipaddress as _ipa
+    import re as _re_imap
+    _PRIVATE_RE = _re_imap.compile(
+        r'^(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1|0\.0\.0\.0)',
+        _re_imap.IGNORECASE
+    )
+    if not host or _PRIVATE_RE.match(host):
+        return jsonify({"error": "Invalid IMAP host"}), 400
+    check_csrf()
+
     if not host or not username or not password:
         return jsonify({"error": "host, username, and password are required"}), 400
 
@@ -19213,6 +19406,7 @@ def api_email_suggestions():
 @app.route("/api/email/suggestions/dismiss", methods=["POST"])
 @require_login
 def api_email_suggestions_dismiss():
+    check_csrf()
     data = request.get_json(force=True) or {}
     site_key = data.get("site_key", "")
     db  = get_db()
@@ -19225,6 +19419,7 @@ def api_email_suggestions_dismiss():
 @app.route("/api/email/suggestions/add", methods=["POST"])
 @require_login
 def api_email_suggestions_add():
+    check_csrf()
     data = request.get_json(force=True) or {}
     site_key = data.get("site_key", "")
     db  = get_db()

@@ -33,8 +33,10 @@ chrome.tabs.onActivated.addListener(info =>
   _dbg('TAB_ACTIVATED', { tabId: info.tabId, windowId: info.windowId }));
 chrome.windows.onFocusChanged.addListener(wId =>
   _dbg('WIN_FOCUS', { windowId: wId }));
-chrome.tabs.onRemoved.addListener((id, info) =>
-  _dbg('TAB_REMOVED', { id, windowId: info.windowId }));
+chrome.tabs.onRemoved.addListener((id, info) => {
+  _dbg('TAB_REMOVED', { id, windowId: info.windowId });
+  _newTabsSeen.delete(id); // prune — Set would otherwise grow for every tab ever opened
+});
 // Track first URL a newly-created tab navigates to — tells us which link/button opened it
 const _newTabsSeen = new Set();
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -133,6 +135,18 @@ const _LOGIN_URL_RE = /\/(login|signin|sign-in|log-in|logon|log-on)(\/|$|\?)/i;
 
 // Debounce per-source so rapid redirects don't fire multiple reports
 const _loginReportedAt = {};
+
+// Periodically prune stale entries from per-source timestamp maps to prevent
+// unbounded growth during long browser sessions.
+setInterval(() => {
+  const _cutoff = Date.now() - 600_000; // prune entries older than 10 minutes
+  for (const k of Object.keys(_loginReportedAt)) {
+    if (_loginReportedAt[k] < _cutoff) delete _loginReportedAt[k];
+  }
+  for (const k of Object.keys(_postLoginSyncedAt)) {
+    if (_postLoginSyncedAt[k] < _cutoff) delete _postLoginSyncedAt[k];
+  }
+}, 10 * 60 * 1000); // run every 10 minutes
 
 // ── Persistent login-wall tracking ──────────────────────────────────────────
 // Stored in chrome.storage.local so it survives service worker restarts.
@@ -898,6 +912,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
       const { api_key } = await chrome.storage.local.get('api_key');
       if (!api_key) return;
       console.log(`[Mighty] Content script login detected for ${source} (${hostname})`);
+      await _markLoginWall(source);
       reportSyncFailure(api_key, source, 'login_wall');
       // Reload any open dashboard tabs so the card immediately shows login_required
       chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, (tabs) => {
@@ -1001,7 +1016,7 @@ const _AUTH_PROBE_PATHS = {
   hilton:       '/en/hilton-honors/guest/my-account/',
   marriott:     '/loyalty/myAccount/default.mi',
   hyatt:        '/en-US/my-account/home',
-  southwest:    '/loyalty/myaccount/',
+  southwest:    '/loyalty/myaccount/mytrips/',
   alaska_air:   '/account/dashboard',
   american_air: '/loyalty/home.do',
 };
@@ -1587,6 +1602,7 @@ async function runSync() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     accounts = await resp.json();
   } catch (e) {
+    _syncInProgress = false;
     await setStatus(`Error fetching accounts: ${e.message}`);
     return;
   }
@@ -1596,6 +1612,7 @@ async function runSync() {
   const capturedList = Object.entries(captured_accounts);
 
   if (!accounts.length && !capturedList.length) {
+    _syncInProgress = false;
     await setStatus('No connected accounts found in dashboard');
     return;
   }
@@ -1634,6 +1651,16 @@ async function runSync() {
 
   // Helper: get-or-create the shared tab (only when silent fetch has failed for an account)
   async function getSharedTab() {
+    if (sharedSync) {
+      // Verify the shared tab is still alive
+      try {
+        await chrome.tabs.get(sharedSync.tabId);
+      } catch (e) {
+        // Tab was closed — clear the reference and create a new one
+        sharedSync = null;
+        // fall through to create a new shared tab
+      }
+    }
     if (sharedSync) return sharedSync.tabId;
     sharedSync = await _createSyncWindow();
     if (sharedSync) {
@@ -1682,9 +1709,13 @@ async function runSync() {
       ok++;
       // Always run gap-fill — this visits wallet/certificate sub-pages that silent
       // fetch of the entry page misses. Creates a tab only if one doesn't exist yet.
+      // Hard cap: gap-fill is best-effort; don't let it block the rest of the sync.
       try {
         const gfTabId = await getSharedTab();
-        await gapFillAccount(api_key, account, syncSessionTime, 2, gfTabId);
+        await Promise.race([
+          gapFillAccount(api_key, account, syncSessionTime, 2, gfTabId),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('gap-fill timeout')), 60_000)),
+        ]);
       } catch(gfe) {
         console.log(`[Mighty] ${account.name}: gap-fill skipped: ${gfe.message}`);
       }
@@ -1998,7 +2029,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
   // Unknown domain: auto-capture if path looks like an account page
   if (!_ACCOUNT_PATH_RE.test(tab.url)) return;
-  const last = _autoCaptureRecent.get(tab.url);
+  const last = _autoCaptureRecent.get(_normUrl(tab.url));
   if (last && Date.now() - last < _AUTO_COOLDOWN_MS) return;
   _autoCapturePage(tabId, tab).catch(() => {});
 });
@@ -2037,7 +2068,7 @@ async function _autoCapturePage(tabId, tab) {
   if (!text || text.length < 400) return;
 
   // Mark debounce before async work to avoid duplicate triggers
-  _autoCaptureSet(tab.url, Date.now());
+  _autoCaptureSet(_normUrl(tab.url), Date.now());
 
   const name     = _nameFromTab(tab);
   const category = _guessCategory(tab.url);
@@ -2064,7 +2095,7 @@ async function _autoCapturePage(tabId, tab) {
     chrome.action.setBadgeBackgroundColor({ color: '#059669' });
     setTimeout(() => chrome.action.setBadgeText({ text: '' }), 4_000);
   } catch (e) {
-    _autoCaptureRecent.delete(tab.url); // allow retry
+    _autoCaptureRecent.delete(_normUrl(tab.url)); // allow retry
     console.warn(`[Mighty] Auto-capture failed for ${tab.url}:`, e.message);
   }
 }
@@ -2204,7 +2235,8 @@ async function isBotBlocked(site, path) {
 function isSpaUrl(url) {
   return url.includes('#/') || url.includes('/#') ||
          url.includes('xfinity.com') || url.includes('spectrum.net') ||
-         url.includes('pge.com') || url.includes('att.com/my/');
+         url.includes('pge.com') || url.includes('att.com/my/') ||
+         url.includes('southwest.com');
 }
 
 // ── Per-account sync ─────────────────────────────────────────────────────────
@@ -2557,28 +2589,6 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     }
   }
 
-  // ── Cookie diagnostic dump (v45) — identify auth cookie names per site ──────
-  // Dumps ALL cookies for SILENT_FETCH_SKIP sites to _dbg so we can identify
-  // which cookie names signal a valid logged-in session. Remove after analysis.
-  if (SILENT_FETCH_SKIP.has(account.source)) {
-    try {
-      const entryUrl = ACCOUNT_ENTRY[account.source];
-      const allCookies = await chrome.cookies.getAll({ url: entryUrl });
-      const cookieSummary = allCookies.map(c => ({
-        name: c.name,
-        httpOnly: c.httpOnly,
-        secure: c.secure,
-        valueLen: c.value.length,
-        valuePfx: c.value.slice(0, 30),
-        domain: c.domain,
-        session: c.session,
-      }));
-      await _dbg(`COOKIES_${account.source.toUpperCase()}`, cookieSummary);
-    } catch (e) {
-      await _dbg(`COOKIES_${account.source.toUpperCase()}_ERR`, e.message);
-    }
-  }
-
   // ── Cookie-based auth check ────────────────────────────────────────────────
   // For sites with a known auth cookie signal, check it before any tab crawl.
   // Cookie presence/absence is definitive and instant — no page load needed.
@@ -2620,19 +2630,6 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
   // Cookie signals (_AUTH_COOKIE_SIGNALS) provide a fast-path to skip the tab
   // entirely when we already know the session is live — but they're optional.
   // Skipped when cookie check already confirmed the session above.
-  if (false && SILENT_FETCH_SKIP.has(account.source) && !_cookieAuthConfirmed) {
-    const _isLoginWall = await _prefetchLoginCheck(account.source);
-    if (_isLoginWall) {
-      console.log(`[Mighty] ${account.name}: pre-flight fetch detected login redirect — skipping tab crawl`);
-      await _markLoginWall(account.source);
-      await reportSyncFailure(apiKey, account.source, 'login_wall');
-      chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
-      _pendingAutoLogins.add(account.source);
-      throw new Error('login_required');
-    }
-    console.log(`[Mighty] ${account.name}: pre-flight fetch OK (no login redirect) — proceeding with tab crawl`);
-  }
-
   // ── Tab-based fallback (SPA sites / login-gated / insufficient silent content) ─
   // Resolve the shared tab lazily — only created now if actually needed
   if (_lazySharedTab) {
@@ -2799,7 +2796,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       // Chrome error page means DNS failure or network error
       if (tabUrl.startsWith('chrome-error://') || tabUrl.startsWith('about:neterror')) {
         console.log(`[Mighty] ${account.name}: domain unreachable (${tabUrl}) — reporting`);
-        const { api_key: _ak } = await chrome.storage.local.get('api_key');
+        const _ak = apiKey;
         if (_ak) await reportSyncFailure(_ak, account.source, 'domain_unreachable');
         _urlCheckFailure = 'domain_unreachable';
       } else {
@@ -2809,14 +2806,14 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           const landedDomain   = new URL(tabUrl).hostname.split('.').slice(-2).join('.');
           if (landedDomain && expectedDomain && landedDomain !== expectedDomain) {
             console.log(`[Mighty] ${account.name}: domain redirected ${expectedDomain} → ${landedDomain} — reporting`);
-            const { api_key: _ak } = await chrome.storage.local.get('api_key');
+            const _ak = apiKey;
             if (_ak) await reportSyncFailure(_ak, account.source, 'domain_moved');
             _urlCheckFailure = 'domain_unreachable';
           }
         } catch (_) {}
         if (!_urlCheckFailure && tabUrl && _isLoginUrl(tabUrl)) {
           console.log(`[Mighty] ${account.name}: redirected to login URL — reporting login_required`);
-          const { api_key: _ak } = await chrome.storage.local.get('api_key');
+          const _ak = apiKey;
           if (_ak) {
             await _markLoginWall(account.source);
             await reportSyncFailure(_ak, account.source, 'login_wall');
@@ -2858,7 +2855,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
     if (_settledState === 'login_redirect') {
       console.log(`[Mighty] ${account.name}: login redirect detected during settle — reporting login_required`);
-      const { api_key: _ak } = await chrome.storage.local.get('api_key');
+      const _ak = apiKey;
       if (_ak) {
         await _markLoginWall(account.source);
         await reportSyncFailure(_ak, account.source, 'login_wall');
@@ -2875,7 +2872,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       const settledUrl = settledTab.url || '';
       if (settledUrl && _isLoginUrl(settledUrl)) {
         console.log(`[Mighty] ${account.name}: login URL detected after settle — reporting login_required`);
-        const { api_key: _ak } = await chrome.storage.local.get('api_key');
+        const _ak = apiKey;
         if (_ak) {
           await _markLoginWall(account.source);
           await reportSyncFailure(_ak, account.source, 'login_wall');
@@ -2918,7 +2915,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       await sleep(5_000);
       if (await _pwCheck()) {
         console.log(`[Mighty] ${account.name}: login form persists after recheck — reporting login_required`);
-        const { api_key: _ak } = await chrome.storage.local.get('api_key');
+        const _ak = apiKey;
         if (_ak) {
           await _markLoginWall(account.source);
           await reportSyncFailure(_ak, account.source, 'login_wall');
@@ -2939,17 +2936,33 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       const [r] = await chrome.scripting.executeScript({
         target: { tabId },
         func: async function waitForEntryContent() {
+          // Wait for content to STABILIZE, not just exceed a minimum length.
+          // SPAs (Southwest, Delta, etc.) load nav immediately but fetch account data
+          // via async API calls — the DOM keeps growing for 1-3s after 'complete'.
+          // We poll until two consecutive reads differ by ≤150 chars, indicating
+          // React/Vue has finished rendering account-specific content.
+          let lastLen = 0;
+          let stableRounds = 0;
           for (let i = 0; i < 20; i++) {
             if (document.body) {
-              // First try stripping chrome/nav to get account-specific content
               const clone = document.body.cloneNode(true);
               clone.querySelectorAll('script, style, noscript').forEach(el => el.remove());
-              const stripped = (clone.innerText || clone.textContent || '').slice(0, 15000);
-              if (stripped.trim().length >= 100) return stripped;
+              const stripped = (clone.innerText || clone.textContent || '').trim().slice(0, 15000);
+              const len = stripped.length;
+              if (len >= 100) {
+                const delta = Math.abs(len - lastLen);
+                if (delta <= 150 && lastLen > 0) {
+                  stableRounds++;
+                  if (stableRounds >= 2) return stripped; // stable for ≥1s — content is settled
+                } else {
+                  stableRounds = 0;
+                }
+                lastLen = len;
+              }
             }
             await new Promise(res => setTimeout(res, 500));
           }
-          // Fallback: full body text
+          // Fallback: return whatever is in the DOM now
           return document.body ? (document.body.innerText || '').slice(0, 15000) : '';
         },
       });
@@ -2966,7 +2979,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     // our URL check) and where getBoundingClientRect() returns 0 in minimized windows.
     if (entryText.length >= 100 && _isSilentLoginPage(entryText)) {
       console.log(`[Mighty] ${account.name}: login page content detected in tab — reporting login_required`);
-      const { api_key: _ak } = await chrome.storage.local.get('api_key');
+      const _ak = apiKey;
       if (_ak) {
         await _markLoginWall(account.source);
         await reportSyncFailure(_ak, account.source, 'login_wall');
@@ -3201,7 +3214,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       : (_subSuccesses === 0 && toVisit.length > 0);
     if (_loginWallCondition) {
       console.log(`[Mighty] ${account.name}: ${_subLoginRedirects}/${toVisit.length} subpages were login redirects — session expired`);
-      const { api_key: _ak } = await chrome.storage.local.get('api_key');
+      const _ak = apiKey;
       if (_ak) {
         await _markLoginWall(account.source);
         await reportSyncFailure(_ak, account.source, 'login_wall');
@@ -3221,7 +3234,8 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     // Trust the content — clear any stale login wall and push.
     await _clearLoginWall(account.source);
 
-    const rawText = allText.join('').slice(0, 40_000);
+    // Truncate each page contribution before joining to avoid mid-sentence cuts
+    const rawText = allText.map((t, i) => i === 0 ? t.slice(0, 20_000) : t.slice(0, 10_000)).join('').slice(0, 40_000);
     console.log(`[Mighty] ${account.name}: ${rawText.length} chars across ${allText.length} page(s) — pushing`);
 
     const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
@@ -3319,8 +3333,6 @@ function extractPageText() {
 
 function waitForTabLoad(tabId, timeout = 20_000) {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, timeout); // resolve anyway on timeout
-
     function listener(id, info) {
       if (id === tabId && info.status === 'complete') {
         clearTimeout(timer);
@@ -3329,6 +3341,12 @@ function waitForTabLoad(tabId, timeout = 20_000) {
       }
     }
     chrome.tabs.onUpdated.addListener(listener);
+    // Always remove the listener on timeout — otherwise it leaks and fires
+    // for future tab updates long after this call has resolved.
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, timeout);
   });
 }
 
@@ -3404,12 +3422,53 @@ function detectIntent(url) {
   return null;
 }
 
+// Per-URL cooldown for intent detection — prevents re-firing when the user refreshes
+// a search results page or the tab reloads during an SPA navigation.
+const _intentCooldown = new Map();
+const _INTENT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes per URL
+
+// Cached notification preference — fetched once and refreshed every 15 minutes.
+// Avoids a round-trip to the server on every matching tab load.
+let _cachedNotifPref = null;
+let _cachedNotifPrefAt = 0;
+const _NOTIF_PREF_TTL = 15 * 60 * 1000;
+
+async function _getNotifPref(apiKey) {
+  const now = Date.now();
+  if (_cachedNotifPref !== null && now - _cachedNotifPrefAt < _NOTIF_PREF_TTL) {
+    return _cachedNotifPref;
+  }
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/settings/notifications`, {
+      headers: { 'X-Mighty-Key': apiKey }, credentials: 'include',
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      _cachedNotifPref = data.pref || 'quiet';
+      _cachedNotifPrefAt = now;
+      return _cachedNotifPref;
+    }
+  } catch (_) {}
+  return _cachedNotifPref || 'quiet';
+}
+
 // Tab intent detection — runs when a tab finishes loading
 chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
   if (changeInfo.status !== 'complete' || !tab.url) return;
 
   const intent = detectIntent(tab.url);
   if (!intent) return;
+
+  // Per-URL cooldown — skip if we already fired for this URL recently
+  const _normIntentUrl = _normUrl(tab.url);
+  const _lastIntent = _intentCooldown.get(_normIntentUrl);
+  if (_lastIntent && Date.now() - _lastIntent < _INTENT_COOLDOWN_MS) return;
+  _intentCooldown.set(_normIntentUrl, Date.now());
+  // Prune stale entries to avoid unbounded growth
+  if (_intentCooldown.size > 500) {
+    const _cutoff = Date.now() - _INTENT_COOLDOWN_MS;
+    for (const [k, t] of _intentCooldown) { if (t < _cutoff) _intentCooldown.delete(k); }
+  }
 
   // Get API key from storage (key name is 'api_key')
   const stored = await chrome.storage.local.get(['api_key']);
@@ -3424,19 +3483,6 @@ chrome.tabs.onUpdated.addListener(async function(tabId, changeInfo, tab) {
     if (!resp.ok) return;
     const data = await resp.json();
     if (!data.count || data.count === 0) return;
-
-    // Fetch notification pref
-    let notifPref = 'quiet';
-    try {
-      const prefResp = await fetch(`${MIGHTY_URL}/api/settings/notifications`, {
-        headers: { 'X-Mighty-Key': apiKey },
-        credentials: 'include'
-      });
-      if (prefResp.ok) {
-        const prefData = await prefResp.json();
-        notifPref = prefData.pref || 'quiet';
-      }
-    } catch(e) {}
 
     if (notifPref === 'never') return;
 

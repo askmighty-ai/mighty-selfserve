@@ -4,7 +4,7 @@ mighty.scoring
 Relevance scoring and confidence calibration for discovered benefits.
 
 score_opportunity()   — unified 0-100 score for action center + surface ranking.
-                        Four components: expiration, value, intent, rarity.
+                        Five components: expiration, value, intent, rarity, affinity.
 urgency_from_score()  — maps score → 'urgent' | 'soon' | 'info'.
 _relevance_score()    — legacy composite sort key (used by /api/opportunities).
 _confidence_label()   — human-readable label for a 0–1 confidence score.
@@ -15,11 +15,13 @@ score_opportunity design
           + value_weight(literal_amount)     0–30
           + intent_weight(domain_match)      0–20
           + rarity_weight(btype)             0–10
+          + affinity_weight(btype, affinity) 0–15
+          (capped at 100)
 
 urgency tiers from score:
     ≥ 65  → urgent   (strong expiry pressure OR very high value + intent)
-    ≥ 38  → soon
-    <  38 → info
+    ≥ 35  → soon
+    <  35 → info
 
 Action center entry threshold: score ≥ 30
   A $500+ credit with no expiry scores ≈ 37-57 (value 30 + rarity 7 + intent 0-20)

@@ -405,25 +405,48 @@ def scan_imap(
     else:
         imap = imaplib.IMAP4(host, port)
 
-    imap.login(username, password)
-    imap.select("INBOX", readonly=True)
+    try:
+        imap.login(username, password)
+        imap.select("INBOX", readonly=True)
 
-    root_domains = set()
-    for domain in SITE_SENDER_DOMAINS:
-        parts = domain.split(".")
-        root_domains.add(".".join(parts[-2:]))
+        root_domains = set()
+        for domain in SITE_SENDER_DOMAINS:
+            parts = domain.split(".")
+            root_domains.add(".".join(parts[-2:]))
 
-    for root in root_domains:
+        for root in root_domains:
+            try:
+                status, data = imap.search(None, f'(FROM "{root}")')
+                if status == "OK" and data and data[0]:
+                    count = len(data[0].split())
+                    if count > 0:
+                        sender_counts[root] = count
+            except Exception:
+                continue
+
+        # Also search Promotions folder if available (Gmail)
         try:
-            status, data = imap.search(None, f'(FROM "{root}")')
-            if status == "OK" and data and data[0]:
-                count = len(data[0].split())
-                if count > 0:
-                    sender_counts[root] = count
+            _promo_status, _ = imap.select("[Gmail]/Promotions", readonly=True)
+            if _promo_status == "OK":
+                for _s in root_domains:
+                    try:
+                        _rc, _ids = imap.search(None, f'FROM "{_s}"')
+                        if _rc == "OK" and _ids[0]:
+                            _promo_count = len(_ids[0].split())
+                            if _promo_count > 0:
+                                sender_counts[_s] = sender_counts.get(_s, 0) + _promo_count
+                    except Exception:
+                        pass
         except Exception:
-            continue
+            pass
 
-    imap.logout()
+        imap.logout()
+    except Exception:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+        raise
     return _build_suggestions(sender_counts, already_connected)
 
 
