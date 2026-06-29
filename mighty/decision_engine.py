@@ -70,7 +70,35 @@ def get_recommendations(
                 ],
                 action_label="Open Amex Travel",
                 action_url="https://www.americanexpress.com/travel/",
-            )
+            ),
+            Recommendation(
+                title="Transfer Chase Ultimate Rewards to Hyatt",
+                summary="World of Hyatt points often deliver strong value at premium properties.",
+                rationale="Demo recommendation.",
+                recommendation_type="hotel",
+                confidence="high",
+                bullets=[
+                    "1:1 transfer from Chase Ultimate Rewards",
+                    "Strong redemption value at Category 1–4 hotels",
+                    "Suite upgrades and elite benefits when available",
+                ],
+                action_label="Transfer to Hyatt",
+                action_url="https://www.hyatt.com/",
+            ),
+            Recommendation(
+                title="Use Southwest Companion Pass before booking",
+                summary="Bring a companion for nearly free on Southwest flights this year.",
+                rationale="Demo recommendation.",
+                recommendation_type="travel",
+                confidence="medium",
+                bullets=[
+                    "Companion flies for taxes and fees only",
+                    "Valid on both paid and points bookings",
+                    "Pass expires — use it before your travel window closes",
+                ],
+                action_label="Book on Southwest",
+                action_url="https://www.southwest.com/",
+            ),
         ]
 
     detect_situation(context)
