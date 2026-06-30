@@ -9,6 +9,7 @@ from mighty.demo_mode import (
     account_count,
     expiring_count,
     get_demo_daily_brief,
+    get_demo_first_name,
     get_demo_recommendations,
     get_demo_reminders,
     get_demo_reminders_summary,
@@ -48,18 +49,27 @@ class TestDemoModeToggle:
 
 
 class TestDemoData:
+    def test_demo_user_is_alex(self):
+        assert get_demo_first_name() == "Alex"
+
     def test_daily_brief_has_coherent_story(self):
         brief = get_demo_daily_brief()
         assert "Tokyo" in brief.headline
-        assert len(brief.attention) >= 1
+        assert len(brief.attention) >= 2
         assert len(brief.discoveries) >= 2
+        assert len(brief.recommendations) >= 3
         assert len(brief.insights) >= 3
+        assert "5 accounts" in brief.summary or "Checked 5 accounts" in brief.summary
 
-    def test_recommendations_are_not_hidden_demo_fallback(self):
+    def test_recommendations_tie_to_accounts_and_trip(self):
         recs = get_demo_recommendations()
         assert len(recs) == 3
+        titles = " ".join(r.title for r in recs)
+        assert "Tokyo" in titles or "Hyatt" in titles
+        assert "Delta" in titles or "SFO" in titles
         for rec in recs:
             assert rec.rationale.lower() != "demo recommendation."
+            assert "demo ·" not in rec.rationale.lower()
 
     def test_reminders_include_expiring_and_credits(self):
         reminders = get_demo_reminders()
@@ -67,13 +77,22 @@ class TestDemoData:
         assert "urgent" in urgencies
         assert "soon" in urgencies
         assert "info" in urgencies
+        sources = {r["source"] for r in reminders}
+        assert sources == {"marriott", "amex", "delta", "chase"}
 
     def test_account_count_matches_cards(self):
         assert account_count() == 5
         html = render_demo_account_cards()
-        assert "Marriott Bonvoy" in html
-        assert "Delta SkyMiles" in html
+        for name in (
+            "Marriott Bonvoy",
+            "American Express",
+            "Delta SkyMiles",
+            "Chase Sapphire Reserve",
+            "Southwest Rapid Rewards",
+        ):
+            assert name in html
         assert "Demo account" in html
+        assert "SFO → NRT" in html
 
     def test_expiring_count(self):
         assert expiring_count() == 3

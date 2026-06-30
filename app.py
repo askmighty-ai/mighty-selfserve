@@ -11409,7 +11409,7 @@ function dismissOnboarding() {
     demo_mode_banner = ""
     if demo_mode_active:
         import datetime as _demo_dt
-        _demo_first = (user.get("preferred_name") or user["email"].split("@")[0] or "there").split()[0]
+        _demo_first = _demo_mode.get_demo_first_name()
         _demo_today = _demo_dt.date.today().strftime("%A, %B %-d")
         demo_mode_banner = _demo_mode.render_demo_banner()
         hero_section_html = _demo_mode.render_demo_daily_brief_hero(

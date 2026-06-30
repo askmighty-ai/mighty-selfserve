@@ -62,9 +62,18 @@ def handle_demo_query_param(request, session: dict) -> bool | None:
     return None
 
 
-# ── Coherent story: planning a spring trip to Tokyo ──────────────────────────
-# Alex tracks loyalty accounts across airlines, hotels, and cards. Three perks
-# expire before the trip; recommendations tie directly to those accounts.
+# ── Demo persona: Alex Chen ───────────────────────────────────────────────────
+# Alex is planning a 10-day Tokyo trip (~6 weeks out). Mighty surfaces five
+# connected accounts, three benefits expiring before departure, two fresh
+# discoveries from sync, and savings paths that combine those perks.
+
+_DEMO_FIRST_NAME = "Alex"
+_DEMO_TRIP_DESTINATION = "Tokyo"
+_DEMO_TRIP_DAYS = 45
+_DEMO_MARRIOTT_CERT_DAYS = 14
+_DEMO_AMEX_OFFER_DAYS = 5
+_DEMO_DELTA_UPGRADE_DAYS = 21
+_DEMO_CHASE_DINING_DAYS = 12
 
 _DEMO_ACCOUNT_URLS = {
     "marriott": "https://www.marriott.com/loyalty/myAccount/default.mi",
@@ -73,6 +82,63 @@ _DEMO_ACCOUNT_URLS = {
     "chase": "https://secure.chase.com/web/auth/dashboard",
     "southwest": "https://www.southwest.com/loyalty/myaccount/",
 }
+
+
+@dataclass(frozen=True)
+class DemoStory:
+    """Single source of truth for the demo user's trip and benefit timeline."""
+
+    first_name: str
+    destination: str
+    trip_date: date
+    positioning_date: date
+    marriott_cert_expiry: date
+    amex_offer_expiry: date
+    delta_upgrade_expiry: date
+    chase_dining_end: date
+
+    @property
+    def trip_label(self) -> str:
+        return f"{self.destination} · {self.trip_date.strftime('%b %d')}"
+
+    @property
+    def marriott_cert_days(self) -> int:
+        return _DEMO_MARRIOTT_CERT_DAYS
+
+    @property
+    def amex_offer_days(self) -> int:
+        return _DEMO_AMEX_OFFER_DAYS
+
+    @property
+    def delta_upgrade_days(self) -> int:
+        return _DEMO_DELTA_UPGRADE_DAYS
+
+    @property
+    def chase_dining_days(self) -> int:
+        return _DEMO_CHASE_DINING_DAYS
+
+    @property
+    def expiring_before_trip_count(self) -> int:
+        return 3
+
+
+def _story() -> DemoStory:
+    today = date.today()
+    trip_date = today + timedelta(days=_DEMO_TRIP_DAYS)
+    return DemoStory(
+        first_name=_DEMO_FIRST_NAME,
+        destination=_DEMO_TRIP_DESTINATION,
+        trip_date=trip_date,
+        positioning_date=trip_date - timedelta(days=1),
+        marriott_cert_expiry=today + timedelta(days=_DEMO_MARRIOTT_CERT_DAYS),
+        amex_offer_expiry=today + timedelta(days=_DEMO_AMEX_OFFER_DAYS),
+        delta_upgrade_expiry=today + timedelta(days=_DEMO_DELTA_UPGRADE_DAYS),
+        chase_dining_end=today + timedelta(days=_DEMO_CHASE_DINING_DAYS),
+    )
+
+
+def get_demo_first_name() -> str:
+    return _story().first_name
 
 
 @dataclass(frozen=True)
@@ -93,11 +159,7 @@ class DemoAccount:
 
 
 def _demo_accounts() -> list[DemoAccount]:
-    trip_date = date.today() + timedelta(days=45)
-    cert_expiry = date.today() + timedelta(days=14)
-    offer_expiry = date.today() + timedelta(days=5)
-    upgrade_expiry = date.today() + timedelta(days=21)
-    dining_end = date.today() + timedelta(days=12)
+    s = _story()
 
     return [
         DemoAccount(
@@ -111,10 +173,10 @@ def _demo_accounts() -> list[DemoAccount]:
             secondary=[
                 ("Elite Status", "Platinum Elite"),
                 ("Free Night Certificate", "1 certificate"),
-                ("Certificate Expires", cert_expiry.strftime("%b %d, %Y")),
+                ("Certificate Expires", s.marriott_cert_expiry.strftime("%b %d, %Y")),
             ],
             alert_label="Free Night Certificate",
-            alert_value=cert_expiry.strftime("%b %d, %Y"),
+            alert_value=s.marriott_cert_expiry.strftime("%b %d, %Y"),
             alert_level="amber",
             badge_certs=1,
         ),
@@ -133,7 +195,7 @@ def _demo_accounts() -> list[DemoAccount]:
                 ("Annual Fee", "$695"),
             ],
             alert_label="Amex Offer",
-            alert_value=f"${offer_expiry.strftime('%b %d')}",
+            alert_value=f"$40 dining · expires {s.amex_offer_expiry.strftime('%b %d')}",
             alert_level="red",
             badge_credits=2,
         ),
@@ -147,11 +209,12 @@ def _demo_accounts() -> list[DemoAccount]:
             hero_value="87,450",
             secondary=[
                 ("Medallion Status", "Gold Medallion"),
+                ("Booked Flight", f"SFO → NRT · {s.trip_date.strftime('%b %d')}"),
                 ("Regional Upgrade Certificate", "1 available"),
-                ("Valid Through", upgrade_expiry.strftime("%b %d, %Y")),
+                ("Valid Through", s.delta_upgrade_expiry.strftime("%b %d, %Y")),
             ],
             alert_label="Regional Upgrade Certificate",
-            alert_value=upgrade_expiry.strftime("%b %d, %Y"),
+            alert_value=s.delta_upgrade_expiry.strftime("%b %d, %Y"),
             alert_level="amber",
             badge_certs=1,
         ),
@@ -165,11 +228,11 @@ def _demo_accounts() -> list[DemoAccount]:
             hero_value="92,180",
             secondary=[
                 ("Travel Credit", "$50 remaining"),
-                ("5× Dining Multiplier", f"Ends {dining_end.strftime('%b %d')}"),
+                ("5× Dining Multiplier", f"Ends {s.chase_dining_end.strftime('%b %d')}"),
                 ("Annual Fee", "$550"),
             ],
             alert_label="5× Dining Multiplier",
-            alert_value=dining_end.strftime("%b %d, %Y"),
+            alert_value=s.chase_dining_end.strftime("%b %d, %Y"),
             alert_level="amber",
             badge_credits=1,
         ),
@@ -183,27 +246,39 @@ def _demo_accounts() -> list[DemoAccount]:
             hero_value="45,200",
             secondary=[
                 ("Companion Pass", "Active through Dec 2026"),
-                ("Upcoming Trip", f"Tokyo · {trip_date.strftime('%b %d')}"),
+                (
+                    "Positioning Flight",
+                    f"AUS → SFO · {s.positioning_date.strftime('%b %d')} (companion fare)",
+                ),
             ],
         ),
     ]
 
 
 def get_demo_daily_brief() -> DailyBrief:
-    cert_days = 14
-    offer_days = 5
-    upgrade_days = 21
+    s = _story()
+    account_total = account_count()
+    discovery_count = len(get_demo_recent_discoveries())
 
     return DailyBrief(
-        headline="3 benefits expire before your Tokyo trip — act this week.",
+        headline=(
+            f"{s.expiring_before_trip_count} benefits expire before your "
+            f"{s.destination} trip — act this week."
+        ),
         summary=(
-            "Checked 5 demo accounts · 3 items need you · "
-            "2 new discoveries since yesterday."
+            f"Checked {account_total} accounts · "
+            f"{s.expiring_before_trip_count} expiring soon · "
+            f"{discovery_count} new discoveries since yesterday."
         ),
         attention=[
             BriefItem(
+                title="Amex $40 dining offer expires soon",
+                detail=f"Platinum · {s.amex_offer_days} days left",
+                tone="attention",
+            ),
+            BriefItem(
                 title="Chase 5× dining multiplier ending soon",
-                detail=f"Sapphire Reserve · Ends in {cert_days - 2} days",
+                detail=f"Sapphire Reserve · {s.chase_dining_days} days left",
                 tone="attention",
             ),
         ],
@@ -222,41 +297,54 @@ def get_demo_daily_brief() -> DailyBrief:
         recommendations=[
             BriefItem(
                 title="Book Park Hyatt Tokyo via Amex FHR",
-                detail="Platinum · Breakfast + late checkout included",
+                detail="Platinum · Breakfast + $300 hotel credit",
                 tone="neutral",
             ),
             BriefItem(
                 title="Transfer 60K Chase UR to Hyatt",
-                detail="Sapphire Reserve · Strong value for 2 nights in Tokyo",
+                detail="Sapphire Reserve · Covers 2 nights in Tokyo",
+                tone="neutral",
+            ),
+            BriefItem(
+                title="Apply Delta upgrade cert on SFO→NRT",
+                detail=f"SkyMiles · Flight on {s.trip_date.strftime('%b %d')}",
                 tone="neutral",
             ),
         ],
         completed=[
             BriefItem(
                 title="Southwest Companion Pass confirmed active",
-                detail="Rapid Rewards · Valid through Dec 2026",
+                detail=(
+                    f"Rapid Rewards · Companion fare ready for "
+                    f"{s.positioning_date.strftime('%b %d')} positioning flight"
+                ),
                 tone="completed",
             ),
         ],
         insights=[
             BriefInsight(
-                title="Marriott free night expires soon",
-                detail=f"Bonvoy · Expires in {cert_days} days",
+                title="Marriott free night expires before Tokyo",
+                detail=f"Bonvoy · Expires in {s.marriott_cert_days} days",
                 severity="warning",
             ),
             BriefInsight(
-                title="Amex $40 dining offer expires Friday",
-                detail=f"Platinum · Expires in {offer_days} days",
+                title="Amex $40 dining offer expires soon",
+                detail=f"Platinum · Expires in {s.amex_offer_days} days",
                 severity="warning",
             ),
             BriefInsight(
-                title="Delta upgrade cert valid through next month",
-                detail=f"SkyMiles · Expires in {upgrade_days} days",
+                title="Delta upgrade cert expires before departure",
+                detail=f"SkyMiles · Expires in {s.delta_upgrade_days} days",
                 severity="warning",
             ),
             BriefInsight(
-                title="Strong Hyatt redemption via Chase transfer",
-                detail="Sapphire Reserve · 1:1 transfer to World of Hyatt",
+                title="Stack Hyatt points with Marriott free night",
+                detail="Sapphire Reserve · 60K UR transfer + 1 free night = 3 nights",
+                severity="opportunity",
+            ),
+            BriefInsight(
+                title="$550 in unused Amex credits this year",
+                detail="Platinum · $200 airline + $300 hotel credit remaining",
                 severity="opportunity",
             ),
         ],
@@ -264,43 +352,64 @@ def get_demo_daily_brief() -> DailyBrief:
 
 
 def get_demo_recommendations() -> list[Recommendation]:
+    s = _story()
+    trip_str = s.trip_date.strftime("%b %d")
+
     return [
         Recommendation(
             title="Book Park Hyatt Tokyo via Amex Travel",
-            summary="Your Platinum Fine Hotels + Resorts benefits include breakfast, upgrades, and late checkout.",
-            rationale="Demo · Matches your Tokyo trip dates and unused hotel credit.",
+            summary=(
+                "Your Platinum Fine Hotels + Resorts benefits include breakfast, "
+                "upgrades, and late checkout — plus $300 hotel credit to apply."
+            ),
+            rationale=(
+                f"Matches your {s.destination} trip ({trip_str}) and unused "
+                "Amex hotel credit."
+            ),
             recommendation_type="hotel",
             confidence="high",
             bullets=[
                 "Fine Hotels + Resorts eligible property",
-                "Potential suite upgrade at check-in",
                 "Apply $300 hotel credit before booking",
+                "Combine with Marriott free night for a longer stay",
             ],
             action_label="Open Amex Travel",
             action_url="https://www.americanexpress.com/travel/",
         ),
         Recommendation(
             title="Transfer 60K Chase UR to Hyatt",
-            summary="World of Hyatt points deliver strong value at Category 5–6 properties in Tokyo.",
-            rationale="Demo · You have 92K Ultimate Rewards and a Tokyo trip planned.",
+            summary=(
+                "World of Hyatt points deliver strong value at Category 5–6 "
+                "properties in Tokyo."
+            ),
+            rationale=(
+                f"You have 92K Ultimate Rewards and a {s.destination} trip on "
+                f"{trip_str}."
+            ),
             recommendation_type="hotel",
             confidence="high",
             bullets=[
                 "1:1 transfer from Chase Ultimate Rewards",
                 "Park Hyatt Tokyo ~30K/night off-peak",
-                "Combine with Marriott free night for 3 nights covered",
+                "Stack with Marriott free night for 3 nights covered",
             ],
             action_label="Transfer to Hyatt",
             action_url="https://www.hyatt.com/",
         ),
         Recommendation(
             title="Apply Delta upgrade cert on SFO→NRT",
-            summary="Your regional upgrade certificate expires before your trip — use it on the long-haul segment.",
-            rationale="Demo · Certificate expires in 21 days; Tokyo flight is in 45 days.",
+            summary=(
+                "Your regional upgrade certificate expires before departure — "
+                "use it on the long-haul segment."
+            ),
+            rationale=(
+                f"Certificate expires in {s.delta_upgrade_days} days; "
+                f"your {s.destination} flight is {trip_str}."
+            ),
             recommendation_type="travel",
             confidence="medium",
             bullets=[
-                "Regional upgrade valid on select international routes",
+                "Regional upgrade valid on SFO→NRT",
                 "Apply at booking or via My Trips",
                 "Gold Medallion complimentary upgrades may stack",
             ],
@@ -312,11 +421,12 @@ def get_demo_recommendations() -> list[Recommendation]:
 
 def get_demo_hero_candidates() -> list[tuple]:
     """Return hero candidate tuples: (priority, exp_sort, display, label, value, exp_days, btype)."""
+    s = _story()
     return [
-        (95, 14, "Marriott Bonvoy", "Free Night Certificate", "1 certificate", 14, "certificate"),
-        (88, 5, "American Express", "Amex Offer", "$40 dining credit", 5, "cash_credit"),
-        (82, 21, "Delta SkyMiles", "Regional Upgrade Certificate", "1 available", 21, "certificate"),
-        (70, 12, "Chase Sapphire Reserve", "5× Dining Multiplier", "Active", 12, "travel_credit"),
+        (95, s.marriott_cert_days, "Marriott Bonvoy", "Free Night Certificate", "1 certificate", s.marriott_cert_days, "certificate"),
+        (88, s.amex_offer_days, "American Express", "Amex Offer", "$40 dining credit", s.amex_offer_days, "cash_credit"),
+        (82, s.delta_upgrade_days, "Delta SkyMiles", "Regional Upgrade Certificate", "1 available", s.delta_upgrade_days, "certificate"),
+        (70, s.chase_dining_days, "Chase Sapphire Reserve", "5× Dining Multiplier", "Active", s.chase_dining_days, "travel_credit"),
         (60, 9999, "Chase Sapphire Reserve", "Travel Credit", "$50 remaining", None, "travel_credit"),
     ]
 
@@ -341,8 +451,9 @@ def get_demo_value_items() -> list[tuple]:
 
 
 def get_demo_action_items() -> list[dict]:
-    cert_expiry = (date.today() + timedelta(days=14)).strftime("%b %d, %Y")
-    offer_expiry = (date.today() + timedelta(days=5)).strftime("%b %d, %Y")
+    s = _story()
+    cert_expiry = s.marriott_cert_expiry.strftime("%b %d, %Y")
+    offer_expiry = s.amex_offer_expiry.strftime("%b %d, %Y")
     return [
         {
             "id": None,
@@ -351,7 +462,7 @@ def get_demo_action_items() -> list[dict]:
             "value": cert_expiry,
             "btype": "certificate",
             "urgency": "soon",
-            "days_left": 14,
+            "days_left": s.marriott_cert_days,
             "exp_date": cert_expiry,
         },
         {
@@ -361,48 +472,45 @@ def get_demo_action_items() -> list[dict]:
             "value": offer_expiry,
             "btype": "cash_credit",
             "urgency": "urgent",
-            "days_left": 5,
+            "days_left": s.amex_offer_days,
             "exp_date": offer_expiry,
         },
     ]
 
 
 def get_demo_reminders() -> list[dict]:
-    cert_expiry = date.today() + timedelta(days=14)
-    offer_expiry = date.today() + timedelta(days=5)
-    upgrade_expiry = date.today() + timedelta(days=21)
-    dining_end = date.today() + timedelta(days=12)
+    s = _story()
 
     return [
         {
             "source": "amex",
             "account_name": "American Express",
             "label": "Amex Offer",
-            "value": f"Expires {offer_expiry.strftime('%b %d, %Y')}",
-            "message": f"Amex Offer: Expires {offer_expiry.strftime('%b %d, %Y')}",
+            "value": f"Expires {s.amex_offer_expiry.strftime('%b %d, %Y')}",
+            "message": f"Amex Offer: Expires {s.amex_offer_expiry.strftime('%b %d, %Y')}",
             "urgency": "urgent",
-            "days_left": 5,
-            "expires_on": offer_expiry.isoformat(),
+            "days_left": s.amex_offer_days,
+            "expires_on": s.amex_offer_expiry.isoformat(),
         },
         {
             "source": "marriott",
             "account_name": "Marriott Bonvoy",
             "label": "Free Night Certificate",
-            "value": cert_expiry.strftime("%b %d, %Y"),
-            "message": f"Free Night Certificate: {cert_expiry.strftime('%b %d, %Y')}",
+            "value": s.marriott_cert_expiry.strftime("%b %d, %Y"),
+            "message": f"Free Night Certificate: {s.marriott_cert_expiry.strftime('%b %d, %Y')}",
             "urgency": "soon",
-            "days_left": 14,
-            "expires_on": cert_expiry.isoformat(),
+            "days_left": s.marriott_cert_days,
+            "expires_on": s.marriott_cert_expiry.isoformat(),
         },
         {
             "source": "delta",
             "account_name": "Delta SkyMiles",
             "label": "Regional Upgrade Certificate",
-            "value": upgrade_expiry.strftime("%b %d, %Y"),
-            "message": f"Regional Upgrade Certificate: {upgrade_expiry.strftime('%b %d, %Y')}",
+            "value": s.delta_upgrade_expiry.strftime("%b %d, %Y"),
+            "message": f"Regional Upgrade Certificate: {s.delta_upgrade_expiry.strftime('%b %d, %Y')}",
             "urgency": "soon",
-            "days_left": 21,
-            "expires_on": upgrade_expiry.isoformat(),
+            "days_left": s.delta_upgrade_days,
+            "expires_on": s.delta_upgrade_expiry.isoformat(),
         },
         {
             "source": "amex",
@@ -418,11 +526,11 @@ def get_demo_reminders() -> list[dict]:
             "source": "chase",
             "account_name": "Chase Sapphire Reserve",
             "label": "5× Dining Multiplier",
-            "value": dining_end.strftime("%b %d, %Y"),
-            "message": f"5× Dining Multiplier: Ends {dining_end.strftime('%b %d, %Y')}",
+            "value": s.chase_dining_end.strftime("%b %d, %Y"),
+            "message": f"5× Dining Multiplier: Ends {s.chase_dining_end.strftime('%b %d, %Y')}",
             "urgency": "soon",
-            "days_left": 12,
-            "expires_on": dining_end.isoformat(),
+            "days_left": s.chase_dining_days,
+            "expires_on": s.chase_dining_end.isoformat(),
         },
     ]
 
@@ -510,7 +618,7 @@ def get_demo_recent_discoveries() -> list[dict]:
 
 
 def expiring_count() -> int:
-    return 3
+    return _story().expiring_before_trip_count
 
 
 def account_count() -> int:
