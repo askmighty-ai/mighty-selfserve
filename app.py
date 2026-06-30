@@ -10079,9 +10079,9 @@ def dashboard():
             body_html = (
                 f'<div class="dash-brief-empty">'
                 f'<h2 class="dash-brief-onboard-headline">Connect Gmail to start your Daily Brief</h2>'
-                f'<p class="dash-brief-onboard-desc">Mighty scans who emails you — never what they say — '
-                f'to discover loyalty programs, subscriptions, and benefits you already have. '
-                f'Your brief fills in with expiring credits, account changes, and what needs attention.</p>'
+                f'<p class="dash-brief-onboard-desc">Mighty reads email metadata—not message contents—to discover '
+                f'loyalty programs, subscriptions, and travel accounts you\u2019re already using. Every morning '
+                f'you\u2019ll receive a brief with expiring benefits, account changes, and savings opportunities.</p>'
                 f'<ul class="dash-brief-onboard-points">'
                 f'<li class="dash-brief-onboard-point">'
                 f'<span class="dash-brief-onboard-point-dot" aria-hidden="true"></span>'
