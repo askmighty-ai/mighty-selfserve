@@ -9744,15 +9744,7 @@ def dashboard():
     _dashboard_recommendations = []
     if get_recommendations is not None and DecisionContext is not None:
         try:
-            _dash_email_subjects = [
-                r["display_name"]
-                for r in db.execute(
-                    "SELECT display_name FROM email_suggestions "
-                    "WHERE user_id=? AND dismissed=0 ORDER BY email_count DESC",
-                    (uid,),
-                ).fetchall()
-                if r["display_name"]
-            ]
+            _dash_email_subjects = _load_dashboard_email_subjects(uid, db)
             _dash_user_memory = {
                 "email_subjects": _dash_email_subjects,
                 "available_benefits": [
@@ -18864,7 +18856,27 @@ def api_opportunities():
 from mighty.email_scan import (
     scan_gmail, scan_imap, scan_outlook,
     get_imap_preset, CATEGORY_LABELS,
+    fetch_recent_subjects,
 )
+
+
+def _load_dashboard_email_subjects(uid: str, db) -> list[str]:
+    """Load recent email subject lines from the user's connected email provider."""
+    try:
+        row = db.execute(
+            "SELECT provider, access_token_enc FROM email_connections "
+            "WHERE user_id=? AND access_token_enc IS NOT NULL AND access_token_enc != '' "
+            "ORDER BY scanned_at DESC LIMIT 1",
+            (uid,),
+        ).fetchone()
+        if not row:
+            return []
+        access_token = decrypt_cred(uid, row["access_token_enc"])
+        if not access_token:
+            return []
+        return fetch_recent_subjects(row["provider"], access_token) or []
+    except Exception:
+        return []
 
 _EMAIL_SCAN_PAGE = r"""<!DOCTYPE html>
 <html lang="en">
