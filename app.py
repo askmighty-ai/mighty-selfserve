@@ -5957,6 +5957,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-brief-insight-title{font-size:15px;font-weight:600;color:#1c1917;line-height:1.45;letter-spacing:-0.01em}
 .dash-brief-insight-detail{font-size:13px;font-weight:400;color:#78716c;margin-top:4px;line-height:1.55}
 .dash-brief-empty{padding:4px 0 0;max-width:52ch}
+.dash-brief-onboard-layout{display:flex;align-items:stretch;gap:48px;margin-top:4px}
+.dash-brief-onboard-copy{flex:1;min-width:0;max-width:52ch}
+.dash-brief-onboard-preview{flex:1;min-width:0;display:flex;align-items:flex-start}
+.dash-brief-preview-panel{width:100%;background:#faf8f6;border:1px solid rgba(0,0,0,0.06);border-radius:14px;padding:22px 24px 20px;box-shadow:inset 0 1px 0 rgba(255,255,255,0.6)}
+.dash-brief-preview-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 18px;padding-bottom:14px;border-bottom:1px solid rgba(0,0,0,0.05)}
+.dash-brief-preview-label{font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:0.12em}
+.dash-brief-preview-badge{font-size:10px;font-weight:600;color:#a8a29e;background:rgba(0,0,0,0.04);border:0.5px solid rgba(0,0,0,0.06);border-radius:20px;padding:3px 9px;letter-spacing:0.02em;white-space:nowrap}
+.dash-brief-preview .dash-brief-insights{gap:0}
+.dash-brief-preview .dash-brief-insight{padding:14px 0}
+.dash-brief-preview .dash-brief-insight-title{font-size:14px;font-weight:600}
+.dash-brief-preview .dash-brief-insight-detail{font-size:12px;margin-top:3px}
 .dash-brief-onboard-headline{font-size:20px;font-weight:600;color:#1c1917;letter-spacing:-0.35px;line-height:1.35;margin:0 0 14px;max-width:38ch}
 .dash-brief-onboard-desc{font-size:14px;font-weight:400;color:#57534e;line-height:1.65;margin:0 0 28px;max-width:48ch}
 .dash-brief-onboard-points{list-style:none;margin:0 0 32px;padding:0;display:flex;flex-direction:column;gap:16px}
@@ -6078,7 +6089,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-brief-card{padding:28px 22px;border-radius:16px}.dash-brief-greeting{font-size:13px;margin-bottom:22px}.dash-brief-today{margin-bottom:20px;padding-bottom:16px}.dash-brief-insight{gap:14px;padding:16px 0}.dash-brief-insight-title{font-size:14px}.dash-brief-insight-detail{font-size:12px}.dash-brief-onboard-headline{font-size:18px}.dash-brief-onboard-desc{font-size:13px;margin-bottom:24px}.dash-brief-onboard-points{margin-bottom:28px;gap:14px}.dash-brief-onboard-primary{width:100%;box-sizing:border-box}.cards-panel{padding:16px 16px 32px}}
+@media(max-width:768px){.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-brief-card{padding:28px 22px;border-radius:16px}.dash-brief-greeting{font-size:13px;margin-bottom:22px}.dash-brief-today{margin-bottom:20px;padding-bottom:16px}.dash-brief-insight{gap:14px;padding:16px 0}.dash-brief-insight-title{font-size:14px}.dash-brief-insight-detail{font-size:12px}.dash-brief-onboard-layout{flex-direction:column;gap:28px}.dash-brief-onboard-copy{max-width:none}.dash-brief-onboard-headline{font-size:18px}.dash-brief-onboard-desc{font-size:13px;margin-bottom:24px}.dash-brief-onboard-points{margin-bottom:28px;gap:14px}.dash-brief-onboard-primary{width:100%;box-sizing:border-box}.dash-brief-preview-panel{padding:18px 18px 16px}.cards-panel{padding:16px 16px 32px}}
 </style>
 </head>
 <body>
@@ -10076,8 +10087,26 @@ def dashboard():
         if insights_html:
             body_html = f'<ul class="dash-brief-insights">{insights_html}</ul>'
         else:
+            _preview_items = (
+                ("warning", "Marriott free night expires in 14 days", "Bonvoy · 1 certificate"),
+                ("success", "Delta upgrade certificate available", "SkyMiles · Regional upgrade"),
+                ("info", "New subscription detected", "Streaming · $15.99/mo"),
+                ("warning", "$40 Amex Offer expires Friday", "Platinum · Merchant credit"),
+                ("warning", "One account requires attention", "Credentials · Re-authentication needed"),
+            )
+            _preview_insights_html = ""
+            for _sev, _title, _detail in _preview_items:
+                _preview_insights_html += (
+                    f'<li class="dash-brief-insight dash-brief-insight--{_sev}">'
+                    f'<span class="dash-brief-severity" aria-hidden="true"></span>'
+                    f'<div class="dash-brief-insight-body">'
+                    f'<div class="dash-brief-insight-title">{he(_title)}</div>'
+                    f'<div class="dash-brief-insight-detail">{he(_detail)}</div>'
+                    f'</div></li>'
+                )
             body_html = (
-                f'<div class="dash-brief-empty">'
+                f'<div class="dash-brief-onboard-layout">'
+                f'<div class="dash-brief-onboard-copy">'
                 f'<h2 class="dash-brief-onboard-headline">Connect Gmail to start your Daily Brief</h2>'
                 f'<p class="dash-brief-onboard-desc">Mighty reads email metadata—not message contents—to discover '
                 f'loyalty programs, subscriptions, and travel accounts you\u2019re already using. Every morning '
@@ -10097,6 +10126,16 @@ def dashboard():
                 f'<a href="/email-scan" class="dash-brief-onboard-primary">Connect Gmail</a>'
                 f'<a href="/credentials" class="dash-brief-onboard-secondary">'
                 f'Or connect an account manually</a>'
+                f'</div>'
+                f'</div>'
+                f'<div class="dash-brief-onboard-preview" aria-hidden="true">'
+                f'<div class="dash-brief-preview-panel dash-brief-preview">'
+                f'<div class="dash-brief-preview-head">'
+                f'<span class="dash-brief-preview-label">Example Daily Brief</span>'
+                f'<span class="dash-brief-preview-badge">Sample</span>'
+                f'</div>'
+                f'<ul class="dash-brief-insights">{_preview_insights_html}</ul>'
+                f'</div>'
                 f'</div>'
                 f'</div>'
             )
