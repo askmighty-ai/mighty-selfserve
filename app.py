@@ -10037,7 +10037,14 @@ def dashboard():
             f'</div>'
         )
 
-    recommendations_section_html = _render_recommendation_cards(_dashboard_recommendations)
+    _recs = _dashboard_recommendations or []
+    _has_real_recommendations = any(
+        str(getattr(_rec, "rationale", "") or "").strip().lower() != "demo recommendation."
+        for _rec in _recs
+    )
+    recommendations_section_html = _render_recommendation_cards(
+        _recs if _has_real_recommendations else []
+    )
     if recommendations_section_html:
         recommendations_section_html = (
             f'<div class="dash-section dash-recommendations-section">'
