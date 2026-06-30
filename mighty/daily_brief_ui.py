@@ -308,11 +308,11 @@ def render_executive_briefing_hero(
     today_label: str,
     escape: Callable[[Any], str],
 ) -> str:
-    """Render the two-column executive Daily Brief hero."""
+    """Render the executive Daily Brief hero."""
 
     def _render_priority(action: PriorityActionItem) -> str:
         value_html = (
-            f'<div class="dash-brief-priority-value">{escape(action.value)}</div>'
+            f'<p class="dash-brief-priority-value">{escape(action.value)}</p>'
             if action.value else ""
         )
         cta_html = ""
@@ -320,17 +320,14 @@ def render_executive_briefing_hero(
             href = escape(action.cta_url or "#")
             cta_html = (
                 f'<a href="{href}" class="dash-brief-priority-cta">'
-                f'{escape(action.cta_label)}</a>'
+                f'{escape(action.cta_label)} →</a>'
             )
         return (
-            f'<article class="dash-brief-priority-item dash-brief-priority-item--{escape(action.urgency)}">'
-            f'<span class="dash-brief-priority-dot" aria-hidden="true"></span>'
-            f'<div class="dash-brief-priority-body">'
+            f'<article class="dash-brief-priority-item">'
             f'<h3 class="dash-brief-priority-headline">{escape(action.headline)}</h3>'
             f'<p class="dash-brief-priority-why">{escape(action.why)}</p>'
             f'{value_html}'
             f'{cta_html}'
-            f'</div>'
             f'</article>'
         )
 
@@ -376,20 +373,17 @@ def render_executive_briefing_hero(
         f'<div class="dash-hero">'
         f'<div class="dash-brief-card dash-brief-card--exec">'
         f'<div class="dash-brief-exec">'
-        f'<div class="dash-brief-exec-left">'
-        f'<div class="dash-brief-greeting" id="hero-greeting">Hello, {safe_name}</div>'
-        f'<div class="dash-brief-today">'
+        f'<header class="dash-brief-header">'
+        f'<h1 class="dash-brief-greeting" id="hero-greeting">Hello, {safe_name}</h1>'
+        f'<div class="dash-brief-meta">'
         f'<time class="dash-brief-today-date">{escape(today_label)}</time>'
         f'{demo_tag}'
         f'</div>'
+        f'</header>'
         f'<p class="dash-brief-priority-summary">{escape(briefing.priority_summary)}</p>'
         f'<div class="dash-brief-priorities">{priorities_html}</div>'
         f'{onboard_html}'
-        f'</div>'
-        f'<div class="dash-brief-exec-right">'
-        f'<div class="dash-brief-metrics-head">Summary</div>'
         f'<div class="dash-brief-metrics">{metrics_html}</div>'
-        f'</div>'
         f'</div>'
         f'</div>'
         f'<script>'
