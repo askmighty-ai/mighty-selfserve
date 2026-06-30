@@ -121,10 +121,11 @@ def get_recommendations(
     user_memory: dict[str, Any] | None = None,
 ) -> list[Recommendation]:
     if context.source == "dashboard":
+        recommendations = _dashboard_demo_recommendations()
         email_opportunities = evaluate_email(context, user_memory)
         if email_opportunities:
-            return _opportunities_to_recommendations(email_opportunities)
-        return _dashboard_demo_recommendations()
+            recommendations.extend(_opportunities_to_recommendations(email_opportunities))
+        return recommendations
 
     detect_situation(context)
     opportunities = evaluate_hotel(context, user_memory)

@@ -16,15 +16,16 @@ def test_dashboard_falls_back_to_demo_without_subjects():
     assert recs[0].rationale == "Demo recommendation."
 
 
-def test_dashboard_uses_email_advisor_when_subjects_match():
+def test_dashboard_appends_email_advisor_when_subjects_match():
     recs = get_recommendations(
         _dashboard_ctx(subjects=["World of Hyatt: 2x points this week"]),
         user_memory={"email_subjects": ["World of Hyatt: 2x points this week"]},
     )
-    assert len(recs) == 1
-    assert recs[0].title == "Review your Hyatt emails"
-    assert recs[0].recommendation_type == "hotel"
-    assert recs[0].rationale != "Demo recommendation."
+    assert len(recs) == 4
+    assert recs[0].rationale == "Demo recommendation."
+    assert recs[-1].title == "Review your Hyatt emails"
+    assert recs[-1].recommendation_type == "hotel"
+    assert recs[-1].rationale != "Demo recommendation."
 
 
 def test_dashboard_accepts_subjects_from_user_memory_only():
@@ -33,5 +34,6 @@ def test_dashboard_accepts_subjects_from_user_memory_only():
         ctx,
         user_memory={"email_subjects": ["Marriott Bonvoy offer inside"]},
     )
-    assert len(recs) == 1
-    assert recs[0].title == "Review your Marriott emails"
+    assert len(recs) == 4
+    assert recs[0].rationale == "Demo recommendation."
+    assert recs[-1].title == "Review your Marriott emails"
