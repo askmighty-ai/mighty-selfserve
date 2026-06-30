@@ -122,9 +122,9 @@ def get_recommendations(
 ) -> list[Recommendation]:
     if context.source == "dashboard":
         recommendations = _dashboard_demo_recommendations()
-        email_opportunities = evaluate_email(context, user_memory)
-        if email_opportunities:
-            recommendations.extend(_opportunities_to_recommendations(email_opportunities))
+        recommendations.extend(
+            _opportunities_to_recommendations(evaluate_email(context, user_memory))
+        )
         return recommendations
 
     detect_situation(context)
