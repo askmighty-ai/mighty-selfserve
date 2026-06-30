@@ -1708,8 +1708,8 @@ def _log_privacy_event(uid: str, event_type: str, source: str = None, domain: st
         pass
 
 
-def _sidebar_html(active: str, email: str, csrf: str) -> str:
-    """Generate the shared left sidebar HTML — icon + label, 140px."""
+def _sidebar_parts(active: str, email: str, csrf: str) -> tuple[str, str, str]:
+    """Shared sidebar fragments: (desktop aside, mobile drawer, full combined)."""
     def _nav(href, label, icon_svg, page_key):
         cls = "sidebar-link sidebar-link-active" if active == page_key else "sidebar-link"
         return f'<a href="{href}" class="{cls}">{icon_svg}{label}</a>'
@@ -1730,8 +1730,7 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         f'</button>'
         f'</form>'
     )
-    return (
-        # Desktop sidebar
+    desktop = (
         '<aside class="sidebar" id="desktop-sidebar">'
         '<div class="sidebar-header">'
         '<a href="/dashboard" class="sidebar-logo">'
@@ -1741,7 +1740,8 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         '<nav class="sidebar-nav">' + _nav_links + '</nav>'
         '<div class="sidebar-footer">' + _logout_form + '</div>'
         '</aside>'
-
+    )
+    mobile = (
         # Mobile drawer overlay — hidden by default
         '<div id="mobile-drawer-overlay" onclick="closeMobileDrawer()" '
         'style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:199"></div>'
@@ -1801,6 +1801,12 @@ def _sidebar_html(active: str, email: str, csrf: str) -> str:
         '});'
         '</script>'
     )
+    return desktop, mobile, desktop + mobile
+
+
+def _sidebar_html(active: str, email: str, csrf: str) -> str:
+    """Generate the shared left sidebar HTML — icon + label, 140px."""
+    return _sidebar_parts(active, email, csrf)[2]
 
 # ── Per-user data encryption ───────────────────────────────────────────────────
 # Key is derived from SECRET_KEY + user_id so each user's data uses a distinct key.
@@ -5182,6 +5188,11 @@ button{font-family:inherit;cursor:pointer}
 .badge-approved{background:#d1fae5;color:#065f46;border:1px solid #a7f3d0}
 .badge-denied{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
 .badge-timeout{background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb}
+/* App shell — sidebar + main content layout (dashboard, credentials, settings) */
+html:has(.app-shell){height:100%;overflow:hidden}
+body:has(.app-shell){display:flex;flex-direction:column;height:100%;min-height:100vh;overflow:hidden;background:#eee9e2}
+.app-shell{display:flex;flex-direction:row;flex:1;min-height:0;height:100vh;width:100%;overflow:hidden}
+.app-shell > .main-content{flex:1 1 auto;min-width:0}
 .sidebar{width:140px;flex-shrink:0;background:#0a0c12;border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;height:100vh;overflow:hidden}
 .sidebar-header{padding:14px 12px 10px;border-bottom:1px solid rgba(255,255,255,0.06);width:100%;display:flex;align-items:center;gap:8px}
 .sidebar-logo{display:flex;align-items:center;gap:8px;text-decoration:none}
@@ -5197,7 +5208,7 @@ button{font-family:inherit;cursor:pointer}
 .sidebar-avatar{width:100%;height:34px;border-radius:8px;background:none;display:flex;align-items:center;gap:9px;padding:0 10px;font-size:12px;font-weight:500;color:#5a6080;border:none;cursor:pointer;font-family:inherit;transition:background 0.1s,color 0.1s}
 .sidebar-avatar:hover{background:rgba(255,255,255,0.07);color:#c4cde0}
 .sidebar-avatar-dot{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0}
-.sidebar-tip{display:none}
+@media(max-width:768px){html,body{height:auto;overflow:auto}.app-shell{height:auto;overflow:visible}.sidebar{display:none}.main-content{height:auto;overflow:visible}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}}
 """
 
 LANDING_HTML = """<!DOCTYPE html>
@@ -5901,9 +5912,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-html,body{height:100%;overflow:hidden}
-body{display:flex;flex-direction:row;background:#eee9e2}
-.main-content{flex:1;min-width:0;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+.main-content{height:100vh;overflow:hidden;display:flex;flex-direction:column}
 /* Top bar */
 .topbar{padding:14px 24px;display:flex;align-items:center;gap:10px;flex-shrink:0;background:#eee9e2;z-index:2;border-bottom:0.5px solid rgba(0,0,0,0.07)}
 .topbar-search{flex:1;display:flex;align-items:center;gap:8px;background:#fff;border:0.5px solid rgba(0,0,0,0.1);border-radius:9px;padding:8px 14px;cursor:text;max-width:340px}
@@ -6061,11 +6070,12 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-hero-card,.dash-connect-card{padding:28px 22px;border-radius:16px}.dash-hero-greeting{font-size:14px;margin-bottom:10px}.dash-hero-headline{font-size:22px;letter-spacing:-0.4px}.dash-hero-tagline{font-size:14px;margin-top:10px}.dash-hero-brief-btn{margin-top:20px;width:100%}.dash-connect-actions{flex-direction:column}.dash-connect-primary,.dash-connect-secondary{width:100%;box-sizing:border-box}.cards-panel{padding:16px 16px 32px}}
+@media(max-width:768px){.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-hero-card,.dash-connect-card{padding:28px 22px;border-radius:16px}.dash-hero-greeting{font-size:14px;margin-bottom:10px}.dash-hero-headline{font-size:22px;letter-spacing:-0.4px}.dash-hero-tagline{font-size:14px;margin-top:10px}.dash-hero-brief-btn{margin-top:20px;width:100%}.dash-connect-actions{flex-direction:column}.dash-connect-primary,.dash-connect-secondary{width:100%;box-sizing:border-box}.cards-panel{padding:16px 16px 32px}}
 </style>
 </head>
 <body>
-{_SIDEBAR_}
+<div class="app-shell">
+{_SIDEBAR_DESKTOP_}
 
 <div class="main-content">
   {onboarding_banner}
@@ -6244,6 +6254,8 @@ body{display:flex;flex-direction:row;background:#eee9e2}
     </div><!-- /cards-panel -->
   </div><!-- /page-body -->
 </div><!-- /main-content -->
+</div><!-- /app-shell -->
+{_SIDEBAR_MOBILE_}
 
 
 <script>
@@ -7024,9 +7036,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-html,body{height:100%;overflow:hidden}
-body{display:flex;flex-direction:row}
-.main-content{flex:1;min-width:0;height:100vh;overflow-y:auto}
+.main-content{height:100vh;overflow-y:auto}
 .page-wrap{max-width:600px;margin:0 auto;padding:32px 36px;display:flex;flex-direction:column;gap:16px}
 .page-title{font-size:20px;font-weight:700;color:#1c1917;margin-bottom:4px}
 .card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:24px;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
@@ -7057,11 +7067,11 @@ body{display:flex;flex-direction:row}
 .settings-input:focus{border-color:#6366f1}
 .settings-input::placeholder{color:#c0bbb5}
 .settings-label{display:block;font-size:11px;font-weight:600;color:#9ca3af;margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}}
 </style>
 </head>
 <body>
-{_SIDEBAR_}
+<div class="app-shell">
+{_SIDEBAR_DESKTOP_}
 
 <div class="main-content">
 <div style="display:none;align-items:center;gap:10px;padding:12px 16px;border-bottom:0.5px solid rgba(0,0,0,0.07);background:#eee9e2;position:sticky;top:0;z-index:2" id="mobile-topbar-settings">
@@ -7267,7 +7277,9 @@ body{display:flex;flex-direction:row}
     </div>
   </div>
 </div>
-</div>
+</div><!-- /main-content -->
+</div><!-- /app-shell -->
+{_SIDEBAR_MOBILE_}
 
 
 <script>
@@ -11130,8 +11142,10 @@ function dismissOnboarding() {
 </script>"""
 
     _csrf = get_csrf_token()
+    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('dashboard', user["email"], _csrf)
     return (DASHBOARD_HTML
-            .replace("{_SIDEBAR_}",               _sidebar_html('dashboard', user["email"], _csrf))
+            .replace("{_SIDEBAR_DESKTOP_}",        _sidebar_desktop)
+            .replace("{_SIDEBAR_MOBILE_}",         _sidebar_mobile)
             .replace("{email}",                   he(user["email"]))
             .replace("{feed_html}",               feed)
             .replace("{pending_count}",           str(pending_count))
@@ -11183,8 +11197,10 @@ def settings():
     api_key_masked = key_prefix + "•" * max(0, len(raw_key) - 3)
     _csrf = get_csrf_token()
     notif_pref = user["notification_pref"] if user["notification_pref"] else "quiet"
+    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('settings', user["email"], _csrf)
     return (SETTINGS_HTML
-            .replace("{_SIDEBAR_}",               _sidebar_html('settings', user["email"], _csrf))
+            .replace("{_SIDEBAR_DESKTOP_}",        _sidebar_desktop)
+            .replace("{_SIDEBAR_MOBILE_}",         _sidebar_mobile)
             .replace("{email}",                   he(user["email"]))
             .replace("{api_key}",                 raw_key)
             .replace("{api_key_masked}",          he(api_key_masked))
@@ -14434,11 +14450,68 @@ function closeBenefitDrawer() {{
 </script>"""
 
 
+_CREDENTIALS_PAGE_CSS = """
+.main-content{height:100vh;overflow-y:auto}
+.page{max-width:660px;margin:0 auto;padding:32px 28px}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+h1{font-size:20px;font-weight:700;color:#1c1917}
+.btn-connect-new{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;transition:background 0.12s}
+.btn-connect-new:hover{background:#4f46e5}
+/* ── Cred cards ── */
+.cred-card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
+.cred-card:hover{border-color:#d0ccc5}
+.cred-form input{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#ffffff;color:#1c1917}
+.cred-form input:focus{border-color:#6366f1}
+.cred-form input::placeholder{color:#c0bbb5}
+.cred-form details{margin-top:8px;border:1px solid #e8e4de;border-radius:8px;overflow:hidden}
+.cred-form details summary{font-size:12px;color:#6b7280;cursor:pointer;user-select:none;padding:8px 12px;background:#f5f2ed;list-style:none;display:flex;align-items:center;justify-content:space-between}
+.cred-form details summary::after{content:'＋';font-size:14px;color:#9ca3af}
+.cred-form details[open] summary::after{content:'－'}
+.cred-form details input{margin:0;border:none;border-top:1px solid #e8e4de;border-radius:0}
+.btn-toggle{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;transition:all 0.12s}
+.btn-toggle:hover{border-color:#6366f1;background:#eef2ff}
+.btn-remove{padding:5px 10px;border-radius:7px;border:1px solid rgba(220,38,38,0.25);background:transparent;font-size:12px;color:#dc2626;cursor:pointer;font-family:inherit;transition:all 0.12s}
+.btn-remove:hover{background:rgba(220,38,38,0.06);border-color:#dc2626}
+.btn-save{margin-top:12px;padding:9px 18px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.12s}
+.btn-save:hover{background:#4f46e5}
+/* ── Modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:64px;backdrop-filter:blur(2px)}
+.modal-overlay.open{display:flex}
+.modal{background:#ffffff;border:1px solid #e8e4de;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.15)}
+.modal-head{padding:20px 20px 12px;border-bottom:1px solid #f5f2ed;flex-shrink:0}
+.modal-title{font-size:16px;font-weight:700;color:#1c1917;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}
+.modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px;transition:color 0.12s}
+.modal-close:hover{color:#1c1917}
+.modal-search{width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #e8e4de;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#f5f2ed;transition:border-color .12s}
+.modal-search:focus{border-color:#6366f1}
+.modal-search::placeholder{color:#c0bbb5}
+.modal-body{overflow-y:auto;padding:0 20px 20px;flex:1;min-height:0}
+.modal-cat-group .modal-cat-label{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9ca3af;margin:16px 0 6px}
+.modal-site-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f5f2ed}
+.modal-site-row:last-child{border-bottom:none}
+.modal-connect-btn{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;flex-shrink:0;transition:all 0.12s}
+.modal-connect-btn:hover{border-color:#6366f1;background:#eef2ff}
+.modal-cred-screen{display:none;flex-direction:column;flex:1;min-height:0}
+.modal-cred-screen.active{display:flex}
+.modal-cred-head{padding:20px 20px 16px;border-bottom:1px solid #f5f2ed;flex-shrink:0;display:flex;align-items:center;gap:12px}
+.modal-back-btn{background:none;border:none;font-size:14px;cursor:pointer;color:#6366f1;font-family:inherit;font-weight:600;padding:0;transition:color 0.12s}
+.modal-back-btn:hover{color:#4f46e5}
+.modal-cred-body{padding:20px;overflow-y:auto;flex:1;min-height:0}
+.modal-cred-body input{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:10px;transition:border-color .12s;background:#ffffff;color:#1c1917}
+.modal-cred-body input:focus{border-color:#6366f1}
+.modal-cred-body input::placeholder{color:#c0bbb5}
+.toast{position:fixed;bottom:24px;right:24px;background:#1c1917;color:#f5f2ed;border:1px solid #333;padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,0.15)}
+.toast.show{opacity:1}
+"""
+
+
 def _build_credentials_page(user, configured: set, extra_by_source: dict = None, synced_at_by_source: dict = None) -> str:
     """Generate the credentials management page HTML."""
     extra_by_source = extra_by_source or {}
     synced_at_by_source = synced_at_by_source or {}
     csrf = get_csrf_token()
+    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
+    _cred_styles = BASE_CSS + _CREDENTIALS_PAGE_CSS
 
     # ── Connected account cards (main page) ──────────────────────────────────
     connected_cards_html = ""
@@ -14530,66 +14603,12 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-{BASE_CSS}
-html,body{{height:100%;overflow:hidden}}
-body{{display:flex;flex-direction:row;background:#eee9e2}}
-.main-content{{flex:1;min-width:0;height:100vh;overflow-y:auto}}
-.page{{max-width:660px;margin:0 auto;padding:32px 28px}}
-.page-header{{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}}
-h1{{font-size:20px;font-weight:700;color:#1c1917}}
-.btn-connect-new{{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;transition:background 0.12s}}
-.btn-connect-new:hover{{background:#4f46e5}}
-/* ── Cred cards ── */
-.cred-card{{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}}
-.cred-card:hover{{border-color:#d0ccc5}}
-.cred-form input{{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#ffffff;color:#1c1917}}
-.cred-form input:focus{{border-color:#6366f1}}
-.cred-form input::placeholder{{color:#c0bbb5}}
-.cred-form details{{margin-top:8px;border:1px solid #e8e4de;border-radius:8px;overflow:hidden}}
-.cred-form details summary{{font-size:12px;color:#6b7280;cursor:pointer;user-select:none;padding:8px 12px;background:#f5f2ed;list-style:none;display:flex;align-items:center;justify-content:space-between}}
-.cred-form details summary::after{{content:'＋';font-size:14px;color:#9ca3af}}
-.cred-form details[open] summary::after{{content:'－'}}
-.cred-form details input{{margin:0;border:none;border-top:1px solid #e8e4de;border-radius:0}}
-.btn-toggle{{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;transition:all 0.12s}}
-.btn-toggle:hover{{border-color:#6366f1;background:#eef2ff}}
-.btn-remove{{padding:5px 10px;border-radius:7px;border:1px solid rgba(220,38,38,0.25);background:transparent;font-size:12px;color:#dc2626;cursor:pointer;font-family:inherit;transition:all 0.12s}}
-.btn-remove:hover{{background:rgba(220,38,38,0.06);border-color:#dc2626}}
-.btn-save{{margin-top:12px;padding:9px 18px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.12s}}
-.btn-save:hover{{background:#4f46e5}}
-/* ── Modal ── */
-.modal-overlay{{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:64px;backdrop-filter:blur(2px)}}
-.modal-overlay.open{{display:flex}}
-.modal{{background:#ffffff;border:1px solid #e8e4de;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.15)}}
-.modal-head{{padding:20px 20px 12px;border-bottom:1px solid #f5f2ed;flex-shrink:0}}
-.modal-title{{font-size:16px;font-weight:700;color:#1c1917;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}}
-.modal-close{{background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px;transition:color 0.12s}}
-.modal-close:hover{{color:#1c1917}}
-.modal-search{{width:100%;padding:9px 12px;border-radius:8px;border:1.5px solid #e8e4de;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#f5f2ed;transition:border-color .12s}}
-.modal-search:focus{{border-color:#6366f1}}
-.modal-search::placeholder{{color:#c0bbb5}}
-.modal-body{{overflow-y:auto;padding:0 20px 20px;flex:1;min-height:0}}
-.modal-cat-group .modal-cat-label{{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9ca3af;margin:16px 0 6px}}
-.modal-site-row{{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f5f2ed}}
-.modal-site-row:last-child{{border-bottom:none}}
-.modal-connect-btn{{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;flex-shrink:0;transition:all 0.12s}}
-.modal-connect-btn:hover{{border-color:#6366f1;background:#eef2ff}}
-.modal-cred-screen{{display:none;flex-direction:column;flex:1;min-height:0}}
-.modal-cred-screen.active{{display:flex}}
-.modal-cred-head{{padding:20px 20px 16px;border-bottom:1px solid #f5f2ed;flex-shrink:0;display:flex;align-items:center;gap:12px}}
-.modal-back-btn{{background:none;border:none;font-size:14px;cursor:pointer;color:#6366f1;font-family:inherit;font-weight:600;padding:0;transition:color 0.12s}}
-.modal-back-btn:hover{{color:#4f46e5}}
-.modal-cred-body{{padding:20px;overflow-y:auto;flex:1;min-height:0}}
-.modal-cred-body input{{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:10px;transition:border-color .12s;background:#ffffff;color:#1c1917}}
-.modal-cred-body input:focus{{border-color:#6366f1}}
-.modal-cred-body input::placeholder{{color:#c0bbb5}}
-.toast{{position:fixed;bottom:24px;right:24px;background:#1c1917;color:#f5f2ed;border:1px solid #333;padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,0.15)}}
-.toast.show{{opacity:1}}
-@media(max-width:768px){{html,body{{height:auto;overflow:auto}}.sidebar{{display:none}}.main-content{{height:auto;overflow:visible;padding-left:0!important}}.nav-hamburger{{display:flex!important}}.topbar-search{{flex:1;min-width:0}}}}
+{_cred_styles}
 </style>
 </head>
 <body>
-{_sidebar_html('accounts', user["email"], csrf)}
-
+<div class="app-shell">
+{_sidebar_desktop}
 <div class="main-content">
 <div style="display:none;align-items:center;gap:10px;padding:12px 16px;border-bottom:0.5px solid rgba(0,0,0,0.07);background:#eee9e2;position:sticky;top:0;z-index:2" id="mobile-topbar-accounts">
   <button class="nav-hamburger" onclick="openMobileDrawer()" aria-label="Open menu" style="display:none">
@@ -14696,6 +14715,9 @@ h1{{font-size:20px;font-weight:700;color:#1c1917}}
 </div>
 
 <div class="toast" id="toast"></div>
+</div><!-- /main-content -->
+</div><!-- /app-shell -->
+{_sidebar_mobile}
 
 <script>
 var CSRF = '{csrf}';
