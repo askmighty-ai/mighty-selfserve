@@ -14452,11 +14452,35 @@ function closeBenefitDrawer() {{
 
 _CREDENTIALS_PAGE_CSS = """
 .main-content{height:100vh;overflow-y:auto}
-.page{max-width:660px;margin:0 auto;padding:32px 28px}
-.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
-h1{font-size:20px;font-weight:700;color:#1c1917}
-.btn-connect-new{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;transition:background 0.12s}
+.page{max-width:720px;margin:0;padding:32px 36px 40px}
+.page:has(.accounts-onboard){max-width:828px}
+.page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px}
+.page-header-text{flex:1;min-width:0}
+.page-header h1{font-size:20px;font-weight:700;color:#1c1917;margin:0}
+.page-subtitle{font-size:14px;color:#6b7280;line-height:1.5;margin-top:4px;max-width:48ch}
+.btn-connect-new{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;transition:background 0.12s;flex-shrink:0;margin-top:2px}
 .btn-connect-new:hover{background:#4f46e5}
+.accounts-onboard{margin-top:4px}
+.accounts-onboard-card{background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:18px;padding:32px 36px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 16px rgba(0,0,0,0.06);text-align:center}
+.accounts-onboard-title{font-size:24px;font-weight:700;color:#1c1917;letter-spacing:-0.5px;line-height:1.25;margin:0 auto 10px;max-width:24ch}
+.accounts-onboard-desc{font-size:15px;color:#57534e;line-height:1.55;margin:0 auto 18px;max-width:46ch}
+.accounts-onboard-value{display:grid;gap:8px;margin:0 auto 22px;max-width:440px;text-align:left}
+.accounts-onboard-value-item{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:#fafaf9;border:1px solid rgba(0,0,0,0.05);border-radius:10px}
+.accounts-onboard-value-icon{width:22px;height:22px;border-radius:6px;background:rgba(99,102,241,0.1);color:#6366f1;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.accounts-onboard-value-text{font-size:13px;font-weight:600;color:#1c1917;line-height:1.45}
+.accounts-onboard-value-text span{display:block;font-size:12px;font-weight:400;color:#78716c;margin-top:1px}
+.accounts-onboard-cats{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-bottom:20px}
+.accounts-onboard-cat{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;border:1px solid #e8e4de;border-radius:99px;font-size:12px;font-weight:500;color:#57534e}
+.accounts-onboard-cat-icon{font-size:13px;line-height:1}
+.accounts-onboard-cta{display:inline-flex;align-items:center;justify-content:center;padding:13px 26px;background:#6366f1;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;box-shadow:0 1px 2px rgba(99,102,241,0.2);transition:background 0.12s,box-shadow 0.12s;margin-bottom:18px}
+.accounts-onboard-cta:hover{background:#4f46e5;box-shadow:0 4px 12px rgba(99,102,241,0.25)}
+.accounts-onboard-providers-label{display:block;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px}
+.accounts-onboard-chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.accounts-onboard-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px 5px 6px;background:#fff;border:1px solid #e8e4de;border-radius:99px;font-size:12px;font-weight:500;color:#57534e}
+.accounts-onboard-chip-icon{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;overflow:hidden}
+.accounts-onboard-chip-icon img{width:14px;height:14px;border-radius:2px;display:block}
+.page-sync-note{text-align:center;padding:16px 0 8px;font-size:12px;color:#9ca3af}
+@media(max-width:768px){.page{padding:24px 16px 32px}.page-header{flex-wrap:wrap}.btn-connect-new{width:100%;justify-content:center;margin-top:0}.accounts-onboard-card{padding:26px 20px;border-radius:16px}.accounts-onboard-title{font-size:21px;max-width:none}.accounts-onboard-desc{font-size:14px}.accounts-onboard-cta{width:100%;box-sizing:border-box}}
 /* ── Cred cards ── */
 .cred-card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
 .cred-card:hover{border-color:#d0ccc5}
@@ -14554,13 +14578,56 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
   {_field_config_html(key, configured, extra_by_source.get(key, {}))}
 </div>"""
 
+    _sync_note_html = ""
     if not connected_cards_html:
-        connected_cards_html = """
-<div style="text-align:center;padding:56px 24px;color:#9ca3af">
-  <div style="font-size:36px;margin-bottom:14px">🔗</div>
-  <div style="font-size:15px;font-weight:500;color:#6b7280;margin-bottom:6px">No accounts connected yet</div>
-  <div style="font-size:13px">Click <strong>Connect account</strong> above to get started.</div>
+        _site_map = {k: (n, ic, col) for k, n, ic, col, _ in SUPPORTED_SITES}
+        _chip_labels = {"delta": "Delta", "united": "United", "marriott": "Marriott", "amex": "Amex"}
+        _chips_html = (
+            '<span class="accounts-onboard-chip">'
+            '<span class="accounts-onboard-chip-icon" style="background:#f5f2ed">'
+            '<img src="https://www.google.com/s2/favicons?domain=google.com&amp;sz=64" alt="">'
+            '</span>Google</span>'
+        )
+        for _ck in ("delta", "united", "marriott", "amex"):
+            if _ck in _site_map:
+                _cn, _ci, _cc = _site_map[_ck]
+                _chips_html += (
+                    f'<span class="accounts-onboard-chip">'
+                    f'<span class="accounts-onboard-chip-icon" style="background:{he(_cc)}">{_ci}</span>'
+                    f'{he(_chip_labels.get(_ck, _cn.split()[0]))}</span>'
+                )
+        connected_cards_html = f"""
+<div class="accounts-onboard">
+  <div class="accounts-onboard-card">
+    <div class="accounts-onboard-title">Never miss another credit or perk.</div>
+    <p class="accounts-onboard-desc">Connect an account once. Mighty watches your balances and benefits, then surfaces opportunities on your Dashboard.</p>
+    <div class="accounts-onboard-value">
+      <div class="accounts-onboard-value-item">
+        <span class="accounts-onboard-value-icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.5l2.5 2.5L10 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <div class="accounts-onboard-value-text">Catch expiring perks<span>Certificates, credits, and free nights before they lapse</span></div>
+      </div>
+      <div class="accounts-onboard-value-item">
+        <span class="accounts-onboard-value-icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.5l2.5 2.5L10 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <div class="accounts-onboard-value-text">Recover unused value<span>Points, card benefits, and offers you may have forgotten</span></div>
+      </div>
+      <div class="accounts-onboard-value-item">
+        <span class="accounts-onboard-value-icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.5l2.5 2.5L10 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <div class="accounts-onboard-value-text">Get personalized recommendations<span>Actionable next steps tailored to your accounts</span></div>
+      </div>
+    </div>
+    <button type="button" class="accounts-onboard-cta" onclick="openModal()">Connect your first account</button>
+    <div class="accounts-onboard-cats">
+      <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">✈️</span>Travel</span>
+      <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">🏦</span>Banking</span>
+      <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">🛒</span>Shopping</span>
+      <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">📺</span>Subscriptions</span>
+    </div>
+    <span class="accounts-onboard-providers-label">Works with</span>
+    <div class="accounts-onboard-chips">{_chips_html}</div>
+  </div>
 </div>"""
+    else:
+        _sync_note_html = '<div class="page-sync-note">Changes take effect on next sync.</div>'
 
     # ── Modal site picker ────────────────────────────────────────────────────
     modal_categories: dict = {}
@@ -14619,11 +14686,14 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 <script>(function(){{var t=document.getElementById('mobile-topbar-accounts');if(t&&window.innerWidth<=768)t.style.display='flex';}})();</script>
 <div class="page">
   <div class="page-header">
-    <h1>Connected accounts</h1>
+    <div class="page-header-text">
+      <h1>Connected accounts</h1>
+      <p class="page-subtitle">Connect accounts so Mighty can find expiring perks, unused value, and savings for you.</p>
+    </div>
     <button class="btn-connect-new" onclick="openModal()">+ Connect account</button>
   </div>
   {connected_cards_html}
-  <div style="text-align:center;padding:16px 0 8px;font-size:12px;color:#9ca3af">Changes take effect on next sync.</div>
+  {_sync_note_html}
 </div>
 
 
