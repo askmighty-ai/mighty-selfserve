@@ -5927,8 +5927,34 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 .feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10)}
 /* Page body — single column: intelligence strip at top, accounts below */
 .page-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:0}
-.insight-panel{width:100%;padding:16px 32px 12px;background:#ffffff;flex-shrink:0}
+.insight-panel{width:100%;padding:16px 32px 0;background:#ffffff;flex-shrink:0}
 .insight-inner{max-width:1600px;margin:0 auto}
+/* Dashboard hero */
+.dash-hero{margin-bottom:0}
+.dash-hero-card{background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:18px;padding:40px 44px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 16px rgba(0,0,0,0.06)}
+.dash-hero-greeting{font-size:15px;font-weight:600;color:#78716c;letter-spacing:0.01em;line-height:1.4;margin:0 0 12px}
+.dash-hero-headline{font-size:28px;font-weight:700;color:#1c1917;letter-spacing:-0.6px;line-height:1.25;margin:0;max-width:42ch}
+.dash-hero-tagline{font-size:15px;font-weight:400;color:#57534e;margin:12px 0 0;line-height:1.6;max-width:48ch}
+.dash-hero-brief-btn{margin-top:24px;padding:11px 22px;font-size:13px;font-weight:600;color:#fff;background:#1c1917;border:none;border-radius:10px;cursor:pointer;font-family:inherit;transition:background 0.12s,box-shadow 0.12s;box-shadow:0 1px 2px rgba(0,0,0,0.06)}
+.dash-hero-brief-btn:hover{background:#292524;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
+/* Dashboard sections */
+.dash-section{width:100%;padding:0 32px 28px;flex-shrink:0}
+.dash-recommendations-section{padding-top:12px}
+.dash-section-inner{max-width:1600px;margin:0 auto}
+.dash-connect-card{background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:20px;padding:36px 40px;box-shadow:0 1px 3px rgba(0,0,0,0.05),0 10px 32px rgba(0,0,0,0.05)}
+.dash-connect-title{font-size:22px;font-weight:700;color:#1c1917;letter-spacing:-0.4px;margin:0 0 10px;text-align:center}
+.dash-connect-desc{font-size:15px;color:#57534e;line-height:1.65;margin:0 auto 28px;max-width:52ch;text-align:center}
+.dash-connect-steps{display:flex;flex-direction:column;gap:12px;text-align:left;margin-bottom:32px;max-width:560px;margin-left:auto;margin-right:auto}
+.dash-connect-step{display:flex;align-items:flex-start;gap:14px;background:#fafaf9;border:1px solid rgba(0,0,0,0.06);border-radius:12px;padding:14px 16px}
+.dash-connect-step-num{font-size:13px;font-weight:700;color:#6366f1;background:rgba(99,102,241,0.1);border-radius:8px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.dash-connect-step-title{font-size:14px;font-weight:600;color:#1c1917}
+.dash-connect-step-desc{font-size:13px;color:#6b7280;margin-top:3px;line-height:1.5}
+.dash-connect-actions{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
+.dash-connect-primary{display:inline-flex;align-items:center;justify-content:center;padding:13px 26px;background:#6366f1;color:#fff;border-radius:10px;font-size:14px;font-weight:600;text-decoration:none;box-shadow:0 1px 2px rgba(99,102,241,0.2);transition:background 0.12s,box-shadow 0.12s}
+.dash-connect-primary:hover{background:#4f46e5;color:#fff;text-decoration:none;box-shadow:0 4px 12px rgba(99,102,241,0.25)}
+.dash-connect-secondary{display:inline-flex;align-items:center;justify-content:center;padding:13px 26px;background:#fff;color:#6366f1;border:1px solid rgba(99,102,241,0.25);border-radius:10px;font-size:14px;font-weight:600;text-decoration:none;transition:background 0.12s,border-color 0.12s}
+.dash-connect-secondary:hover{background:#f5f3ff;color:#4f46e5;text-decoration:none;border-color:rgba(99,102,241,0.4)}
+.dash-recommendations-section .dash-section-label{font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 12px;text-transform:uppercase;letter-spacing:.06em}
 /* Cards panel — full-width with generous max so wide monitors breathe */
 .cards-panel{flex:1;min-width:0;padding:0 32px 40px}
 .cards-panel-inner{max-width:1600px;margin:0 auto}
@@ -6035,7 +6061,7 @@ body{display:flex;flex-direction:row;background:#eee9e2}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:16px 16px 16px}.cards-panel{padding:16px 16px 32px}}
+@media(max-width:768px){html,body{height:auto;overflow:auto}.sidebar{display:none}.main-content{height:auto;overflow:visible;padding-left:0!important}.nav-hamburger{display:flex!important}.topbar-search{flex:1;min-width:0}.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-hero-card,.dash-connect-card{padding:28px 22px;border-radius:16px}.dash-hero-greeting{font-size:14px;margin-bottom:10px}.dash-hero-headline{font-size:22px;letter-spacing:-0.4px}.dash-hero-tagline{font-size:14px;margin-top:10px}.dash-hero-brief-btn{margin-top:20px;width:100%}.dash-connect-actions{flex-direction:column}.dash-connect-primary,.dash-connect-secondary{width:100%;box-sizing:border-box}.cards-panel{padding:16px 16px 32px}}
 </style>
 </head>
 <body>
@@ -6077,13 +6103,10 @@ body{display:flex;flex-direction:row;background:#eee9e2}
   <div class="page-body" {feed_col_hidden}>
     <input type="hidden" name="_csrf" value="{csrf_token}">
 
-    <!-- Intelligence panel: greeting → available benefits → status -->
+    <!-- Hero -->
     <div class="insight-panel">
       <div class="insight-inner">
       {hero_section_html}
-      {insights_html}
-      {relevant_now_html}
-      {progress_section_html}
       </div><!-- /insight-inner -->
       <script>
       (function() {
@@ -6173,11 +6196,20 @@ body{display:flex;flex-direction:row;background:#eee9e2}
       </script>
     </div><!-- /insight-panel -->
 
-    <!-- Cards panel: account grid (evidence layer) -->
+    <!-- Connect account (primary CTA for first-time users) -->
+    {connect_account_section_html}
+
+    <!-- Recommendations -->
+    {recommendations_section_html}
+
+    <!-- Connected accounts -->
     <div class="cards-panel">
       <div class="cards-panel-inner">
+      {insights_html}
+      {relevant_now_html}
+      {progress_section_html}
       <div class="cards-panel-header">
-        <span style="font-size:13px;font-weight:600;color:#1c1917">Your accounts</span>
+        <span style="font-size:13px;font-weight:600;color:#1c1917">Connected accounts</span>
         <div style="display:flex;align-items:center;gap:8px">
           {agent_cta_button}
           <button class="btn-connect" onclick="openDashConnectModal()">+ Connect</button>
@@ -9400,35 +9432,46 @@ def dashboard():
                 f'</div>'
             )
 
-    account_data_html = cards_html if cards_html else (
-        '<div style="text-align:center;padding:48px 24px;max-width:540px;margin:0 auto">'
-        '<div style="font-size:36px;margin-bottom:14px">🔗</div>'
-        '<div style="font-size:16px;font-weight:700;color:#1c1917;margin-bottom:8px">Connect your first account</div>'
-        '<div style="font-size:13px;color:#6b7280;line-height:1.65;margin-bottom:28px">'
-        'Mighty uses the Chrome extension to read your account data directly from the sites you\'re already logged into — '
-        'no passwords stored here.</div>'
-        '<div style="display:flex;flex-direction:column;gap:10px;text-align:left;margin-bottom:28px">'
-        '<div style="display:flex;align-items:flex-start;gap:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px">'
-        '<div style="font-size:18px;flex-shrink:0">1️⃣</div>'
-        '<div><div style="font-size:13px;font-weight:600;color:#111827">Install the Chrome extension</div>'
-        '<div style="font-size:12px;color:#6b7280;margin-top:2px">Then visit <a href="/extension-setup" target="_blank" style="color:#6366f1;font-weight:500">Settings → Setup Extension</a> to auto-configure it</div></div></div>'
-        '<div style="display:flex;align-items:flex-start;gap:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px">'
-        '<div style="font-size:18px;flex-shrink:0">2️⃣</div>'
-        '<div><div style="font-size:13px;font-weight:600;color:#111827">Log into your accounts in Chrome</div>'
-        '<div style="font-size:12px;color:#6b7280;margin-top:2px">The extension automatically detects and captures account pages as you browse</div></div></div>'
-        '<div style="display:flex;align-items:flex-start;gap:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px">'
-        '<div style="font-size:18px;flex-shrink:0">3️⃣</div>'
-        '<div><div style="font-size:13px;font-weight:600;color:#111827">Your data appears here automatically</div>'
-        '<div style="font-size:12px;color:#6b7280;margin-top:2px">Points, balances, alerts, and expiring benefits — all in one place</div></div></div>'
+    _connect_first_account_inner = (
+        '<div class="dash-connect-title">Connect your first account</div>'
+        '<p class="dash-connect-desc">Mighty uses the Chrome extension to read your account data '
+        'directly from the sites you\u2019re already logged into \u2014 no passwords stored here.</p>'
+        '<div class="dash-connect-steps">'
+        '<div class="dash-connect-step">'
+        '<div class="dash-connect-step-num">1</div>'
+        '<div><div class="dash-connect-step-title">Install the Chrome extension</div>'
+        '<div class="dash-connect-step-desc">Then visit '
+        '<a href="/extension-setup" target="_blank" style="color:#6366f1;font-weight:500">'
+        'Settings \u2192 Setup Extension</a> to auto-configure it</div></div></div>'
+        '<div class="dash-connect-step">'
+        '<div class="dash-connect-step-num">2</div>'
+        '<div><div class="dash-connect-step-title">Log into your accounts in Chrome</div>'
+        '<div class="dash-connect-step-desc">The extension automatically detects and captures '
+        'account pages as you browse</div></div></div>'
+        '<div class="dash-connect-step">'
+        '<div class="dash-connect-step-num">3</div>'
+        '<div><div class="dash-connect-step-title">Your data appears here automatically</div>'
+        '<div class="dash-connect-step-desc">Points, balances, alerts, and expiring benefits '
+        '\u2014 all in one place</div></div></div>'
         '</div>'
-        '<a href="/credentials" style="display:inline-block;padding:10px 22px;background:#6366f1;'
-        'color:#fff;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none;margin-right:10px">'
-        '+ Connect account manually</a>'
-        '<a href="/extension-setup" target="_blank" style="display:inline-block;padding:10px 22px;background:#fff;'
-        'color:#6366f1;border:1px solid #c7d2fe;border-radius:8px;font-size:13px;font-weight:600;text-decoration:none">'
-        '🔌 Setup Extension</a>'
+        '<div class="dash-connect-actions">'
+        '<a href="/credentials" class="dash-connect-primary">+ Connect account manually</a>'
+        '<a href="/extension-setup" target="_blank" class="dash-connect-secondary">'
+        'Setup Extension</a>'
         '</div>'
     )
+
+    if cards_html:
+        account_data_html = cards_html
+        connect_account_section_html = ""
+    else:
+        account_data_html = ""
+        connect_account_section_html = (
+            f'<div class="dash-section">'
+            f'<div class="dash-section-inner">'
+            f'<div class="dash-connect-card">{_connect_first_account_inner}</div>'
+            f'</div></div>'
+        )
 
     # ── Suggested accounts (from email scan, not yet connected) ─────────────────
     _site_info = {k: (n, ic, col) for k, n, ic, col, _ in SUPPORTED_SITES}
@@ -9512,7 +9555,10 @@ def dashboard():
             f'</script>'
             f'</div>'
         )
-        account_data_html = _sugg_section + account_data_html
+        if connect_account_section_html:
+            connect_account_section_html = _sugg_section + connect_account_section_html
+        else:
+            account_data_html = _sugg_section + account_data_html
 
     # Compute total tracked value across all accounts
     total_value = 0.0
@@ -9900,47 +9946,6 @@ def dashboard():
         _value_lead = "No accounts connected yet."
 
     # Greeting + Daily Brief card
-    if daily_brief is not None:
-        _brief_headline = daily_brief.headline
-        _brief_summary = daily_brief.summary
-        _brief_attention = daily_brief.attention
-        _brief_discoveries = daily_brief.discoveries
-        _brief_completed = daily_brief.completed
-    else:
-        _brief_headline = "Everything looks good."
-        _brief_summary = "I'm keeping an eye on things."
-        _brief_attention = []
-        _brief_discoveries = []
-        _brief_completed = []
-
-    def _render_brief_section(title, items, empty_msg):
-        if items:
-            _items_html = ""
-            for _item in items:
-                _detail_html = (
-                    f'<div style="font-size:12px;color:#6b7280;margin-top:2px;line-height:1.4">'
-                    f'{he(_item.detail)}</div>'
-                ) if _item.detail else ""
-                _items_html += (
-                    f'<div style="padding:6px 0">'
-                    f'<div style="font-size:13px;font-weight:600;color:#1c1917;line-height:1.4">'
-                    f'{he(_item.title)}</div>'
-                    f'{_detail_html}'
-                    f'</div>'
-                )
-            _body = _items_html
-        else:
-            _body = (
-                f'<div style="font-size:13px;color:#9ca3af;line-height:1.5">{empty_msg}</div>'
-            )
-        return (
-            f'<div style="flex:1;min-width:0">'
-            f'<div style="font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 8px;'
-            f'text-transform:uppercase;letter-spacing:.06em">{title}</div>'
-            f'{_body}'
-            f'</div>'
-        )
-
     def _render_recommendation_cards(recs):
         if not recs:
             return ""
@@ -10060,33 +10065,26 @@ def dashboard():
             f'</div>'
         )
 
-    _brief_sections_html = (
-        f'<div id="daily-brief-expanded" style="display:none;margin-top:14px;padding-top:14px;'
-        f'border-top:0.5px solid #e8e4de">'
-        f'<div style="display:flex;flex-direction:column;gap:16px">'
-        + _render_brief_section(
-            "Needs Your Attention",
-            _brief_attention,
-            "Nothing needs you right now.",
+    recommendations_section_html = _render_recommendation_cards(_dashboard_recommendations)
+    if recommendations_section_html:
+        recommendations_section_html = (
+            f'<div class="dash-section dash-recommendations-section">'
+            f'<div class="dash-section-inner">{recommendations_section_html}</div>'
+            f'</div>'
         )
-        + _render_brief_section(
-            "What I Found",
-            _brief_discoveries,
-            "No new discoveries yet. I\u2019m still watching.",
-        )
-        + _render_brief_section(
-            "Working For You",
-            _brief_completed,
-            "I\u2019ll show completed checks here as Mighty watches more.",
-        )
-        + _render_recommendation_cards(_dashboard_recommendations)
-        + f'</div></div>'
-    )
 
     hero_section_html = (
-        f'<div style="margin-bottom:14px">'
-        f'<div style="font-size:20px;font-weight:700;color:#1c1917" id="hero-greeting">'
+        f'<div class="dash-hero">'
+        f'<div class="dash-hero-card">'
+        f'<div class="dash-hero-greeting" id="hero-greeting">'
         f'Hello, {he(_first_name)}'
+        f'</div>'
+        f'<h1 class="dash-hero-headline">Mighty automatically watches your travel, banking, '
+        f'shopping and subscription accounts.</h1>'
+        f'<p class="dash-hero-tagline">Connect your first account to start receiving '
+        f'personalized recommendations.</p>'
+        f'<button type="button" id="daily-brief-toggle" '
+        f'class="dash-hero-brief-btn">Read today\u2019s brief</button>'
         f'</div>'
         f'<script>'
         f'(function(){{'
@@ -10095,28 +10093,7 @@ def dashboard():
         f'  var el=document.getElementById("hero-greeting");'
         f'  if(el) el.textContent=g+", {he(_first_name)}";'
         f'}})();'
-        f'function toggleDailyBrief(){{'
-        f'  var panel=document.getElementById("daily-brief-expanded");'
-        f'  var btn=document.getElementById("daily-brief-toggle");'
-        f'  if(!panel||!btn)return;'
-        f'  var open=panel.style.display!=="none";'
-        f'  panel.style.display=open?"none":"block";'
-        f'  btn.textContent=open?"Read today\u2019s brief":"Hide today\u2019s brief";'
-        f'}}'
         f'</script>'
-        f''
-        f'<div style="background:#f5f2ed;border-radius:8px;padding:14px 16px;margin-top:10px">'
-        f'<div style="font-size:16px;font-weight:600;color:#1c1917;line-height:1.4">{he(_brief_headline)}</div>'
-        f'<div style="font-size:13px;color:#6b7280;margin-top:6px;line-height:1.5">{he(_brief_summary)}</div>'
-        f'<div style="font-size:12px;color:#9ca3af;margin-top:10px;line-height:1.4">'
-        f'I\u2019ll keep watching and surface anything that needs you.'
-        f'</div>'
-        f'<button type="button" id="daily-brief-toggle" onclick="toggleDailyBrief()" '
-        f'style="margin-top:12px;font-size:12px;font-weight:500;color:#6b7280;background:none;'
-        f'border:none;padding:0;cursor:pointer;font-family:inherit;text-decoration:underline;'
-        f'text-underline-offset:2px">Read today\u2019s brief</button>'
-        f'{_brief_sections_html}'
-        f'</div>'
         f'</div>'
     )
 
@@ -11178,6 +11155,8 @@ function dismissOnboarding() {
             .replace("{reauth_banner}",           reauth_banner)
             .replace("{new_accounts_banner}",     new_accounts_banner)
             .replace("{account_data_html}",       account_data_html)
+            .replace("{connect_account_section_html}", connect_account_section_html)
+            .replace("{recommendations_section_html}", recommendations_section_html)
             .replace("{hero_section_html}",       hero_section_html)
             .replace("{insights_html}",           insights_html)
             .replace("{available_rail_html}",     available_rail_html)
