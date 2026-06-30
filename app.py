@@ -31,6 +31,12 @@ except ImportError:
     build_daily_brief = None
 
 try:
+    from mighty.action_builders import build_dashboard_actions, recommendation_actions
+except ImportError:
+    build_dashboard_actions = None
+    recommendation_actions = None
+
+try:
     from mighty.decision_engine import DecisionContext, get_recommendations
 except ImportError:
     DecisionContext = None
@@ -9766,6 +9772,7 @@ def dashboard():
 
     daily_brief = None
     _dashboard_recommendations = []
+    _dashboard_actions = []
     if get_recommendations is not None and DecisionContext is not None:
         try:
             _dash_email_subjects = _load_dashboard_email_subjects(uid, db)
@@ -9790,20 +9797,35 @@ def dashboard():
             ) or []
         except Exception:
             _dashboard_recommendations = []
+    _email_suggestion_count = 0
+    try:
+        _email_suggestion_count = db.execute(
+            "SELECT COUNT(*) FROM email_suggestions WHERE user_id=? AND dismissed=0",
+            (uid,),
+        ).fetchone()[0]
+    except Exception:
+        pass
+    if build_dashboard_actions is not None:
+        try:
+            _dashboard_actions = build_dashboard_actions(
+                action_items=_all_action_items,
+                hero_candidates=_hero_candidates,
+                recommendations=_dashboard_recommendations,
+                email_suggestion_count=_email_suggestion_count,
+            )
+        except Exception:
+            _dashboard_actions = []
     try:
         if build_daily_brief is not None:
-            _email_suggestion_count = db.execute(
-                "SELECT COUNT(*) FROM email_suggestions WHERE user_id=? AND dismissed=0",
-                (uid,),
-            ).fetchone()[0]
             daily_brief = build_daily_brief(
+                actions=_dashboard_actions if build_dashboard_actions is not None else None,
                 account_count=_account_count,
                 benefit_count=len(_hero_candidates),
                 expiring_count=total_expiring,
                 global_sync_label=_global_sync_label,
+                acct_rows=acct_rows,
                 action_items=_all_action_items,
                 hero_candidates=_hero_candidates,
-                acct_rows=acct_rows,
                 email_suggestion_count=_email_suggestion_count,
                 recommendations=_dashboard_recommendations,
             )
@@ -10086,11 +10108,12 @@ def dashboard():
             f'</div>'
         )
 
-    _recs = _dashboard_recommendations or []
-    _has_real_recommendations = any(
-        str(getattr(_rec, "rationale", "") or "").strip().lower() != "demo recommendation."
-        for _rec in _recs
+    _recs = (
+        recommendation_actions(_dashboard_actions)
+        if recommendation_actions is not None and _dashboard_actions
+        else _dashboard_recommendations or []
     )
+    _has_real_recommendations = bool(_recs)
     recommendations_section_html = _render_recommendation_cards(
         _recs if _has_real_recommendations else []
     )
