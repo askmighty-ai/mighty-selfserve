@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from mighty.daily_brief import BriefInsight, BriefItem, DailyBrief
+from mighty.daily_brief_ui import build_executive_briefing, render_executive_briefing_hero
 from mighty.decision_engine import Recommendation
 
 
@@ -953,118 +954,17 @@ def render_demo_recent_discoveries() -> str:
 
 def render_demo_daily_brief_hero(brief: DailyBrief, first_name: str, today_label: str) -> str:
     """Render the Daily Brief hero card from a DailyBrief object."""
-
-    def render_insight_row(title: str, detail: str, severity: str) -> str:
-        detail_html = (
-            f'<div class="dash-brief-insight-detail">{_he(detail)}</div>'
-            if detail else ""
-        )
-        return (
-            f'<li class="dash-brief-insight dash-brief-insight--{severity}">'
-            f'<span class="dash-brief-severity" aria-hidden="true"></span>'
-            f'<div class="dash-brief-insight-body">'
-            f'<div class="dash-brief-insight-title">{_he(title)}</div>'
-            f'{detail_html}'
-            f'</div></li>'
-        )
-
-    def render_insight_list(items: list[tuple[str, str, str]]) -> str:
-        if not items:
-            return ""
-        rows = "".join(render_insight_row(t, d, s) for t, d, s in items)
-        return f'<ul class="dash-brief-insights">{rows}</ul>'
-
-    def render_brief_section(section_key: str, title: str, items: list[tuple[str, str, str]]) -> str:
-        if not items:
-            return ""
-        return (
-            f'<section class="dash-brief-section dash-brief-section--{section_key}">'
-            f'<div class="dash-brief-section-head">'
-            f'<h3 class="dash-brief-section-title">{_he(title)}</h3>'
-            f'<span class="dash-brief-section-count">{len(items)}</span>'
-            f'</div>'
-            f'{render_insight_list(items)}'
-            f'</section>'
-        )
-
-    needs_attention: list[tuple[str, str, str]] = []
-    savings: list[tuple[str, str, str]] = []
-    expiring: list[tuple[str, str, str]] = []
-    discoveries: list[tuple[str, str, str]] = []
-    status: list[tuple[str, str, str]] = []
-
-    for item in brief.attention:
-        needs_attention.append((item.title, item.detail, "warning"))
-    for item in brief.recommendations:
-        savings.append((item.title, item.detail, "opportunity"))
-    for item in brief.discoveries:
-        detail = item.detail or ""
-        if "expire" in detail.lower():
-            expiring.append((item.title, detail, "warning"))
-        else:
-            discoveries.append((item.title, detail, "info"))
-    for ins in brief.insights:
-        sev = ins.severity if ins.severity in ("warning", "opportunity", "info", "success") else "info"
-        detail = ins.detail or ""
-        if sev == "success":
-            status.append((ins.title, detail, "success"))
-        elif sev == "opportunity":
-            savings.append((ins.title, detail, "opportunity"))
-        elif "expire" in detail.lower() or "expire" in ins.title.lower():
-            expiring.append((ins.title, detail, "warning"))
-        elif sev == "warning":
-            needs_attention.append((ins.title, detail, "warning"))
-        else:
-            discoveries.append((ins.title, detail, "info"))
-    for item in brief.completed:
-        status.append((item.title, item.detail, "success"))
-
-    sections_html = (
-        render_brief_section("attention", "Needs attention", needs_attention)
-        + render_brief_section("expiring", "Benefits expiring", expiring)
-        + render_brief_section("savings", "Savings opportunities", savings)
-        + render_brief_section("discoveries", "Recent discoveries", discoveries)
+    exec_brief = build_executive_briefing(
+        brief,
+        account_count=account_count(),
+        benefit_count=len(get_demo_hero_candidates()),
+        expiring_count=expiring_count(),
+        use_demo_when_empty=True,
     )
-
-    lede_html = (
-        f'<div class="dash-brief-lede">'
-        f'<h2 class="dash-brief-headline">{_he(brief.headline)}</h2>'
-        f'<p class="dash-brief-summary-text">{_he(brief.summary)}</p>'
-        f'</div>'
-    )
-    status_html = render_insight_list(status[:2])
-    if status_html:
-        status_html = f'<div class="dash-brief-status">{status_html}</div>'
-
-    demo_tag = (
-        '<span style="font-size:10px;font-weight:600;color:#7c3aed;background:#f5f3ff;'
-        'border:0.5px solid rgba(124,58,237,0.2);border-radius:20px;padding:3px 9px;'
-        'margin-left:8px;vertical-align:middle">Demo data</span>'
-    )
-
-    body_html = (
-        f'{lede_html}'
-        f'<div class="dash-brief-sections">{sections_html}</div>'
-        f'{status_html}'
-    )
-
-    return (
-        f'<div class="dash-hero">'
-        f'<div class="dash-brief-card">'
-        f'<div class="dash-brief-greeting" id="hero-greeting">Hello, {_he(first_name)}</div>'
-        f'<div class="dash-brief-today">'
-        f'<span class="dash-brief-today-label">Today</span>'
-        f'<span class="dash-brief-today-date">{_he(today_label)}{demo_tag}</span>'
-        f'</div>'
-        f'{body_html}'
-        f'</div>'
-        f'<script>'
-        f'(function(){{'
-        f'  var h=new Date().getHours();'
-        f'  var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";'
-        f'  var el=document.getElementById("hero-greeting");'
-        f'  if(el) el.textContent=g+", {_he(first_name)}";'
-        f'}})();'
-        f'</script>'
-        f'</div>'
+    exec_brief.is_demo = True
+    return render_executive_briefing_hero(
+        exec_brief,
+        first_name=first_name,
+        today_label=today_label,
+        escape=_he,
     )

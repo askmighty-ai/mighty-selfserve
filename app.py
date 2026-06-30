@@ -31,6 +31,12 @@ except ImportError:
     build_daily_brief = None
 
 try:
+    from mighty.daily_brief_ui import build_executive_briefing, render_executive_briefing_hero
+except ImportError:
+    build_executive_briefing = None
+    render_executive_briefing_hero = None
+
+try:
     from mighty.action_builders import build_dashboard_actions, recommendation_actions
 except ImportError:
     build_dashboard_actions = None
@@ -5950,65 +5956,43 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .page-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:0}
 .insight-panel{width:100%;padding:16px 32px 0;background:#ffffff;flex-shrink:0}
 .insight-inner{max-width:1600px;margin:0 auto}
-/* Dashboard hero — Daily Brief */
+/* Dashboard hero — Executive Daily Brief */
 .dash-hero{margin-bottom:0}
-.dash-brief-card{background:#ffffff;border:1px solid rgba(0,0,0,0.05);border-radius:20px;padding:44px 48px 40px;box-shadow:0 1px 2px rgba(0,0,0,0.03)}
-.dash-brief-greeting{font-size:14px;font-weight:500;color:#a8a29e;letter-spacing:0.02em;line-height:1.4;margin:0 0 28px}
-.dash-brief-today{display:flex;align-items:baseline;gap:12px;margin:0 0 24px;padding-bottom:20px;border-bottom:1px solid rgba(0,0,0,0.05)}
-.dash-brief-today-label{font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:0.12em}
-.dash-brief-today-date{font-size:13px;font-weight:500;color:#d6d3d1}
-.dash-brief-lede{margin:0 0 28px;padding-bottom:24px;border-bottom:1px solid rgba(0,0,0,0.05)}
-.dash-brief-headline{font-size:22px;font-weight:600;color:#1c1917;letter-spacing:-0.4px;line-height:1.3;margin:0 0 8px;max-width:42ch}
-.dash-brief-summary-text{font-size:14px;font-weight:400;color:#78716c;line-height:1.6;margin:0;max-width:58ch}
-.dash-brief-sections{display:flex;flex-direction:column;gap:28px}
-.dash-brief-section{margin:0}
-.dash-brief-section-head{display:flex;align-items:center;gap:10px;margin:0 0 10px}
-.dash-brief-section-title{font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:0.1em;margin:0}
-.dash-brief-section-count{font-size:10px;font-weight:600;color:#a8a29e;background:rgba(0,0,0,0.04);border:0.5px solid rgba(0,0,0,0.06);border-radius:20px;padding:2px 8px;line-height:1.4;letter-spacing:0.02em}
-.dash-brief-section--attention .dash-brief-section-title{color:#b45309}
-.dash-brief-section--expiring .dash-brief-section-title{color:#b45309}
-.dash-brief-section--savings .dash-brief-section-title{color:#4f46e5}
-.dash-brief-section--discoveries .dash-brief-section-title{color:#57534e}
-.dash-brief-status{margin-top:28px;padding-top:20px;border-top:1px solid rgba(0,0,0,0.05)}
-.dash-brief-status .dash-brief-insight{padding:0;border-bottom:none}
-.dash-brief-insights{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0}
-.dash-brief-insight{display:flex;align-items:flex-start;gap:14px;padding:14px 0;border-bottom:1px solid rgba(0,0,0,0.04)}
-.dash-brief-insight:last-child{border-bottom:none;padding-bottom:0}
-.dash-brief-insight:first-child{padding-top:0}
-.dash-brief-severity{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:6px}
-.dash-brief-insight--warning .dash-brief-severity{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,0.15)}
-.dash-brief-insight--opportunity .dash-brief-severity{background:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.14)}
-.dash-brief-insight--info .dash-brief-severity{background:#a8a29e;box-shadow:0 0 0 3px rgba(168,162,158,0.12)}
-.dash-brief-insight--success .dash-brief-severity{background:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,0.12)}
-.dash-brief-insight-body{flex:1;min-width:0}
-.dash-brief-insight-title{font-size:15px;font-weight:600;color:#1c1917;line-height:1.45;letter-spacing:-0.01em}
-.dash-brief-insight-detail{font-size:13px;font-weight:400;color:#78716c;margin-top:4px;line-height:1.55}
-.dash-brief-empty{padding:4px 0 0;max-width:52ch}
-.dash-brief-onboard-layout{display:flex;align-items:stretch;gap:48px;margin-top:4px}
-.dash-brief-onboard-copy{flex:1;min-width:0;max-width:52ch}
-.dash-brief-onboard-preview{flex:1;min-width:0;display:flex;align-items:flex-start}
-.dash-brief-preview-panel{width:100%;background:#faf8f6;border:1px solid rgba(0,0,0,0.06);border-radius:14px;padding:22px 24px 20px;box-shadow:inset 0 1px 0 rgba(255,255,255,0.6)}
-.dash-brief-preview-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 18px;padding-bottom:14px;border-bottom:1px solid rgba(0,0,0,0.05)}
-.dash-brief-preview-label{font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:0.12em}
-.dash-brief-preview-badge{font-size:10px;font-weight:600;color:#a8a29e;background:rgba(0,0,0,0.04);border:0.5px solid rgba(0,0,0,0.06);border-radius:20px;padding:3px 9px;letter-spacing:0.02em;white-space:nowrap}
-.dash-brief-preview .dash-brief-sections{gap:18px}
-.dash-brief-preview .dash-brief-section-head{margin-bottom:8px}
-.dash-brief-preview .dash-brief-lede{margin-bottom:18px;padding-bottom:14px}
-.dash-brief-preview .dash-brief-headline{font-size:16px;letter-spacing:-0.25px;margin-bottom:6px}
-.dash-brief-preview .dash-brief-summary-text{font-size:12px;line-height:1.5}
-.dash-brief-preview .dash-brief-insights{gap:0}
-.dash-brief-preview .dash-brief-insight{padding:10px 0}
-.dash-brief-preview .dash-brief-insight-title{font-size:13px;font-weight:600}
-.dash-brief-preview .dash-brief-insight-detail{font-size:11px;margin-top:2px}
-.dash-brief-onboard-headline{font-size:20px;font-weight:600;color:#1c1917;letter-spacing:-0.35px;line-height:1.35;margin:0 0 14px;max-width:38ch}
-.dash-brief-onboard-desc{font-size:14px;font-weight:400;color:#57534e;line-height:1.65;margin:0 0 28px;max-width:48ch}
-.dash-brief-onboard-points{list-style:none;margin:0 0 32px;padding:0;display:flex;flex-direction:column;gap:16px}
-.dash-brief-onboard-point{display:flex;align-items:flex-start;gap:12px;font-size:13px;color:#78716c;line-height:1.55}
-.dash-brief-onboard-point-dot{width:5px;height:5px;border-radius:50%;background:#d6d3d1;flex-shrink:0;margin-top:7px}
-.dash-brief-onboard-actions{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px}
-.dash-brief-onboard-primary{display:inline-flex;align-items:center;justify-content:center;padding:12px 24px;font-size:13px;font-weight:600;color:#fff;background:#6366f1;border-radius:10px;text-decoration:none;box-shadow:0 1px 2px rgba(99,102,241,0.2);transition:background 0.12s,box-shadow 0.12s}
-.dash-brief-onboard-primary:hover{background:#4f46e5;color:#fff;text-decoration:none;box-shadow:0 4px 12px rgba(99,102,241,0.25)}
-.dash-brief-onboard-secondary{font-size:13px;font-weight:500;color:#78716c;text-decoration:none;transition:color 0.12s}
+.dash-brief-card{background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:16px;padding:32px 36px;box-shadow:0 1px 2px rgba(0,0,0,0.03)}
+.dash-brief-card--exec{padding:28px 32px}
+.dash-brief-exec{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:36px;align-items:start}
+.dash-brief-exec-left{min-width:0}
+.dash-brief-exec-right{min-width:0}
+.dash-brief-greeting{font-size:15px;font-weight:600;color:#1c1917;letter-spacing:-0.01em;line-height:1.3;margin:0 0 6px}
+.dash-brief-today{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 18px}
+.dash-brief-today-date{font-size:13px;font-weight:400;color:#78716c}
+.dash-brief-demo-tag{font-size:10px;font-weight:600;color:#78716c;background:#f5f5f4;border:0.5px solid rgba(0,0,0,0.06);border-radius:20px;padding:2px 8px;letter-spacing:0.02em}
+.dash-brief-priority-summary{font-size:14px;font-weight:400;color:#57534e;line-height:1.5;margin:0 0 20px;padding-bottom:18px;border-bottom:1px solid rgba(0,0,0,0.05)}
+.dash-brief-priorities{display:flex;flex-direction:column;gap:0}
+.dash-brief-priority-item{display:flex;align-items:flex-start;gap:14px;padding:16px 0;border-bottom:1px solid rgba(0,0,0,0.04)}
+.dash-brief-priority-item:last-child{border-bottom:none;padding-bottom:0}
+.dash-brief-priority-item:first-child{padding-top:0}
+.dash-brief-priority-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:6px}
+.dash-brief-priority-item--urgent .dash-brief-priority-dot{background:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,0.12)}
+.dash-brief-priority-item--soon .dash-brief-priority-dot{background:#d97706;box-shadow:0 0 0 3px rgba(217,119,6,0.12)}
+.dash-brief-priority-item--info .dash-brief-priority-dot{background:#a8a29e;box-shadow:0 0 0 3px rgba(168,162,158,0.12)}
+.dash-brief-priority-body{flex:1;min-width:0}
+.dash-brief-priority-headline{font-size:15px;font-weight:600;color:#1c1917;line-height:1.4;letter-spacing:-0.01em;margin:0}
+.dash-brief-priority-why{font-size:13px;font-weight:400;color:#78716c;line-height:1.55;margin:4px 0 0}
+.dash-brief-priority-value{font-size:12px;font-weight:600;color:#57534e;margin-top:6px;line-height:1.4}
+.dash-brief-priority-cta{display:inline-flex;align-items:center;margin-top:10px;font-size:12px;font-weight:600;color:#1c1917;text-decoration:none;padding:6px 12px;border-radius:7px;border:0.5px solid rgba(0,0,0,0.12);background:#fafaf9;transition:background 0.12s,border-color 0.12s}
+.dash-brief-priority-cta:hover{background:#f5f5f4;border-color:rgba(0,0,0,0.18);text-decoration:none;color:#1c1917}
+.dash-brief-metrics-head{font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 12px}
+.dash-brief-metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.dash-brief-metric{background:#fafaf9;border:0.5px solid rgba(0,0,0,0.06);border-radius:10px;padding:14px 14px 12px}
+.dash-brief-metric-val{font-size:22px;font-weight:700;color:#1c1917;letter-spacing:-0.4px;line-height:1.15}
+.dash-brief-metric-lbl{font-size:10px;font-weight:600;color:#a8a29e;text-transform:uppercase;letter-spacing:0.06em;margin-top:5px;line-height:1.35}
+.dash-brief-onboard-cta{margin-top:22px;padding-top:18px;border-top:1px solid rgba(0,0,0,0.05)}
+.dash-brief-onboard-note{font-size:12px;color:#78716c;margin:0 0 12px;line-height:1.5}
+.dash-brief-onboard-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px}
+.dash-brief-onboard-primary{display:inline-flex;align-items:center;justify-content:center;padding:9px 18px;font-size:12px;font-weight:600;color:#fff;background:#1c1917;border-radius:8px;text-decoration:none;transition:background 0.12s}
+.dash-brief-onboard-primary:hover{background:#292524;color:#fff;text-decoration:none}
+.dash-brief-onboard-secondary{font-size:12px;font-weight:500;color:#78716c;text-decoration:none;transition:color 0.12s}
 .dash-brief-onboard-secondary:hover{color:#1c1917;text-decoration:underline}
 /* Demo mode banner */
 .demo-mode-banner{background:linear-gradient(90deg,rgba(124,58,237,0.08),rgba(99,102,241,0.06));border-bottom:0.5px solid rgba(124,58,237,0.18);flex-shrink:0}
@@ -6129,7 +6113,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-brief-card{padding:28px 22px;border-radius:16px}.dash-brief-greeting{font-size:13px;margin-bottom:22px}.dash-brief-today{margin-bottom:20px;padding-bottom:16px}.dash-brief-lede{margin-bottom:22px;padding-bottom:18px}.dash-brief-headline{font-size:19px}.dash-brief-summary-text{font-size:13px}.dash-brief-sections{gap:22px}.dash-brief-insight{gap:12px;padding:12px 0}.dash-brief-insight-title{font-size:14px}.dash-brief-insight-detail{font-size:12px}.dash-brief-onboard-layout{flex-direction:column;gap:28px}.dash-brief-onboard-copy{max-width:none}.dash-brief-onboard-headline{font-size:18px}.dash-brief-onboard-desc{font-size:13px;margin-bottom:24px}.dash-brief-onboard-points{margin-bottom:28px;gap:14px}.dash-brief-onboard-primary{width:100%;box-sizing:border-box}.dash-brief-preview-panel{padding:18px 18px 16px}.cards-panel{padding:16px 16px 32px}}
+@media(max-width:768px){.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-brief-card{padding:22px 18px;border-radius:14px}.dash-brief-exec{grid-template-columns:1fr;gap:24px}.dash-brief-exec-right{padding-top:4px;border-top:1px solid rgba(0,0,0,0.05)}.dash-brief-greeting{font-size:14px}.dash-brief-priority-summary{font-size:13px;margin-bottom:16px;padding-bottom:14px}.dash-brief-priority-item{padding:14px 0}.dash-brief-priority-headline{font-size:14px}.dash-brief-priority-why{font-size:12px}.dash-brief-metric-val{font-size:20px}.dash-brief-onboard-primary{width:100%;box-sizing:border-box;justify-content:center}.cards-panel{padding:16px 16px 32px}}
 </style>
 </head>
 <body>
@@ -10128,251 +10112,25 @@ def dashboard():
     _today_label = _brief_dt.date.today().strftime("%A, %B %-d")
 
     def _render_daily_brief_hero(brief, first_name: str) -> str:
-        _VALID_SEVERITIES = frozenset({"warning", "opportunity", "info", "success"})
-
-        def _normalize_severity(severity: str) -> str:
-            sev = (severity or "info").lower()
-            if sev == "informational":
-                return "info"
-            return sev if sev in _VALID_SEVERITIES else "info"
-
-        def _render_insight_row(title: str, detail: str, severity: str) -> str:
-            sev = _normalize_severity(severity)
-            detail_html = (
-                f'<div class="dash-brief-insight-detail">{he(detail)}</div>'
-                if detail else ""
+        if build_executive_briefing is not None and render_executive_briefing_hero is not None:
+            exec_brief = build_executive_briefing(
+                brief,
+                account_count=_account_count,
+                benefit_count=len(_hero_candidates),
+                expiring_count=total_expiring,
+                use_demo_when_empty=True,
             )
-            return (
-                f'<li class="dash-brief-insight dash-brief-insight--{sev}">'
-                f'<span class="dash-brief-severity" aria-hidden="true"></span>'
-                f'<div class="dash-brief-insight-body">'
-                f'<div class="dash-brief-insight-title">{he(title)}</div>'
-                f'{detail_html}'
-                f'</div></li>'
+            return render_executive_briefing_hero(
+                exec_brief,
+                first_name=first_name,
+                today_label=_today_label,
+                escape=he,
             )
-
-        def _render_insight_list(items: list[tuple[str, str, str]]) -> str:
-            if not items:
-                return ""
-            rows = "".join(_render_insight_row(t, d, s) for t, d, s in items)
-            return f'<ul class="dash-brief-insights">{rows}</ul>'
-
-        def _render_brief_section(
-            section_key: str,
-            title: str,
-            items: list[tuple[str, str, str]],
-        ) -> str:
-            if not items:
-                return ""
-            count = len(items)
-            return (
-                f'<section class="dash-brief-section dash-brief-section--{section_key}">'
-                f'<div class="dash-brief-section-head">'
-                f'<h3 class="dash-brief-section-title">{he(title)}</h3>'
-                f'<span class="dash-brief-section-count">{count}</span>'
-                f'</div>'
-                f'{_render_insight_list(items)}'
-                f'</section>'
-            )
-
-        def _clean_discovery_title(title: str) -> str:
-            title = (title or "").strip()
-            if title.lower().startswith("i found "):
-                return title[8:].strip()
-            return title
-
-        def _is_expiring_detail(detail: str) -> bool:
-            return "expire" in (detail or "").lower()
-
-        def _brief_has_content(b) -> bool:
-            if not b:
-                return False
-            if getattr(b, "attention", None) or getattr(b, "recommendations", None):
-                return True
-            if getattr(b, "discoveries", None) or getattr(b, "insights", None):
-                return True
-            for item in getattr(b, "completed", None) or []:
-                if getattr(item, "title", "") != "Ready to start watching":
-                    return True
-            return False
-
-        def _compose_brief_sections(b) -> tuple[list, list, list, list, list]:
-            """Map existing DailyBrief fields into executive briefing sections."""
-            needs_attention: list[tuple[str, str, str]] = []
-            savings: list[tuple[str, str, str]] = []
-            expiring: list[tuple[str, str, str]] = []
-            discoveries: list[tuple[str, str, str]] = []
-            status: list[tuple[str, str, str]] = []
-            seen: set[tuple[str, str]] = set()
-
-            def _add(bucket: list, title: str, detail: str, severity: str) -> None:
-                title = (title or "").strip()
-                detail = (detail or "").strip()
-                if not title:
-                    return
-                key = (title.lower(), detail.lower())
-                if key in seen:
-                    return
-                seen.add(key)
-                bucket.append((title, detail, severity))
-
-            for item in getattr(b, "attention", None) or []:
-                _add(needs_attention, item.title, item.detail, "warning")
-
-            for item in getattr(b, "recommendations", None) or []:
-                _add(savings, item.title, item.detail, "opportunity")
-
-            for item in getattr(b, "discoveries", None) or []:
-                title = _clean_discovery_title(item.title)
-                if _is_expiring_detail(item.detail):
-                    _add(expiring, title, item.detail, "warning")
-                else:
-                    _add(discoveries, title, item.detail, "info")
-
-            for ins in getattr(b, "insights", None) or []:
-                sev = _normalize_severity(ins.severity)
-                detail = ins.detail or ""
-                if sev == "success":
-                    _add(status, ins.title, detail, "success")
-                    continue
-                if sev == "opportunity":
-                    _add(savings, ins.title, detail, "opportunity")
-                    continue
-                if _is_expiring_detail(detail) or "expire" in ins.title.lower():
-                    _add(expiring, ins.title, detail, "warning")
-                    continue
-                if sev == "warning":
-                    _add(needs_attention, ins.title, detail, "warning")
-                    continue
-                _add(discoveries, ins.title, detail, "info")
-
-            for item in getattr(b, "completed", None) or []:
-                if item.title == "Ready to start watching":
-                    continue
-                if item.tone == "completed" and not needs_attention and not expiring:
-                    _add(status, item.title, item.detail, "success")
-
-            return needs_attention, savings, expiring, discoveries, status
-
-        def _render_sectioned_brief(b) -> str:
-            needs_attention, savings, expiring, discoveries, status = _compose_brief_sections(b)
-            sections_html = (
-                _render_brief_section("attention", "Needs attention", needs_attention)
-                + _render_brief_section("expiring", "Benefits expiring", expiring)
-                + _render_brief_section("savings", "Savings opportunities", savings)
-                + _render_brief_section("discoveries", "Recent discoveries", discoveries)
-            )
-            lede_html = ""
-            headline = getattr(b, "headline", "") or ""
-            summary = getattr(b, "summary", "") or ""
-            if headline:
-                lede_html = (
-                    f'<div class="dash-brief-lede">'
-                    f'<h2 class="dash-brief-headline">{he(headline)}</h2>'
-                    f'{f"<p class=\"dash-brief-summary-text\">{he(summary)}</p>" if summary else ""}'
-                    f'</div>'
-                )
-            status_html = ""
-            if status:
-                status_html = (
-                    f'<div class="dash-brief-status">'
-                    f'{_render_insight_list(status[:2])}'
-                    f'</div>'
-                )
-            if not sections_html and not lede_html and not status_html:
-                return ""
-            return (
-                f'{lede_html}'
-                f'<div class="dash-brief-sections">{sections_html}</div>'
-                f'{status_html}'
-            )
-
-        body_html = ""
-        if brief and _brief_has_content(brief):
-            body_html = _render_sectioned_brief(brief)
-
-        if not body_html:
-            _preview_sections = (
-                ("attention", "Needs attention", (
-                    ("warning", "Re-authentication required", "Marriott Bonvoy · Login expired"),
-                )),
-                ("expiring", "Benefits expiring", (
-                    ("warning", "Marriott free night certificate", "Bonvoy · Expires in 14 days"),
-                    ("warning", "$40 Amex Offer", "Platinum · Expires Friday"),
-                )),
-                ("savings", "Savings opportunities", (
-                    ("opportunity", "Activate 5× dining multiplier", "Chase Sapphire · Ends this month"),
-                )),
-                ("discoveries", "Recent discoveries", (
-                    ("info", "Delta upgrade certificate", "SkyMiles · Regional upgrade available"),
-                    ("info", "New subscription detected", "Streaming · $15.99/mo"),
-                )),
-            )
-            _preview_sections_html = ""
-            for _key, _label, _items in _preview_sections:
-                _preview_sections_html += _render_brief_section(_key, _label, list(_items))
-            body_html = (
-                f'<div class="dash-brief-onboard-layout">'
-                f'<div class="dash-brief-onboard-copy">'
-                f'<h2 class="dash-brief-onboard-headline">Connect Gmail to start your Daily Brief</h2>'
-                f'<p class="dash-brief-onboard-desc">Mighty reads email metadata—not message contents—to discover '
-                f'loyalty programs, subscriptions, and travel accounts you\u2019re already using. Every morning '
-                f'you\u2019ll receive a brief with expiring benefits, account changes, and savings opportunities.</p>'
-                f'<ul class="dash-brief-onboard-points">'
-                f'<li class="dash-brief-onboard-point">'
-                f'<span class="dash-brief-onboard-point-dot" aria-hidden="true"></span>'
-                f'<span>Find accounts you forgot you had</span></li>'
-                f'<li class="dash-brief-onboard-point">'
-                f'<span class="dash-brief-onboard-point-dot" aria-hidden="true"></span>'
-                f'<span>Get alerts before benefits expire</span></li>'
-                f'<li class="dash-brief-onboard-point">'
-                f'<span class="dash-brief-onboard-point-dot" aria-hidden="true"></span>'
-                f'<span>See personalized insights every morning</span></li>'
-                f'</ul>'
-                f'<div class="dash-brief-onboard-actions">'
-                f'<a href="/email-scan" class="dash-brief-onboard-primary">Connect Gmail</a>'
-                f'<a href="/credentials" class="dash-brief-onboard-secondary">'
-                f'Or connect an account manually</a>'
-                f'</div>'
-                f'</div>'
-                f'<div class="dash-brief-onboard-preview" aria-hidden="true">'
-                f'<div class="dash-brief-preview-panel dash-brief-preview">'
-                f'<div class="dash-brief-preview-head">'
-                f'<span class="dash-brief-preview-label">Example Daily Brief</span>'
-                f'<span class="dash-brief-preview-badge">Sample</span>'
-                f'</div>'
-                f'<div class="dash-brief-lede">'
-                f'<h2 class="dash-brief-headline">2 things need your attention.</h2>'
-                f'<p class="dash-brief-summary-text">Checked 6 connected services · 2 items need you · '
-                f'3 discoveries found.</p>'
-                f'</div>'
-                f'<div class="dash-brief-sections">{_preview_sections_html}</div>'
-                f'</div>'
-                f'</div>'
-                f'</div>'
-            )
-
         return (
             f'<div class="dash-hero">'
             f'<div class="dash-brief-card">'
-            f'<div class="dash-brief-greeting" id="hero-greeting">'
-            f'Hello, {he(first_name)}'
-            f'</div>'
-            f'<div class="dash-brief-today">'
-            f'<span class="dash-brief-today-label">Today</span>'
-            f'<span class="dash-brief-today-date">{he(_today_label)}</span>'
-            f'</div>'
-            f'{body_html}'
-            f'</div>'
-            f'<script>'
-            f'(function(){{'
-            f'  var h=new Date().getHours();'
-            f'  var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";'
-            f'  var el=document.getElementById("hero-greeting");'
-            f'  if(el) el.textContent=g+", {he(first_name)}";'
-            f'}})();'
-            f'</script>'
-            f'</div>'
+            f'<div class="dash-brief-greeting">Hello, {he(first_name)}</div>'
+            f'</div></div>'
         )
 
     hero_section_html = _render_daily_brief_hero(daily_brief, _first_name)

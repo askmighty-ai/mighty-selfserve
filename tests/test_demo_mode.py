@@ -103,7 +103,8 @@ class TestDemoRendering:
         brief = get_demo_daily_brief()
         html = render_demo_daily_brief_hero(brief, "Alex", "Monday, June 30")
         assert "Demo data" in html
-        assert "Tokyo" in html
+        assert "dash-brief-exec" in html
+        assert "Accounts monitored" in html
 
     def test_recommendations_render(self):
         html = render_demo_recommendations()
