@@ -22,6 +22,13 @@ class BriefItem:
 
 
 @dataclass
+class BriefInsight:
+    title: str
+    detail: str = ""
+    severity: str = "info"  # warning | info | success
+
+
+@dataclass
 class DailyBrief:
     headline: str
     summary: str
@@ -29,6 +36,7 @@ class DailyBrief:
     discoveries: list[BriefItem] = field(default_factory=list)
     recommendations: list[BriefItem] = field(default_factory=list)
     completed: list[BriefItem] = field(default_factory=list)
+    insights: list[BriefInsight] = field(default_factory=list)
 
 
 def _clean(value: Any) -> str:
@@ -37,6 +45,115 @@ def _clean(value: Any) -> str:
 
 def _plural(n: int, singular: str, plural: str | None = None) -> str:
     return f"{n} {singular if n == 1 else (plural or singular + 's')}"
+
+
+def _is_demo_recommendation(recommendation: Any) -> bool:
+    return _clean(getattr(recommendation, "rationale", "")).lower() == "demo recommendation."
+
+
+def _build_insights(
+    *,
+    action_items: list[dict],
+    hero_candidates: list[tuple],
+    recommendations: list[Any] | None,
+    account_count: int,
+    global_sync_label: str,
+    email_suggestion_count: int,
+) -> list[BriefInsight]:
+    """Compose 3–5 executive-style insights with severity indicators."""
+    insights: list[BriefInsight] = []
+    seen_titles: set[str] = set()
+
+    def _add(title: str, detail: str = "", severity: str = "info") -> None:
+        title = _clean(title)
+        if not title or title in seen_titles or len(insights) >= 5:
+            return
+        seen_titles.add(title)
+        insights.append(BriefInsight(title=title, detail=_clean(detail), severity=severity))
+
+    urgent_items = [
+        i for i in action_items
+        if _clean(i.get("urgency")).lower() == "urgent"
+        or _clean(i.get("btype")).lower() == "login_required"
+    ]
+    soon_items = [
+        i for i in action_items
+        if i not in urgent_items
+        and (
+            _clean(i.get("urgency")).lower() == "soon"
+            or isinstance(i.get("days_left"), int)
+            and i.get("days_left") <= 45
+        )
+    ]
+
+    for item in (urgent_items + soon_items)[:2]:
+        label = _clean(item.get("label")) or "Needs your attention"
+        value = _clean(item.get("value"))
+        source = _clean(item.get("source")).replace("_", " ").title()
+        if source and source.lower() not in value.lower():
+            detail = f"{source} · {value}" if value else source
+        else:
+            detail = value
+        severity = "warning" if item in urgent_items else "info"
+        _add(label, detail, severity)
+
+    for cand in hero_candidates:
+        if len(insights) >= 5:
+            break
+        try:
+            _, _, display_name, label, value, exp_days, _btype = cand
+        except Exception:
+            continue
+
+        detail_parts = []
+        if value and str(value).strip().lower() not in {"available", "active", "yes", "enabled"}:
+            detail_parts.append(str(value).strip())
+        if display_name:
+            detail_parts.append(str(display_name).strip())
+        if isinstance(exp_days, int) and exp_days >= 0:
+            if exp_days == 0:
+                detail_parts.append("expires today")
+            elif exp_days == 1:
+                detail_parts.append("expires tomorrow")
+            elif exp_days <= 30:
+                detail_parts.append(f"expires in {exp_days} days")
+            else:
+                detail_parts.append(f"expires in {exp_days} days")
+
+        severity = "warning" if isinstance(exp_days, int) and 0 <= exp_days <= 30 else "info"
+        _add(label, " · ".join(detail_parts), severity)
+
+    if email_suggestion_count > 0 and len(insights) < 5:
+        _add(
+            f"{email_suggestion_count} account{'s' if email_suggestion_count != 1 else ''} found in your email",
+            "Ready to connect when you are.",
+            "info",
+        )
+
+    for recommendation in recommendations or []:
+        if len(insights) >= 5 or _is_demo_recommendation(recommendation):
+            continue
+        summary = _clean(getattr(recommendation, "summary", ""))
+        rationale = _clean(getattr(recommendation, "rationale", ""))
+        _add(
+            _clean(getattr(recommendation, "title", "")),
+            summary or rationale,
+            "info",
+        )
+
+    if not insights and account_count:
+        detail = global_sync_label or "Recently synced"
+        _add(
+            f"Watching {_plural(account_count, 'connected account')}",
+            detail,
+            "success",
+        )
+    elif not insights and account_count == 0:
+        pass
+    elif len(insights) < 5 and account_count and not urgent_items:
+        _add("Accounts look current", global_sync_label or "No urgent items", "success")
+
+    return insights[:5]
 
 
 def build_daily_brief(
@@ -195,6 +312,8 @@ def build_daily_brief(
 
     recommendation_items: list[BriefItem] = []
     for recommendation in recommendations or []:
+        if _is_demo_recommendation(recommendation):
+            continue
         summary = _clean(getattr(recommendation, "summary", ""))
         rationale = _clean(getattr(recommendation, "rationale", ""))
         recommendation_items.append(
@@ -205,6 +324,15 @@ def build_daily_brief(
             )
         )
 
+    insights = _build_insights(
+        action_items=action_items,
+        hero_candidates=hero_candidates,
+        recommendations=recommendations,
+        account_count=account_count,
+        global_sync_label=global_sync_label,
+        email_suggestion_count=email_suggestion_count,
+    )
+
     return DailyBrief(
         headline=headline,
         summary=" · ".join(summary_bits) + ".",
@@ -212,4 +340,5 @@ def build_daily_brief(
         discoveries=discoveries,
         recommendations=recommendation_items,
         completed=completed[:4],
+        insights=insights,
     )

@@ -5938,31 +5938,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .page-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:0}
 .insight-panel{width:100%;padding:16px 32px 0;background:#ffffff;flex-shrink:0}
 .insight-inner{max-width:1600px;margin:0 auto}
-/* Dashboard hero */
+/* Dashboard hero — Daily Brief */
 .dash-hero{margin-bottom:0}
-.dash-hero-card{background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:18px;padding:40px 44px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 16px rgba(0,0,0,0.06)}
-.dash-hero-greeting{font-size:15px;font-weight:600;color:#78716c;letter-spacing:0.01em;line-height:1.4;margin:0 0 12px}
-.dash-hero-headline{font-size:28px;font-weight:700;color:#1c1917;letter-spacing:-0.6px;line-height:1.25;margin:0;max-width:42ch}
-.dash-hero-tagline{font-size:15px;font-weight:400;color:#57534e;margin:12px 0 0;line-height:1.6;max-width:48ch}
-.dash-hero-brief-btn{margin-top:24px;padding:11px 22px;font-size:13px;font-weight:600;color:#fff;background:#1c1917;border:none;border-radius:10px;cursor:pointer;font-family:inherit;transition:background 0.12s,box-shadow 0.12s;box-shadow:0 1px 2px rgba(0,0,0,0.06)}
-.dash-hero-brief-btn:hover{background:#292524;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
+.dash-brief-card{background:#ffffff;border:1px solid rgba(0,0,0,0.05);border-radius:20px;padding:44px 48px 40px;box-shadow:0 1px 2px rgba(0,0,0,0.03)}
+.dash-brief-greeting{font-size:14px;font-weight:500;color:#a8a29e;letter-spacing:0.02em;line-height:1.4;margin:0 0 28px}
+.dash-brief-today{display:flex;align-items:baseline;gap:12px;margin:0 0 24px;padding-bottom:20px;border-bottom:1px solid rgba(0,0,0,0.05)}
+.dash-brief-today-label{font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:0.12em}
+.dash-brief-today-date{font-size:13px;font-weight:500;color:#d6d3d1}
+.dash-brief-insights{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0}
+.dash-brief-insight{display:flex;align-items:flex-start;gap:16px;padding:18px 0;border-bottom:1px solid rgba(0,0,0,0.04)}
+.dash-brief-insight:last-child{border-bottom:none;padding-bottom:0}
+.dash-brief-insight:first-child{padding-top:0}
+.dash-brief-severity{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:7px}
+.dash-brief-insight--warning .dash-brief-severity{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,0.15)}
+.dash-brief-insight--info .dash-brief-severity{background:#a8a29e;box-shadow:0 0 0 3px rgba(168,162,158,0.12)}
+.dash-brief-insight--success .dash-brief-severity{background:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,0.12)}
+.dash-brief-insight-body{flex:1;min-width:0}
+.dash-brief-insight-title{font-size:15px;font-weight:600;color:#1c1917;line-height:1.45;letter-spacing:-0.01em}
+.dash-brief-insight-detail{font-size:13px;font-weight:400;color:#78716c;margin-top:4px;line-height:1.55}
+.dash-brief-empty{padding:4px 0 0;max-width:52ch}
+.dash-brief-onboard-headline{font-size:20px;font-weight:600;color:#1c1917;letter-spacing:-0.35px;line-height:1.35;margin:0 0 14px;max-width:38ch}
+.dash-brief-onboard-desc{font-size:14px;font-weight:400;color:#57534e;line-height:1.65;margin:0 0 28px;max-width:48ch}
+.dash-brief-onboard-points{list-style:none;margin:0 0 32px;padding:0;display:flex;flex-direction:column;gap:16px}
+.dash-brief-onboard-point{display:flex;align-items:flex-start;gap:12px;font-size:13px;color:#78716c;line-height:1.55}
+.dash-brief-onboard-point-dot{width:5px;height:5px;border-radius:50%;background:#d6d3d1;flex-shrink:0;margin-top:7px}
+.dash-brief-onboard-actions{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px}
+.dash-brief-onboard-primary{display:inline-flex;align-items:center;justify-content:center;padding:12px 24px;font-size:13px;font-weight:600;color:#fff;background:#6366f1;border-radius:10px;text-decoration:none;box-shadow:0 1px 2px rgba(99,102,241,0.2);transition:background 0.12s,box-shadow 0.12s}
+.dash-brief-onboard-primary:hover{background:#4f46e5;color:#fff;text-decoration:none;box-shadow:0 4px 12px rgba(99,102,241,0.25)}
+.dash-brief-onboard-secondary{font-size:13px;font-weight:500;color:#78716c;text-decoration:none;transition:color 0.12s}
+.dash-brief-onboard-secondary:hover{color:#1c1917;text-decoration:underline}
 /* Dashboard sections */
 .dash-section{width:100%;padding:0 32px 28px;flex-shrink:0}
 .dash-recommendations-section{padding-top:12px}
 .dash-section-inner{max-width:1600px;margin:0 auto}
-.dash-connect-card{background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:20px;padding:36px 40px;box-shadow:0 1px 3px rgba(0,0,0,0.05),0 10px 32px rgba(0,0,0,0.05)}
-.dash-connect-title{font-size:22px;font-weight:700;color:#1c1917;letter-spacing:-0.4px;margin:0 0 10px;text-align:center}
-.dash-connect-desc{font-size:15px;color:#57534e;line-height:1.65;margin:0 auto 28px;max-width:52ch;text-align:center}
-.dash-connect-steps{display:flex;flex-direction:column;gap:12px;text-align:left;margin-bottom:32px;max-width:560px;margin-left:auto;margin-right:auto}
-.dash-connect-step{display:flex;align-items:flex-start;gap:14px;background:#fafaf9;border:1px solid rgba(0,0,0,0.06);border-radius:12px;padding:14px 16px}
-.dash-connect-step-num{font-size:13px;font-weight:700;color:#6366f1;background:rgba(99,102,241,0.1);border-radius:8px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.dash-connect-step-title{font-size:14px;font-weight:600;color:#1c1917}
-.dash-connect-step-desc{font-size:13px;color:#6b7280;margin-top:3px;line-height:1.5}
-.dash-connect-actions{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
-.dash-connect-primary{display:inline-flex;align-items:center;justify-content:center;padding:13px 26px;background:#6366f1;color:#fff;border-radius:10px;font-size:14px;font-weight:600;text-decoration:none;box-shadow:0 1px 2px rgba(99,102,241,0.2);transition:background 0.12s,box-shadow 0.12s}
-.dash-connect-primary:hover{background:#4f46e5;color:#fff;text-decoration:none;box-shadow:0 4px 12px rgba(99,102,241,0.25)}
-.dash-connect-secondary{display:inline-flex;align-items:center;justify-content:center;padding:13px 26px;background:#fff;color:#6366f1;border:1px solid rgba(99,102,241,0.25);border-radius:10px;font-size:14px;font-weight:600;text-decoration:none;transition:background 0.12s,border-color 0.12s}
-.dash-connect-secondary:hover{background:#f5f3ff;color:#4f46e5;text-decoration:none;border-color:rgba(99,102,241,0.4)}
 .dash-recommendations-section .dash-section-label{font-size:11px;font-weight:700;color:#9ca3af;margin:0 0 12px;text-transform:uppercase;letter-spacing:.06em}
 /* Cards panel — full-width with generous max so wide monitors breathe */
 .cards-panel{flex:1;min-width:0;padding:0 32px 40px}
@@ -6070,7 +6078,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-hero-card,.dash-connect-card{padding:28px 22px;border-radius:16px}.dash-hero-greeting{font-size:14px;margin-bottom:10px}.dash-hero-headline{font-size:22px;letter-spacing:-0.4px}.dash-hero-tagline{font-size:14px;margin-top:10px}.dash-hero-brief-btn{margin-top:20px;width:100%}.dash-connect-actions{flex-direction:column}.dash-connect-primary,.dash-connect-secondary{width:100%;box-sizing:border-box}.cards-panel{padding:16px 16px 32px}}
+@media(max-width:768px){.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-brief-card{padding:28px 22px;border-radius:16px}.dash-brief-greeting{font-size:13px;margin-bottom:22px}.dash-brief-today{margin-bottom:20px;padding-bottom:16px}.dash-brief-insight{gap:14px;padding:16px 0}.dash-brief-insight-title{font-size:14px}.dash-brief-insight-detail{font-size:12px}.dash-brief-onboard-headline{font-size:18px}.dash-brief-onboard-desc{font-size:13px;margin-bottom:24px}.dash-brief-onboard-points{margin-bottom:28px;gap:14px}.dash-brief-onboard-primary{width:100%;box-sizing:border-box}.cards-panel{padding:16px 16px 32px}}
 </style>
 </head>
 <body>
@@ -6088,10 +6096,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button class="nav-hamburger" onclick="openMobileDrawer()" aria-label="Open menu" style="display:none">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
     </button>
-    <div class="topbar-search">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <input type="text" placeholder="Search accounts…" oninput="filterCards(this.value)" id="card-search">
-    </div>
+    {topbar_search_html}
     <div style="flex:1"></div>
     {agent_status_indicator}
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
@@ -6205,9 +6210,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       })();
       </script>
     </div><!-- /insight-panel -->
-
-    <!-- Connect account (primary CTA for first-time users) -->
-    {connect_account_section_html}
 
     <!-- Recommendations -->
     {recommendations_section_html}
@@ -9444,46 +9446,10 @@ def dashboard():
                 f'</div>'
             )
 
-    _connect_first_account_inner = (
-        '<div class="dash-connect-title">Connect your first account</div>'
-        '<p class="dash-connect-desc">Mighty uses the Chrome extension to read your account data '
-        'directly from the sites you\u2019re already logged into \u2014 no passwords stored here.</p>'
-        '<div class="dash-connect-steps">'
-        '<div class="dash-connect-step">'
-        '<div class="dash-connect-step-num">1</div>'
-        '<div><div class="dash-connect-step-title">Install the Chrome extension</div>'
-        '<div class="dash-connect-step-desc">Then visit '
-        '<a href="/extension-setup" target="_blank" style="color:#6366f1;font-weight:500">'
-        'Settings \u2192 Setup Extension</a> to auto-configure it</div></div></div>'
-        '<div class="dash-connect-step">'
-        '<div class="dash-connect-step-num">2</div>'
-        '<div><div class="dash-connect-step-title">Log into your accounts in Chrome</div>'
-        '<div class="dash-connect-step-desc">The extension automatically detects and captures '
-        'account pages as you browse</div></div></div>'
-        '<div class="dash-connect-step">'
-        '<div class="dash-connect-step-num">3</div>'
-        '<div><div class="dash-connect-step-title">Your data appears here automatically</div>'
-        '<div class="dash-connect-step-desc">Points, balances, alerts, and expiring benefits '
-        '\u2014 all in one place</div></div></div>'
-        '</div>'
-        '<div class="dash-connect-actions">'
-        '<a href="/credentials" class="dash-connect-primary">+ Connect account manually</a>'
-        '<a href="/extension-setup" target="_blank" class="dash-connect-secondary">'
-        'Setup Extension</a>'
-        '</div>'
-    )
-
     if cards_html:
         account_data_html = cards_html
-        connect_account_section_html = ""
     else:
         account_data_html = ""
-        connect_account_section_html = (
-            f'<div class="dash-section">'
-            f'<div class="dash-section-inner">'
-            f'<div class="dash-connect-card">{_connect_first_account_inner}</div>'
-            f'</div></div>'
-        )
 
     # ── Suggested accounts (from email scan, not yet connected) ─────────────────
     _site_info = {k: (n, ic, col) for k, n, ic, col, _ in SUPPORTED_SITES}
@@ -9567,10 +9533,7 @@ def dashboard():
             f'</script>'
             f'</div>'
         )
-        if connect_account_section_html:
-            connect_account_section_html = _sugg_section + connect_account_section_html
-        else:
-            account_data_html = _sugg_section + account_data_html
+        account_data_html = _sugg_section + account_data_html
 
     # Compute total tracked value across all accounts
     total_value = 0.0
@@ -9780,6 +9743,10 @@ def dashboard():
             _dashboard_recommendations = []
     try:
         if build_daily_brief is not None:
+            _email_suggestion_count = db.execute(
+                "SELECT COUNT(*) FROM email_suggestions WHERE user_id=? AND dismissed=0",
+                (uid,),
+            ).fetchone()[0]
             daily_brief = build_daily_brief(
                 account_count=_account_count,
                 benefit_count=len(_hero_candidates),
@@ -9788,6 +9755,7 @@ def dashboard():
                 action_items=_all_action_items,
                 hero_candidates=_hero_candidates,
                 acct_rows=acct_rows,
+                email_suggestion_count=_email_suggestion_count,
                 recommendations=_dashboard_recommendations,
             )
     except Exception:
@@ -10077,28 +10045,87 @@ def dashboard():
             f'</div>'
         )
 
-    hero_section_html = (
-        f'<div class="dash-hero">'
-        f'<div class="dash-hero-card">'
-        f'<div class="dash-hero-greeting" id="hero-greeting">'
-        f'Hello, {he(_first_name)}'
-        f'</div>'
-        f'<h1 class="dash-hero-headline">Mighty automatically watches your travel, banking, '
-        f'shopping and subscription accounts.</h1>'
-        f'<p class="dash-hero-tagline">Connect your first account to start receiving '
-        f'personalized recommendations.</p>'
-        f'<button type="button" id="daily-brief-toggle" '
-        f'class="dash-hero-brief-btn">Read today\u2019s brief</button>'
-        f'</div>'
-        f'<script>'
-        f'(function(){{'
-        f'  var h=new Date().getHours();'
-        f'  var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";'
-        f'  var el=document.getElementById("hero-greeting");'
-        f'  if(el) el.textContent=g+", {he(_first_name)}";'
-        f'}})();'
-        f'</script>'
-        f'</div>'
+    import datetime as _brief_dt
+    _today_label = _brief_dt.date.today().strftime("%A, %B %-d")
+
+    def _render_daily_brief_hero(brief, first_name: str) -> str:
+        insights = getattr(brief, "insights", None) or [] if brief else []
+        insights_html = ""
+        for ins in insights:
+            sev = ins.severity if ins.severity in ("warning", "info", "success") else "info"
+            detail_html = (
+                f'<div class="dash-brief-insight-detail">{he(ins.detail)}</div>'
+                if ins.detail else ""
+            )
+            insights_html += (
+                f'<li class="dash-brief-insight dash-brief-insight--{sev}">'
+                f'<span class="dash-brief-severity" aria-hidden="true"></span>'
+                f'<div class="dash-brief-insight-body">'
+                f'<div class="dash-brief-insight-title">{he(ins.title)}</div>'
+                f'{detail_html}'
+                f'</div></li>'
+            )
+
+        if insights_html:
+            body_html = f'<ul class="dash-brief-insights">{insights_html}</ul>'
+        else:
+            body_html = (
+                f'<div class="dash-brief-empty">'
+                f'<h2 class="dash-brief-onboard-headline">Connect Gmail to start your Daily Brief</h2>'
+                f'<p class="dash-brief-onboard-desc">Mighty scans who emails you — never what they say — '
+                f'to discover loyalty programs, subscriptions, and benefits you already have. '
+                f'Your brief fills in with expiring credits, account changes, and what needs attention.</p>'
+                f'<ul class="dash-brief-onboard-points">'
+                f'<li class="dash-brief-onboard-point">'
+                f'<span class="dash-brief-onboard-point-dot" aria-hidden="true"></span>'
+                f'<span>Find accounts you forgot you had</span></li>'
+                f'<li class="dash-brief-onboard-point">'
+                f'<span class="dash-brief-onboard-point-dot" aria-hidden="true"></span>'
+                f'<span>Get alerts before benefits expire</span></li>'
+                f'<li class="dash-brief-onboard-point">'
+                f'<span class="dash-brief-onboard-point-dot" aria-hidden="true"></span>'
+                f'<span>See personalized insights every morning</span></li>'
+                f'</ul>'
+                f'<div class="dash-brief-onboard-actions">'
+                f'<a href="/email-scan" class="dash-brief-onboard-primary">Connect Gmail</a>'
+                f'<a href="/credentials" class="dash-brief-onboard-secondary">'
+                f'Or connect an account manually</a>'
+                f'</div>'
+                f'</div>'
+            )
+
+        return (
+            f'<div class="dash-hero">'
+            f'<div class="dash-brief-card">'
+            f'<div class="dash-brief-greeting" id="hero-greeting">'
+            f'Hello, {he(first_name)}'
+            f'</div>'
+            f'<div class="dash-brief-today">'
+            f'<span class="dash-brief-today-label">Today</span>'
+            f'<span class="dash-brief-today-date">{he(_today_label)}</span>'
+            f'</div>'
+            f'{body_html}'
+            f'</div>'
+            f'<script>'
+            f'(function(){{'
+            f'  var h=new Date().getHours();'
+            f'  var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";'
+            f'  var el=document.getElementById("hero-greeting");'
+            f'  if(el) el.textContent=g+", {he(first_name)}";'
+            f'}})();'
+            f'</script>'
+            f'</div>'
+        )
+
+    hero_section_html = _render_daily_brief_hero(daily_brief, _first_name)
+
+    topbar_search_html = (
+        '<div class="topbar-search">'
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+        '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
+        '<input type="text" placeholder="Search accounts…" oninput="filterCards(this.value)" id="card-search">'
+        '</div>'
+        if _account_count > 0 else ''
     )
 
     # ── INSIGHTS: Benefits available now — horizontal 3-card row ─────────────────
@@ -11161,9 +11188,9 @@ function dismissOnboarding() {
             .replace("{reauth_banner}",           reauth_banner)
             .replace("{new_accounts_banner}",     new_accounts_banner)
             .replace("{account_data_html}",       account_data_html)
-            .replace("{connect_account_section_html}", connect_account_section_html)
             .replace("{recommendations_section_html}", recommendations_section_html)
             .replace("{hero_section_html}",       hero_section_html)
+            .replace("{topbar_search_html}",      topbar_search_html)
             .replace("{insights_html}",           insights_html)
             .replace("{available_rail_html}",     available_rail_html)
             .replace("{action_center_html}",      action_center_html)
