@@ -14530,25 +14530,9 @@ def _build_credentials_page(user, configured: set, extra_by_source: dict = None,
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-html,body{{height:100%;overflow:hidden;font-family:'Inter',sans-serif}}
-body{{display:flex;flex-direction:row;background:#eae5de;color:#1c1917;-webkit-font-smoothing:antialiased}}
-/* ── Sidebar ── */
-.sidebar{{width:48px;flex-shrink:0;background:#0a0c12;border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;height:100vh;overflow:hidden;align-items:center}}
-.sidebar-header{{padding:14px 0 10px;border-bottom:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}}
-.sidebar-logo{{display:flex;align-items:center;justify-content:center;text-decoration:none}}
-.sidebar-logo:hover{{text-decoration:none}}
-.sidebar-logo-img{{width:26px;height:26px;border-radius:7px;object-fit:cover}}
-.sidebar-nav{{flex:1;padding:8px 0;display:flex;flex-direction:column;align-items:center;gap:2px;overflow-y:auto;width:100%}}
-.sidebar-link{{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#3d4560;text-decoration:none;transition:background 0.1s,color 0.1s}}
-.sidebar-link:hover{{background:rgba(255,255,255,0.07);color:#c4cde0;text-decoration:none}}
-.sidebar-link svg{{flex-shrink:0}}
-.sidebar-link-active{{background:rgba(129,140,248,0.15);color:#818cf8 !important}}
-.sidebar-footer{{padding:10px 0 12px;border-top:1px solid rgba(255,255,255,0.06);width:100%;display:flex;justify-content:center}}
-.sidebar-avatar{{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;border:none;cursor:pointer;font-family:inherit;position:relative}}
-.sidebar-tip{{position:fixed;left:54px;background:#1a1d2e;color:#e2e8f0;font-size:12px;font-weight:500;padding:5px 10px;border-radius:7px;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity 0.1s;z-index:999;border:1px solid rgba(255,255,255,0.08)}}
-.sidebar-link:hover .sidebar-tip,.sidebar-logo:hover .sidebar-tip,.sidebar-avatar:hover .sidebar-tip{{opacity:1}}
-/* ── Main ── */
+{BASE_CSS}
+html,body{{height:100%;overflow:hidden}}
+body{{display:flex;flex-direction:row;background:#eee9e2}}
 .main-content{{flex:1;min-width:0;height:100vh;overflow-y:auto}}
 .page{{max-width:660px;margin:0 auto;padding:32px 28px}}
 .page-header{{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}}
