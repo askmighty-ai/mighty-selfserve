@@ -112,6 +112,14 @@ def _opportunities_to_recommendations(opportunities: list[Any]) -> list[Recommen
     ]
 
 
+def _collect_live_advisor_recommendations(
+    context: DecisionContext,
+    user_memory: dict[str, Any] | None = None,
+) -> list[Recommendation]:
+    """Collect live recommendations from advisors."""
+    return _opportunities_to_recommendations(evaluate_email(context, user_memory))
+
+
 def detect_situation(context: DecisionContext) -> Situation:
     return Situation(kind="unknown", confidence="low", evidence=[])
 
@@ -122,9 +130,7 @@ def get_recommendations(
 ) -> list[Recommendation]:
     if context.source == "dashboard":
         recommendations = _dashboard_demo_recommendations()
-        recommendations.extend(
-            _opportunities_to_recommendations(evaluate_email(context, user_memory))
-        )
+        recommendations.extend(_collect_live_advisor_recommendations(context, user_memory))
         return recommendations
 
     detect_situation(context)
