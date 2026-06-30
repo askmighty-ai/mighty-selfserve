@@ -66,7 +66,7 @@ class TestExecutiveBriefing:
         assert exec_brief.is_demo is True
         assert exec_brief.metrics.accounts_monitored == 5
 
-    def test_render_two_column_layout(self):
+    def test_render_newspaper_hierarchy(self):
         exec_brief = build_executive_briefing(get_demo_daily_brief(), account_count=5, benefit_count=12, expiring_count=3)
         rendered = render_executive_briefing_hero(
             exec_brief,
@@ -76,14 +76,17 @@ class TestExecutiveBriefing:
         )
 
         assert "dash-brief-exec" in rendered
-        assert "dash-brief-priority-item" in rendered
-        assert "dash-brief-metric" in rendered
-        assert "Accounts monitored" in rendered
-        assert "Benefits tracked" in rendered
-        assert "Total estimated value found" in rendered
-        assert "Items needing attention" in rendered
+        assert "dash-brief-featured" in rendered
+        assert "dash-brief-featured-headline" in rendered
+        assert "dash-brief-row" in rendered
+        assert "dash-brief-value-badge" in rendered
+        assert "dash-brief-else" in rendered
+        assert "dash-brief-priority-why" not in rendered
+        assert "dash-brief-priority-summary" not in rendered
+        assert "Accounts monitored" not in rendered
         assert "hero-greeting" in rendered
         assert "Good morning" in rendered
+        assert "$40" in rendered or "$300" in rendered
 
     def test_priority_action_includes_cta_and_value(self):
         action = Action(
@@ -108,6 +111,7 @@ class TestExecutiveBriefing:
 class TestDemoHeroRendering:
     def test_demo_hero_renders_executive_brief(self):
         html_out = render_demo_daily_brief_hero(get_demo_daily_brief(), "Alex", "Monday, June 30")
-        assert "Demo data" in html_out
+        assert "Demo" in html_out
         assert "dash-brief-exec" in html_out
-        assert "dash-brief-metric" in html_out
+        assert "dash-brief-featured" in html_out
+        assert "dash-brief-else" in html_out

@@ -85,9 +85,12 @@ def _value_for_action(action: Action) -> str:
     if value and _is_meaningful_value(value):
         if "$" in value or "credit" in value.lower() or "night" in value.lower():
             return value
+    badge = _badge_from_texts(value, action.title, action.summary, action.reasoning)
+    if badge:
+        return badge
     phrase = action.expiry_phrase()
     if phrase:
-        return phrase.replace("expires", "Expires").capitalize()
+        return _compact_days_badge(phrase) or phrase.replace("expires", "Expires").capitalize()
     return ""
 
 
@@ -147,7 +150,7 @@ def _priority_actions_from_brief(brief: DailyBrief) -> list[PriorityActionItem]:
                 headline=item.title,
                 why=item.detail or "Needs your attention soon.",
                 urgency="urgent",
-                value=item.detail if "$" in (item.detail or "") else "",
+                value=_badge_from_texts(item.detail or "", item.title),
                 cta_label="Take action",
                 cta_url="#accounts",
             )
@@ -160,7 +163,7 @@ def _priority_actions_from_brief(brief: DailyBrief) -> list[PriorityActionItem]:
                 headline=item.title,
                 why=item.detail or "A strong fit for your upcoming plans.",
                 urgency="info",
-                value=item.detail if "$" in (item.detail or "") else "",
+                value=_badge_from_texts(item.detail or "", item.title),
                 cta_label="View opportunity",
                 cta_url="#recommendations",
             )
@@ -174,7 +177,7 @@ def _priority_actions_from_brief(brief: DailyBrief) -> list[PriorityActionItem]:
                 headline=ins.title,
                 why=ins.detail or "Surfaced in today's brief.",
                 urgency=urgency,
-                value=ins.detail if "$" in (ins.detail or "") else "",
+                value=_badge_from_texts(ins.detail or "", ins.title),
                 cta_label="Review",
                 cta_url="#accounts",
             )
@@ -207,7 +210,7 @@ def _demo_priority_actions() -> list[PriorityActionItem]:
             headline="Use your Marriott free night before Tokyo",
             why="Certificate expires 14 days before your departure — book now or lose a full night.",
             urgency="urgent",
-            value="1 free night · ~$400 value",
+            value="$400 value",
             cta_label="Book with Marriott",
             cta_url="https://www.marriott.com/",
         ),
@@ -215,7 +218,7 @@ def _demo_priority_actions() -> list[PriorityActionItem]:
             headline="Activate your Amex $40 dining credit",
             why="Offer expires Friday; unused credits don't roll over to next quarter.",
             urgency="soon",
-            value="$40 dining credit",
+            value="$40 credit",
             cta_label="View Amex offers",
             cta_url="#accounts",
         ),
@@ -301,6 +304,82 @@ def build_executive_briefing(
     )
 
 
+def _compact_days_badge(text: str) -> str:
+    match = re.search(r"(\d+)\s*days?\s*left", text or "", re.I)
+    if match:
+        return f"{match.group(1)}d"
+    return ""
+
+
+def _badge_from_texts(*texts: str) -> str:
+    for text in texts:
+        badge = _format_value_badge(text)
+        if badge:
+            return badge
+        badge = _compact_days_badge(text)
+        if badge:
+            return badge
+    return ""
+
+
+def _format_value_badge(value: str) -> str:
+    """Normalize estimated value for a compact badge (e.g. '$400 value')."""
+    cleaned = _clean(value)
+    if not cleaned:
+        return ""
+    match = _DOLLAR_RE.search(cleaned)
+    if match:
+        try:
+            amount = float(match.group(1).replace(",", ""))
+        except ValueError:
+            amount = None
+        if amount is not None:
+            if amount >= 1000:
+                dollars = f"${amount:,.0f}"
+            elif amount == int(amount):
+                dollars = f"${int(amount)}"
+            else:
+                dollars = f"${amount:,.2f}"
+            if "credit" in cleaned.lower():
+                return f"{dollars} credit"
+            if "value" in cleaned.lower() or "~" in cleaned:
+                return f"{dollars} value"
+            return dollars
+    if len(cleaned) > 28:
+        return cleaned[:25].rstrip() + "…"
+    return cleaned
+
+
+def _urgency_icon(urgency: str) -> str:
+    if urgency == "urgent":
+        return (
+            '<svg class="dash-brief-urgency-svg" viewBox="0 0 16 16" fill="none" '
+            'aria-hidden="true"><circle cx="8" cy="8" r="6.5" stroke="currentColor" '
+            'stroke-width="1.25"/><path d="M8 4.75v4" stroke="currentColor" '
+            'stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.25" '
+            'r=".75" fill="currentColor"/></svg>'
+        )
+    if urgency == "soon":
+        return (
+            '<svg class="dash-brief-urgency-svg" viewBox="0 0 16 16" fill="none" '
+            'aria-hidden="true"><circle cx="8" cy="8" r="6.5" stroke="currentColor" '
+            'stroke-width="1.25"/><path d="M8 4.5v3.75l2.25 1.35" stroke="currentColor" '
+            'stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        )
+    return (
+        '<svg class="dash-brief-urgency-svg" viewBox="0 0 16 16" fill="none" '
+        'aria-hidden="true"><circle cx="8" cy="8" r="6.5" stroke="currentColor" '
+        'stroke-width="1.25"/><circle cx="8" cy="8" r="1.75" fill="currentColor"/></svg>'
+    )
+
+
+def _value_badge_html(value: str, escape: Callable[[Any], str]) -> str:
+    badge = _format_value_badge(value)
+    if not badge:
+        return ""
+    return f'<span class="dash-brief-value-badge">{escape(badge)}</span>'
+
+
 def render_executive_briefing_hero(
     briefing: ExecutiveBriefing,
     *,
@@ -310,64 +389,95 @@ def render_executive_briefing_hero(
 ) -> str:
     """Render the executive Daily Brief hero."""
 
-    def _render_priority(action: PriorityActionItem) -> str:
-        value_html = (
-            f'<p class="dash-brief-priority-value">{escape(action.value)}</p>'
-            if action.value else ""
-        )
-        cta_html = ""
-        if action.cta_label:
-            href = escape(action.cta_url or "#")
-            cta_html = (
-                f'<a href="{href}" class="dash-brief-priority-cta">'
-                f'{escape(action.cta_label)} →</a>'
-            )
+    actions = briefing.priority_actions[:3]
+    featured = actions[0] if actions else None
+    secondary = actions[1:3]
+
+    def _featured_action(action: PriorityActionItem) -> str:
+        href = escape(action.cta_url or "#")
+        cta = escape(action.cta_label or "Take action")
+        urgency = action.urgency if action.urgency in {"urgent", "soon", "info"} else "info"
         return (
-            f'<article class="dash-brief-priority-item">'
-            f'<h3 class="dash-brief-priority-headline">{escape(action.headline)}</h3>'
-            f'<p class="dash-brief-priority-why">{escape(action.why)}</p>'
-            f'{value_html}'
-            f'{cta_html}'
+            f'<article class="dash-brief-featured dash-brief-urgency--{urgency}">'
+            f'<div class="dash-brief-featured-meta">'
+            f'<span class="dash-brief-urgency-icon" aria-hidden="true">'
+            f'{_urgency_icon(urgency)}</span>'
+            f'{_value_badge_html(action.value, escape)}'
+            f'</div>'
+            f'<h2 class="dash-brief-featured-headline">{escape(action.headline)}</h2>'
+            f'<a href="{href}" class="dash-brief-featured-cta">{cta}</a>'
             f'</article>'
         )
 
-    priorities_html = "".join(_render_priority(item) for item in briefing.priority_actions[:3])
-
-    def _metric_card(label: str, value: str) -> str:
+    def _secondary_row(action: PriorityActionItem) -> str:
+        href = escape(action.cta_url or "#")
+        urgency = action.urgency if action.urgency in {"urgent", "soon", "info"} else "info"
+        badge = _value_badge_html(action.value, escape)
         return (
-            f'<div class="dash-brief-metric">'
-            f'<div class="dash-brief-metric-val">{escape(value)}</div>'
-            f'<div class="dash-brief-metric-lbl">{escape(label)}</div>'
-            f'</div>'
+            f'<a href="{href}" class="dash-brief-row dash-brief-urgency--{urgency}">'
+            f'<span class="dash-brief-row-icon" aria-hidden="true">'
+            f'{_urgency_icon(urgency)}</span>'
+            f'<span class="dash-brief-row-body">'
+            f'<span class="dash-brief-row-headline">{escape(action.headline)}</span>'
+            f'{badge}'
+            f'</span>'
+            f'<span class="dash-brief-row-arrow" aria-hidden="true">'
+            f'<svg viewBox="0 0 16 16" fill="none"><path d="M6 3.5l4.5 4.5L6 12.5" '
+            f'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
+            f'stroke-linejoin="round"/></svg></span>'
+            f'</a>'
         )
 
+    featured_html = _featured_action(featured) if featured else ""
+    secondary_html = "".join(_secondary_row(item) for item in secondary)
+
     metrics = briefing.metrics
-    metrics_html = (
-        _metric_card("Accounts monitored", str(metrics.accounts_monitored))
-        + _metric_card("Benefits tracked", str(metrics.benefits_tracked))
-        + _metric_card("Total estimated value found", metrics.total_estimated_value or "—")
-        + _metric_card("Items needing attention", str(metrics.items_needing_attention))
-    )
+    else_items: list[str] = []
+    if metrics.accounts_monitored:
+        n = metrics.accounts_monitored
+        else_items.append(f"{n} account{'s' if n != 1 else ''}")
+    if metrics.benefits_tracked:
+        n = metrics.benefits_tracked
+        else_items.append(f"{n} benefit{'s' if n != 1 else ''}")
+    if metrics.total_estimated_value:
+        else_items.append(f"{escape(metrics.total_estimated_value)} tracked")
+    if metrics.items_needing_attention:
+        n = metrics.items_needing_attention
+        else_items.append(f"{n} need attention")
+
+    else_html = ""
+    if else_items:
+        chips = "".join(
+            f'<span class="dash-brief-else-chip">{item}</span>' for item in else_items
+        )
+        else_html = (
+            f'<section class="dash-brief-else" aria-label="Overview">'
+            f'<p class="dash-brief-else-label">Also</p>'
+            f'<div class="dash-brief-else-chips">{chips}</div>'
+            f'</section>'
+        )
 
     demo_tag = ""
     if briefing.is_demo:
-        demo_tag = (
-            '<span class="dash-brief-demo-tag">Demo data</span>'
-        )
+        demo_tag = '<span class="dash-brief-demo-tag">Demo</span>'
 
     onboard_html = ""
     if briefing.show_onboard_cta:
         onboard_html = (
             f'<div class="dash-brief-onboard-cta">'
-            f'<p class="dash-brief-onboard-note">Connect Gmail to replace sample data with your accounts.</p>'
-            f'<div class="dash-brief-onboard-actions">'
             f'<a href="/email-scan" class="dash-brief-onboard-primary">Connect Gmail</a>'
             f'<a href="/credentials" class="dash-brief-onboard-secondary">Connect manually</a>'
-            f'</div>'
             f'</div>'
         )
 
     safe_name = escape(first_name)
+    secondary_section = ""
+    if secondary_html:
+        secondary_section = (
+            f'<section class="dash-brief-secondary" aria-label="Next priorities">'
+            f'{secondary_html}'
+            f'</section>'
+        )
 
     return (
         f'<div class="dash-hero">'
@@ -380,10 +490,12 @@ def render_executive_briefing_hero(
         f'{demo_tag}'
         f'</div>'
         f'</header>'
-        f'<p class="dash-brief-priority-summary">{escape(briefing.priority_summary)}</p>'
-        f'<div class="dash-brief-priorities">{priorities_html}</div>'
+        f'<section class="dash-brief-primary" aria-label="Top priority">'
+        f'{featured_html}'
+        f'</section>'
+        f'{secondary_section}'
         f'{onboard_html}'
-        f'<div class="dash-brief-metrics">{metrics_html}</div>'
+        f'{else_html}'
         f'</div>'
         f'</div>'
         f'<script>'
