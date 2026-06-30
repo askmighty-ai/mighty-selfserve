@@ -5945,12 +5945,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-brief-today{display:flex;align-items:baseline;gap:12px;margin:0 0 24px;padding-bottom:20px;border-bottom:1px solid rgba(0,0,0,0.05)}
 .dash-brief-today-label{font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:0.12em}
 .dash-brief-today-date{font-size:13px;font-weight:500;color:#d6d3d1}
+.dash-brief-lede{margin:0 0 28px;padding-bottom:24px;border-bottom:1px solid rgba(0,0,0,0.05)}
+.dash-brief-headline{font-size:22px;font-weight:600;color:#1c1917;letter-spacing:-0.4px;line-height:1.3;margin:0 0 8px;max-width:42ch}
+.dash-brief-summary-text{font-size:14px;font-weight:400;color:#78716c;line-height:1.6;margin:0;max-width:58ch}
+.dash-brief-sections{display:flex;flex-direction:column;gap:28px}
+.dash-brief-section{margin:0}
+.dash-brief-section-head{display:flex;align-items:center;gap:10px;margin:0 0 10px}
+.dash-brief-section-title{font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:0.1em;margin:0}
+.dash-brief-section-count{font-size:10px;font-weight:600;color:#a8a29e;background:rgba(0,0,0,0.04);border:0.5px solid rgba(0,0,0,0.06);border-radius:20px;padding:2px 8px;line-height:1.4;letter-spacing:0.02em}
+.dash-brief-section--attention .dash-brief-section-title{color:#b45309}
+.dash-brief-section--expiring .dash-brief-section-title{color:#b45309}
+.dash-brief-section--savings .dash-brief-section-title{color:#4f46e5}
+.dash-brief-section--discoveries .dash-brief-section-title{color:#57534e}
+.dash-brief-status{margin-top:28px;padding-top:20px;border-top:1px solid rgba(0,0,0,0.05)}
+.dash-brief-status .dash-brief-insight{padding:0;border-bottom:none}
 .dash-brief-insights{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0}
-.dash-brief-insight{display:flex;align-items:flex-start;gap:16px;padding:18px 0;border-bottom:1px solid rgba(0,0,0,0.04)}
+.dash-brief-insight{display:flex;align-items:flex-start;gap:14px;padding:14px 0;border-bottom:1px solid rgba(0,0,0,0.04)}
 .dash-brief-insight:last-child{border-bottom:none;padding-bottom:0}
 .dash-brief-insight:first-child{padding-top:0}
-.dash-brief-severity{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:7px}
+.dash-brief-severity{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:6px}
 .dash-brief-insight--warning .dash-brief-severity{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,0.15)}
+.dash-brief-insight--opportunity .dash-brief-severity{background:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.14)}
 .dash-brief-insight--info .dash-brief-severity{background:#a8a29e;box-shadow:0 0 0 3px rgba(168,162,158,0.12)}
 .dash-brief-insight--success .dash-brief-severity{background:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,0.12)}
 .dash-brief-insight-body{flex:1;min-width:0}
@@ -5964,10 +5979,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-brief-preview-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 18px;padding-bottom:14px;border-bottom:1px solid rgba(0,0,0,0.05)}
 .dash-brief-preview-label{font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:0.12em}
 .dash-brief-preview-badge{font-size:10px;font-weight:600;color:#a8a29e;background:rgba(0,0,0,0.04);border:0.5px solid rgba(0,0,0,0.06);border-radius:20px;padding:3px 9px;letter-spacing:0.02em;white-space:nowrap}
+.dash-brief-preview .dash-brief-sections{gap:18px}
+.dash-brief-preview .dash-brief-section-head{margin-bottom:8px}
+.dash-brief-preview .dash-brief-lede{margin-bottom:18px;padding-bottom:14px}
+.dash-brief-preview .dash-brief-headline{font-size:16px;letter-spacing:-0.25px;margin-bottom:6px}
+.dash-brief-preview .dash-brief-summary-text{font-size:12px;line-height:1.5}
 .dash-brief-preview .dash-brief-insights{gap:0}
-.dash-brief-preview .dash-brief-insight{padding:14px 0}
-.dash-brief-preview .dash-brief-insight-title{font-size:14px;font-weight:600}
-.dash-brief-preview .dash-brief-insight-detail{font-size:12px;margin-top:3px}
+.dash-brief-preview .dash-brief-insight{padding:10px 0}
+.dash-brief-preview .dash-brief-insight-title{font-size:13px;font-weight:600}
+.dash-brief-preview .dash-brief-insight-detail{font-size:11px;margin-top:2px}
 .dash-brief-onboard-headline{font-size:20px;font-weight:600;color:#1c1917;letter-spacing:-0.35px;line-height:1.35;margin:0 0 14px;max-width:38ch}
 .dash-brief-onboard-desc{font-size:14px;font-weight:400;color:#57534e;line-height:1.65;margin:0 0 28px;max-width:48ch}
 .dash-brief-onboard-points{list-style:none;margin:0 0 32px;padding:0;display:flex;flex-direction:column;gap:16px}
@@ -6089,7 +6109,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .feed-col{overflow-y:auto;min-height:0}
-@media(max-width:768px){.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-brief-card{padding:28px 22px;border-radius:16px}.dash-brief-greeting{font-size:13px;margin-bottom:22px}.dash-brief-today{margin-bottom:20px;padding-bottom:16px}.dash-brief-insight{gap:14px;padding:16px 0}.dash-brief-insight-title{font-size:14px}.dash-brief-insight-detail{font-size:12px}.dash-brief-onboard-layout{flex-direction:column;gap:28px}.dash-brief-onboard-copy{max-width:none}.dash-brief-onboard-headline{font-size:18px}.dash-brief-onboard-desc{font-size:13px;margin-bottom:24px}.dash-brief-onboard-points{margin-bottom:28px;gap:14px}.dash-brief-onboard-primary{width:100%;box-sizing:border-box}.dash-brief-preview-panel{padding:18px 18px 16px}.cards-panel{padding:16px 16px 32px}}
+@media(max-width:768px){.pending-pill{font-size:10px;padding:3px 8px}.page-body{overflow:visible}.insight-panel{padding:12px 16px 0}.dash-section{padding:0 16px 20px}.dash-recommendations-section{padding-top:8px}.dash-brief-card{padding:28px 22px;border-radius:16px}.dash-brief-greeting{font-size:13px;margin-bottom:22px}.dash-brief-today{margin-bottom:20px;padding-bottom:16px}.dash-brief-lede{margin-bottom:22px;padding-bottom:18px}.dash-brief-headline{font-size:19px}.dash-brief-summary-text{font-size:13px}.dash-brief-sections{gap:22px}.dash-brief-insight{gap:12px;padding:12px 0}.dash-brief-insight-title{font-size:14px}.dash-brief-insight-detail{font-size:12px}.dash-brief-onboard-layout{flex-direction:column;gap:28px}.dash-brief-onboard-copy{max-width:none}.dash-brief-onboard-headline{font-size:18px}.dash-brief-onboard-desc{font-size:13px;margin-bottom:24px}.dash-brief-onboard-points{margin-bottom:28px;gap:14px}.dash-brief-onboard-primary{width:100%;box-sizing:border-box}.dash-brief-preview-panel{padding:18px 18px 16px}.cards-panel{padding:16px 16px 32px}}
 </style>
 </head>
 <body>
@@ -10067,43 +10087,189 @@ def dashboard():
     _today_label = _brief_dt.date.today().strftime("%A, %B %-d")
 
     def _render_daily_brief_hero(brief, first_name: str) -> str:
-        insights = getattr(brief, "insights", None) or [] if brief else []
-        insights_html = ""
-        for ins in insights:
-            sev = ins.severity if ins.severity in ("warning", "info", "success") else "info"
+        _VALID_SEVERITIES = frozenset({"warning", "opportunity", "info", "success"})
+
+        def _normalize_severity(severity: str) -> str:
+            sev = (severity or "info").lower()
+            if sev == "informational":
+                return "info"
+            return sev if sev in _VALID_SEVERITIES else "info"
+
+        def _render_insight_row(title: str, detail: str, severity: str) -> str:
+            sev = _normalize_severity(severity)
             detail_html = (
-                f'<div class="dash-brief-insight-detail">{he(ins.detail)}</div>'
-                if ins.detail else ""
+                f'<div class="dash-brief-insight-detail">{he(detail)}</div>'
+                if detail else ""
             )
-            insights_html += (
+            return (
                 f'<li class="dash-brief-insight dash-brief-insight--{sev}">'
                 f'<span class="dash-brief-severity" aria-hidden="true"></span>'
                 f'<div class="dash-brief-insight-body">'
-                f'<div class="dash-brief-insight-title">{he(ins.title)}</div>'
+                f'<div class="dash-brief-insight-title">{he(title)}</div>'
                 f'{detail_html}'
                 f'</div></li>'
             )
 
-        if insights_html:
-            body_html = f'<ul class="dash-brief-insights">{insights_html}</ul>'
-        else:
-            _preview_items = (
-                ("warning", "Marriott free night expires in 14 days", "Bonvoy · 1 certificate"),
-                ("success", "Delta upgrade certificate available", "SkyMiles · Regional upgrade"),
-                ("info", "New subscription detected", "Streaming · $15.99/mo"),
-                ("warning", "$40 Amex Offer expires Friday", "Platinum · Merchant credit"),
-                ("warning", "One account requires attention", "Credentials · Re-authentication needed"),
+        def _render_insight_list(items: list[tuple[str, str, str]]) -> str:
+            if not items:
+                return ""
+            rows = "".join(_render_insight_row(t, d, s) for t, d, s in items)
+            return f'<ul class="dash-brief-insights">{rows}</ul>'
+
+        def _render_brief_section(
+            section_key: str,
+            title: str,
+            items: list[tuple[str, str, str]],
+        ) -> str:
+            if not items:
+                return ""
+            count = len(items)
+            return (
+                f'<section class="dash-brief-section dash-brief-section--{section_key}">'
+                f'<div class="dash-brief-section-head">'
+                f'<h3 class="dash-brief-section-title">{he(title)}</h3>'
+                f'<span class="dash-brief-section-count">{count}</span>'
+                f'</div>'
+                f'{_render_insight_list(items)}'
+                f'</section>'
             )
-            _preview_insights_html = ""
-            for _sev, _title, _detail in _preview_items:
-                _preview_insights_html += (
-                    f'<li class="dash-brief-insight dash-brief-insight--{_sev}">'
-                    f'<span class="dash-brief-severity" aria-hidden="true"></span>'
-                    f'<div class="dash-brief-insight-body">'
-                    f'<div class="dash-brief-insight-title">{he(_title)}</div>'
-                    f'<div class="dash-brief-insight-detail">{he(_detail)}</div>'
-                    f'</div></li>'
+
+        def _clean_discovery_title(title: str) -> str:
+            title = (title or "").strip()
+            if title.lower().startswith("i found "):
+                return title[8:].strip()
+            return title
+
+        def _is_expiring_detail(detail: str) -> bool:
+            return "expire" in (detail or "").lower()
+
+        def _brief_has_content(b) -> bool:
+            if not b:
+                return False
+            if getattr(b, "attention", None) or getattr(b, "recommendations", None):
+                return True
+            if getattr(b, "discoveries", None) or getattr(b, "insights", None):
+                return True
+            for item in getattr(b, "completed", None) or []:
+                if getattr(item, "title", "") != "Ready to start watching":
+                    return True
+            return False
+
+        def _compose_brief_sections(b) -> tuple[list, list, list, list, list]:
+            """Map existing DailyBrief fields into executive briefing sections."""
+            needs_attention: list[tuple[str, str, str]] = []
+            savings: list[tuple[str, str, str]] = []
+            expiring: list[tuple[str, str, str]] = []
+            discoveries: list[tuple[str, str, str]] = []
+            status: list[tuple[str, str, str]] = []
+            seen: set[tuple[str, str]] = set()
+
+            def _add(bucket: list, title: str, detail: str, severity: str) -> None:
+                title = (title or "").strip()
+                detail = (detail or "").strip()
+                if not title:
+                    return
+                key = (title.lower(), detail.lower())
+                if key in seen:
+                    return
+                seen.add(key)
+                bucket.append((title, detail, severity))
+
+            for item in getattr(b, "attention", None) or []:
+                _add(needs_attention, item.title, item.detail, "warning")
+
+            for item in getattr(b, "recommendations", None) or []:
+                _add(savings, item.title, item.detail, "opportunity")
+
+            for item in getattr(b, "discoveries", None) or []:
+                title = _clean_discovery_title(item.title)
+                if _is_expiring_detail(item.detail):
+                    _add(expiring, title, item.detail, "warning")
+                else:
+                    _add(discoveries, title, item.detail, "info")
+
+            for ins in getattr(b, "insights", None) or []:
+                sev = _normalize_severity(ins.severity)
+                detail = ins.detail or ""
+                if sev == "success":
+                    _add(status, ins.title, detail, "success")
+                    continue
+                if sev == "opportunity":
+                    _add(savings, ins.title, detail, "opportunity")
+                    continue
+                if _is_expiring_detail(detail) or "expire" in ins.title.lower():
+                    _add(expiring, ins.title, detail, "warning")
+                    continue
+                if sev == "warning":
+                    _add(needs_attention, ins.title, detail, "warning")
+                    continue
+                _add(discoveries, ins.title, detail, "info")
+
+            for item in getattr(b, "completed", None) or []:
+                if item.title == "Ready to start watching":
+                    continue
+                if item.tone == "completed" and not needs_attention and not expiring:
+                    _add(status, item.title, item.detail, "success")
+
+            return needs_attention, savings, expiring, discoveries, status
+
+        def _render_sectioned_brief(b) -> str:
+            needs_attention, savings, expiring, discoveries, status = _compose_brief_sections(b)
+            sections_html = (
+                _render_brief_section("attention", "Needs attention", needs_attention)
+                + _render_brief_section("expiring", "Benefits expiring", expiring)
+                + _render_brief_section("savings", "Savings opportunities", savings)
+                + _render_brief_section("discoveries", "Recent discoveries", discoveries)
+            )
+            lede_html = ""
+            headline = getattr(b, "headline", "") or ""
+            summary = getattr(b, "summary", "") or ""
+            if headline:
+                lede_html = (
+                    f'<div class="dash-brief-lede">'
+                    f'<h2 class="dash-brief-headline">{he(headline)}</h2>'
+                    f'{f"<p class=\"dash-brief-summary-text\">{he(summary)}</p>" if summary else ""}'
+                    f'</div>'
                 )
+            status_html = ""
+            if status:
+                status_html = (
+                    f'<div class="dash-brief-status">'
+                    f'{_render_insight_list(status[:2])}'
+                    f'</div>'
+                )
+            if not sections_html and not lede_html and not status_html:
+                return ""
+            return (
+                f'{lede_html}'
+                f'<div class="dash-brief-sections">{sections_html}</div>'
+                f'{status_html}'
+            )
+
+        body_html = ""
+        if brief and _brief_has_content(brief):
+            body_html = _render_sectioned_brief(brief)
+
+        if not body_html:
+            _preview_sections = (
+                ("attention", "Needs attention", (
+                    ("warning", "Re-authentication required", "Marriott Bonvoy · Login expired"),
+                )),
+                ("expiring", "Benefits expiring", (
+                    ("warning", "Marriott free night certificate", "Bonvoy · Expires in 14 days"),
+                    ("warning", "$40 Amex Offer", "Platinum · Expires Friday"),
+                )),
+                ("savings", "Savings opportunities", (
+                    ("opportunity", "Activate 5× dining multiplier", "Chase Sapphire · Ends this month"),
+                )),
+                ("discoveries", "Recent discoveries", (
+                    ("info", "Delta upgrade certificate", "SkyMiles · Regional upgrade available"),
+                    ("info", "New subscription detected", "Streaming · $15.99/mo"),
+                )),
+            )
+            _preview_sections_html = ""
+            for _key, _label, _items in _preview_sections:
+                _preview_sections_html += _render_brief_section(_key, _label, list(_items))
             body_html = (
                 f'<div class="dash-brief-onboard-layout">'
                 f'<div class="dash-brief-onboard-copy">'
@@ -10134,7 +10300,12 @@ def dashboard():
                 f'<span class="dash-brief-preview-label">Example Daily Brief</span>'
                 f'<span class="dash-brief-preview-badge">Sample</span>'
                 f'</div>'
-                f'<ul class="dash-brief-insights">{_preview_insights_html}</ul>'
+                f'<div class="dash-brief-lede">'
+                f'<h2 class="dash-brief-headline">2 things need your attention.</h2>'
+                f'<p class="dash-brief-summary-text">Checked 6 connected services · 2 items need you · '
+                f'3 discoveries found.</p>'
+                f'</div>'
+                f'<div class="dash-brief-sections">{_preview_sections_html}</div>'
                 f'</div>'
                 f'</div>'
                 f'</div>'
