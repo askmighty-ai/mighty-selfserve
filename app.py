@@ -13,6 +13,7 @@ Env vars (all optional):
   DATABASE_PATH — SQLite file path (default: mighty.db)
   BASE_URL      — Public URL override (e.g. https://mighty-selfserve.up.railway.app)
   PORT          — Port to listen on (default: 5004)
+  DEMO_MODE     — Set to true to show sample dashboard data (also: ?demo=1 on /dashboard)
 """
 
 import os, io, csv, json, re, secrets, hashlib, hmac, sqlite3, threading, urllib.request, urllib.error, html, time, base64
@@ -34,6 +35,11 @@ try:
 except ImportError:
     DecisionContext = None
     get_recommendations = None
+
+try:
+    from mighty import demo_mode as _demo_mode
+except ImportError:
+    _demo_mode = None
 
 import bcrypt as _bcrypt
 
@@ -5998,6 +6004,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-brief-onboard-primary:hover{background:#4f46e5;color:#fff;text-decoration:none;box-shadow:0 4px 12px rgba(99,102,241,0.25)}
 .dash-brief-onboard-secondary{font-size:13px;font-weight:500;color:#78716c;text-decoration:none;transition:color 0.12s}
 .dash-brief-onboard-secondary:hover{color:#1c1917;text-decoration:underline}
+/* Demo mode banner */
+.demo-mode-banner{background:linear-gradient(90deg,rgba(124,58,237,0.08),rgba(99,102,241,0.06));border-bottom:0.5px solid rgba(124,58,237,0.18);flex-shrink:0}
+.demo-mode-banner-inner{max-width:1600px;margin:0 auto;padding:10px 32px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.demo-mode-badge{font-size:10px;font-weight:700;color:#6d28d9;background:#f5f3ff;border:0.5px solid rgba(124,58,237,0.25);border-radius:20px;padding:3px 10px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.demo-mode-copy{font-size:12px;color:#5b21b6;flex:1;min-width:200px}
+.demo-mode-exit{font-size:12px;font-weight:600;color:#6d28d9;text-decoration:none;white-space:nowrap;padding:4px 10px;border-radius:8px;border:0.5px solid rgba(124,58,237,0.25);background:#fff}
+.demo-mode-exit:hover{background:#f5f3ff;text-decoration:none}
+@media(max-width:768px){.demo-mode-banner-inner{padding:10px 16px}}
 /* Dashboard sections */
 .dash-section{width:100%;padding:0 32px 28px;flex-shrink:0}
 .dash-recommendations-section{padding-top:12px}
@@ -6117,6 +6131,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 {_SIDEBAR_DESKTOP_}
 
 <div class="main-content">
+  {demo_mode_banner}
   {onboarding_banner}
   {reauth_banner}
   {new_accounts_banner}
@@ -8465,6 +8480,9 @@ def _coverage_score(source: str, field_count: int) -> dict:
 @require_login
 def dashboard():
     expire_pending()
+    if _demo_mode is not None:
+        _demo_mode.handle_demo_query_param(request, session)
+    demo_mode_active = _demo_mode is not None and _demo_mode.is_demo_mode_enabled(request, session)
     db    = get_db()
     user  = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
     if not user:
@@ -11387,6 +11405,38 @@ function dismissOnboarding() {
 
     _csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('dashboard', user["email"], _csrf)
+
+    demo_mode_banner = ""
+    if demo_mode_active:
+        import datetime as _demo_dt
+        _demo_first = (user.get("preferred_name") or user["email"].split("@")[0] or "there").split()[0]
+        _demo_today = _demo_dt.date.today().strftime("%A, %B %-d")
+        demo_mode_banner = _demo_mode.render_demo_banner()
+        hero_section_html = _demo_mode.render_demo_daily_brief_hero(
+            _demo_mode.get_demo_daily_brief(), _demo_first, _demo_today,
+        )
+        recommendations_section_html = _demo_mode.render_demo_recommendations()
+        insights_html = _demo_mode.render_demo_benefits_row()
+        account_data_html = _demo_mode.render_demo_account_cards(reg_domain=_reg_domain)
+        recently_found_html = _demo_mode.render_demo_recent_discoveries()
+        total_expiring = _demo_mode.expiring_count()
+        _global_sync_label = "Demo · Synced 2h ago"
+        onboarding_banner = ""
+        reauth_banner = ""
+        new_accounts_banner = ""
+        topbar_search_html = (
+            '<div class="topbar-search">'
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+            '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
+            '<input type="text" placeholder="Search demo accounts…" oninput="filterCards(this.value)" id="card-search">'
+            '</div>'
+        )
+        agent_status_indicator = (
+            '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#7c3aed">'
+            '<div style="width:7px;height:7px;border-radius:50%;background:#7c3aed;flex-shrink:0"></div>'
+            'Demo</div>'
+        )
+
     return (DASHBOARD_HTML
             .replace("{_SIDEBAR_DESKTOP_}",        _sidebar_desktop)
             .replace("{_SIDEBAR_MOBILE_}",         _sidebar_mobile)
@@ -11401,6 +11451,7 @@ function dismissOnboarding() {
             .replace("{agent_cta_button}",        agent_cta_button)
             .replace("{feed_col_hidden}",         feed_col_hidden)
             .replace("{welcome_state}",           welcome_state)
+            .replace("{demo_mode_banner}",        demo_mode_banner)
             .replace("{onboarding_banner}",       onboarding_banner)
             .replace("{reauth_banner}",           reauth_banner)
             .replace("{new_accounts_banner}",     new_accounts_banner)
@@ -17455,6 +17506,12 @@ def api_field_history(source):
 @require_login
 def api_reminders():
     """Return actionable reminders for all accounts."""
+    if _demo_mode is not None and _demo_mode.is_demo_mode_enabled(request, session):
+        all_reminders = _demo_mode.get_demo_reminders() + _demo_mode.get_demo_change_alerts()
+        priority = {"urgent": 0, "soon": 1, "info": 2}
+        all_reminders.sort(key=lambda x: priority.get(x.get("urgency", "info"), 2))
+        return jsonify({"reminders": all_reminders})
+
     uid = session["user_id"]
     reminders = _get_reminders(uid)
     change_alerts = _get_change_alerts(uid)
@@ -17488,6 +17545,9 @@ def api_reminders_summary():
     Returns a cross-account summary: groups all reminders by type/theme,
     not by account. Shows what the user is collectively forgetting.
     """
+    if _demo_mode is not None and _demo_mode.is_demo_mode_enabled(request, session):
+        return jsonify(_demo_mode.get_demo_reminders_summary())
+
     uid = session["user_id"]
     try:
         reminders = _get_reminders(uid)
