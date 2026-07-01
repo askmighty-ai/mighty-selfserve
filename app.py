@@ -398,6 +398,10 @@ def init_db():
         except Exception:
             pass
         try:
+            db.execute("ALTER TABLE account_data ADD COLUMN connection_status TEXT")
+        except Exception:
+            pass
+        try:
             db.execute("ALTER TABLE account_credentials ADD COLUMN review_required_fields TEXT DEFAULT '[]'")
         except Exception:
             pass
@@ -6656,6 +6660,28 @@ window.addEventListener('message', function(e) {
   }
 });
 
+// Poll Amex connection state after email-scan redirect (?connect=amex)
+(function() {
+  if (new URLSearchParams(window.location.search).get('connect') !== 'amex') return;
+  var attempts = 0;
+  var poll = setInterval(function() {
+    attempts++;
+    fetch('/api/connect/amex/status')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.connection_status === 'connected') {
+          clearInterval(poll);
+          var url = new URL(window.location.href);
+          url.searchParams.delete('connect');
+          window.history.replaceState({}, '', url.pathname + url.search);
+          location.reload();
+        }
+      })
+      .catch(function() {});
+    if (attempts >= 60) clearInterval(poll);
+  }, 3000);
+})();
+
 function _finishSync() {
   var btn = document.getElementById('cloud-sync-btn');
   document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
@@ -8833,6 +8859,9 @@ def dashboard():
 
             synced_at   = row["synced_at"] if row else ""
             sync_status = data.get("sync_status", "ok") if row else ""
+            _connection_status = ""
+            if row:
+                _connection_status = (row.get("connection_status") or "") or data.get("connection_status", "")
             # The standalone column is updated by sync-failure reports AFTER the blob
             # is written. If it records a worse state than the blob, trust the column.
             _col_st = (row["sync_status"] if row and row["sync_status"] else "") or ""
@@ -8859,7 +8888,8 @@ def dashboard():
             # we have old hero data to display. This prevents stale ok-data from
             # masking a login_required or no_data state with a green dot.
             if sync_status in ("login_required", "no_data", "needs_first_visit"):
-                status_color = "#ef4444"
+                if not (src == AMEX_SOURCE and _connection_status in AMEX_CONNECTION_STATES):
+                    status_color = "#ef4444"
 
             # For utility/telecom sources, promote billing fields to the front
             _UTILITY_SOURCES_CARD = {
@@ -8984,7 +9014,9 @@ def dashboard():
                 secondary_items = [i for i in items if i is not hero_item]
 
             # Build card hero section
-            if hero_item:
+            if src == AMEX_SOURCE and _connection_status in AMEX_CONNECTION_STATES:
+                card_hero_html, status_color = _amex_connection_card_html(_connection_status, display_name)
+            elif hero_item:
                 card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
@@ -9450,7 +9482,7 @@ def dashboard():
             ) if _fav_domain else ''
 
             grid_cards += (
-                f'<div class="acct-card{stale_cls}{expiring_cls}{_compact_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}">'
+                f'<div class="acct-card{stale_cls}{expiring_cls}{_compact_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}" data-connection-status="{he(_connection_status)}">'
                 f'<div class="acct-card-header">'
                 f'{_fav_html}'
                 f'<div style="flex:1;min-width:0">'
@@ -15443,15 +15475,18 @@ def extension_poll(source):
     """
     uid = session["user_id"]
     db  = get_db()
-    # For custom_* sources the extension uses the generated key directly.
-    # For known sources (delta, marriott, etc.) we look for the exact source key
-    # OR any custom_* source captured recently that references this source.
     row = db.execute(
-        "SELECT synced_at FROM account_data WHERE user_id=? AND source=? ORDER BY synced_at DESC LIMIT 1",
+        "SELECT synced_at, connection_status FROM account_data "
+        "WHERE user_id=? AND source=? ORDER BY synced_at DESC LIMIT 1",
         (uid, source)
     ).fetchone()
     if row:
-        return jsonify({"captured": True, "synced_at": row["synced_at"]})
+        connected = bool(row["synced_at"]) or row["connection_status"] == AMEX_CONNECTED
+        return jsonify({
+            "captured": connected,
+            "synced_at": row["synced_at"],
+            "connection_status": row["connection_status"],
+        })
     return jsonify({"captured": False})
 
 
@@ -18110,13 +18145,17 @@ def api_extension_accounts():
 
         name, icon, color = meta
         ad_row = db.execute(
-            "SELECT entry_url, synced_at FROM account_data WHERE user_id=? AND source=?",
+            "SELECT entry_url, synced_at, connection_status FROM account_data WHERE user_id=? AND source=?",
             (user["id"], source)
         ).fetchone()
         entry_url = ad_row["entry_url"] if ad_row and ad_row["entry_url"] else None
         synced_at = ad_row["synced_at"] if ad_row else None
-        accounts.append({"source": source, "name": name, "icon": icon, "color": color,
-                         "entry_url": entry_url, "synced_at": synced_at})
+        connection_status = ad_row["connection_status"] if ad_row else None
+        accounts.append({
+            "source": source, "name": name, "icon": icon, "color": color,
+            "entry_url": entry_url, "synced_at": synced_at,
+            "connection_status": connection_status,
+        })
 
     return jsonify(accounts)
 
@@ -19028,6 +19067,64 @@ from mighty.email_scan import (
     get_imap_preset, CATEGORY_LABELS,
     fetch_recent_subjects,
 )
+from mighty.connection_state import (
+    AMEX_SOURCE,
+    AMEX_CONNECTION_STATES,
+    CONNECTED as AMEX_CONNECTED,
+    CONNECTING as AMEX_CONNECTING,
+    WAITING_FOR_EXTENSION as AMEX_WAITING,
+    InvalidAmexConnectionTransition,
+    advance_amex_to_waiting,
+    amex_extension_connected,
+    get_amex_connection_status,
+    start_amex_connect,
+    state_label as amex_state_label,
+)
+
+
+def _amex_conn_ctx():
+    return dict(iso_fn=iso, encrypt_fn=encrypt_account_data, decrypt_fn=decrypt_account_data)
+
+
+def _amex_connection_card_html(status: str, display_name: str) -> tuple[str, str]:
+    """Return (card_hero_html, status_color) for an Amex connection state."""
+    label = amex_state_label(status)
+    colors = {
+        AMEX_CONNECTING: "#a78bfa",
+        AMEX_WAITING: "#6366f1",
+        AMEX_CONNECTED: "#22c55e",
+    }
+    color = colors.get(status, "#a78bfa")
+    subcopy = {
+        AMEX_CONNECTING: "Setting up your American Express account…",
+        AMEX_WAITING: "Install the Mighty Chrome extension and sign in with your API key.",
+        AMEX_CONNECTED: "Extension linked — account data sync will begin here next.",
+    }.get(status, "")
+    login_url = SOURCE_CAPABILITIES.get(AMEX_SOURCE, {}).get("login_url", SITE_ENTRY_URL.get(AMEX_SOURCE, ""))
+    ext_link = ""
+    if status == AMEX_WAITING:
+        ext_link = (
+            f'<a href="/extension-setup" '
+            f'style="display:inline-block;margin-top:8px;padding:5px 12px;background:#6366f1;'
+            f'color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none">'
+            f'Set up extension →</a>'
+        )
+    elif status == AMEX_CONNECTED and login_url:
+        ext_link = (
+            f'<a href="{he(login_url)}" target="_blank" rel="noopener" '
+            f'style="display:inline-block;margin-top:8px;padding:5px 12px;background:#22c55e;'
+            f'color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none">'
+            f'Open {he(display_name)} →</a>'
+        )
+    hero = (
+        f'<div class="acct-divider"></div>'
+        f'<div class="acct-hero">'
+        f'<div style="color:{color};font-size:13px;font-weight:600">{he(label)}</div>'
+        f'<div style="color:#6b7280;font-size:11px;margin-top:4px;line-height:1.5">{he(subcopy)}</div>'
+        f'{ext_link}'
+        f'</div>'
+    )
+    return hero, color
 
 
 def _load_dashboard_email_subjects(uid: str, db) -> list[str]:
@@ -19122,9 +19219,16 @@ input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
 .note-box{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;
   font-size:13px;color:#92400e;margin-bottom:24px;display:none}
 .note-box.visible{display:block}
+.connect-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center}
+.connect-overlay.visible{display:flex}
+.connect-box{background:#fff;border-radius:12px;padding:28px 32px;max-width:360px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.15)}
+.connect-box h2{font-size:16px;font-weight:700;margin-bottom:8px}
+.connect-status{font-size:14px;color:#6366f1;font-weight:600;margin-top:12px;min-height:20px}
+.connect-sub{font-size:12px;color:#9ca3af;margin-top:6px;line-height:1.5}
 </style>
 </head>
 <body>
+<input type="hidden" id="csrf-token" value="{csrf_token}">
 <div class="topbar">
   <a href="/dashboard">← Dashboard</a>
   <span class="sep">·</span>
@@ -19199,7 +19303,19 @@ input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
   </div>
 </div>
 
+<div class="connect-overlay" id="amex-connect-overlay">
+  <div class="connect-box">
+    <h2>Connecting American Express</h2>
+    <div class="connect-status" id="amex-connect-status">Connecting…</div>
+    <div class="connect-sub">Mighty is setting up your account. You'll be redirected to the dashboard next.</div>
+  </div>
+</div>
+
 <script>
+var _CSRF = (document.getElementById('csrf-token') || {}).value || '';
+function _jsonHeaders() {
+  return {'Content-Type':'application/json', 'X-CSRF-Token': _CSRF};
+}
 var _selectedProvider = null;
 var _alreadyConnected = {already_connected_json};
 
@@ -19340,7 +19456,7 @@ function addAll() {
   // Fire all add requests in parallel, then mark cards
   var fetches = pending.map(function(s){
     return fetch('/api/email/suggestions/add', {
-      method:'POST', headers:{'Content-Type':'application/json'},
+      method:'POST', headers: _jsonHeaders(),
       body: JSON.stringify({site_key: s.site_key})
     }).then(function(){ _markAdded(s.site_key); });
   });
@@ -19354,7 +19470,31 @@ function addAll() {
 }
 
 function connectAdded() {
-  // Go to dashboard; user can set up credentials from there
+  var keys = Array.from(window._addedSiteKeys || []);
+  if (keys.indexOf('amex') >= 0) {
+    var overlay = document.getElementById('amex-connect-overlay');
+    var statusEl = document.getElementById('amex-connect-status');
+    if (overlay) overlay.classList.add('visible');
+    function setStatus(text) { if (statusEl) statusEl.textContent = text; }
+    setStatus('Connecting…');
+    fetch('/api/connect/amex', {method:'POST', headers: _jsonHeaders()})
+      .then(function(r){ return r.json(); })
+      .then(function(d) {
+        if (!d.ok) { alert(d.error || 'Connect failed'); if (overlay) overlay.classList.remove('visible'); return; }
+        setTimeout(function() {
+          setStatus('Waiting for Browser Extension');
+          fetch('/api/connect/amex/waiting', {method:'POST', headers: _jsonHeaders()})
+            .then(function(r2){ return r2.json(); })
+            .then(function(d2) {
+              if (!d2.ok) { alert(d2.error || 'Could not advance'); if (overlay) overlay.classList.remove('visible'); return; }
+              window.location.href = '/dashboard?connect=amex';
+            })
+            .catch(function(e){ alert('Connection error: ' + e.message); if (overlay) overlay.classList.remove('visible'); });
+        }, 900);
+      })
+      .catch(function(e){ alert('Connection error: ' + e.message); if (overlay) overlay.classList.remove('visible'); });
+    return;
+  }
   window.location.href = '/dashboard';
 }
 
@@ -19364,14 +19504,14 @@ function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace
 
 function addSuggestion(siteKey, displayName) {
   fetch('/api/email/suggestions/add', {
-    method:'POST', headers:{'Content-Type':'application/json'},
+    method:'POST', headers: _jsonHeaders(),
     body: JSON.stringify({site_key: siteKey})
   }).then(function(){ _markAdded(siteKey); });
 }
 
 function dismissSuggestion(siteKey) {
   fetch('/api/email/suggestions/dismiss', {
-    method:'POST', headers:{'Content-Type':'application/json'},
+    method:'POST', headers: _jsonHeaders(),
     body: JSON.stringify({site_key: siteKey})
   });
   var card = document.getElementById('sc-' + siteKey);
@@ -19442,6 +19582,7 @@ def _render_email_scan_page(suggestions=None, already_count=0, provider_triggere
     page = page.replace("{injected_suggestions_json}", _json.dumps(suggestions))
     page = page.replace("{injected_already_count}", str(already_count))
     page = page.replace("{gmail_not_configured}", "true" if not gmail_configured else "false")
+    page = page.replace("{csrf_token}", get_csrf_token())
     return page
 
 
@@ -19748,6 +19889,78 @@ def api_email_suggestions_add():
     db.execute("UPDATE email_suggestions SET added=1 WHERE user_id=? AND site_key=?", (uid, site_key))
     db.commit()
     return jsonify({"ok": True})
+
+
+# ── Amex connection state machine ─────────────────────────────────────────────
+
+@app.route("/api/connect/amex", methods=["POST"])
+@require_login
+def api_connect_amex_start():
+    """Start Amex connect flow → connection_status=connecting."""
+    check_csrf()
+    uid = session["user_id"]
+    db  = get_db()
+    try:
+        status = start_amex_connect(db, uid, **_amex_conn_ctx())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({
+        "ok": True,
+        "source": AMEX_SOURCE,
+        "connection_status": status,
+        "label": amex_state_label(status),
+    })
+
+
+@app.route("/api/connect/amex/waiting", methods=["POST"])
+@require_login
+def api_connect_amex_waiting():
+    """Advance Amex connect flow → waiting_for_extension."""
+    check_csrf()
+    uid = session["user_id"]
+    db  = get_db()
+    try:
+        status = advance_amex_to_waiting(db, uid, **_amex_conn_ctx())
+    except InvalidAmexConnectionTransition as e:
+        return jsonify({"ok": False, "error": str(e), "connection_status": e.current}), 409
+    return jsonify({
+        "ok": True,
+        "source": AMEX_SOURCE,
+        "connection_status": status,
+        "label": amex_state_label(status),
+    })
+
+
+@app.route("/api/connect/amex/status")
+@require_login
+def api_connect_amex_status():
+    """Return persisted Amex connection_status for dashboard polling."""
+    uid = session["user_id"]
+    return jsonify({"ok": True, **get_amex_connection_status(get_db(), uid, decrypt_fn=decrypt_account_data)})
+
+
+@app.route("/api/extension/amex/connected", methods=["POST"])
+def api_extension_amex_connected():
+    """Stub: extension reports Amex account linked → connection_status=connected."""
+    user, _ = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    uid = user["id"]
+    db  = get_db()
+    try:
+        status = amex_extension_connected(db, uid, **_amex_conn_ctx())
+    except InvalidAmexConnectionTransition as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "connection_status": e.current,
+        }), 409
+    return jsonify({
+        "ok": True,
+        "source": AMEX_SOURCE,
+        "connection_status": status,
+        "label": amex_state_label(status),
+    })
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────

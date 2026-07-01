@@ -1532,6 +1532,28 @@ async function syncSingleAccount(source, apiKey) {
   }
 }
 
+// ── Amex connection stub (no extraction) ─────────────────────────────────────
+/** Report Amex as connected when the dashboard is waiting for the extension. */
+async function reportAmexConnectedIfNeeded(apiKey, accounts) {
+  if (!apiKey || !Array.isArray(accounts)) return;
+  const amex = accounts.find(a => a.source === 'amex');
+  if (!amex || amex.connection_status !== 'waiting_for_extension') return;
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/connected`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+    });
+    if (resp.ok) {
+      console.log('[Mighty] Amex connection state → connected (stub)');
+      chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+    } else {
+      console.log('[Mighty] Amex connected stub skipped:', resp.status);
+    }
+  } catch (e) {
+    console.warn('[Mighty] Amex connected stub failed:', e.message);
+  }
+}
+
 async function runSync() {
   // Prevent concurrent syncs — each would spawn its own tab set.
   // _syncInProgress is in-memory only and resets on MV3 service worker restart.
@@ -1606,6 +1628,8 @@ async function runSync() {
     await setStatus(`Error fetching accounts: ${e.message}`);
     return;
   }
+
+  await reportAmexConnectedIfNeeded(api_key, accounts);
 
   // Also load captured (custom) accounts from local storage
   const { captured_accounts = {} } = await chrome.storage.local.get('captured_accounts');
@@ -1987,7 +2011,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (key) {
       chrome.storage.local.set({ api_key: key }, () => {
         console.log('[Mighty] API key auto-configured from /extension-setup — starting sync');
-        // Kick off an immediate sync so data appears right away
+        fetch(`${MIGHTY_URL}/api/extension/accounts`, {
+          headers: { 'X-Mighty-Key': key },
+        })
+          .then(r => r.ok ? r.json() : [])
+          .then(accts => reportAmexConnectedIfNeeded(key, accts))
+          .catch(() => {});
         runSync();
       });
     }
