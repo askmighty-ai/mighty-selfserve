@@ -121,12 +121,82 @@ def _rate_limit(ip: str, name: str, limit: int = 10, window: int = 60) -> bool:
                 _rl_store.pop(_k, None)
         return True
 
+
+class _RouteTimer:
+    """Lightweight per-route render timer — logs to stdout (Railway logs)."""
+
+    def __init__(self, route: str):
+        self.route = route
+        self._t0 = time.perf_counter()
+        self._last = self._t0
+        self._steps: list[tuple[str, float]] = []
+
+    def step(self, name: str) -> None:
+        now = time.perf_counter()
+        self._steps.append((name, (now - self._last) * 1000))
+        self._last = now
+
+    def finish(self) -> None:
+        total_ms = (time.perf_counter() - self._t0) * 1000
+        steps_str = " | ".join(f"{n}={ms:.0f}ms" for n, ms in self._steps)
+        msg = f"[RouteTiming] {self.route} total={total_ms:.0f}ms"
+        if steps_str:
+            msg += f" | {steps_str}"
+        print(msg, flush=True)
+
+
+def _is_dev_debug(user) -> bool:
+    """True when ?debug=1 and user matches ADMIN_EMAIL."""
+    admin = os.environ.get("ADMIN_EMAIL", "")
+    if not admin or not user:
+        return False
+    email = user["email"] if hasattr(user, "__getitem__") else user
+    return request.args.get("debug") == "1" and email == admin
+
+
+def _account_debug_panel_html(info: dict) -> str:
+    """Collapsible dev-only sync state panel for an account row."""
+    def _row(key: str, val) -> str:
+        display = "—" if val is None or val == "" else str(val)
+        return (
+            f'<div style="display:flex;gap:8px;font-size:10px;line-height:1.5">'
+            f'<span style="color:#9ca3af;min-width:110px">{he(key)}</span>'
+            f'<span style="color:#374151;font-family:ui-monospace,monospace;word-break:break-all">{he(display)}</span>'
+            f'</div>'
+        )
+    rows = "".join(_row(k, info.get(k)) for k in (
+        "source", "connection_status", "extraction_status", "sync_status",
+        "is_synced", "synced_at", "last_error",
+    ))
+    return (
+        f'<details class="acct-debug-panel" style="margin-top:10px;padding-top:8px;border-top:1px dashed #e8e4de">'
+        f'<summary style="font-size:10px;font-weight:600;color:#6366f1;cursor:pointer;user-select:none">'
+        f'Debug sync state</summary>'
+        f'<div style="margin-top:6px;display:flex;flex-direction:column;gap:2px">{rows}</div>'
+        f'</details>'
+    )
+
+
+_SYNC_HOWTO_HTML = """
+<div class="sync-howto">
+  <div class="sync-howto-title">How syncing works</div>
+  <ol class="sync-howto-list">
+    <li><strong>Find accounts</strong> — Mighty scans Gmail sender addresses to suggest loyalty programs and subscriptions.</li>
+    <li><strong>Chrome extension syncs</strong> — When you visit a provider site while logged in, the Mighty extension captures account data and sends it here.</li>
+    <li><strong>Dashboard shows results</strong> — Balances, perks, and expiry dates appear on your Dashboard. Mighty does not log into provider sites for you.</li>
+    <li><strong>Needs login?</strong> — Open the provider in Chrome, sign in, and visit your account page. The extension picks up the session on its next sync.</li>
+  </ol>
+</div>
+"""
+
+
 DATABASE        = os.environ.get("DATABASE_PATH", "/app/data/mighty.db")
 PORT            = int(os.environ.get("PORT", 5004))
 TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
 POSTMARK_API_KEY = os.environ.get("POSTMARK_API_KEY", "")
 POSTMARK_FROM    = os.environ.get("POSTMARK_FROM", "Mighty <noreply@mighty.ai>")
 NOTIFY_EMAIL_OVERRIDE = os.environ.get("NOTIFY_EMAIL", "")  # override recipient for sandbox testing
+EMAIL_SUBJECTS_CACHE_HOURS = int(os.environ.get("EMAIL_SUBJECTS_CACHE_HOURS", "24"))
 if NOTIFY_EMAIL_OVERRIDE:
     print(f"[Mighty] WARNING: NOTIFY_EMAIL_OVERRIDE is set — all notification emails go to {NOTIFY_EMAIL_OVERRIDE}", flush=True)
 ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -583,6 +653,16 @@ def init_db():
             db.commit()
         except Exception:
             pass
+        for _ec_col, _ec_typ in (
+            ("subjects_json", "TEXT"),
+            ("subjects_refreshed_at", "TEXT"),
+        ):
+            try:
+                db.execute(f"ALTER TABLE email_connections ADD COLUMN {_ec_col} {_ec_typ}")
+                db.commit()
+            except Exception as _e:
+                if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
+                    raise
         # Email scan — surfaced account suggestions per user
         try:
             db.execute("""
@@ -1455,9 +1535,9 @@ def _start_alert_scheduler():
             print(f"[Alerts] Next expiry check at {target.isoformat()}Z ({wait/3600:.1f}h away)", flush=True)
             _time_sched.sleep(wait)
             try:
-                # get_db() requires Flask app context outside a request
                 with app.app_context():
                     run_expiry_alerts()
+                    _refresh_stale_email_subjects_all()
             except Exception as e:
                 print(f"[Alerts] run_expiry_alerts error: {e}", flush=True)
     t = threading.Thread(target=_loop, daemon=True)
@@ -6213,11 +6293,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
-    <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap">{global_sync_label}</span>
-    <button id="cloud-sync-btn" onclick="cloudSync()" class="btn-sync" title="Sync all accounts — fetches live data from connected sites, then re-extracts fields">
-      <svg id="sync-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
-      <span id="sync-label">Sync</span>
-    </button>
+    <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="Last extension sync">{global_sync_label}</span>
+    <!-- Alpha: manual sync removed — extension is the primary sync mechanism. Server retry is in Settings. -->
     <a id="ext-install-link" href="javascript:void(0)" onclick="return false;"
        style="display:none;font-size:11px;color:#6366f1;white-space:nowrap;text-decoration:none;padding:4px 8px;background:rgba(99,102,241,0.08);border-radius:6px;border:1px solid rgba(99,102,241,0.2)">
       Get Chrome Extension (coming soon)
@@ -7371,6 +7448,16 @@ SETTINGS_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card">
+    <div class="section-title">Sync (advanced)</div>
+    <div style="font-size:13px;color:#6b7280;margin-bottom:14px;line-height:1.55">
+      <strong style="color:#1c1917">Primary sync:</strong> the Mighty Chrome extension updates accounts when you visit provider sites while logged in.<br><br>
+      <strong style="color:#1c1917">Server sync (fallback):</strong> re-runs Mighty's server-side scraper for all connected accounts. Use only if extension data looks stale or missing — it may not work for sites that require an active browser session.
+    </div>
+    <button id="retry-server-sync-btn" class="btn-sm" onclick="retryServerSync()">Retry server sync</button>
+    <span id="retry-server-sync-msg" style="font-size:12px;color:#6b7280;margin-left:10px"></span>
+  </div>
+
+  <div class="card">
     <div class="section-title">Account discovery</div>
     <div style="font-size:13px;color:#6b7280;margin-bottom:14px;line-height:1.5">
       Scan your email inbox to find accounts you might want to add to Mighty. Only sender addresses are checked — no email content is read.
@@ -7413,6 +7500,31 @@ SETTINGS_HTML = """<!DOCTYPE html>
 
 <script>
 var CSRF = '{csrf_token}';
+function retryServerSync() {
+  var btn = document.getElementById('retry-server-sync-btn');
+  var msg = document.getElementById('retry-server-sync-msg');
+  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+  if (msg) { msg.textContent = ''; msg.style.color = '#6b7280'; }
+  fetch('/sync/now', {
+    method: 'POST',
+    headers: {'X-CSRF-Token': CSRF}
+  }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
+    .then(function(res) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Retry server sync'; }
+      if (msg) {
+        if (res.ok && res.d.ok !== false) {
+          msg.textContent = 'Server sync started — check Dashboard in a few minutes.';
+          msg.style.color = '#16a34a';
+        } else {
+          msg.textContent = res.d.error || 'Server sync failed or already running.';
+          msg.style.color = '#dc2626';
+        }
+      }
+    }).catch(function() {
+      if (btn) { btn.disabled = false; btn.textContent = 'Retry server sync'; }
+      if (msg) { msg.textContent = 'Request failed.'; msg.style.color = '#dc2626'; }
+    });
+}
 var swReg = null;
 if ('serviceWorker' in navigator && 'PushManager' in window) {
   navigator.serviceWorker.register('/sw.js').then(function(reg) {
@@ -8548,6 +8660,7 @@ def _coverage_score(source: str, field_count: int) -> dict:
 @app.route("/dashboard")
 @require_login
 def dashboard():
+    _rt = _RouteTimer("/dashboard")
     expire_pending()
     if _demo_mode is not None:
         _demo_mode.handle_demo_query_param(request, session)
@@ -8573,8 +8686,8 @@ def dashboard():
     ).fetchone()[0]
     pending_display = "flex" if pending_count > 0 else "none"
     is_connected    = len(acts) > 0
-    _admin_email = os.environ.get("ADMIN_EMAIL", "")
-    debug_mode = request.args.get("debug") == "1" and bool(_admin_email) and user.get("email") == _admin_email
+    debug_mode = _is_dev_debug(user)
+    _rt.step("setup")
 
     onboarding_banner = ""
     agent_cta_button = ""
@@ -8690,8 +8803,7 @@ def dashboard():
         _promote_pending_candidates(uid)
     except Exception:
         pass
-
-    # Step 1: get ALL connected accounts (have credentials, not internal keys)
+    _rt.step("promote_candidates")
     cred_rows = get_db().execute(
         "SELECT source, extra_enc FROM account_credentials WHERE user_id=?",
         (user["id"],)
@@ -8728,8 +8840,7 @@ def dashboard():
     # Convert to plain dicts so .get() works safely even when columns are
     # missing from older production DB schemas (e.g. sync_status, sync_failure_reason).
     synced_map = {r["source"]: dict(r) for r in acct_rows}
-
-    # Pre-fetch field_observations and pending candidate counts for ALL sources in two queries
+    _rt.step("load_accounts")
     # so the card rendering loop doesn't fire N+1 queries (one pair per account).
     _obs_by_source: dict = {}
     _cand_counts_by_source: dict = {}
@@ -9460,6 +9571,7 @@ def dashboard():
         account_data_html = cards_html
     else:
         account_data_html = ""
+    _rt.step("render_cards")
 
     # Compute total tracked value across all accounts
     total_value = 0.0
@@ -9501,6 +9613,7 @@ def dashboard():
                 if _raw_val > 0:
                     total_value += _raw_val
                     value_items.append((display_name_v, it.get("label",""), str(it.get("value","")), _rs, "relevance", it.get("_type","other")))
+    _rt.step("value_items")
     # Get latest intent for context-aware sorting + load 30-day intent summary
     _latest_intent = get_db().execute(
         "SELECT intent_type FROM intent_history WHERE user_id=? ORDER BY detected_at DESC LIMIT 1",
@@ -9668,7 +9781,8 @@ def dashboard():
     _dashboard_actions = []
     if get_recommendations is not None and DecisionContext is not None:
         try:
-            _dash_email_subjects = _load_dashboard_email_subjects(uid, db)
+            _dash_email_subjects = _cached_dashboard_email_subjects(uid, db)
+            _rt.step("email_subjects_cache")
             _dash_user_memory = {
                 "email_subjects": _dash_email_subjects,
                 "available_benefits": [
@@ -9720,6 +9834,7 @@ def dashboard():
             )
     except Exception:
         daily_brief = None
+    _rt.step("recommendations")
 
     # Build display_name → synced_ago lookup for evidence lines
     import datetime as _hdt_ev
@@ -10910,6 +11025,7 @@ def dashboard():
 
     # ── RELEVANT NOW — cross-domain intent recommendations ──────────────────
     _rn_items = _relevant_now_items(session["user_id"])
+    _rt.step("relevant_now")
     if _rn_items:
         import json as _json_rn_dash
         _rn_intent = _rn_items[0]["intent_type"]
@@ -11006,7 +11122,7 @@ def dashboard():
             f'<span style="font-size:15px">🔐</span>'
             f'<span style="flex:1;font-size:12.5px;color:#991b1b;line-height:1.45">'
             f'<strong>{_n} {_acct_word} need re-authentication:</strong> {_names_html} — '
-            f'log in to each site in Chrome, then click ↻ to re-sync.</span>'
+            f'open each site in Chrome, sign in, and visit your account page. The extension syncs automatically.</span>'
             f'<button onclick="this.closest(\'div\').remove()" style="background:none;border:none;'
             f'cursor:pointer;color:#ef4444;font-size:16px;line-height:1;padding:0 2px" title="Dismiss">×</button>'
             f'</div>'
@@ -11127,6 +11243,7 @@ function dismissOnboarding() {
     _latest_sync_baseline = _json_dash_poll.dumps(_global_last_synced or "")
     _awaiting_sync_poll = "true" if _account_count > 0 else "false"
 
+    _rt.finish()
     return (DASHBOARD_HTML
             .replace("{_SIDEBAR_DESKTOP_}",        _sidebar_desktop)
             .replace("{_SIDEBAR_MOBILE_}",         _sidebar_mobile)
@@ -11169,6 +11286,7 @@ function dismissOnboarding() {
 @app.route("/settings")
 @require_login
 def settings():
+    _rt = _RouteTimer("/settings")
     db   = get_db()
     user = db.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
     if not user:
@@ -11185,6 +11303,7 @@ def settings():
     _csrf = get_csrf_token()
     notif_pref = user["notification_pref"] if user["notification_pref"] else "quiet"
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('settings', user["email"], _csrf)
+    _rt.finish()
     return (SETTINGS_HTML
             .replace("{_SIDEBAR_DESKTOP_}",        _sidebar_desktop)
             .replace("{_SIDEBAR_MOBILE_}",         _sidebar_mobile)
@@ -14371,6 +14490,11 @@ _CREDENTIALS_PAGE_CSS = """
 .accounts-onboard-chip-icon{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;overflow:hidden}
 .accounts-onboard-chip-icon img{width:14px;height:14px;border-radius:2px;display:block}
 .page-sync-note{text-align:center;padding:16px 0 8px;font-size:12px;color:#9ca3af}
+.sync-howto{background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:16px 18px;margin-bottom:20px}
+.sync-howto-title{font-size:13px;font-weight:700;color:#0369a1;margin-bottom:10px}
+.sync-howto-list{margin:0;padding-left:18px;font-size:13px;color:#374151;line-height:1.65}
+.sync-howto-list li{margin-bottom:6px}
+.sync-howto-list li:last-child{margin-bottom:0}
 @media(max-width:768px){.page{padding:24px 16px 32px}.page-header{flex-wrap:wrap}.btn-connect-new{width:100%;justify-content:center;margin-top:0}.accounts-onboard-card{padding:26px 20px;border-radius:16px}.accounts-onboard-title{font-size:21px;max-width:none}.accounts-onboard-desc{font-size:14px}.accounts-onboard-cta{width:100%;box-sizing:border-box}}
 /* ── Cred cards ── */
 .cred-card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
@@ -14453,6 +14577,8 @@ def _build_credentials_page(
     lifecycle_by_source: dict = None,
     pending_added: list = None,
     connect_source: str = None,
+    debug_by_source: dict = None,
+    show_debug: bool = False,
 ) -> str:
     """Generate the credentials management page HTML."""
     extra_by_source = extra_by_source or {}
@@ -14462,6 +14588,7 @@ def _build_credentials_page(
     lifecycle_by_source = lifecycle_by_source or {}
     pending_added = pending_added or []
     connect_source = connect_source or ""
+    debug_by_source = debug_by_source or {}
     csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
     _cred_styles = BASE_CSS + _CREDENTIALS_PAGE_CSS
@@ -14490,6 +14617,7 @@ def _build_credentials_page(
             f'<button class="btn-toggle" onclick="toggleForm(\'{he(key)}\')" id="btn-{he(key)}" '
             f'style="color:#8892a4;font-weight:500">Edit login</button>'
         ) if lifecycle.state == LC_SYNCED else ""
+        _debug_html = _account_debug_panel_html(debug_by_source[key]) if show_debug and key in debug_by_source else ""
         connected_cards_html += f"""
 <div class="cred-card" id="card-{he(key)}" data-lifecycle="{he(lifecycle.state)}">
   <div style="display:flex;align-items:center;gap:12px">
@@ -14502,6 +14630,7 @@ def _build_credentials_page(
     {_edit_login}
     {remove_btn}
   </div>
+  {_debug_html}
   <div class="cred-form" id="form-{he(key)}" style="display:none;margin-top:14px">
     <input type="text" name="username" placeholder="Username or email" autocomplete="off" id="u-{he(key)}">
     <input type="password" name="password" placeholder="Password" autocomplete="new-password" id="p-{he(key)}">
@@ -14528,6 +14657,7 @@ def _build_credentials_page(
         lifecycle = lifecycle_by_source.get(sk) or resolve_account_lifecycle(
             sk, email_added=True, from_email=True,
         )
+        _debug_html = _account_debug_panel_html(debug_by_source[sk]) if show_debug and sk in debug_by_source else ""
         connected_cards_html += f"""
 <div class="cred-card" id="card-{he(sk)}" data-lifecycle="{he(lifecycle.state)}" style="border-style:dashed">
   <div style="display:flex;align-items:center;gap:12px">
@@ -14538,6 +14668,7 @@ def _build_credentials_page(
     </div>
     {_lifecycle_primary_cta_html(lifecycle, sk, dname, icon=icon, color=color, surface="credentials")}
   </div>
+  {_debug_html}
 </div>"""
 
     _sync_note_html = ""
@@ -14589,7 +14720,9 @@ def _build_credentials_page(
   </div>
 </div>"""
     else:
-        _sync_note_html = '<div class="page-sync-note">Changes take effect on next sync.</div>'
+        _sync_note_html = ""
+
+    _sync_howto_html = _SYNC_HOWTO_HTML
 
     # ── Modal site picker ────────────────────────────────────────────────────
     modal_categories: dict = {}
@@ -14674,6 +14807,7 @@ def _build_credentials_page(
     </div>
     <a href="/email-scan" class="btn-connect-new" style="text-decoration:none;display:inline-flex;align-items:center">Find accounts</a>
   </div>
+  {_sync_howto_html}
   {connected_cards_html}
   {_sync_note_html}
 </div>
@@ -15414,6 +15548,7 @@ fetch('/credentials/fields/load').then(r => r.json()).then(function(data) {{
 @app.route("/credentials")
 @require_login
 def credentials_page():
+    _rt = _RouteTimer("/credentials")
     user = get_db().execute(
         "SELECT * FROM users WHERE id=?", (session["user_id"],)
     ).fetchone()
@@ -15434,7 +15569,8 @@ def credentials_page():
                 pass
     # Load sync timestamps from account_data
     sync_rows = get_db().execute(
-        "SELECT source, synced_at, connection_status, extraction_status, data_enc "
+        "SELECT source, synced_at, connection_status, extraction_status, sync_status, "
+        "sync_failure_reason, data_enc "
         "FROM account_data WHERE user_id=?",
         (user["id"],),
     ).fetchall()
@@ -15442,6 +15578,8 @@ def credentials_page():
     connection_status_by_source = {}
     extraction_status_by_source = {}
     lifecycle_by_source = {}
+    debug_by_source = {}
+    show_debug = _is_dev_debug(user)
     db = get_db()
     uid = user["id"]
     for r in sync_rows:
@@ -15453,6 +15591,16 @@ def credentials_page():
         if r["extraction_status"]:
             extraction_status_by_source[r["source"]] = r["extraction_status"]
         lifecycle_by_source[r["source"]] = _lifecycle_for_user_source(uid, r["source"], db)
+        if show_debug:
+            debug_by_source[r["source"]] = {
+                "source": r["source"],
+                "connection_status": acct.connection_status if acct else r["connection_status"],
+                "extraction_status": acct.extraction_status if acct else r["extraction_status"],
+                "sync_status": acct.sync_status if acct else r["sync_status"],
+                "is_synced": acct.is_synced if acct else False,
+                "synced_at": r["synced_at"],
+                "last_error": r["sync_failure_reason"],
+            }
     pending_added = db.execute(
         "SELECT site_key, display_name FROM email_suggestions "
         "WHERE user_id=? AND added=1 AND dismissed=0 ORDER BY email_count DESC",
@@ -15462,11 +15610,41 @@ def credentials_page():
         sk = row["site_key"]
         if sk not in lifecycle_by_source:
             lifecycle_by_source[sk] = _lifecycle_for_user_source(uid, sk, db)
+        if show_debug and sk not in debug_by_source:
+            lc = lifecycle_by_source[sk]
+            debug_by_source[sk] = {
+                "source": sk,
+                "connection_status": None,
+                "extraction_status": None,
+                "sync_status": None,
+                "is_synced": lc.state == LC_SYNCED,
+                "synced_at": None,
+                "last_error": None,
+            }
+    if show_debug:
+        for src in configured:
+            if src.startswith("_") or src in debug_by_source:
+                continue
+            lifecycle_by_source.setdefault(src, _lifecycle_for_user_source(uid, src, db))
+            lc = lifecycle_by_source[src]
+            debug_by_source[src] = {
+                "source": src,
+                "connection_status": None,
+                "extraction_status": None,
+                "sync_status": None,
+                "is_synced": lc.state == LC_SYNCED,
+                "synced_at": None,
+                "last_error": None,
+            }
+    _rt.step("load_accounts")
+    _rt.finish()
     return _build_credentials_page(
         user, configured, extra_by_source, synced_at_by_source,
         connection_status_by_source, extraction_status_by_source,
         lifecycle_by_source, pending_added,
         connect_source=request.args.get("connect", "").strip(),
+        debug_by_source=debug_by_source,
+        show_debug=show_debug,
     )
 
 
@@ -18883,6 +19061,22 @@ def api_trigger_alerts():
     return jsonify({"ok": True, "sent": sent, "dry_run": dry})
 
 
+@app.route("/api/email/subjects/refresh", methods=["POST"])
+@require_login
+def api_refresh_email_subjects():
+    """Admin endpoint — refresh cached dashboard email subjects from the live provider."""
+    check_csrf()
+    uid = session["user_id"]
+    user = get_db().execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    if not admin_email or not user or user["email"] != admin_email:
+        return jsonify({"error": "forbidden"}), 403
+    target_uid = (request.args.get("user_id") or uid).strip()
+    provider = (request.args.get("provider") or "").strip() or None
+    subjects = _refresh_dashboard_email_subjects(target_uid, get_db(), provider=provider)
+    return jsonify({"ok": True, "count": len(subjects), "user_id": target_uid})
+
+
 @app.route("/api/benefits/feedback", methods=["POST"])
 @require_login_or_key
 def api_benefits_feedback():
@@ -19391,23 +19585,112 @@ def _amex_connection_card_html(status: str, display_name: str) -> tuple[str, str
     return hero, color
 
 
-def _load_dashboard_email_subjects(uid: str, db) -> list[str]:
-    """Load recent email subject lines from the user's connected email provider."""
+def _cached_dashboard_email_subjects(uid: str, db) -> list[str]:
+    """Read cached email subjects for dashboard render — never calls external APIs."""
     try:
         row = db.execute(
-            "SELECT provider, access_token_enc FROM email_connections "
-            "WHERE user_id=? AND access_token_enc IS NOT NULL AND access_token_enc != '' "
-            "ORDER BY scanned_at DESC LIMIT 1",
+            "SELECT subjects_json, subjects_refreshed_at FROM email_connections "
+            "WHERE user_id=? AND subjects_json IS NOT NULL AND subjects_json != '' "
+            "AND subjects_refreshed_at IS NOT NULL AND subjects_refreshed_at != '' "
+            "ORDER BY subjects_refreshed_at DESC LIMIT 1",
             (uid,),
         ).fetchone()
+        if not row:
+            return []
+        refreshed_raw = row["subjects_refreshed_at"]
+        try:
+            refreshed = datetime.fromisoformat(refreshed_raw.replace("Z", "+00:00"))
+            if refreshed.tzinfo is None:
+                refreshed = refreshed.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - refreshed).total_seconds() / 3600
+            if age_hours > EMAIL_SUBJECTS_CACHE_HOURS:
+                return []
+        except Exception:
+            return []
+        subjects = json.loads(row["subjects_json"])
+        return subjects if isinstance(subjects, list) else []
+    except Exception:
+        return []
+
+
+def _refresh_dashboard_email_subjects(
+    uid: str, db, *, provider: str | None = None,
+) -> list[str]:
+    """Fetch live email subjects from the provider and persist to cache."""
+    try:
+        if provider:
+            row = db.execute(
+                "SELECT provider, access_token_enc FROM email_connections "
+                "WHERE user_id=? AND provider=? "
+                "AND access_token_enc IS NOT NULL AND access_token_enc != ''",
+                (uid, provider),
+            ).fetchone()
+        else:
+            row = db.execute(
+                "SELECT provider, access_token_enc FROM email_connections "
+                "WHERE user_id=? AND access_token_enc IS NOT NULL AND access_token_enc != '' "
+                "ORDER BY scanned_at DESC LIMIT 1",
+                (uid,),
+            ).fetchone()
         if not row:
             return []
         access_token = decrypt_cred(uid, row["access_token_enc"])
         if not access_token:
             return []
-        return fetch_recent_subjects(row["provider"], access_token) or []
-    except Exception:
+        subjects = fetch_recent_subjects(row["provider"], access_token) or []
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute(
+            "UPDATE email_connections SET subjects_json=?, subjects_refreshed_at=? "
+            "WHERE user_id=? AND provider=?",
+            (json.dumps(subjects), now, uid, row["provider"]),
+        )
+        db.commit()
+        print(
+            f"[EmailSubjects] refreshed uid={uid[:8]} provider={row['provider']} "
+            f"count={len(subjects)}",
+            flush=True,
+        )
+        return subjects
+    except Exception as e:
+        print(f"[EmailSubjects] refresh failed uid={uid[:8]}: {e}", flush=True)
         return []
+
+
+def _refresh_dashboard_email_subjects_bg(uid: str, *, provider: str | None = None) -> None:
+    """Background refresh — used after OAuth so callbacks stay responsive."""
+    def _do():
+        with app.app_context():
+            _refresh_dashboard_email_subjects(uid, get_db(), provider=provider)
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def _refresh_stale_email_subjects_all() -> int:
+    """Refresh cached subjects for users with missing or stale cache (daily job)."""
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=EMAIL_SUBJECTS_CACHE_HOURS)
+    ).isoformat()
+    rows = get_db().execute(
+        "SELECT user_id, provider FROM email_connections "
+        "WHERE access_token_enc IS NOT NULL AND access_token_enc != '' "
+        "AND (subjects_refreshed_at IS NULL OR subjects_refreshed_at = '' "
+        "     OR subjects_refreshed_at < ?)",
+        (cutoff,),
+    ).fetchall()
+    refreshed = 0
+    for row in rows:
+        try:
+            if _refresh_dashboard_email_subjects(row["user_id"], get_db(), provider=row["provider"]):
+                refreshed += 1
+        except Exception as e:
+            print(f"[EmailSubjects] stale refresh error: {e}", flush=True)
+    if rows:
+        print(f"[EmailSubjects] stale refresh complete — {refreshed}/{len(rows)} user(s)", flush=True)
+    return refreshed
+
+
+def _load_dashboard_email_subjects(uid: str, db) -> list[str]:
+    """Deprecated alias — dashboard render must use _cached_dashboard_email_subjects only."""
+    return _cached_dashboard_email_subjects(uid, db)
 
 _EMAIL_SCAN_PAGE = r"""<!DOCTYPE html>
 <html lang="en">
@@ -19877,8 +20160,11 @@ def _store_suggestions(uid: str, suggestions: list, db):
 @app.route("/email-scan")
 @require_login
 def email_scan_page():
+    _rt = _RouteTimer("/email-scan")
     oauth_error = request.args.get("error")
-    return _render_email_scan_page(oauth_error=oauth_error)
+    result = _render_email_scan_page(oauth_error=oauth_error)
+    _rt.finish()
+    return result
 
 
 @app.route("/email/gmail/auth")
@@ -19969,6 +20255,8 @@ def email_gmail_callback():
           scanned_at=excluded.scanned_at
     """, (uid, "gmail", enc_access, enc_refresh, email_address, now, now))
     db.commit()
+
+    _refresh_dashboard_email_subjects_bg(uid, provider="gmail")
 
     # Run the scan
     acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
@@ -20066,6 +20354,8 @@ def email_outlook_callback():
           scanned_at=excluded.scanned_at
     """, (uid, "outlook", enc_access, enc_refresh, "", now, now))
     db.commit()
+
+    _refresh_dashboard_email_subjects_bg(uid, provider="outlook")
 
     acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
     connected = {r["source"] for r in acts if not r["source"].startswith("_")}
