@@ -162,8 +162,7 @@
     },
     {
       "matches": [
-        "*://*.americanexpress.com/en-us/account/*",
-        "*://*.americanexpress.com/en-us/rewards/*",
+        "*://*.americanexpress.com/*",
         "*://global.americanexpress.com/*"
       ],
       "js": [

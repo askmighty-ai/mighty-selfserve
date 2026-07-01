@@ -129,7 +129,12 @@ def get_recommendations(
     user_memory: dict[str, Any] | None = None,
 ) -> list[Recommendation]:
     if context.source == "dashboard":
-        recommendations = _dashboard_demo_recommendations()
+        user_memory = user_memory or {}
+        recommendations = (
+            []
+            if user_memory.get("suppress_demo_content")
+            else _dashboard_demo_recommendations()
+        )
         recommendations.extend(_collect_live_advisor_recommendations(context, user_memory))
         return recommendations
 

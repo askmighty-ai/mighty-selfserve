@@ -16,6 +16,8 @@ Env vars (all optional):
   DEMO_MODE     — Set to true to show sample dashboard data (also: ?demo=1 on /dashboard)
 """
 
+from __future__ import annotations
+
 import os, io, csv, json, re, secrets, hashlib, hmac, sqlite3, threading, urllib.request, urllib.error, html, time, base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -57,7 +59,7 @@ import bcrypt as _bcrypt
 
 from datetime import datetime, timezone, timedelta
 from functools import wraps
-from flask import Flask, request, jsonify, session, redirect, g, make_response
+from flask import Flask, request, jsonify, session, redirect, g, make_response, render_template_string
 
 def he(s):
     """HTML-escape a value for safe insertion into HTML."""
@@ -70,8 +72,25 @@ _secret_key = os.environ.get("SECRET_KEY", "")
 if not _secret_key:
     if os.environ.get("RAILWAY_ENVIRONMENT") == "production":
         raise RuntimeError("SECRET_KEY environment variable must be set in production")
-    _secret_key = secrets.token_hex(32)
-    print("[Mighty] WARNING: SECRET_KEY not set — generating random key. All sessions will be lost on restart.", flush=True)
+    _dev_key_dir = os.path.dirname(os.path.abspath(
+        os.environ.get("DATABASE_PATH", "/app/data/mighty.db")
+    )) or "."
+    _dev_key_path = os.path.join(_dev_key_dir, ".mighty_secret_key")
+    try:
+        if os.path.isfile(_dev_key_path):
+            with open(_dev_key_path, encoding="utf-8") as _kf:
+                _secret_key = _kf.read().strip()
+    except OSError:
+        _secret_key = ""
+    if not _secret_key:
+        _secret_key = secrets.token_hex(32)
+        try:
+            os.makedirs(_dev_key_dir, exist_ok=True)
+            with open(_dev_key_path, "w", encoding="utf-8") as _kf:
+                _kf.write(_secret_key)
+            print(f"[Mighty] Dev SECRET_KEY persisted to {_dev_key_path}", flush=True)
+        except OSError:
+            print("[Mighty] WARNING: SECRET_KEY not set — generating random key. All sessions will be lost on restart.", flush=True)
 app.secret_key = _secret_key
 app.config["SESSION_COOKIE_HTTPONLY"]    = True
 app.config["SESSION_COOKIE_SAMESITE"]    = "Lax"
@@ -1740,11 +1759,13 @@ def _sidebar_parts(active: str, email: str, csrf: str) -> tuple[str, str, str]:
         cls = "sidebar-link sidebar-link-active" if active == page_key else "sidebar-link"
         return f'<a href="{href}" class="{cls}">{icon_svg}{label}</a>'
     icon_dash = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>'
+    icon_scan = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>'
     icon_acct = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>'
     icon_sett = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>'
     av = (email[0] if email else "?").upper()
     _nav_links = (
         _nav('/dashboard', 'Dashboard', icon_dash, 'dashboard')
+        + _nav('/email-scan', 'Find accounts', icon_scan, 'email-scan')
         + _nav('/credentials', 'Accounts', icon_acct, 'accounts')
         + _nav('/settings', 'Settings', icon_sett, 'settings')
     )
@@ -1787,6 +1808,9 @@ def _sidebar_parts(active: str, email: str, csrf: str) -> tuple[str, str, str]:
         '<a href="/dashboard" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
         'border-radius:8px;text-decoration:none;color:#d1d5db;font-size:14px;font-weight:500">'
         + icon_dash + ' Dashboard</a>'
+        '<a href="/email-scan" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
+        'border-radius:8px;text-decoration:none;color:#d1d5db;font-size:14px;font-weight:500">'
+        + icon_scan + ' Find accounts</a>'
         '<a href="/credentials" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
         'border-radius:8px;text-decoration:none;color:#d1d5db;font-size:14px;font-weight:500">'
         + icon_acct + ' Accounts</a>'
@@ -4911,12 +4935,45 @@ def base_url():
         root = "https://" + root[len("http://"):]
     return root
 
+def _safe_redirect_path(url: str) -> str:
+    """Return a same-origin relative path for post-login redirects."""
+    from urllib.parse import urlparse
+    if not url:
+        return "/dashboard"
+    try:
+        parsed = urlparse(url)
+        if parsed.netloc or not url.startswith("/"):
+            return "/dashboard"
+        if url.startswith("//") or url.startswith("/\\"):
+            return "/dashboard"
+        return url
+    except Exception:
+        return "/dashboard"
+
+def _path_for_login_next() -> str:
+    """Full path + query for ?next= after login."""
+    qs = request.query_string.decode() if request.query_string else ""
+    return f"{request.path}?{qs}" if qs else request.path
+
+def _redirect_to_login():
+    from urllib.parse import quote
+    nxt = quote(_path_for_login_next(), safe="/%:?&=")
+    return redirect(f"/login?next={nxt}")
+
+def _session_user_row():
+    """Return the logged-in user row, or None if session is missing/invalid."""
+    uid = session.get("user_id")
+    if not uid:
+        return None
+    return get_db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+
 def require_login(f):
     @wraps(f)
     def inner(*a, **kw):
-        if "user_id" not in session:
-            nxt = request.path
-            return redirect(f"/login?next={nxt}")
+        user = _session_user_row()
+        if not user:
+            session.clear()
+            return _redirect_to_login()
         return f(*a, **kw)
     return inner
 
@@ -4936,9 +4993,10 @@ def require_login_or_key(f):
             g.api_key_user_id = row["id"]
             return f(*args, **kwargs)
         # Fall back to session cookie (web path)
-        if "user_id" not in session:
-            nxt = request.path
-            return redirect(f"/login?next={nxt}")
+        user = _session_user_row()
+        if not user:
+            session.clear()
+            return _redirect_to_login()
         return f(*args, **kwargs)
     return decorated
 
@@ -6276,8 +6334,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="cards-panel-header">
         <span style="font-size:13px;font-weight:600;color:#1c1917">Connected accounts</span>
         <div style="display:flex;align-items:center;gap:8px">
-          {agent_cta_button}
-          <button class="btn-connect" onclick="openDashConnectModal()">+ Connect</button>
+          <a href="/email-scan" class="btn-connect" style="text-decoration:none;display:inline-flex;align-items:center">Find accounts</a>
         </div>
       </div>
 
@@ -6664,28 +6721,6 @@ window.addEventListener('message', function(e) {
   }
 });
 
-// Poll Amex connection state after email-scan redirect (?connect=amex)
-(function() {
-  if (new URLSearchParams(window.location.search).get('connect') !== 'amex') return;
-  var attempts = 0;
-  var poll = setInterval(function() {
-    attempts++;
-    fetch('/api/connect/amex/status')
-      .then(function(r) { return r.json(); })
-      .then(function(d) {
-        if (d.connection_status === 'connected') {
-          clearInterval(poll);
-          var url = new URL(window.location.href);
-          url.searchParams.delete('connect');
-          window.history.replaceState({}, '', url.pathname + url.search);
-          location.reload();
-        }
-      })
-      .catch(function() {});
-    if (attempts >= 60) clearInterval(poll);
-  }, 3000);
-})();
-
 function _finishSync() {
   var btn = document.getElementById('cloud-sync-btn');
   document.querySelectorAll('.acct-card').forEach(function(c){ c.classList.remove('is-syncing'); });
@@ -6906,6 +6941,24 @@ document.addEventListener('visibilitychange', function() {
 
 // Sync is driven by the background alarm (hourly) or explicit Sync button clicks.
 // No auto-sync on dashboard open — the dashboard displays whatever the DB has.
+
+// Reload Home when the extension finishes extraction (poll synced_at).
+(function() {
+  var baseline = {latest_sync_baseline};
+  var pollForSync = {awaiting_sync_poll};
+  if (!pollForSync) return;
+  var syncWaitPoll = setInterval(function() {
+    if (window._syncPoll) return;
+    fetch('/api/latest-sync').then(function(r) { return r.json(); }).then(function(d) {
+      if (!d.latest) return;
+      if (d.latest !== baseline) {
+        clearInterval(syncWaitPoll);
+        reloadWithScroll();
+      }
+    }).catch(function() {});
+  }, 8000);
+  setTimeout(function() { clearInterval(syncWaitPoll); }, 600000);
+})();
 
 // Register SW for push delivery (notifications managed in /settings)
 if ('serviceWorker' in navigator) {
@@ -7259,7 +7312,6 @@ SETTINGS_HTML = """<!DOCTYPE html>
     </div>
     <div style="font-size:11px;color:#9ca3af;margin-top:8px">Anyone with this key can submit actions on your behalf.</div>
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f5f2ed;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <a href="/onboarding" style="display:inline-block;padding:8px 14px;background:#f5f2ed;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">Re-run setup</a>
       <a href="/extension-setup" target="_blank" style="display:inline-block;padding:8px 14px;background:#f0fdf4;color:#059669;border:1px solid #bbf7d0;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">🔌 Setup Chrome Extension</a>
       <span style="font-size:11px;color:#9ca3af">Opens a page the extension reads to auto-configure itself</span>
     </div>
@@ -7729,7 +7781,7 @@ def signup():
     session.permanent  = True
     session["user_id"] = uid
     session["email"]   = email
-    return redirect("/onboarding")
+    return redirect("/dashboard")
 
 @app.route("/enterprise-interest", methods=["POST"])
 def enterprise_interest():
@@ -7757,6 +7809,9 @@ def enterprise_interest():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
+        user = _session_user_row()
+        if user:
+            return redirect(_safe_redirect_path(request.args.get("next", "")))
         if request.args.get("reset") == "1":
             info = '<div style="font-size:13px;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:7px;padding:9px 12px;margin-bottom:14px">Password updated successfully. Sign in with your new password.</div>'
             return LOGIN_HTML.replace("{error}", info).replace("{csrf_token}", get_csrf_token())
@@ -7779,22 +7834,7 @@ def login():
     if row["password_hash"] and ":" in row["password_hash"] and not row["password_hash"].startswith("$2"):
         get_db().execute("UPDATE users SET password_hash=? WHERE id=?", (hash_pw(password), row["id"]))
         get_db().commit()
-    nxt = request.form.get("next", "").strip()
-    from urllib.parse import urlparse as _urlparse_login
-    def _safe_redirect(url):
-        if not url:
-            return "/dashboard"
-        try:
-            parsed = _urlparse_login(url)
-            if parsed.netloc or not url.startswith("/"):
-                return "/dashboard"
-            # Block //evil.com and /\evil.com (backslash-normalized)
-            if url.startswith("//") or url.startswith("/\\"):
-                return "/dashboard"
-            return url
-        except Exception:
-            return "/dashboard"
-    nxt = _safe_redirect(nxt)
+    nxt = _safe_redirect_path(request.form.get("next", "").strip())
     return redirect(nxt)
 
 @app.route("/logout", methods=["GET", "POST"])
@@ -8537,104 +8577,31 @@ def dashboard():
     debug_mode = request.args.get("debug") == "1" and bool(_admin_email) and user.get("email") == _admin_email
 
     onboarding_banner = ""
-    # Onboarding banner takes priority — only show the active (non-empty) state
-    if not user["onboarded"] and len(acts) > 0:
-        onboarding_banner = (
-            '<div style="background:rgba(129,140,248,0.08);border:1px solid rgba(129,140,248,0.2);'
-            'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
-            'justify-content:space-between;gap:16px;margin:0 16px 8px">'
-            '<div style="font-size:13px;color:#4338ca">'
-            'Finish setting up Mighty to connect your first agent.</div>'
-            '<a href="/onboarding" style="font-size:13px;font-weight:600;color:#6366f1;white-space:nowrap">'
-            'Complete setup &#8594;</a></div>'
-        )
-    elif len(acts) < 4:
-        # Email scan nudge: shown when user has few accounts and hasn't scanned yet
-        _email_scan_done = db.execute(
-            "SELECT COUNT(*) FROM email_suggestions WHERE user_id=?", (uid,)
-        ).fetchone()[0]
-        if not _email_scan_done:
-            onboarding_banner = (
-                '<div style="background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.18);'
-                'border-radius:10px;padding:14px 18px;display:flex;align-items:center;'
-                'justify-content:space-between;gap:16px;margin:0 16px 8px">'
-                '<div style="font-size:13px;color:#1d4ed8">💡 <strong>Find more accounts to track</strong> — '
-                'scan your email to discover loyalty programs and subscriptions you already have.</div>'
-                '<a href="/email-scan" style="font-size:13px;font-weight:600;color:#3b82f6;white-space:nowrap">'
-                'Scan email &#8594;</a></div>'
-            )
-
+    agent_cta_button = ""
     welcome_state = ''
+    agent_status_indicator = ''
+    feed_col_hidden = ''
     if len(acts) == 0:
-        if user["onboarded"]:
-            # Onboarded but no activity yet — show feed area
-            agent_status_indicator = (
-                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#34d399">'
-                '<div style="width:7px;height:7px;border-radius:50%;background:#34d399;flex-shrink:0"></div>'
-                'Ready</div>'
-            )
-            agent_cta_button = (
-                '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#ffffff;color:#6b7280;border:1px solid #e8e4de;font-size:12px;font-weight:600;'
-                'text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect agent</a>'
-            )
-            feed = (
-                '<div style="display:flex;flex-direction:column;align-items:center;'
-                'justify-content:center;padding:60px 24px;text-align:center">'
-                '<div style="font-size:14px;font-weight:600;color:#6b7280;margin-bottom:8px">No requests yet</div>'
-                '<div style="font-size:13px;color:#9ca3af;line-height:1.6;max-width:280px">'
-                'Ask your agent to do something that needs approval and the request will appear here.</div>'
-                '</div>'
-            )
-            feed_col_hidden = ''
-        else:
-            # Not yet onboarded — show welcome state full-width, hide the feed column
-            agent_status_indicator = ''
-            agent_cta_button = ''
-            feed_col_hidden = 'style="display:none"'
-            welcome_state = (
-                '<div style="display:flex;flex-direction:column;align-items:center;'
-                'justify-content:center;padding:60px 24px;min-height:60vh">'
-                '<div style="width:100%;max-width:360px;text-align:center">'
-                '<div style="width:52px;height:52px;background:rgba(129,140,248,0.1);border:1px solid rgba(129,140,248,0.2);border-radius:14px;'
-                'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
-                '<svg width="22" height="22" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-                '<polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></svg></div>'
-                '<div style="font-size:22px;font-weight:700;color:#1c1917;margin-bottom:10px">'
-                'Welcome to Mighty</div>'
-                '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
-                'Connect your agent in about 5 minutes. Once connected, approval requests from your agent will appear here.</div>'
-                '<a href="/onboarding" style="display:block;padding:13px 20px;'
-                'background:#6366f1;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
-                'text-decoration:none;margin-bottom:16px">Get started &#8594;</a>'
-                '</div>'
-                '</div>'
-            )
+        feed_col_hidden = 'style="display:none"'
+        welcome_state = (
+            '<div style="display:flex;flex-direction:column;align-items:center;'
+            'justify-content:center;padding:60px 24px;min-height:60vh">'
+            '<div style="width:100%;max-width:360px;text-align:center">'
+            '<div style="width:52px;height:52px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.2);border-radius:14px;'
+            'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
+            '<svg width="22" height="22" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg></div>'
+            '<div style="font-size:22px;font-weight:700;color:#1c1917;margin-bottom:10px">'
+            'Find your accounts</div>'
+            '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
+            'Scan your Gmail to discover loyalty programs and subscriptions, then connect them with the Mighty Chrome extension.</div>'
+            '<a href="/email-scan" style="display:block;padding:13px 20px;'
+            'background:#6366f1;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
+            'text-decoration:none">Scan Gmail &#8594;</a>'
+            '</div>'
+            '</div>'
+        )
     else:
-        # Active state
-        if is_connected:
-            agent_status_indicator = (
-                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#34d399"'
-                ' title="Mighty agent is connected and active">'
-                '<div style="width:7px;height:7px;border-radius:50%;background:#34d399;flex-shrink:0"></div>'
-                'Active</div>'
-            )
-            agent_cta_button = (
-                '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#ffffff;color:#6b7280;border:1px solid #e8e4de;font-size:12px;font-weight:600;'
-                'text-decoration:none;white-space:nowrap;height:32px;box-sizing:border-box">+ Connect agent</a>'
-            )
-        else:
-            agent_status_indicator = (
-                '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#9ca3af">'
-                '<div style="width:7px;height:7px;border-radius:50%;background:#9ca3af;flex-shrink:0"></div>'
-                'No agent</div>'
-            )
-            agent_cta_button = (
-                '<a href="/onboarding" style="display:inline-flex;align-items:center;gap:5px;padding:7px 14px;'
-                'border-radius:8px;background:#6366f1;color:#fff;font-size:12px;font-weight:600;'
-                'text-decoration:none;white-space:nowrap">Set up agent &#8594;</a>'
-            )
         feed_col_hidden = ''
 
     # ── Account data tab ──────────────────────────────────────────────────────
@@ -8873,6 +8840,32 @@ def dashboard():
             if _SEVERITY.get(_col_st, 0) > _SEVERITY.get(sync_status, 0):
                 sync_status = _col_st
 
+            _extraction_st_early = (row.get("extraction_status") or "") if row else ""
+            _provider_acct_early = ProviderAccount(
+                source=src,
+                connection_status=_connection_status or None,
+                extraction_status=infer_extraction_status(
+                    items,
+                    explicit=_extraction_st_early or None,
+                    sync_status=sync_status,
+                ),
+                normalized_fields=items,
+                data_source=(data.get("data_source") or data.get("sync_source")) if row else None,
+                synced_at=synced_at or None,
+                sync_status=sync_status,
+            )
+            _lc = resolve_account_lifecycle(
+                src,
+                in_credentials=True,
+                from_email=bool(db.execute(
+                    "SELECT 1 FROM email_suggestions WHERE user_id=? AND site_key=? AND dismissed=0",
+                    (uid, src),
+                ).fetchone()),
+                account=_provider_acct_early,
+            )
+            if _lc.state != LC_SYNCED:
+                status_color = _lc.color
+
             # Use pre-fetched data (avoids N+1 — two bulk queries run before the loop)
             obs_map: dict = _obs_by_source.get(src, {})
             cand_count: int = _cand_counts_by_source.get(src, 0)
@@ -9017,14 +9010,19 @@ def dashboard():
                 hero_item = items[0]
                 secondary_items = [i for i in items if i is not hero_item]
 
-            # Build card hero section — show extracted data once synced (any adapter)
-            _amex_show_conn_card = (
-                src == AMEX_SOURCE
-                and _connection_status in AMEX_CONNECTION_STATES
-                and not _provider_acct.is_synced
-            )
-            if _amex_show_conn_card:
-                card_hero_html, status_color = _amex_connection_card_html(_connection_status, display_name)
+            # Build card hero — synced accounts show extracted data; others show lifecycle
+            if _provider_acct_early.is_synced and hero_item:
+                card_hero_html = (
+                    f'<div class="acct-divider"></div>'
+                    f'<div class="acct-hero">'
+                    f'<div class="hero-val" title="{he(hero_item["value"])}">{he(hero_item["value"])}</div>'
+                    f'<div class="hero-lbl">{he(hero_item["label"])}</div>'
+                    f'</div>'
+                )
+            elif _lc.state != LC_SYNCED:
+                card_hero_html, status_color = _lifecycle_dashboard_hero(
+                    _lc, src, display_name, icon=icon, color=color,
+                )
             elif hero_item:
                 card_hero_html = (
                     f'<div class="acct-divider"></div>'
@@ -9033,90 +9031,6 @@ def dashboard():
                     f'<div class="hero-lbl">{he(hero_item["label"])}</div>'
                     f'</div>'
                 )
-            elif sync_status == "needs_first_visit":
-                _nfv_login_url = SOURCE_CAPABILITIES.get(src, {}).get("login_url", "")
-                _nfv_link = (
-                    f'<a href="{he(_nfv_login_url)}" target="_blank" rel="noopener" '
-                    f'style="display:inline-block;margin-top:8px;padding:5px 12px;background:#6366f1;'
-                    f'color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none">'
-                    f'Open {he(display_name)} →</a>'
-                ) if _nfv_login_url else ""
-                card_hero_html = (
-                    f'<div class="acct-divider"></div>'
-                    f'<div class="acct-hero">'
-                    f'<div style="color:#6b7280;font-size:12px;line-height:1.5">'
-                    f'Visit your {he(display_name)} account page to start syncing. '
-                    f'The extension will capture it automatically.'
-                    f'</div>'
-                    f'{_nfv_link}'
-                    f'</div>'
-                )
-                status_color = "#a78bfa"
-            elif sync_status == "login_required":
-                _lr_mfa_sites = {'delta','united','southwest','american_air','alaska_air',
-                                 'hilton','marriott','hyatt','ihg','amex','chase',
-                                 'citi','capital_one','wellsfargo','bank_of_america'}
-                _lr_is_mfa = src in _lr_mfa_sites
-                _lr_login_url = SOURCE_CAPABILITIES.get(src, {}).get("login_url") or _ACCOUNT_ENTRY_URLS.get(src, "")
-                _lr_btn = (
-                    f'<a href="{he(_lr_login_url)}" target="_blank" rel="noopener" '
-                    f'style="display:inline-block;margin-top:8px;padding:5px 12px;background:#ef4444;'
-                    f'color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none">'
-                    f'Sign in to {he(display_name)} →</a>'
-                ) if _lr_login_url else ""
-                _lr_src_js = src.replace("'", "\\'")
-                _lr_force_btn = (
-                    f'<button onclick="forceClearLoginWall(\'{_lr_src_js}\', this)" '
-                    f'style="display:inline-block;margin-top:6px;margin-left:6px;padding:5px 10px;'
-                    f'background:none;border:1px solid #d1d5db;color:#6b7280;border-radius:6px;'
-                    f'font-size:11px;font-weight:500;cursor:pointer">Already signed in?</button>'
-                )
-                _lr_ali_btn_label  = "⚡ Auto-fill + open for MFA" if _lr_is_mfa else "⚡ Enable auto-login"
-                _lr_ali_on_label   = "⚡ Auto-fill enabled (MFA still required)" if _lr_is_mfa else "⚡ Auto-login enabled"
-                _lr_ali_form_note  = (
-                    f'Save your password — Mighty will auto-fill the login form, then open a tab for you to complete the {he(display_name)} MFA step. Stored locally, never sent to servers.'
-                    if _lr_is_mfa else
-                    'Mighty will log you in automatically when your session expires. Stored locally in the extension — never sent to servers.'
-                )
-                _lr_ali = (
-                    f'<div id="ali-{src}-wrap" style="margin-top:8px">'
-                    f'<button id="ali-{src}-btn" onclick="showAutoLoginForm(\'{_lr_src_js}\',this)" '
-                    f'style="padding:4px 10px;background:none;border:1px solid #6366f1;color:#6366f1;'
-                    f'border-radius:6px;font-size:11px;font-weight:500;cursor:pointer">{he(_lr_ali_btn_label)}</button>'
-                    f'<span id="ali-{src}-on" style="display:none;font-size:11px;font-weight:500;color:#22c55e">'
-                    f'{he(_lr_ali_on_label)} '
-                    f'<a href="#" onclick="removeAutoLoginCred(\'{_lr_src_js}\');return false" '
-                    f'style="color:#ef4444;font-size:10px;text-decoration:underline">Remove</a></span>'
-                    f'<div id="ali-{src}-form" style="display:none;margin-top:8px">'
-                    f'<div style="color:#6b7280;font-size:10px;margin-bottom:6px;line-height:1.4">'
-                    f'{he(_lr_ali_form_note)}</div>'
-                    f'<input id="ali-{src}-user" type="email" placeholder="Username / email" autocomplete="off" '
-                    f'style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #d1d5db;'
-                    f'border-radius:5px;font-size:12px;margin-bottom:4px">'
-                    f'<input id="ali-{src}-pw" type="password" placeholder="Password" autocomplete="off" '
-                    f'style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #d1d5db;'
-                    f'border-radius:5px;font-size:12px">'
-                    f'<div style="margin-top:6px">'
-                    f'<button onclick="saveAutoLoginCred(\'{_lr_src_js}\')" '
-                    f'style="padding:5px 12px;background:#6366f1;color:#fff;border:none;border-radius:5px;'
-                    f'font-size:11px;font-weight:600;cursor:pointer">Save on this device</button>'
-                    f'<button onclick="document.getElementById(\'ali-{src}-form\').style.display=\'none\';'
-                    f'document.getElementById(\'ali-{src}-btn\').style.display=\'\'" '
-                    f'style="margin-left:6px;padding:5px 10px;background:none;border:1px solid #d1d5db;'
-                    f'color:#6b7280;border-radius:5px;font-size:11px;cursor:pointer">Cancel</button>'
-                    f'</div></div></div>'
-                )
-                card_hero_html = (
-                    f'<div class="acct-divider"></div>'
-                    f'<div class="acct-hero">'
-                    f'<div style="color:#ef4444;font-size:12px;font-weight:500">Session expired</div>'
-                    f'<div style="color:#9ca3af;font-size:11px;margin-top:3px">Sign back in — Mighty will sync automatically.</div>'
-                    f'<div style="margin-top:4px">{_lr_btn}{_lr_force_btn}</div>'
-                    f'{_lr_ali}'
-                    f'</div>'
-                )
-                status_color = "#ef4444"
-                login_required_accounts.append(display_name)
             elif synced_at:
                 # Show "No account data" only when discovery explicitly failed or
                 # sync returned no_data — never based on age alone (age-based
@@ -9314,51 +9228,35 @@ def dashboard():
                 f'</div>'
             ) if bad_fields else ""
 
+            if sync_status == "login_required" and _lc.state == LC_NEEDS_LOGIN:
+                login_required_accounts.append(display_name)
+
             sync_label = f'Synced {_fmt_sync(synced_at)}' if synced_at else 'Not yet synced'
             stale_cls = " is-stale" if not synced_at else ""
             expiring_cls = " is-expiring" if alert_item else ""
-            _extraction_st = (row.get("extraction_status") or "") if row else ""
-            _provider_acct = ProviderAccount(
-                source=src,
-                connection_status=_connection_status or None,
-                extraction_status=infer_extraction_status(
-                    items,
-                    explicit=_extraction_st or None,
-                    sync_status=sync_status,
-                ),
-                normalized_fields=items,
-                data_source=(data.get("data_source") or data.get("sync_source")) if row else None,
-                synced_at=synced_at or None,
-                sync_status=sync_status,
-            )
-            _active_conn = AMEX_CONNECTION_STATES if src == AMEX_SOURCE else ()
-            _conn_line_fn = amex_status_line_label if src == AMEX_SOURCE else None
-            _flabel, _fcolor, _ficon = _provider_card_freshness(
-                _provider_acct,
-                active_connection_states=_active_conn,
-                connection_line_fn=_conn_line_fn,
-            )
-            stale_cls = " is-stale" if not _provider_acct.is_synced else stale_cls
-            _fw = "700" if _fcolor == "#dc2626" else "500"
-            _fprefix = f"{_ficon} " if _ficon else ""
-            # Promote dot to red when data is stale, even if sync_status="ok".
-            if status_color == "#30d158" and _fcolor in ("#f59e0b", "#dc2626"):
-                status_color = "#ef4444"
-            synced_title = (
-                f"Synced {_fmt_sync(synced_at)}" if synced_at else "Not yet synced"
-            )
-            # Synced label only when normalized provider data exists (any adapter).
-            _hide_synced_label = not _provider_acct.is_synced
-            _is_sync_problem = (
-                _fcolor in ("#f59e0b", "#dc2626") or not synced_at or _hide_synced_label
-            )
-            if _is_sync_problem or _hide_synced_label:
-                freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
-            elif synced_at:
-                _ago = _fmt_sync(synced_at)
-                freshness_html = f'<span style="font-size:11px;color:#6b7280">Synced {_ago}</span>'
+            _provider_acct = _provider_acct_early
+            _fw = "700" if _lc.color == "#dc2626" else "500"
+            if _provider_acct.is_synced and synced_at:
+                _field_note = (
+                    f" · {_lc.extracted_field_count} field"
+                    f"{'s' if _lc.extracted_field_count != 1 else ''}"
+                    if _lc.extracted_field_count else ""
+                )
+                freshness_html = (
+                    f'<span style="font-size:11px;color:#6b7280">'
+                    f'Synced {_fmt_sync(synced_at)}{_field_note}'
+                    f'</span>'
+                )
+                synced_title = f"Synced {_fmt_sync(synced_at)}"
             else:
-                freshness_html = ""
+                freshness_html = (
+                    f'<span style="font-size:11px;color:{_lc.color};font-weight:{_fw}">'
+                    f'{he(_lc.label)}</span>'
+                )
+                synced_title = _lc.label
+            stale_cls = " is-stale" if not _provider_acct.is_synced else stale_cls
+            if status_color == "#30d158" and _lc.color in ("#f59e0b", "#dc2626"):
+                status_color = "#ef4444"
 
             # Consistent footer for all cards
             _BAD_VALUES = {"", "—", "–", "—", "no data", "none", "n/a", "-"}
@@ -9372,11 +9270,10 @@ def dashboard():
                     f'{len(extra_items)} more field{"s" if len(extra_items)!=1 else ""}'
                     f'</button>'
                 )
+            elif _no_data and _lc.state == LC_SYNCED:
+                expand_btn = ""
             elif _no_data:
-                # No data yet — don't show a confusing button
-                expand_btn = (
-                    f'<span style="font-size:11px;color:#c0bab4">No data synced yet</span>'
-                )
+                expand_btn = ""
             else:
                 # Has data, all fields already shown — nothing extra to expand
                 expand_btn = ""
@@ -9564,90 +9461,6 @@ def dashboard():
     else:
         account_data_html = ""
 
-    # ── Suggested accounts (from email scan, not yet connected) ─────────────────
-    _site_info = {k: (n, ic, col) for k, n, ic, col, _ in SUPPORTED_SITES}
-    _pending_sugg = db.execute(
-        "SELECT site_key, display_name FROM email_suggestions "
-        "WHERE user_id=? AND added=1 AND dismissed=0 ORDER BY email_count DESC",
-        (uid,)
-    ).fetchall()
-    _pending_not_connected = [
-        r for r in _pending_sugg if r["site_key"] not in connected_sources
-    ]
-    if _pending_not_connected:
-        _sugg_items_html = ""
-        for r in _pending_not_connected:
-            sk   = r["site_key"]
-            dname = r["display_name"]
-            info = _site_info.get(sk)
-            icon_s  = info[1] if info else "🌐"
-            color_s = info[2] if info else "#e5e7eb"
-            name_s  = info[0] if info else dname
-            _sugg_items_html += (
-                f'<div class="sugg-row" data-sk="{he(sk)}" style="display:flex;align-items:center;gap:10px;padding:8px 0;'
-                f'border-bottom:1px solid #f0ede8">'
-                f'<div style="width:28px;height:28px;border-radius:6px;background:{he(color_s)};'
-                f'display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">{icon_s}</div>'
-                f'<div style="flex:1;font-size:13px;font-weight:500;color:#1c1917">{he(name_s)}</div>'
-                f'<button onclick="dashOpenCredForm(\'{he(sk)}\',\'{he(name_s)}\',\'{icon_s}\',\'{he(color_s)}\')" '
-                f'style="padding:4px 10px;border-radius:6px;border:1px solid #c7d2fe;background:#eef2ff;'
-                f'font-size:11px;font-weight:600;color:#4338ca;cursor:pointer;font-family:inherit;flex-shrink:0">'
-                f'Connect</button>'
-                f'<button onclick="dismissSuggRow(this)" '
-                f'style="background:none;border:none;color:#d1d5db;font-size:14px;cursor:pointer;padding:2px 4px;flex-shrink:0" '
-                f'title="Remove from list">✕</button>'
-                f'</div>'
-            )
-        _n_sugg = len(_pending_not_connected)
-        _sugg_label = f"{_n_sugg} account{'s' if _n_sugg != 1 else ''} ready to connect from your email scan"
-        _sugg_section = (
-            f'<div id="sugg-section" style="border:0.5px solid #e0e7ff;border-radius:10px;'
-            f'margin-bottom:20px;overflow:hidden">'
-            f'<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;'
-            f'background:#f5f3ff" onclick="toggleSuggPanel(this)">'
-            f'<span style="font-size:13px">📬</span>'
-            f'<span style="flex:1;font-size:13px;font-weight:600;color:#3730a3">{he(_sugg_label)}</span>'
-            f'<a href="/email-scan" onclick="event.stopPropagation()" '
-            f'style="font-size:11px;color:#6366f1;text-decoration:none;margin-right:6px">Edit list</a>'
-            f'<button onclick="event.stopPropagation();dismissAllSugg()" style="font-size:11px;color:#9ca3af;'
-            f'background:none;border:none;cursor:pointer;font-family:inherit;margin-right:6px">Dismiss all</button>'
-            f'<span id="sugg-chevron" style="font-size:11px;color:#9ca3af">▼</span>'
-            f'</div>'
-            f'<div id="sugg-list" style="display:none;max-height:260px;overflow-y:auto;'
-            f'padding:0 14px;background:#fff">{_sugg_items_html}</div>'
-            f'<script>'
-            f'function toggleSuggPanel(hdr){{'
-            f'  var list=document.getElementById("sugg-list");'
-            f'  var chev=document.getElementById("sugg-chevron");'
-            f'  var open=list.style.display!=="none";'
-            f'  list.style.display=open?"none":"block";'
-            f'  if(chev)chev.textContent=open?"▼":"▲";'
-            f'}}'
-            f'function dismissSuggRow(btn){{'
-            f'  var row=btn.closest(".sugg-row");'
-            f'  var sk=row?row.dataset.sk:"";'
-            f'  if(sk)fetch("/api/email/suggestions/dismiss",{{method:"POST",headers:{{"Content-Type":"application/json"}},'
-            f'  body:JSON.stringify({{site_key:sk}})}});'
-            f'  if(row){{row.style.opacity="0";row.style.transition="opacity .2s";'
-            f'  setTimeout(function(){{row.remove();'
-            f'    var lst=document.getElementById("sugg-list");'
-            f'    if(lst&&!lst.querySelector(".sugg-row")){{document.getElementById("sugg-section").remove();}}'
-            f'  }},210);}}'
-            f'}}'
-            f'function dismissAllSugg(){{'
-            f'  document.querySelectorAll("#sugg-list .sugg-row").forEach(function(row){{'
-            f'    var sk=row.dataset.sk;'
-            f'    if(sk)fetch("/api/email/suggestions/dismiss",{{method:"POST",headers:{{"Content-Type":"application/json"}},'
-            f'    body:JSON.stringify({{site_key:sk}})}});'
-            f'  }});'
-            f'  var sec=document.getElementById("sugg-section");'
-            f'  if(sec){{sec.style.opacity="0";sec.style.transition="opacity .2s";setTimeout(function(){{sec.remove();}},210);}}'
-            f'}}'
-            f'</script>'
-            f'</div>'
-        )
-        account_data_html = _sugg_section + account_data_html
-
     # Compute total tracked value across all accounts
     total_value = 0.0
     value_items = []  # list of (source_display, field_label, value_str, dollar_val, methodology)
@@ -9719,6 +9532,28 @@ def dashboard():
     _first_name = (user["preferred_name"] or "").strip() or \
                   ((user["email"] or "").split("@")[0].split(".")[0] or "").capitalize() or "there"
     _account_count = len(connected_sources)
+
+    _has_synced_data = False
+    for _sr in acct_rows:
+        _pa = load_provider_account(uid, dict(_sr), decrypt_fn=decrypt_account_data)
+        if _pa and _pa.is_synced:
+            _has_synced_data = True
+            break
+
+    _email_suggestion_count = 0
+    try:
+        _email_suggestion_count = db.execute(
+            "SELECT COUNT(*) FROM email_suggestions WHERE user_id=? AND dismissed=0",
+            (uid,),
+        ).fetchone()[0]
+    except Exception:
+        pass
+
+    _suppress_demo_content = (
+        _has_synced_data
+        or _account_count > 0
+        or _email_suggestion_count > 0
+    )
 
     # ── Action items: persistent, from action_items table + login_required accounts ──
     _open_items = []
@@ -9840,6 +9675,7 @@ def dashboard():
                     {"label": lbl, "value": val, "source": disp}
                     for disp, lbl, val, _, _, _btype in value_items
                 ],
+                "suppress_demo_content": _suppress_demo_content,
             }
             if _dash_user_intent:
                 _dash_user_memory["intent"] = _dash_user_intent
@@ -9855,21 +9691,16 @@ def dashboard():
             ) or []
         except Exception:
             _dashboard_recommendations = []
-    _email_suggestion_count = 0
-    try:
-        _email_suggestion_count = db.execute(
-            "SELECT COUNT(*) FROM email_suggestions WHERE user_id=? AND dismissed=0",
-            (uid,),
-        ).fetchone()[0]
-    except Exception:
-        pass
     if build_dashboard_actions is not None:
         try:
             _dashboard_actions = build_dashboard_actions(
                 action_items=_all_action_items,
                 hero_candidates=_hero_candidates,
                 recommendations=_dashboard_recommendations,
-                email_suggestion_count=_email_suggestion_count,
+                email_suggestion_count=(
+                    0 if _suppress_demo_content and _account_count > 0
+                    else _email_suggestion_count
+                ),
             )
         except Exception:
             _dashboard_actions = []
@@ -10192,7 +10023,7 @@ def dashboard():
                 account_count=_account_count,
                 benefit_count=len(_hero_candidates),
                 expiring_count=total_expiring,
-                use_demo_when_empty=True,
+                use_demo_when_empty=not _suppress_demo_content,
             )
             return render_executive_briefing_hero(
                 exec_brief,
@@ -11292,6 +11123,10 @@ function dismissOnboarding() {
             'Demo</div>'
         )
 
+    import json as _json_dash_poll
+    _latest_sync_baseline = _json_dash_poll.dumps(_global_last_synced or "")
+    _awaiting_sync_poll = "true" if _account_count > 0 else "false"
+
     return (DASHBOARD_HTML
             .replace("{_SIDEBAR_DESKTOP_}",        _sidebar_desktop)
             .replace("{_SIDEBAR_MOBILE_}",         _sidebar_mobile)
@@ -11327,7 +11162,9 @@ function dismissOnboarding() {
             .replace("{onboarding_modal}",        onboarding_modal)
             .replace("{dash_modals}",             _build_dash_modals(configured, _csrf))
             .replace("{csrf_token}",              _csrf)
-            .replace("{global_sync_label}",       _global_sync_label))
+            .replace("{global_sync_label}",       _global_sync_label)
+            .replace("{latest_sync_baseline}",    _latest_sync_baseline)
+            .replace("{awaiting_sync_poll}",      _awaiting_sync_poll))
 
 @app.route("/settings")
 @require_login
@@ -11761,7 +11598,7 @@ async function deleteAllRaw() {
     .pg-nav a{color:#6b7280;text-decoration:none;font-size:13px;font-weight:500}
     .pg-nav a:hover{color:#111}</style></head>
     <body>
-    <nav class="pg-nav"><a href="/dashboard">Dashboard</a><a href="/settings">Settings</a><a href="/credentials">Credentials</a></nav>
+    <nav class="pg-nav"><a href="/dashboard">Dashboard</a><a href="/email-scan">Find accounts</a><a href="/credentials">Accounts</a><a href="/settings">Settings</a></nav>
     <div class="container">
     <div style="margin-bottom:20px"><a href="/settings" style="color:#6b7280;text-decoration:none;font-size:13px">&larr; Settings</a></div>
     <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 4px">Privacy Audit Log</h2>
@@ -11841,7 +11678,7 @@ def privacy_domains():
     .pg-nav a{color:#6b7280;text-decoration:none;font-size:13px;font-weight:500}
     .pg-nav a:hover{color:#111}</style></head>
     <body>
-    <nav class="pg-nav"><a href="/dashboard">Dashboard</a><a href="/settings">Settings</a><a href="/credentials">Credentials</a></nav>
+    <nav class="pg-nav"><a href="/dashboard">Dashboard</a><a href="/email-scan">Find accounts</a><a href="/credentials">Accounts</a><a href="/settings">Settings</a></nav>
     <div class="container">
     <div style="margin-bottom:20px"><a href="/settings" style="color:#6b7280;text-decoration:none;font-size:13px">&larr; Settings</a></div>
     <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 4px">Captured Domains</h2>
@@ -11855,17 +11692,7 @@ def privacy_domains():
 @app.route("/onboarding")
 @require_login
 def onboarding():
-    user = get_db().execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
-    if not user:
-        session.clear()
-        return redirect("/login")
-    url  = base_url()
-    import json as _json
-    onboarding_data = _json.dumps({
-        "api_key":  user["api_key"],
-        "base_url": url,
-    })
-    return ONBOARDING_HTML.replace("MIGHTY_ONBOARDING_DATA", onboarding_data)
+    return redirect("/dashboard")
 
 @app.route("/onboarding/complete", methods=["POST"])
 @require_login
@@ -13882,10 +13709,7 @@ var _DASH_SOURCE_URLS = {{
 }})();
 
 function openDashConnectModal() {{
-  document.getElementById('dash-modal-overlay').classList.add('open');
-  document.getElementById('dash-screen-picker').style.display = 'flex';
-  document.getElementById('dash-screen-cred').style.display = 'none';
-  setTimeout(function(){{ var s=document.getElementById('dash-modal-search'); if(s) s.focus(); }}, 50);
+  window.location.href = '/email-scan';
 }}
 function closeDashConnectModal() {{
   document.getElementById('dash-modal-overlay').classList.remove('open');
@@ -13910,103 +13734,20 @@ function dashFilterModal(q) {{
   if (nr) nr.style.display = (q && !anyVisible) ? '' : 'none';
 }}
 function dashBackToPicker() {{
-  document.getElementById('dash-screen-picker').style.display = 'flex';
-  document.getElementById('dash-screen-cred').style.display = 'none';
-  if (_dashModalPollInterval) {{ clearInterval(_dashModalPollInterval); _dashModalPollInterval = null; }}
+  closeDashConnectModal();
+}}
+function triggerDashSync(source) {{
+  fetch('/sync/account/' + encodeURIComponent(source), {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF}})
+  }}).then(function() {{ location.reload(); }}).catch(function() {{ location.reload(); }});
 }}
 function dashOpenCredForm(key, name, icon, color) {{
-  _dashCurrentSource = key;
-  if (_dashModalPollInterval) {{ clearInterval(_dashModalPollInterval); _dashModalPollInterval = null; }}
-  // Ensure the modal overlay is open (needed when called directly from suggestion card buttons)
-  document.getElementById('dash-modal-overlay').classList.add('open');
-  document.getElementById('dash-cred-name').textContent = name;
-  var ic = document.getElementById('dash-cred-icon');
-  ic.textContent = icon; ic.style.background = color;
-
-  // Set site name everywhere it appears
-  document.querySelectorAll('.dash-site-name-ref').forEach(function(el) {{ el.textContent = name; }});
-
-  // Credential hint pill
-  var h = _LOGIN_HINTS[key];
-  var hintEl = document.getElementById('dash-cred-hint');
-  if (hintEl) {{
-    var idLabel = h ? h.u : 'email or username';
-    var pwLabel = h ? h.p.toLowerCase() : 'password';
-    hintEl.textContent = '🔑 You’ll log in with your ' + idLabel.toLowerCase() + ' and ' + pwLabel + '.';
-    hintEl.style.display = 'block';
-  }}
-
-  // Credential type sub-note in step 2
-  var typeNote = document.getElementById('dash-cred-type-note');
-  if (typeNote) {{
-    typeNote.textContent = h ? '(use your ' + h.u.toLowerCase() + ')' : '';
-  }}
-
-  // 2FA warning
-  var siteNote = _SITE_NOTES[key];
-  var twofaEl = document.getElementById('dash-twofa-warn');
-  var twofaNoteEl = document.getElementById('dash-twofa-note');
-  if (twofaEl) {{
-    if (siteNote && siteNote.twofa) {{
-      if (twofaNoteEl) twofaNoteEl.textContent = siteNote.note || 'Have your phone or authenticator app ready.';
-      twofaEl.style.display = 'block';
-    }} else {{
-      twofaEl.style.display = 'none';
-    }}
-  }}
-
-  // Reset status panels
-  var waiting = document.getElementById('dash-ext-waiting');
-  var trouble = document.getElementById('dash-ext-trouble');
-  if (waiting) waiting.style.display = 'none';
-  if (trouble) trouble.style.display = 'none';
-
-  // Wire up Open in Chrome button
-  var openBtn = document.getElementById('dash-open-chrome-btn');
-  var siteUrl = _DASH_SOURCE_URLS[key] || 'https://google.com/search?q=' + encodeURIComponent(name + ' login');
-  if (openBtn) {{
-    openBtn.href = siteUrl;
-    openBtn.onclick = function() {{ _dashStartExtPoll(key); }};
-    openBtn.style.display = '';
-  }}
-
-  // If extension not present, skip straight to trouble panel
-  if (!_extPresent) {{
-    if (openBtn) openBtn.style.display = 'none';
-    if (trouble) trouble.style.display = 'block';
-  }}
-
-  document.getElementById('dash-screen-picker').style.display = 'none';
-  document.getElementById('dash-screen-cred').style.display = 'flex';
+  window.location.href = '/credentials?connect=' + encodeURIComponent(key);
 }}
 function _dashStartExtPoll(source) {{
-  var waiting = document.getElementById('dash-ext-waiting');
-  var trouble = document.getElementById('dash-ext-trouble');
-  if (waiting) waiting.style.display = 'block';
-  if (trouble) trouble.style.display = 'none';
-  fetch('/credentials/register', {{
-    method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
-    body: new URLSearchParams({{_csrf: _DASH_CSRF, source: source}})
-  }});
-  var attempts = 0;
-  _dashModalPollInterval = setInterval(function() {{
-    attempts++;
-    fetch('/api/extension/poll/' + source).then(function(r){{return r.json();}}).then(function(d){{
-      if (d.captured) {{
-        clearInterval(_dashModalPollInterval); _dashModalPollInterval = null;
-        if (waiting) waiting.innerHTML = (
-          '<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#15803d;font-weight:600">' +
-          '<span>✓</span> Connected! Loading your data…</div>'
-        );
-        setTimeout(function() {{ closeDashConnectModal(); location.reload(); }}, 1200);
-      }}
-    }}).catch(function(){{}});
-    if (attempts >= 20) {{
-      clearInterval(_dashModalPollInterval); _dashModalPollInterval = null;
-      if (waiting) waiting.style.display = 'none';
-      if (trouble) trouble.style.display = 'block';
-    }}
-  }}, 3000);
+  window.location.href = '/credentials?connect=' + encodeURIComponent(source);
 }}
 function dashRetryExtPoll() {{
   document.getElementById('dash-ext-trouble').style.display = 'none';
@@ -14679,6 +14420,29 @@ _CREDENTIALS_PAGE_CSS = """
 """
 
 
+def _lifecycle_badge_html(lifecycle: AccountLifecycle, synced_fmt: str = "") -> str:
+    """Lifecycle label block for account cards."""
+    parts = [
+        f'<div style="font-size:10px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em">'
+        f'{he(lifecycle.source_label)}</div>',
+        f'<div style="font-size:11px;font-weight:600;color:{he(lifecycle.color)};margin-top:3px">'
+        f'{he(lifecycle.label)}</div>',
+    ]
+    if lifecycle.show_last_sync and synced_fmt:
+        n = lifecycle.extracted_field_count
+        field_note = f" · {n} field{'s' if n != 1 else ''}" if n else ""
+        parts.append(
+            f'<div style="font-size:11px;color:#8892a4;margin-top:2px">'
+            f'Last synced {he(synced_fmt)}{field_note}</div>'
+        )
+    elif lifecycle.state != LC_SYNCED:
+        parts.append(
+            f'<div style="font-size:11px;color:#6b7280;margin-top:2px;line-height:1.4">'
+            f'{he(lifecycle.description)}</div>'
+        )
+    return "".join(parts)
+
+
 def _build_credentials_page(
     user,
     configured: set,
@@ -14686,64 +14450,56 @@ def _build_credentials_page(
     synced_at_by_source: dict = None,
     connection_status_by_source: dict = None,
     extraction_status_by_source: dict = None,
+    lifecycle_by_source: dict = None,
+    pending_added: list = None,
+    connect_source: str = None,
 ) -> str:
     """Generate the credentials management page HTML."""
     extra_by_source = extra_by_source or {}
     synced_at_by_source = synced_at_by_source or {}
     connection_status_by_source = connection_status_by_source or {}
     extraction_status_by_source = extraction_status_by_source or {}
+    lifecycle_by_source = lifecycle_by_source or {}
+    pending_added = pending_added or []
+    connect_source = connect_source or ""
     csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
     _cred_styles = BASE_CSS + _CREDENTIALS_PAGE_CSS
 
     # ── Connected account cards (main page) ──────────────────────────────────
     connected_cards_html = ""
+
+    def _cred_action_btn(source_key: str, name: str, lifecycle: AccountLifecycle, icon: str, color: str) -> str:
+        return _lifecycle_primary_cta_html(
+            lifecycle, source_key, name, icon=icon, color=color, surface="credentials",
+        )
+
     for key, name, icon, color, cat in SUPPORTED_SITES:
         if key not in configured:
             continue
+        lifecycle = lifecycle_by_source.get(key) or resolve_account_lifecycle(key, in_credentials=True)
         remove_btn = (
             '<button class="btn-remove" onclick="if(confirm(\'Disconnect this account? This will remove saved credentials.\'))removeCred(\''
             + he(key) + '\',\'' + he(name) + '\')" style="cursor:pointer">Disconnect</button>'
         )
         _cred_synced = synced_at_by_source.get(key, "")
-        _cred_conn = connection_status_by_source.get(key, "")
-        _cred_extract = extraction_status_by_source.get(key, "")
-        if key == AMEX_SOURCE and _cred_conn in AMEX_CONNECTION_STATES and not _cred_synced:
-            _cred_colors = {
-                AMEX_CONNECTING: "#a78bfa",
-                AMEX_WAITING: "#6366f1",
-                AMEX_NEEDS_LOGIN: "#dc2626",
-                AMEX_CONNECTED: "#22c55e",
-            }
-            _cred_color = _cred_colors.get(_cred_conn, "#6b7280")
-            _cred_sync_label = (
-                f'<div style="font-size:11px;color:{_cred_color};margin-top:2px">'
-                f'{he(amex_status_line_label(_cred_conn))}</div>'
-            )
-        elif _cred_extract == EXTRACTION_PENDING and not _cred_synced:
-            _cred_sync_label = (
-                '<div style="font-size:11px;color:#6366f1;margin-top:2px">Awaiting data</div>'
-            )
-        elif _cred_synced:
-            _cred_sync_label = (
-                f'<div style="font-size:11px;color:#8892a4;margin-top:2px" data-synced="{he(_cred_synced)}">'
-                f'Synced {_fmt_sync(_cred_synced)}</div>'
-            )
-        else:
-            _cred_sync_label = (
-                '<div style="font-size:11px;color:#9ca3af;margin-top:2px">Not yet synced</div>'
-            )
+        _sync_fmt = _fmt_sync(_cred_synced) if _cred_synced else ""
+        _lifecycle_html = _lifecycle_badge_html(lifecycle, _sync_fmt)
+        _primary_action = _cred_action_btn(key, name, lifecycle, icon, color)
+        _edit_login = (
+            f'<button class="btn-toggle" onclick="toggleForm(\'{he(key)}\')" id="btn-{he(key)}" '
+            f'style="color:#8892a4;font-weight:500">Edit login</button>'
+        ) if lifecycle.state == LC_SYNCED else ""
         connected_cards_html += f"""
-<div class="cred-card" id="card-{he(key)}">
+<div class="cred-card" id="card-{he(key)}" data-lifecycle="{he(lifecycle.state)}">
   <div style="display:flex;align-items:center;gap:12px">
     <div style="width:36px;height:36px;border-radius:9px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{icon}</div>
     <div style="flex:1">
       <div style="font-size:14px;font-weight:600;color:#1c1917">{he(name)}</div>
-      {_cred_sync_label}
+      {_lifecycle_html}
     </div>
-    <button class="btn-toggle" onclick="openFieldModal('{he(key)}')" id="btn-fields-{he(key)}">Edit fields</button>
-    <button class="btn-toggle" onclick="toggleForm('{he(key)}')" id="btn-{he(key)}"
-            style="color:#8892a4;font-weight:500">Edit login</button>
+    {_primary_action}
+    {_edit_login}
     {remove_btn}
   </div>
   <div class="cred-form" id="form-{he(key)}" style="display:none;margin-top:14px">
@@ -14757,6 +14513,31 @@ def _build_credentials_page(
     <button class="btn-save" onclick="saveCred('{he(key)}', '{he(name)}')">Save & Sync</button>
   </div>
   {_field_config_html(key, configured, extra_by_source.get(key, {}))}
+</div>"""
+
+    # Added-but-not-connected accounts from email scan
+    _site_map = {k: (n, ic, col) for k, n, ic, col, _ in SUPPORTED_SITES}
+    for row in pending_added:
+        sk = row["site_key"]
+        if sk in configured:
+            continue
+        info = _site_map.get(sk)
+        dname = info[0] if info else row["display_name"]
+        icon = info[1] if info else "🌐"
+        color = info[2] if info else "#e5e7eb"
+        lifecycle = lifecycle_by_source.get(sk) or resolve_account_lifecycle(
+            sk, email_added=True, from_email=True,
+        )
+        connected_cards_html += f"""
+<div class="cred-card" id="card-{he(sk)}" data-lifecycle="{he(lifecycle.state)}" style="border-style:dashed">
+  <div style="display:flex;align-items:center;gap:12px">
+    <div style="width:36px;height:36px;border-radius:9px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{icon}</div>
+    <div style="flex:1">
+      <div style="font-size:14px;font-weight:600;color:#1c1917">{he(dname)}</div>
+      {_lifecycle_badge_html(lifecycle)}
+    </div>
+    {_lifecycle_primary_cta_html(lifecycle, sk, dname, icon=icon, color=color, surface="credentials")}
+  </div>
 </div>"""
 
     _sync_note_html = ""
@@ -14796,7 +14577,7 @@ def _build_credentials_page(
         <div class="accounts-onboard-value-text">Get personalized recommendations<span>Actionable next steps tailored to your accounts</span></div>
       </div>
     </div>
-    <button type="button" class="accounts-onboard-cta" onclick="openModal()">Connect your first account</button>
+    <a href="/email-scan" class="accounts-onboard-cta" style="text-decoration:none;display:inline-block">Scan Gmail to find accounts</a>
     <div class="accounts-onboard-cats">
       <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">✈️</span>Travel</span>
       <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">🏦</span>Banking</span>
@@ -14821,7 +14602,14 @@ def _build_credentials_page(
         for key, name, icon, color in sites:
             already = key in configured
             if already:
-                action = f'<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:rgba(52,211,153,0.1);color:#34d399;border:1px solid rgba(52,211,153,0.25)">Connected</span>'
+                lc = lifecycle_by_source.get(key)
+                lc_label = lc.label if lc else "Connected"
+                lc_color = lc.color if lc else "#34d399"
+                action = (
+                    f'<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;'
+                    f'background:{he(lc_color)}18;color:{he(lc_color)};border:1px solid {he(lc_color)}40">'
+                    f'{he(lc_label)}</span>'
+                )
             else:
                 action = (
                     f'<button class="modal-connect-btn" '
@@ -14839,6 +14627,19 @@ def _build_credentials_page(
   <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9ca3af;margin:16px 0 6px">{he(cat)}</div>
   {site_rows}
 </div>"""
+
+    import json as _cred_json
+    _site_info_map = {k: [n, ic, col] for k, n, ic, col, _ in SUPPORTED_SITES}
+    for row in pending_added:
+        sk = row["site_key"]
+        if sk not in _site_info_map:
+            _site_info_map[sk] = [row["display_name"], "🌐", "#e5e7eb"]
+    if connect_source and connect_source not in _site_info_map:
+        _site_info_map[connect_source] = [
+            connect_source.replace("_", " ").title(), "🌐", "#e5e7eb",
+        ]
+    _site_info_json = _cred_json.dumps(_site_info_map)
+    _connect_auto_json = _cred_json.dumps(connect_source) if connect_source else "null"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -14871,7 +14672,7 @@ def _build_credentials_page(
       <h1>Connected accounts</h1>
       <p class="page-subtitle">Connect accounts so Mighty can find expiring perks, unused value, and savings for you.</p>
     </div>
-    <button class="btn-connect-new" onclick="openModal()">+ Connect account</button>
+    <a href="/email-scan" class="btn-connect-new" style="text-decoration:none;display:inline-flex;align-items:center">Find accounts</a>
   </div>
   {connected_cards_html}
   {_sync_note_html}
@@ -14901,7 +14702,7 @@ def _build_credentials_page(
     <!-- Screen 2: extension-first connect -->
     <div id="screen-cred" style="display:none;flex-direction:column;flex:1;min-height:0">
       <div class="modal-cred-head">
-        <button class="modal-back-btn" onclick="backToPicker()">← Back</button>
+        <button class="modal-back-btn" onclick="backToPicker()">← Close</button>
         <div id="modal-cred-icon" style="width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px"></div>
         <div style="font-size:15px;font-weight:700" id="modal-cred-name"></div>
         <button class="modal-close" style="margin-left:auto" onclick="closeModal()">✕</button>
@@ -14921,14 +14722,28 @@ def _build_credentials_page(
             Open in Chrome →
           </a>
           <div id="modal-ext-waiting" style="display:none;margin-top:20px;text-align:center">
-            <div style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#6b7280">
+            <div id="modal-ext-waiting-spinner" style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#6b7280">
               <span style="display:inline-block;width:14px;height:14px;border:2px solid #d1fae5;border-top-color:#059669;border-radius:50%;animation:spin 0.8s linear infinite"></span>
-              Waiting for Mighty extension to detect your session…
+              <span id="modal-ext-waiting-text">Waiting for extension…</span>
             </div>
-            <div style="font-size:11px;color:#9ca3af;margin-top:6px">This usually takes 5–15 seconds after you log in</div>
+            <div id="modal-ext-waiting-sub" style="font-size:11px;color:#9ca3af;margin-top:6px;line-height:1.5">
+              Open your provider site in Chrome while logged in. The Mighty extension verifies your session — visiting the domain alone is not enough.
+            </div>
+            <button id="modal-ext-retry" type="button" onclick="retryExtPoll()"
+              style="display:none;margin-top:10px;padding:6px 12px;background:none;border:1px solid #d1d5db;color:#6b7280;border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit">
+              I installed the extension / Retry
+            </button>
           </div>
           <div id="modal-ext-no-ext" style="display:none;margin-top:16px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:#92400e;text-align:left">
-            💡 <strong>Extension not installed?</strong> Visit <a href="/extension-setup" target="_blank" style="color:#b45309">Settings → Setup Chrome Extension</a> first.
+            💡 <strong>Extension not detected.</strong> Install the Mighty Chrome extension from
+            <a href="/extension-setup" target="_blank" style="color:#b45309">Settings → Setup Chrome Extension</a>,
+            then click Retry above.
+          </div>
+          <div id="modal-ext-needs-login" style="display:none;margin-top:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px;font-size:12px;color:#991b1b;text-align:left">
+            🔐 <strong>Sign in required.</strong> Log in to your provider in Chrome, then keep this tab open while Mighty verifies your session.
+          </div>
+          <div id="modal-ext-connected" style="display:none;margin-top:16px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;font-size:12px;color:#166534;text-align:left">
+            ✓ <strong>Connected.</strong> Session verified. Sync will pull your account data — no fields extracted yet.
           </div>
         </div>
       </div>
@@ -14977,9 +14792,7 @@ var _fieldModalSource = '';
 
 /* ── Modal open/close ─────────────────────────────── */
 function openModal() {{
-  document.getElementById('modal-overlay').classList.add('open');
-  document.getElementById('modal-search').focus();
-  showPicker();
+  window.location.href = '/email-scan';
 }}
 function closeModal() {{
   document.getElementById('modal-overlay').classList.remove('open');
@@ -15011,8 +14824,7 @@ function showPicker() {{
   document.getElementById('screen-cred').style.display = 'none';
 }}
 function backToPicker() {{
-  showPicker();
-  _modalKey = '';
+  closeModal();
 }}
 
 /* ── Source → account URL map for "Open in Chrome →" ── */
@@ -15065,6 +14877,7 @@ var _modalPollTimeout  = null;
 /* ── Open extension-connect screen for a site ─────── */
 function openCredForm(key, name, icon, color) {{
   _modalKey = key;
+  document.getElementById('modal-overlay').classList.add('open');
 
   // Stop any existing poll
   if (_modalPollInterval) {{ clearInterval(_modalPollInterval); _modalPollInterval = null; }}
@@ -15099,7 +14912,65 @@ function openCredForm(key, name, icon, color) {{
   document.getElementById('screen-cred').style.display   = 'flex';
 }}
 
+function _resetExtModalStates() {{
+  ['modal-ext-waiting','modal-ext-no-ext','modal-ext-needs-login','modal-ext-connected'].forEach(function(id) {{
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }});
+  var retry = document.getElementById('modal-ext-retry');
+  if (retry) retry.style.display = 'none';
+  var spinner = document.getElementById('modal-ext-waiting-spinner');
+  if (spinner) spinner.style.display = 'flex';
+}}
+
+function retryExtPoll() {{
+  if (!_modalKey) return;
+  _resetExtModalStates();
+  _startExtPoll(_modalKey);
+}}
+
+function _applyLifecyclePoll(d) {{
+  var lc = d.lifecycle || {{}};
+  var waiting = document.getElementById('modal-ext-waiting');
+  var noExt = document.getElementById('modal-ext-no-ext');
+  var needsLogin = document.getElementById('modal-ext-needs-login');
+  var connected = document.getElementById('modal-ext-connected');
+  var retry = document.getElementById('modal-ext-retry');
+  var waitText = document.getElementById('modal-ext-waiting-text');
+  if (lc.state === 'needs_login') {{
+    if (waiting) waiting.style.display = 'none';
+    if (needsLogin) needsLogin.style.display = 'block';
+    if (waitText) waitText.textContent = 'Needs login';
+    return 'needs_login';
+  }}
+  if (lc.state === 'connected') {{
+    if (waiting) waiting.style.display = 'none';
+    if (connected) connected.style.display = 'block';
+    return 'connected';
+  }}
+  if (lc.state === 'synced' || d.is_synced) {{
+    return 'synced';
+  }}
+  if (waiting) waiting.style.display = 'block';
+  if (waitText) waitText.textContent = lc.label || 'Waiting for extension…';
+  if (retry && lc.state === 'waiting_for_extension') retry.style.display = 'inline-block';
+  return 'waiting';
+}}
+
+function triggerSync(source) {{
+  fetch('/sync/account/' + encodeURIComponent(source), {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+    body: new URLSearchParams({{_csrf: CSRF}})
+  }}).then(function() {{
+    window.location.href = '/dashboard';
+  }}).catch(function() {{
+    window.location.href = '/dashboard';
+  }});
+}}
+
 function _startExtPoll(source) {{
+  _resetExtModalStates();
   var waiting = document.getElementById('modal-ext-waiting');
   var noExt   = document.getElementById('modal-ext-no-ext');
   if (waiting) waiting.style.display = 'block';
@@ -15119,10 +14990,23 @@ function _startExtPoll(source) {{
     fetch('/api/extension/poll/' + source)
       .then(function(r) {{ return r.json(); }})
       .then(function(d) {{
-        if (d.captured) {{
+        var phase = _applyLifecyclePoll(d);
+        if (phase === 'synced' || (d.captured && d.is_synced)) {{
           clearInterval(_modalPollInterval); _modalPollInterval = null;
           _setStep_ext('done');
-          setTimeout(function() {{ closeModal(); location.reload(); }}, 800);
+          setTimeout(function() {{ window.location.href = '/dashboard'; }}, 800);
+        }} else if (phase === 'connected') {{
+          clearInterval(_modalPollInterval); _modalPollInterval = null;
+          _setStep_ext('connected');
+          fetch('/sync/account/' + encodeURIComponent(source), {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+            body: new URLSearchParams({{_csrf: CSRF}})
+          }}).then(function() {{
+            window.location.href = '/dashboard';
+          }}).catch(function() {{
+            window.location.href = '/dashboard';
+          }});
         }}
       }}).catch(function() {{}});
 
@@ -15137,7 +15021,10 @@ function _startExtPoll(source) {{
 function _setStep_ext(state) {{
   var waiting = document.getElementById('modal-ext-waiting');
   if (state === 'done' && waiting) {{
-    waiting.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#16a34a"><span>✓</span> Account connected!</div>';
+    waiting.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#16a34a"><span>✓</span> Synced — account data saved</div>';
+  }}
+  if (state === 'connected' && waiting) {{
+    waiting.style.display = 'none';
   }}
 }}
 
@@ -15497,6 +15384,28 @@ fetch('/credentials/fields/load').then(r => r.json()).then(function(data) {{
     }}
   }});
 }}).catch(function(){{}});
+
+// Auto-open connect flow when redirected from email scan
+(function() {{
+  var key = {_connect_auto_json};
+  if (!key) return;
+  var info = {_site_info_json};
+  var meta = info[key];
+  if (meta) {{
+    setTimeout(function() {{
+      openCredForm(key, meta[0], meta[1], meta[2]);
+      _startExtPoll(key);
+    }}, 300);
+  }} else if (key) {{
+    var fallbackName = key.replace(/_/g, ' ').replace(/\\b\\w/g, function(c) {{ return c.toUpperCase(); }});
+    setTimeout(function() {{
+      openCredForm(key, fallbackName, '🌐', '#e5e7eb');
+      _startExtPoll(key);
+    }}, 300);
+  }} else {{
+    window.location.href = '/email-scan';
+  }}
+}})();
 </script>
 </body>
 </html>"""
@@ -15532,17 +15441,32 @@ def credentials_page():
     synced_at_by_source = {}
     connection_status_by_source = {}
     extraction_status_by_source = {}
+    lifecycle_by_source = {}
+    db = get_db()
+    uid = user["id"]
     for r in sync_rows:
-        acct = load_provider_account(user["id"], dict(r), decrypt_fn=decrypt_account_data)
+        acct = load_provider_account(uid, dict(r), decrypt_fn=decrypt_account_data)
         if acct and acct.is_synced and r["synced_at"]:
             synced_at_by_source[r["source"]] = r["synced_at"]
         if r["connection_status"]:
             connection_status_by_source[r["source"]] = r["connection_status"]
         if r["extraction_status"]:
             extraction_status_by_source[r["source"]] = r["extraction_status"]
+        lifecycle_by_source[r["source"]] = _lifecycle_for_user_source(uid, r["source"], db)
+    pending_added = db.execute(
+        "SELECT site_key, display_name FROM email_suggestions "
+        "WHERE user_id=? AND added=1 AND dismissed=0 ORDER BY email_count DESC",
+        (uid,),
+    ).fetchall()
+    for row in pending_added:
+        sk = row["site_key"]
+        if sk not in lifecycle_by_source:
+            lifecycle_by_source[sk] = _lifecycle_for_user_source(uid, sk, db)
     return _build_credentials_page(
         user, configured, extra_by_source, synced_at_by_source,
         connection_status_by_source, extraction_status_by_source,
+        lifecycle_by_source, pending_added,
+        connect_source=request.args.get("connect", "").strip(),
     )
 
 
@@ -15555,25 +15479,21 @@ def extension_poll(source):
     uid = session["user_id"]
     db  = get_db()
     row = db.execute(
-        "SELECT synced_at, connection_status, data_enc, extraction_status FROM account_data "
+        "SELECT source, synced_at, connection_status, data_enc, extraction_status FROM account_data "
         "WHERE user_id=? AND source=? ORDER BY synced_at DESC LIMIT 1",
         (uid, source)
     ).fetchone()
     if row:
         account = load_provider_account(uid, dict(row), decrypt_fn=decrypt_account_data)
-        if source == AMEX_SOURCE:
-            connected = (
-                row["connection_status"] == AMEX_CONNECTED
-                or (account and account.is_synced)
-            )
-        else:
-            connected = bool(account and account.is_synced)
+        lifecycle = _lifecycle_for_user_source(uid, source, db)
+        captured = lifecycle.state in (LC_CONNECTED, LC_SYNCED)
         return jsonify({
-            "captured": connected,
+            "captured": captured,
             "synced_at": row["synced_at"],
             "connection_status": row["connection_status"],
             "extraction_status": row["extraction_status"],
             "is_synced": account.is_synced if account else False,
+            "lifecycle": lifecycle.to_dict(),
         })
     return jsonify({"captured": False})
 
@@ -15647,29 +15567,37 @@ def credentials_register():
     if not source:
         return jsonify({"ok": False, "error": "source required"}), 400
     db  = get_db()
+    _register_account_source(uid, source, db)
+    return jsonify({"ok": True})
+
+
+def _register_account_source(uid, source, db):
+    """Create credential + stub account_data for extension-first connect."""
     now = iso()
     existing = db.execute(
         "SELECT created_at FROM account_credentials WHERE user_id=? AND source=?",
-        (uid, source)
+        (uid, source),
     ).fetchone()
     if not existing:
         db.execute(
             "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-            (uid, source, "", "", "", now, now)
+            (uid, source, "", "", "", now, now),
         )
-        db.commit()
-    # Create stub account_data row so supplement can fire on first visit
-    site_meta = next(((n,i,c) for k,n,i,c,*_ in SUPPORTED_SITES if k == source), None)
+    site_meta = next(((n, i, c) for k, n, i, c, *_ in SUPPORTED_SITES if k == source), None)
     if not site_meta:
-        site_meta = (source.replace('_',' ').title(), '🔗', '#f3f4f6')
+        site_meta = (source.replace("_", " ").title(), "🔗", "#f3f4f6")
     display, icon, color = site_meta
     stub_enc = encrypt_account_data(uid, {"sync_status": "needs_first_visit", "items": [], "raw_text": ""})
+    _conn_start = connection_status_for_connect_start()
     db.execute(
-        "INSERT OR IGNORE INTO account_data (user_id, source, display_name, icon, color, data_enc, synced_at) VALUES (?,?,?,?,?,?,?)",
-        (uid, source, display, icon, color, stub_enc, iso())
+        "INSERT OR IGNORE INTO account_data (user_id, source, display_name, icon, color, data_enc, synced_at, connection_status) VALUES (?,?,?,?,?,?,?,?)",
+        (uid, source, display, icon, color, stub_enc, "", _conn_start),
+    )
+    db.execute(
+        "UPDATE account_data SET connection_status=? WHERE user_id=? AND source=? AND (connection_status IS NULL OR connection_status='')",
+        (_conn_start, uid, source),
     )
     db.commit()
-    return jsonify({"ok": True})
 
 
 @app.route("/credentials/save", methods=["POST"])
@@ -17979,10 +17907,18 @@ def api_sync_failure():
     _status_for_reason = {"login_required": "login_required", "domain_unreachable": "no_data"}
     payload["sync_status"]         = _status_for_reason.get(reason, "no_data")
     payload["sync_failure_reason"] = reason
+    if reason == "login_required":
+        payload["connection_status"] = AMEX_NEEDS_LOGIN
     now = iso()
+    _sets = "data_enc=?, sync_failure_reason=?, sync_status=?, synced_at=?"
+    _params = [encrypt_account_data(uid, payload), reason, payload["sync_status"], now]
+    if reason == "login_required":
+        _sets += ", connection_status=?"
+        _params.append(AMEX_NEEDS_LOGIN)
+    _params.extend([uid, source])
     db.execute(
-        "UPDATE account_data SET data_enc=?, sync_failure_reason=?, sync_status=?, synced_at=? WHERE user_id=? AND source=?",
-        (encrypt_account_data(uid, payload), reason, payload["sync_status"], now, uid, source)
+        f"UPDATE account_data SET {_sets} WHERE user_id=? AND source=?",
+        _params,
     )
     db.commit()
     print(f"[SyncFailure] uid={uid} source={source} reason={reason}", flush=True)
@@ -18015,10 +17951,11 @@ def api_sync_login_cleared():
         return jsonify({"ok": True, "updated": False, "note": "not login_required"})
     payload["sync_status"] = "ok"
     payload.pop("sync_failure_reason", None)
+    payload["connection_status"] = AMEX_CONNECTED
     now = iso()
     db.execute(
-        "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL, synced_at=? WHERE user_id=? AND source=?",
-        (encrypt_account_data(uid, payload), "ok", now, uid, source)
+        "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL, synced_at=?, connection_status=? WHERE user_id=? AND source=?",
+        (encrypt_account_data(uid, payload), "ok", now, AMEX_CONNECTED, uid, source)
     )
     db.commit()
     print(f"[LoginCleared] uid={uid} source={source} — status reset to ok, synced_at={now}", flush=True)
@@ -18710,6 +18647,12 @@ def sync_status():
 
 @app.errorhandler(403)
 def forbidden(e):
+    if request.path == "/login" and request.method == "POST":
+        err = (
+            '<div class="err">Your session expired (often after a server restart). '
+            "Please sign in again.</div>"
+        )
+        return LOGIN_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token()), 403
     if request.path.startswith("/api/") or request.path.startswith("/credentials/"):
         return jsonify({"ok": False, "error": "Session expired — please refresh the page"}), 403
     return NOT_FOUND_HTML.replace("Page not found", "Forbidden").replace(
@@ -19192,10 +19135,167 @@ from mighty.connection_state import (
     state_label as amex_state_label,
     status_line_label as amex_status_line_label,
 )
+from mighty.account_lifecycle import (
+    AccountLifecycle,
+    ADDED as LC_ADDED,
+    CONNECTED as LC_CONNECTED,
+    NEEDS_LOGIN as LC_NEEDS_LOGIN,
+    SYNCED as LC_SYNCED,
+    WAITING_FOR_EXTENSION as LC_WAITING,
+    connection_status_for_connect_start,
+    lifecycle_status_line,
+    resolve_account_lifecycle,
+)
 
 
 def _amex_conn_ctx():
     return dict(iso_fn=iso, encrypt_fn=encrypt_account_data, decrypt_fn=decrypt_account_data)
+
+
+def _lifecycle_for_user_source(uid: str, source: str, db=None) -> AccountLifecycle:
+    """Load persisted signals and resolve unified lifecycle state."""
+    db = db or get_db()
+    in_cred = bool(db.execute(
+        "SELECT 1 FROM account_credentials WHERE user_id=? AND source=?",
+        (uid, source),
+    ).fetchone())
+    email_row = db.execute(
+        "SELECT added FROM email_suggestions WHERE user_id=? AND site_key=? AND dismissed=0",
+        (uid, source),
+    ).fetchone()
+    from_email = email_row is not None
+    email_added = bool(email_row and email_row["added"])
+    ad_row = db.execute(
+        "SELECT source, synced_at, connection_status, extraction_status, data_enc, sync_status "
+        "FROM account_data WHERE user_id=? AND source=?",
+        (uid, source),
+    ).fetchone()
+    account = load_provider_account(uid, dict(ad_row), decrypt_fn=decrypt_account_data) if ad_row else None
+    return resolve_account_lifecycle(
+        source,
+        in_credentials=in_cred,
+        email_added=email_added,
+        from_email=from_email,
+        account=account,
+    )
+
+
+def _provider_login_url(source: str) -> str:
+    return (
+        SOURCE_CAPABILITIES.get(source, {}).get("login_url")
+        or SITE_ENTRY_URL.get(source, "")
+        or _ACCOUNT_ENTRY_URLS.get(source, "")
+    )
+
+
+def _lifecycle_primary_cta_html(
+    lifecycle: AccountLifecycle,
+    source: str,
+    name: str,
+    *,
+    icon: str = "🔗",
+    color: str = "#f3f4f6",
+    surface: str = "credentials",
+) -> str:
+    """Single primary CTA button for a lifecycle state."""
+    cta = lifecycle.cta_label
+    if not cta:
+        return ""
+    btn_style = (
+        "display:inline-block;padding:5px 12px;border-radius:7px;font-size:12px;"
+        "font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;"
+        "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca"
+    )
+    if lifecycle.state == LC_NEEDS_LOGIN:
+        login_url = _provider_login_url(source)
+        if login_url:
+            return (
+                f'<a href="{he(login_url)}" target="_blank" rel="noopener" '
+                f'style="{btn_style};background:#fef2f2;color:#dc2626;border-color:#fecaca">'
+                f'{he(cta)}</a>'
+            )
+    if lifecycle.state == LC_WAITING:
+        if surface == "dashboard":
+            return (
+                f'<a href="/credentials?connect={he(source)}" '
+                f'style="{btn_style}">{he(cta)}</a>'
+            )
+        return (
+            f'<button type="button" onclick="openCredForm(\'{he(source)}\',\'{he(name)}\','
+            f'\'{icon}\',\'{he(color)}\')" style="{btn_style}">{he(cta)}</button>'
+        )
+    if lifecycle.state == LC_CONNECTED:
+        if surface == "credentials":
+            return (
+                f'<button type="button" onclick="triggerSync(\'{he(source)}\')" '
+                f'style="{btn_style};background:#ecfdf5;color:#059669;border-color:#6ee7b7">'
+                f'{he(cta)}</button>'
+            )
+        return (
+            f'<a href="/credentials?connect={he(source)}" '
+            f'style="{btn_style};background:#ecfdf5;color:#059669;border-color:#6ee7b7">'
+            f'{he(cta)}</a>'
+        )
+    if lifecycle.state == LC_SYNCED:
+        return (
+            f'<button type="button" onclick="openDashFieldModal(\'{he(source)}\',\'{he(name)}\')" '
+            f'style="{btn_style}">{he(cta)}</button>'
+            if surface == "dashboard" else
+            f'<button type="button" class="btn-toggle" onclick="openFieldModal(\'{he(source)}\')" '
+            f'id="btn-fields-{he(source)}">{he(cta)}</button>'
+        )
+    if lifecycle.state == LC_ADDED:
+        if surface == "dashboard":
+            return (
+                f'<a href="/credentials?connect={he(source)}" '
+                f'style="{btn_style}">{he(cta)}</a>'
+            )
+        return (
+            f'<button type="button" onclick="openCredForm(\'{he(source)}\',\'{he(name)}\','
+            f'\'{icon}\',\'{he(color)}\')" style="{btn_style}">{he(cta)}</button>'
+        )
+    if surface == "dashboard":
+        return (
+            f'<a href="/credentials?connect={he(source)}" '
+            f'style="{btn_style}">{he(cta)}</a>'
+        )
+    return (
+        f'<button type="button" onclick="openCredForm(\'{he(source)}\',\'{he(name)}\','
+        f'\'{icon}\',\'{he(color)}\')" style="{btn_style}">{he(cta)}</button>'
+    )
+
+
+def _lifecycle_dashboard_hero(
+    lifecycle: AccountLifecycle,
+    source: str,
+    display_name: str,
+    *,
+    icon: str = "🔗",
+    color: str = "#f3f4f6",
+) -> tuple[str, str]:
+    """Lifecycle hero block for dashboard cards that are not yet synced."""
+    cta = _lifecycle_primary_cta_html(
+        lifecycle, source, display_name, icon=icon, color=color, surface="dashboard",
+    )
+    secondary = ""
+    if lifecycle.secondary_cta_label and lifecycle.state == LC_WAITING:
+        secondary = (
+            f'<a href="/credentials?connect={he(source)}" '
+            f'style="margin-left:8px;padding:5px 10px;background:none;border:1px solid #d1d5db;'
+            f'color:#6b7280;border-radius:6px;font-size:11px;font-weight:500;text-decoration:none;'
+            f'display:inline-block">{he(lifecycle.secondary_cta_label)}</a>'
+        )
+    hero = (
+        f'<div class="acct-divider"></div>'
+        f'<div class="acct-hero">'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;'
+        f'color:{he(lifecycle.color)}">{he(lifecycle.label)}</div>'
+        f'<div style="color:#6b7280;font-size:11px;margin-top:4px;line-height:1.5">'
+        f'{he(lifecycle.description)}</div>'
+        f'<div style="margin-top:8px">{cta}{secondary}</div>'
+        f'</div>'
+    )
+    return hero, lifecycle.color
 
 
 def _provider_card_freshness(
@@ -19203,33 +19303,25 @@ def _provider_card_freshness(
     *,
     active_connection_states: tuple = (),
     connection_line_fn=None,
+    lifecycle: AccountLifecycle | None = None,
 ) -> tuple[str, str, str]:
-    """Card freshness from provider account — Synced only when normalized data exists."""
-    if not account:
-        return ("Awaiting sync", "#9ca3af", "—")
-    if account.is_synced:
-        return _freshness_label(account.synced_at, account.sync_status)
-    if (
-        account.connection_status
-        and account.connection_status in active_connection_states
-        and connection_line_fn
-    ):
-        colors = {
-            "connecting": "#a78bfa",
-            "waiting_for_extension": "#6366f1",
-            "needs_login": "#dc2626",
-            "connected": "#22c55e",
-        }
-        return (
-            connection_line_fn(account.connection_status),
-            colors.get(account.connection_status, "#6b7280"),
-            "",
+    """Card freshness from unified lifecycle — Synced only when normalized data exists."""
+    if lifecycle is None and account:
+        lifecycle = resolve_account_lifecycle(
+            account.source,
+            in_credentials=True,
+            account=account,
         )
-    if account.extraction_status == EXTRACTION_PENDING:
-        return ("Awaiting data", "#6366f1", "")
-    if account.sync_status == "login_required":
-        return ("Sign in required", "#dc2626", "")
-    return ("Awaiting sync", "#9ca3af", "—")
+    if lifecycle:
+        if lifecycle.state == LC_SYNCED and account:
+            return _freshness_label(account.synced_at, account.sync_status)
+        label = lifecycle_status_line(lifecycle)
+        if lifecycle.state == LC_SYNCED and lifecycle.last_sync_at:
+            return (f"Synced {_fmt_sync(lifecycle.last_sync_at)}", lifecycle.color, "✓")
+        return (label, lifecycle.color, "")
+    if not account:
+        return ("Not connected", "#9ca3af", "—")
+    return ("Not connected", "#9ca3af", "—")
 
 
 def _amex_card_freshness(
@@ -19266,9 +19358,9 @@ def _amex_connection_card_html(status: str, display_name: str) -> tuple[str, str
     color = colors.get(status, "#a78bfa")
     subcopy = {
         AMEX_CONNECTING: "Setting up your American Express account…",
-        AMEX_WAITING: "Install the Mighty Chrome extension and sign in with your API key.",
-        AMEX_NEEDS_LOGIN: "Sign in to American Express in your browser so Mighty can verify your session.",
-        AMEX_CONNECTED: "Session verified — normalized account data will appear once extraction completes.",
+        AMEX_WAITING: "Waiting for extension — install Mighty in Chrome and open Amex while logged in.",
+        AMEX_NEEDS_LOGIN: "Needs login — sign in to American Express in Chrome so Mighty can verify your session.",
+        AMEX_CONNECTED: "Connected — session verified. No account data extracted yet.",
     }.get(status, "")
     login_url = SOURCE_CAPABILITIES.get(AMEX_SOURCE, {}).get("login_url", SITE_ENTRY_URL.get(AMEX_SOURCE, ""))
     ext_link = ""
@@ -19326,13 +19418,10 @@ _EMAIL_SCAN_PAGE = r"""<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+{base_css}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',sans-serif;background:#f7f5f2;color:#1a1a1a;min-height:100vh}
-.topbar{background:#fff;border-bottom:1px solid #e8e3dc;padding:0 24px;height:52px;display:flex;align-items:center;gap:12px}
-.topbar a{color:#6b6b6b;text-decoration:none;font-size:13px}
-.topbar a:hover{color:#1a1a1a}
-.topbar .sep{color:#d1c9be}
-.page{max-width:860px;margin:40px auto;padding:0 24px 60px}
+.page{max-width:860px;margin:0 auto;padding:32px 24px 60px}
 h1{font-size:22px;font-weight:700;margin-bottom:6px}
 .sub{color:#6b6b6b;font-size:14px;margin-bottom:32px}
 .provider-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:32px}
@@ -19365,14 +19454,19 @@ input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
 .suggestion-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
 .sugg-card{background:#fff;border:1.5px solid #e8e3dc;border-radius:10px;padding:14px 16px;
   display:flex;align-items:center;gap:12px;transition:border-color .15s}
-.sugg-card.added{opacity:.65;pointer-events:none;border-color:#6ee7b7;background:#f0fdf4}
+.sugg-card.added{border-color:#c7d2fe;background:#f8faff}
+.sugg-state{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6366f1;margin-bottom:2px}
+.sugg-state.discovered{color:#6b7280}
 .sugg-name{flex:1;font-size:13px;font-weight:600}
 .sugg-count{font-size:11px;color:#9ca3af;margin-top:1px}
-.sugg-actions{display:flex;gap:6px;flex-shrink:0}
+.sugg-actions{display:flex;gap:6px;flex-shrink:0;align-items:center}
 .btn-add{background:#ecfdf5;color:#059669;border:1.5px solid #6ee7b7;border-radius:6px;
   padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;
   transition:background .12s}
 .btn-add:hover{background:#d1fae5}
+.btn-connect-sm{background:#eef2ff;color:#4338ca;border:1.5px solid #c7d2fe;border-radius:6px;
+  padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+.btn-connect-sm:hover{background:#e0e7ff}
 .btn-dismiss{background:none;border:none;color:#d1d5db;font-size:16px;cursor:pointer;
   padding:4px;line-height:1;transition:color .12s}
 .btn-dismiss:hover{color:#6b7280}
@@ -19401,12 +19495,11 @@ input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
 </head>
 <body>
 <input type="hidden" id="csrf-token" value="{csrf_token}">
-<div class="topbar">
-  <a href="/dashboard">← Dashboard</a>
-  <span class="sep">·</span>
-  <span style="font-size:13px;font-weight:600">Find accounts from email</span>
-</div>
+<div class="app-shell">
+{_SIDEBAR_DESKTOP_}
+<div class="main-content">
 <div class="page">
+  {oauth_error_banner}
   <h1>Find accounts from your email</h1>
   <p class="sub">Mighty scans only sender addresses — never email content or attachments.</p>
   <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 16px;margin-bottom:20px;font-size:13px;color:#166534;line-height:1.6">
@@ -19466,22 +19559,16 @@ input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
         <div class="results-sub" id="resultsSub"></div>
       </div>
       <div id="addAllBar" style="display:none;align-items:center;gap:10px">
-        <button id="btnAddAll" class="btn-add-all">+ Add All</button>
-        <button id="btnConnect" class="btn-connect" disabled style="opacity:0.45">Connect accounts →</button>
+        <button id="btnAddAll" class="btn-add-all">Add all to Mighty</button>
       </div>
     </div>
     <p class="already-note" id="alreadyNote" style="display:none"></p>
     <div id="resultsBody"></div>
   </div>
 </div>
-
-<div class="connect-overlay" id="amex-connect-overlay">
-  <div class="connect-box">
-    <h2>Connecting American Express</h2>
-    <div class="connect-status" id="amex-connect-status">Connecting…</div>
-    <div class="connect-sub">Mighty is setting up your account. You'll be redirected to the dashboard next.</div>
-  </div>
-</div>
+</div><!-- /main-content -->
+</div><!-- /app-shell -->
+{_SIDEBAR_MOBILE_}
 
 <script>
 var _CSRF = (document.getElementById('csrf-token') || {}).value || '';
@@ -19542,20 +19629,22 @@ function renderResults(suggestions, alreadyCount) {
   sec.style.display = 'block';
   window._allSuggestions = suggestions;
   window._addedSiteKeys = new Set();
+  suggestions.forEach(function(s) {
+    if (s.added) window._addedSiteKeys.add(s.site_key);
+  });
 
   document.getElementById('resultsHeader').textContent =
     suggestions.length > 0 ? 'Found ' + suggestions.length + ' accounts' : 'No new accounts found';
   document.getElementById('resultsSub').textContent =
     suggestions.length > 0
-      ? 'These services sent you email. Click Add to connect them to Mighty.'
-      : 'All accounts we detected are already connected, or no matching emails were found.';
+      ? 'These services emailed you. Add each to Mighty, then connect to verify your provider session.'
+      : 'All detected accounts are already connected, or no matching emails were found.';
 
-  // Add All + Connect bar
+  // Add All bar
   var addAllBar = document.getElementById('addAllBar');
   if (suggestions.length > 0) {
     addAllBar.style.display = 'flex';
     document.getElementById('btnAddAll').onclick = addAll;
-    document.getElementById('btnConnect').onclick = connectAdded;
   }
 
   if (alreadyCount > 0) {
@@ -19582,43 +19671,49 @@ function renderResults(suggestions, alreadyCount) {
     html += '<div class="cat-label">' + (window._catLabels[cat] || cat) + '</div>';
     html += '<div class="suggestion-grid">';
     cats[cat].forEach(function(s){
-      html += '<div class="sugg-card" id="sc-' + s.site_key + '">';
+      var isAdded = s.added || window._addedSiteKeys.has(s.site_key);
+      html += '<div class="sugg-card' + (isAdded ? ' added' : '') + '" id="sc-' + s.site_key + '">';
       html += '<div style="flex:1">';
+      html += '<div class="sugg-state ' + (isAdded ? '' : 'discovered') + '">' + (isAdded ? 'Added' : 'Discovered') + '</div>';
       html += '<div class="sugg-name">' + escHtml(s.display_name) + '</div>';
-      html += '<div class="sugg-count">' + s.email_count + ' email' + (s.email_count !== 1 ? 's' : '') + ' found</div>';
+      html += '<div class="sugg-count">Found from Gmail · ' + s.email_count + ' email' + (s.email_count !== 1 ? 's' : '') + '</div>';
       html += '</div>';
-      html += '<div class="sugg-actions">';
-      html += '<button class="btn-add" id="btn-add-' + s.site_key + '" onclick="addSuggestion(\'' + s.site_key + '\',\'' + escHtml(s.display_name) + '\')">+ Add</button>';
+      html += '<div class="sugg-actions" id="actions-' + s.site_key + '">';
+      if (isAdded) {
+        html += '<button class="btn-connect-sm" onclick="connectOne(\'' + s.site_key + '\')">Connect</button>';
+      } else {
+        html += '<button class="btn-add" id="btn-add-' + s.site_key + '" onclick="addSuggestion(\'' + s.site_key + '\',\'' + escHtml(s.display_name) + '\')">Add to Mighty</button>';
+      }
       html += '<button class="btn-dismiss" onclick="dismissSuggestion(\'' + s.site_key + '\')" title="Dismiss">✕</button>';
       html += '</div></div>';
     });
     html += '</div></div>';
   });
   body.innerHTML = html;
+  suggestions.forEach(function(s) {
+    if (s.added || window._addedSiteKeys.has(s.site_key)) _markAdded(s.site_key, false);
+  });
 }
 
-function _markAdded(siteKey) {
+function _markAdded(siteKey, fromClick) {
   window._addedSiteKeys.add(siteKey);
   var card = document.getElementById('sc-' + siteKey);
-  var btn  = document.getElementById('btn-add-' + siteKey);
   if (card) card.classList.add('added');
-  if (btn)  { btn.textContent = '✓ Added'; btn.disabled = true; }
-  updateConnectBar();
+  var actions = document.getElementById('actions-' + siteKey);
+  if (actions && fromClick !== false) {
+    var nameEl = card ? card.querySelector('.sugg-name') : null;
+    var dname = nameEl ? nameEl.textContent : siteKey;
+    actions.innerHTML = '<button class="btn-connect-sm" onclick="connectOne(\'' + siteKey + '\')">Connect</button>'
+      + '<button class="btn-dismiss" onclick="dismissSuggestion(\'' + siteKey + '\')" title="Dismiss">✕</button>';
+    var stateEl = card ? card.querySelector('.sugg-state') : null;
+    if (stateEl) { stateEl.textContent = 'Added'; stateEl.classList.remove('discovered'); }
+  }
 }
 
-function updateConnectBar() {
-  var n = window._addedSiteKeys ? window._addedSiteKeys.size : 0;
-  var connectBtn = document.getElementById('btnConnect');
-  if (!connectBtn) return;
-  if (n > 0) {
-    connectBtn.textContent = 'Connect ' + n + ' account' + (n !== 1 ? 's' : '') + ' →';
-    connectBtn.disabled = false;
-    connectBtn.style.opacity = '1';
-  } else {
-    connectBtn.textContent = 'Connect accounts →';
-    connectBtn.disabled = true;
-    connectBtn.style.opacity = '0.45';
-  }
+function connectOne(siteKey) {
+  window._addedSiteKeys = window._addedSiteKeys || new Set();
+  window._addedSiteKeys.add(siteKey);
+  connectAdded();
 }
 
 function addAll() {
@@ -19636,38 +19731,15 @@ function addAll() {
   btn.disabled = true;
   btn.textContent = 'Adding…';
   Promise.all(fetches).then(function(){
-    btn.textContent = '✓ All added';
-    updateConnectBar();
+    btn.textContent = '✓ All added to Mighty';
   });
 }
 
 function connectAdded() {
   var keys = Array.from(window._addedSiteKeys || []);
-  if (keys.indexOf('amex') >= 0) {
-    var overlay = document.getElementById('amex-connect-overlay');
-    var statusEl = document.getElementById('amex-connect-status');
-    if (overlay) overlay.classList.add('visible');
-    function setStatus(text) { if (statusEl) statusEl.textContent = text; }
-    setStatus('Connecting…');
-    fetch('/api/connect/amex', {method:'POST', headers: _jsonHeaders()})
-      .then(function(r){ return r.json(); })
-      .then(function(d) {
-        if (!d.ok) { alert(d.error || 'Connect failed'); if (overlay) overlay.classList.remove('visible'); return; }
-        setTimeout(function() {
-          setStatus('Waiting for Browser Extension');
-          fetch('/api/connect/amex/waiting', {method:'POST', headers: _jsonHeaders()})
-            .then(function(r2){ return r2.json(); })
-            .then(function(d2) {
-              if (!d2.ok) { alert(d2.error || 'Could not advance'); if (overlay) overlay.classList.remove('visible'); return; }
-              window.location.href = '/dashboard?connect=amex';
-            })
-            .catch(function(e){ alert('Connection error: ' + e.message); if (overlay) overlay.classList.remove('visible'); });
-        }, 900);
-      })
-      .catch(function(e){ alert('Connection error: ' + e.message); if (overlay) overlay.classList.remove('visible'); });
-    return;
-  }
-  window.location.href = '/dashboard';
+  if (keys.length === 0) return;
+  var siteKey = keys[keys.length - 1];
+  window.location.href = '/credentials?connect=' + encodeURIComponent(siteKey);
 }
 
 window._catLabels = {already_cat_labels_json};
@@ -19678,7 +19750,7 @@ function addSuggestion(siteKey, displayName) {
   fetch('/api/email/suggestions/add', {
     method:'POST', headers: _jsonHeaders(),
     body: JSON.stringify({site_key: siteKey})
-  }).then(function(){ _markAdded(siteKey); });
+  }).then(function(){ _markAdded(siteKey, true); });
 }
 
 function dismissSuggestion(siteKey) {
@@ -19706,10 +19778,15 @@ if ({gmail_not_configured}) {
 </html>"""
 
 
-def _render_email_scan_page(suggestions=None, already_count=0, provider_triggered=None):
+def _render_email_scan_page(suggestions=None, already_count=0, provider_triggered=None, oauth_error=None):
     """Render the /email-scan page, optionally with pre-populated scan results."""
     db  = get_db()
     uid = session["user_id"]
+    user = db.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+    csrf = get_csrf_token()
+    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
+        "email-scan", user["email"] if user else "", csrf,
+    )
 
     # Already-connected site keys
     acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
@@ -19746,7 +19823,29 @@ def _render_email_scan_page(suggestions=None, already_count=0, provider_triggere
     )
 
     import json as _json
+    if suggestions:
+        keys = [s["site_key"] for s in suggestions]
+        placeholders = ",".join("?" * len(keys))
+        added_rows = db.execute(
+            f"SELECT site_key, added FROM email_suggestions WHERE user_id=? AND site_key IN ({placeholders})",
+            [uid, *keys],
+        ).fetchall()
+        added_map = {r["site_key"]: bool(r["added"]) for r in added_rows}
+        for s in suggestions:
+            s["added"] = added_map.get(s["site_key"], False)
+
     page = _EMAIL_SCAN_PAGE
+    oauth_error_banner = ""
+    if oauth_error:
+        oauth_error_banner = (
+            '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;'
+            'padding:12px 16px;margin-bottom:20px;font-size:13px;color:#991b1b;line-height:1.5">'
+            '<strong>Could not connect your email.</strong> Please try again or use IMAP below.</div>'
+        )
+    page = page.replace("{oauth_error_banner}", oauth_error_banner)
+    page = page.replace("{base_css}", BASE_CSS)
+    page = page.replace("{_SIDEBAR_DESKTOP_}", _sidebar_desktop)
+    page = page.replace("{_SIDEBAR_MOBILE_}", _sidebar_mobile)
     page = page.replace("{gmail_card}", gmail_card)
     page = page.replace("{outlook_card}", outlook_card)
     page = page.replace("{already_connected_json}", _json.dumps(list(connected)))
@@ -19778,7 +19877,8 @@ def _store_suggestions(uid: str, suggestions: list, db):
 @app.route("/email-scan")
 @require_login
 def email_scan_page():
-    return _render_email_scan_page()
+    oauth_error = request.args.get("error")
+    return _render_email_scan_page(oauth_error=oauth_error)
 
 
 @app.route("/email/gmail/auth")
@@ -19808,7 +19908,7 @@ def email_gmail_callback():
     import urllib.parse
     error = request.args.get("error")
     if error:
-        return redirect("/email-scan")
+        return redirect("/email-scan?error=oauth")
 
     code  = request.args.get("code", "")
     state = request.args.get("state", "")
@@ -19882,6 +19982,15 @@ def email_gmail_callback():
     visible = [s for s in suggestions if s["site_key"] not in connected]
     _store_suggestions(uid, visible, db)
 
+    if any(s["site_key"] == "amex" for s in visible):
+        db.execute(
+            "UPDATE email_suggestions SET added=1 WHERE user_id=? AND site_key='amex'",
+            (uid,),
+        )
+        db.commit()
+        _register_account_source(uid, "amex", db)
+        return redirect("/credentials?connect=amex")
+
     return _render_email_scan_page(suggestions=visible, already_count=already_count)
 
 
@@ -19910,7 +20019,7 @@ def email_outlook_callback():
     import urllib.parse
     error = request.args.get("error")
     if error:
-        return redirect("/email-scan")
+        return redirect("/email-scan?error=oauth")
 
     code  = request.args.get("code", "")
     state = request.args.get("state", "")
