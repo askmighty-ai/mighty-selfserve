@@ -463,3 +463,165 @@ IMAP_PRESETS = {
 
 def get_imap_preset(provider: str) -> dict:
     return IMAP_PRESETS.get(provider, IMAP_PRESETS["custom"])
+
+
+# ── Recent subject lines (Email Advisor input) ────────────────────────────────
+
+def _parse_imap_subject(raw: bytes) -> str:
+    """Extract and decode a Subject header from an IMAP BODY.HEADER.FIELDS response."""
+    from email.header import decode_header
+
+    text = raw.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        if line.lower().startswith("subject:"):
+            subject_raw = line.split(":", 1)[1].strip()
+            parts = decode_header(subject_raw)
+            decoded: list[str] = []
+            for part, charset in parts:
+                if isinstance(part, bytes):
+                    decoded.append(part.decode(charset or "utf-8", errors="replace"))
+                else:
+                    decoded.append(part)
+            return " ".join(decoded).strip()
+    return ""
+
+
+def fetch_recent_subjects_gmail(access_token: str, max_results: int = 30) -> list[str]:
+    """Return recent INBOX subject lines via the Gmail API (metadata only — no body)."""
+    import requests as _req
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        resp = _req.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            headers=headers,
+            params={"maxResults": max_results, "labelIds": "INBOX"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return []
+        msg_ids = [m["id"] for m in resp.json().get("messages", [])]
+    except Exception:
+        return []
+
+    subjects: list[str] = []
+    for msg_id in msg_ids:
+        try:
+            resp = _req.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}",
+                headers=headers,
+                params={"format": "metadata", "metadataHeaders": "Subject"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
+            for hdr in resp.json().get("payload", {}).get("headers", []):
+                if hdr.get("name", "").lower() == "subject":
+                    subj = hdr.get("value", "").strip()
+                    if subj:
+                        subjects.append(subj)
+                    break
+        except Exception:
+            continue
+    return subjects
+
+
+def fetch_recent_subjects_outlook(access_token: str, max_results: int = 30) -> list[str]:
+    """Return recent subject lines via Microsoft Graph (subject field only)."""
+    import requests as _req
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        resp = _req.get(
+            "https://graph.microsoft.com/v1.0/me/messages",
+            headers=headers,
+            params={
+                "$select": "subject",
+                "$top": max_results,
+                "$orderby": "receivedDateTime desc",
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return []
+        return [
+            m["subject"].strip()
+            for m in resp.json().get("value", [])
+            if m.get("subject", "").strip()
+        ]
+    except Exception:
+        return []
+
+
+def fetch_recent_subjects_imap(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    max_results: int = 30,
+    use_ssl: bool = True,
+) -> list[str]:
+    """Return recent INBOX subject lines via IMAP (header fields only — no body)."""
+    import imaplib
+
+    subjects: list[str] = []
+    if use_ssl:
+        imap = imaplib.IMAP4_SSL(host, port)
+    else:
+        imap = imaplib.IMAP4(host, port)
+
+    try:
+        imap.login(username, password)
+        imap.select("INBOX", readonly=True)
+        status, data = imap.search(None, "ALL")
+        if status != "OK" or not data or not data[0]:
+            imap.logout()
+            return []
+        ids = data[0].split()[-max_results:]
+        for msg_id in reversed(ids):
+            try:
+                status, msg_data = imap.fetch(msg_id, "(BODY.HEADER.FIELDS (SUBJECT))")
+                if status == "OK" and msg_data and msg_data[0]:
+                    raw = msg_data[0][1] if isinstance(msg_data[0], tuple) else msg_data[0]
+                    if isinstance(raw, bytes):
+                        subj = _parse_imap_subject(raw)
+                        if subj:
+                            subjects.append(subj)
+            except Exception:
+                continue
+        imap.logout()
+    except Exception:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+        return []
+    return subjects
+
+
+def fetch_recent_subjects(
+    provider: str,
+    access_token: str | None = None,
+    *,
+    imap_host: str | None = None,
+    imap_port: int = 993,
+    imap_username: str | None = None,
+    imap_password: str | None = None,
+    use_ssl: bool = True,
+    max_results: int = 30,
+) -> list[str]:
+    """Return recent email subject lines for the given provider."""
+    if provider == "gmail" and access_token:
+        return fetch_recent_subjects_gmail(access_token, max_results=max_results)
+    if provider == "outlook" and access_token:
+        return fetch_recent_subjects_outlook(access_token, max_results=max_results)
+    if imap_host and imap_username and imap_password:
+        return fetch_recent_subjects_imap(
+            imap_host,
+            imap_port,
+            imap_username,
+            imap_password,
+            max_results=max_results,
+            use_ssl=use_ssl,
+        )
+    return []
