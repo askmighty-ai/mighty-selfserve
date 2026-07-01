@@ -4307,7 +4307,7 @@ except ImportError:
     BENEFIT_TYPES = ["elite_status","certificate","travel_credit","cash_credit",
                      "points_balance","progress_toward","membership","reservation",
                      "payment_due","renewal","partner_benefit","expiry_date","other"]
-    def is_actionable(btype): return btype in {"certificate","travel_credit","cash_credit"}
+    def is_actionable(btype): return btype in {"certificate","travel_credit","cash_credit","points_balance"}
     def is_balance(btype):    return btype == "points_balance"
     def is_status(btype):     return btype == "elite_status"
     def is_needs_attention(btype): return btype in {"payment_due","renewal"}
@@ -9017,8 +9017,13 @@ def dashboard():
                 hero_item = items[0]
                 secondary_items = [i for i in items if i is not hero_item]
 
-            # Build card hero section
-            if src == AMEX_SOURCE and _connection_status in AMEX_CONNECTION_STATES:
+            # Build card hero section — show extracted data once synced (any adapter)
+            _amex_show_conn_card = (
+                src == AMEX_SOURCE
+                and _connection_status in AMEX_CONNECTION_STATES
+                and not _provider_acct.is_synced
+            )
+            if _amex_show_conn_card:
                 card_hero_html, status_color = _amex_connection_card_html(_connection_status, display_name)
             elif hero_item:
                 card_hero_html = (
@@ -19172,6 +19177,7 @@ from mighty.provider_account import (
     load_provider_account,
 )
 from mighty.adapters import extension as extension_adapter
+from mighty.adapters.amex_extraction import apply_amex_membership_rewards_extraction
 from mighty.connection_state import (
     AMEX_SOURCE,
     AMEX_CONNECTION_STATES,
@@ -20165,6 +20171,36 @@ def api_extension_amex_connected():
         "connection_status": status,
         "extraction_status": info.get("extraction_status"),
         "label": amex_state_label(status),
+    })
+
+
+@app.route("/api/extension/amex/extract", methods=["POST"])
+def api_extension_amex_extract():
+    """Extension adapter: store Membership Rewards points as normalized provider data."""
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    if not body.get("session_verified"):
+        return jsonify({"ok": False, "error": "session_verified required"}), 400
+    raw_value = (body.get("value") or "").strip()
+    if not raw_value:
+        return jsonify({"ok": False, "error": "value required"}), 400
+
+    uid = user["id"]
+    db  = get_db()
+    try:
+        result = apply_amex_membership_rewards_extraction(
+            db, uid, raw_value, **_amex_conn_ctx(),
+        )
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    return jsonify({
+        "ok": True,
+        "adapter": extension_adapter.ADAPTER_ID,
+        **result,
     })
 
 

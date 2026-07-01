@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-28-v56'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '2026-06-30-amex-mr'; // bump on each deploy to confirm reload
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -906,6 +906,15 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     });
     return true; // keep channel open for async
   }
+  if (msg.type === 'AMEX_MR_EXTRACTED') {
+    (async () => {
+      const { api_key } = await chrome.storage.local.get('api_key');
+      if (!api_key || !msg.value) return;
+      console.log('[Mighty Amex] content script reported MR balance:', msg.value, msg.url || '');
+      await _pushAmexExtraction(api_key, msg.value, 'content-script');
+    })();
+    return false;
+  }
   if (msg.action === 'sync_now') {
     // Respond immediately so the message channel doesn't time out during a long sync
     sendResponse({ ok: true });
@@ -1578,6 +1587,103 @@ const _AMEX_SESSION_SIGNALS = [
 ];
 
 const _amexConnReportedAt = {};
+const _amexExtractReportedAt = {};
+
+async function _pushAmexExtraction(apiKey, value, source = 'extension') {
+  if (!apiKey || !value) return false;
+  const cacheKey = String(value).replace(/\D/g, '');
+  const now = Date.now();
+  if (_amexExtractReportedAt[cacheKey] && now - _amexExtractReportedAt[cacheKey] < 300_000) {
+    console.log('[Mighty Amex] extract unchanged — skip post', value);
+    return true;
+  }
+  console.log('[Mighty Amex] posting Membership Rewards →', value, `(${source})`);
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/extract`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body: JSON.stringify({
+        session_verified: true,
+        value,
+        adapter: _EXTENSION_ADAPTER,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) {
+      _amexExtractReportedAt[cacheKey] = now;
+      console.log('[Mighty Amex] extract stored on server:', data);
+      chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+      return true;
+    }
+    console.warn('[Mighty Amex] extract POST failed', resp.status, data);
+  } catch (e) {
+    console.warn('[Mighty Amex] extract POST error:', e.message);
+  }
+  return false;
+}
+
+async function extractAmexRewardsInTab(tabId, apiKey) {
+  console.log('[Mighty Amex] running DOM extraction in tab', tabId);
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: extractAmexMembershipRewardsPage,
+    });
+    const result = r?.result;
+    console.log('[Mighty Amex] tab extract result:', result);
+    if (result?.loggedIn && result?.value) {
+      return _pushAmexExtraction(apiKey, result.value, 'tab');
+    }
+    if (result && result.loggedIn === false) {
+      console.log('[Mighty Amex] tab not logged in during extraction');
+      await _postAmexNeedsLogin(apiKey);
+    } else if (result?.loggedIn) {
+      console.log('[Mighty Amex] logged in but Membership Rewards balance not found in DOM');
+    }
+  } catch (e) {
+    console.warn('[Mighty Amex] tab extraction failed:', e.message);
+  }
+  return false;
+}
+
+async function runAmexExtraction(apiKey, accounts) {
+  if (!apiKey) return;
+  const amex = accounts?.find(a => a.source === 'amex');
+  if (!amex) {
+    console.log('[Mighty Amex] no amex account configured — skip extraction');
+    return;
+  }
+  if (amex.is_synced) {
+    console.log('[Mighty Amex] already synced — skip extraction');
+    return;
+  }
+  const conn = amex.connection_status || '';
+  if (!['connected', 'waiting_for_extension', 'needs_login'].includes(conn)) {
+    console.log('[Mighty Amex] connection state not ready for extraction:', conn);
+    return;
+  }
+
+  const openTabs = await chrome.tabs.query({ url: '*://*.americanexpress.com/*' });
+  for (const tab of openTabs) {
+    if (!tab.id || !tab.url || /\/account\/log-?in/i.test(tab.url)) continue;
+    console.log('[Mighty Amex] trying open tab', tab.url);
+    const ok = await extractAmexRewardsInTab(tab.id, apiKey);
+    if (ok) return;
+  }
+
+  console.log('[Mighty Amex] opening background account tab for extraction');
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: ACCOUNT_ENTRY.amex, active: false });
+    await waitForTabLoad(tab.id, 25_000);
+    await sleep(6000);
+    await extractAmexRewardsInTab(tab.id, apiKey);
+  } catch (e) {
+    console.warn('[Mighty Amex] background tab extraction failed:', e.message);
+  } finally {
+    if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
 
 async function _fetchExtensionAccounts(apiKey) {
   try {
@@ -1669,6 +1775,7 @@ async function probeAmexConnectionState(apiKey, accounts) {
 
   if (status === 'connected') {
     if (!loggedIn) await _postAmexNeedsLogin(apiKey);
+    else if (!amex.is_synced) await runAmexExtraction(apiKey, accounts);
     return;
   }
 
@@ -1676,6 +1783,8 @@ async function probeAmexConnectionState(apiKey, accounts) {
 
   if (loggedIn) {
     await _postAmexConnected(apiKey);
+    const refreshed = await _fetchExtensionAccounts(apiKey);
+    await runAmexExtraction(apiKey, refreshed);
   } else if (status === 'waiting_for_extension') {
     await _postAmexNeedsLogin(apiKey);
   }
@@ -1757,8 +1866,12 @@ async function runSync() {
   }
 
   await probeAmexConnectionState(api_key, accounts);
-  // Refresh accounts after connection probe may have changed Amex state
   accounts = await _fetchExtensionAccounts(api_key);
+  const amexAfterProbe = accounts.find(a => a.source === 'amex');
+  if (amexAfterProbe && !amexAfterProbe.is_synced) {
+    await runAmexExtraction(api_key, accounts);
+    accounts = await _fetchExtensionAccounts(api_key);
+  }
 
   // Also load captured (custom) accounts from local storage
   const { captured_accounts = {} } = await chrome.storage.local.get('captured_accounts');
@@ -1778,7 +1891,10 @@ async function runSync() {
   // TAB_SYNC_SOURCES (xfinity etc.) are excluded: they rely on the supplement watcher
   // which needs a real tab in the user's main window.
   const crawlAccounts = accounts.filter(a => {
-    if (a.source === 'amex' && _AMEX_ACTIVE_CONNECTION.has(a.connection_status)) return false;
+    if (a.source === 'amex') {
+      if (_AMEX_ACTIVE_CONNECTION.has(a.connection_status)) return false;
+      if (!a.is_synced) return false;
+    }
     return (ACCOUNT_ENTRY[a.source] || a.entry_url) && !TAB_SYNC_SOURCES.has(a.source);
   });
   const tabAccounts   = accounts.filter(a => ACCOUNT_ENTRY[a.source] &&  TAB_SYNC_SOURCES.has(a.source));
@@ -3480,6 +3596,91 @@ function dismissSessionTimeouts() {
   }
 
   return false;
+}
+
+// Runs inside Amex account pages — extract Membership Rewards points balance
+function extractAmexMembershipRewardsPage() {
+  const LOG = '[Mighty Amex Page]';
+  function formatPoints(numStr) {
+    const n = parseInt(String(numStr).replace(/[^\d]/g, ''), 10);
+    if (!n || n <= 0) return null;
+    return n.toLocaleString('en-US');
+  }
+  function pickBestNumber(text) {
+    if (!text) return null;
+    const matches = String(text).match(/\b[\d]{1,3}(?:,\d{3})+\b|\b[\d]{4,}\b/g);
+    if (!matches) return null;
+    let best = null;
+    let bestN = 0;
+    for (const m of matches) {
+      const n = parseInt(m.replace(/,/g, ''), 10);
+      if (n > bestN && n < 100000000) { bestN = n; best = m; }
+    }
+    return best;
+  }
+  function findInRoot(root) {
+    if (!root) return null;
+    return pickBestNumber(root.innerText || root.textContent || '');
+  }
+  const path = location.pathname.toLowerCase();
+  if (/\/account\/log-?in/.test(path)) {
+    console.log(LOG, 'login page');
+    return { loggedIn: false, value: null };
+  }
+  const sample = (document.body?.innerText || '').slice(0, 2500).toLowerCase();
+  const loginHits = ['sign in to your account', 'user id', 'show password', 'forgot password']
+    .filter(s => sample.includes(s)).length;
+  if (loginHits >= 2 && !sample.includes('membership rewards')) {
+    console.log(LOG, 'login form detected');
+    return { loggedIn: false, value: null };
+  }
+  const sels = [
+    '[data-testid*="membership-rewards" i]',
+    '[data-testid*="rewards-balance" i]',
+    '[data-automation-id*="rewards" i]',
+    '[class*="membership-rewards" i]',
+    '[class*="rewards-balance" i]',
+    'a[href*="/rewards"]',
+  ];
+  for (const sel of sels) {
+    try {
+      for (const node of document.querySelectorAll(sel)) {
+        const num = findInRoot(node);
+        const formatted = formatPoints(num);
+        if (formatted) {
+          console.log(LOG, 'selector', sel, formatted);
+          return { loggedIn: true, value: formatted };
+        }
+      }
+    } catch (_) {}
+  }
+  for (const node of document.querySelectorAll('h1,h2,h3,h4,span,div,p,a,button')) {
+    const t = (node.textContent || '').trim();
+    if (!/membership rewards/i.test(t)) continue;
+    let scope = node.closest('section,article,li,div') || node.parentElement;
+    for (let d = 0; d < 4 && scope; d++) {
+      const formatted = formatPoints(findInRoot(scope));
+      if (formatted) {
+        console.log(LOG, 'heading walk', formatted);
+        return { loggedIn: true, value: formatted };
+      }
+      scope = scope.parentElement;
+    }
+  }
+  const body = document.body?.innerText || '';
+  const m = body.match(/Membership Rewards[^0-9\n]{0,120}([\d][\d,]*)/i);
+  if (m) {
+    const formatted = formatPoints(m[1]);
+    if (formatted) {
+      console.log(LOG, 'regex', formatted);
+      return { loggedIn: true, value: formatted };
+    }
+  }
+  const loggedIn = sample.includes('membership rewards')
+    || sample.includes('account home')
+    || sample.includes('recent activity');
+  console.log(LOG, loggedIn ? 'balance not found' : 'not logged in');
+  return { loggedIn, value: null };
 }
 
 // Runs inside the page context — extracts visible body text
