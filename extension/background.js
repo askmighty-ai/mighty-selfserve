@@ -1891,10 +1891,7 @@ async function runSync() {
   // TAB_SYNC_SOURCES (xfinity etc.) are excluded: they rely on the supplement watcher
   // which needs a real tab in the user's main window.
   const crawlAccounts = accounts.filter(a => {
-    if (a.source === 'amex') {
-      if (_AMEX_ACTIVE_CONNECTION.has(a.connection_status)) return false;
-      if (!a.is_synced) return false;
-    }
+    if (a.source === 'amex') return false;
     return (ACCOUNT_ENTRY[a.source] || a.entry_url) && !TAB_SYNC_SOURCES.has(a.source);
   });
   const tabAccounts   = accounts.filter(a => ACCOUNT_ENTRY[a.source] &&  TAB_SYNC_SOURCES.has(a.source));
