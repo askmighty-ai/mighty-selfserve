@@ -1560,7 +1560,8 @@ async function syncSingleAccount(source, apiKey) {
   }
 }
 
-// ── Amex connection state (session-gated, no extraction) ─────────────────────
+// ── Extension adapter: provider connection probes (not the account model) ─────
+const _EXTENSION_ADAPTER = 'extension';
 const _AMEX_ACTIVE_CONNECTION = new Set([
   'connecting', 'waiting_for_extension', 'needs_login',
 ]);
@@ -1644,7 +1645,7 @@ async function _postAmexConnected(apiKey) {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/connected`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
-      body: JSON.stringify({ session_verified: true }),
+      body: JSON.stringify({ session_verified: true, adapter: _EXTENSION_ADAPTER }),
     });
     if (resp.ok) {
       console.log('[Mighty] Amex connection state → connected (session verified)');
@@ -1657,7 +1658,7 @@ async function _postAmexConnected(apiKey) {
   }
 }
 
-/** Update Amex connection state from extension based on a real session probe. */
+/** Update provider connection state via the extension adapter (session probe). */
 async function probeAmexConnectionState(apiKey, accounts) {
   if (!apiKey || !Array.isArray(accounts)) return;
   const amex = accounts.find(a => a.source === 'amex');

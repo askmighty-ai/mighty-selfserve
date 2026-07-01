@@ -160,6 +160,8 @@ def test_http_connect_flow(client):
     body = r.get_json()
     assert body["connection_status"] == CONNECTED
     assert body["show_synced"] is False
+    assert body["is_synced"] is False
+    assert body["extraction_status"] == "pending"
 
 
 def test_connected_endpoint_rejects_missing_session_verified(client):

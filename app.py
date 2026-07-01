@@ -402,6 +402,10 @@ def init_db():
         except Exception:
             pass
         try:
+            db.execute("ALTER TABLE account_data ADD COLUMN extraction_status TEXT")
+        except Exception:
+            pass
+        try:
             db.execute("ALTER TABLE account_credentials ADD COLUMN review_required_fields TEXT DEFAULT '[]'")
         except Exception:
             pass
@@ -9308,12 +9312,28 @@ def dashboard():
             sync_label = f'Synced {_fmt_sync(synced_at)}' if synced_at else 'Not yet synced'
             stale_cls = " is-stale" if not synced_at else ""
             expiring_cls = " is-expiring" if alert_item else ""
-            if src == AMEX_SOURCE:
-                _flabel, _fcolor, _ficon = _amex_card_freshness(
-                    _connection_status, items, synced_at, sync_status,
-                )
-            else:
-                _flabel, _fcolor, _ficon = _freshness_label(synced_at, sync_status)
+            _extraction_st = (row.get("extraction_status") or "") if row else ""
+            _provider_acct = ProviderAccount(
+                source=src,
+                connection_status=_connection_status or None,
+                extraction_status=infer_extraction_status(
+                    items,
+                    explicit=_extraction_st or None,
+                    sync_status=sync_status,
+                ),
+                normalized_fields=items,
+                data_source=(data.get("data_source") or data.get("sync_source")) if row else None,
+                synced_at=synced_at or None,
+                sync_status=sync_status,
+            )
+            _active_conn = AMEX_CONNECTION_STATES if src == AMEX_SOURCE else ()
+            _conn_line_fn = amex_status_line_label if src == AMEX_SOURCE else None
+            _flabel, _fcolor, _ficon = _provider_card_freshness(
+                _provider_acct,
+                active_connection_states=_active_conn,
+                connection_line_fn=_conn_line_fn,
+            )
+            stale_cls = " is-stale" if not _provider_acct.is_synced else stale_cls
             _fw = "700" if _fcolor == "#dc2626" else "500"
             _fprefix = f"{_ficon} " if _ficon else ""
             # Promote dot to red when data is stale, even if sync_status="ok".
@@ -9322,14 +9342,12 @@ def dashboard():
             synced_title = (
                 f"Synced {_fmt_sync(synced_at)}" if synced_at else "Not yet synced"
             )
-            # Always show when last synced; use color/icon only when there's a problem
-            _amex_hide_synced = (
-                src == AMEX_SOURCE and not amex_show_as_synced(items)
-            )
+            # Synced label only when normalized provider data exists (any adapter).
+            _hide_synced_label = not _provider_acct.is_synced
             _is_sync_problem = (
-                _fcolor in ("#f59e0b", "#dc2626") or not synced_at or _amex_hide_synced
+                _fcolor in ("#f59e0b", "#dc2626") or not synced_at or _hide_synced_label
             )
-            if _is_sync_problem or _amex_hide_synced:
+            if _is_sync_problem or _hide_synced_label:
                 freshness_html = f'<span style="font-size:11px;color:{_fcolor};font-weight:{_fw}">{_fprefix}{_flabel}</span>'
             elif synced_at:
                 _ago = _fmt_sync(synced_at)
@@ -14662,11 +14680,13 @@ def _build_credentials_page(
     extra_by_source: dict = None,
     synced_at_by_source: dict = None,
     connection_status_by_source: dict = None,
+    extraction_status_by_source: dict = None,
 ) -> str:
     """Generate the credentials management page HTML."""
     extra_by_source = extra_by_source or {}
     synced_at_by_source = synced_at_by_source or {}
     connection_status_by_source = connection_status_by_source or {}
+    extraction_status_by_source = extraction_status_by_source or {}
     csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
     _cred_styles = BASE_CSS + _CREDENTIALS_PAGE_CSS
@@ -14682,7 +14702,8 @@ def _build_credentials_page(
         )
         _cred_synced = synced_at_by_source.get(key, "")
         _cred_conn = connection_status_by_source.get(key, "")
-        if key == AMEX_SOURCE and _cred_conn in AMEX_CONNECTION_STATES:
+        _cred_extract = extraction_status_by_source.get(key, "")
+        if key == AMEX_SOURCE and _cred_conn in AMEX_CONNECTION_STATES and not _cred_synced:
             _cred_colors = {
                 AMEX_CONNECTING: "#a78bfa",
                 AMEX_WAITING: "#6366f1",
@@ -14693,6 +14714,10 @@ def _build_credentials_page(
             _cred_sync_label = (
                 f'<div style="font-size:11px;color:{_cred_color};margin-top:2px">'
                 f'{he(amex_status_line_label(_cred_conn))}</div>'
+            )
+        elif _cred_extract == EXTRACTION_PENDING and not _cred_synced:
+            _cred_sync_label = (
+                '<div style="font-size:11px;color:#6366f1;margin-top:2px">Awaiting data</div>'
             )
         elif _cred_synced:
             _cred_sync_label = (
@@ -15495,15 +15520,24 @@ def credentials_page():
                 pass
     # Load sync timestamps from account_data
     sync_rows = get_db().execute(
-        "SELECT source, synced_at, connection_status FROM account_data WHERE user_id=?",
+        "SELECT source, synced_at, connection_status, extraction_status, data_enc "
+        "FROM account_data WHERE user_id=?",
         (user["id"],),
     ).fetchall()
-    synced_at_by_source = {r["source"]: r["synced_at"] for r in sync_rows if r["synced_at"]}
-    connection_status_by_source = {
-        r["source"]: r["connection_status"] for r in sync_rows if r["connection_status"]
-    }
+    synced_at_by_source = {}
+    connection_status_by_source = {}
+    extraction_status_by_source = {}
+    for r in sync_rows:
+        acct = load_provider_account(user["id"], dict(r), decrypt_fn=decrypt_account_data)
+        if acct and acct.is_synced and r["synced_at"]:
+            synced_at_by_source[r["source"]] = r["synced_at"]
+        if r["connection_status"]:
+            connection_status_by_source[r["source"]] = r["connection_status"]
+        if r["extraction_status"]:
+            extraction_status_by_source[r["source"]] = r["extraction_status"]
     return _build_credentials_page(
-        user, configured, extra_by_source, synced_at_by_source, connection_status_by_source,
+        user, configured, extra_by_source, synced_at_by_source,
+        connection_status_by_source, extraction_status_by_source,
     )
 
 
@@ -15516,19 +15550,25 @@ def extension_poll(source):
     uid = session["user_id"]
     db  = get_db()
     row = db.execute(
-        "SELECT synced_at, connection_status FROM account_data "
+        "SELECT synced_at, connection_status, data_enc, extraction_status FROM account_data "
         "WHERE user_id=? AND source=? ORDER BY synced_at DESC LIMIT 1",
         (uid, source)
     ).fetchone()
     if row:
+        account = load_provider_account(uid, dict(row), decrypt_fn=decrypt_account_data)
         if source == AMEX_SOURCE:
-            connected = row["connection_status"] == AMEX_CONNECTED
+            connected = (
+                row["connection_status"] == AMEX_CONNECTED
+                or (account and account.is_synced)
+            )
         else:
-            connected = bool(row["synced_at"])
+            connected = bool(account and account.is_synced)
         return jsonify({
             "captured": connected,
             "synced_at": row["synced_at"],
             "connection_status": row["connection_status"],
+            "extraction_status": row["extraction_status"],
+            "is_synced": account.is_synced if account else False,
         })
     return jsonify({"captured": False})
 
@@ -16299,14 +16339,18 @@ def api_data_sync():
             data.pop("sync_failure_reason", None)
 
     data["sync_source"] = sync_source
+    data["data_source"] = sync_source
+    _normalized = data.get("items") or []
+    _extraction = infer_extraction_status(_normalized, sync_status=data.get("sync_status", "ok"))
+    data["extraction_status"] = _extraction
 
     data_enc   = encrypt_account_data(user["id"], data)
 
     db = get_db()
     db.execute(
         """INSERT INTO account_data
-           (user_id, source, display_name, icon, color, data_enc, synced_at, sync_failure_reason, sync_status)
-           VALUES (?,?,?,?,?,?,?,?,?)
+           (user_id, source, display_name, icon, color, data_enc, synced_at, sync_failure_reason, sync_status, extraction_status)
+           VALUES (?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(user_id, source) DO UPDATE SET
                display_name        = excluded.display_name,
                icon                = excluded.icon,
@@ -16314,9 +16358,10 @@ def api_data_sync():
                data_enc            = excluded.data_enc,
                synced_at           = excluded.synced_at,
                sync_failure_reason = excluded.sync_failure_reason,
-               sync_status         = excluded.sync_status""",
+               sync_status         = excluded.sync_status,
+               extraction_status   = excluded.extraction_status""",
         (user["id"], source, display, icon, color, data_enc, synced_at,
-         data.get("sync_failure_reason"), data.get("sync_status", "ok")),
+         data.get("sync_failure_reason"), data.get("sync_status", "ok"), _extraction),
     )
     db.commit()
     _log_privacy_event(user["id"], "data_synced", source=source, detail=f"{len(raw_text)} chars")
@@ -18188,16 +18233,26 @@ def api_extension_accounts():
 
         name, icon, color = meta
         ad_row = db.execute(
-            "SELECT entry_url, synced_at, connection_status FROM account_data WHERE user_id=? AND source=?",
+            "SELECT entry_url, synced_at, connection_status, extraction_status, data_enc "
+            "FROM account_data WHERE user_id=? AND source=?",
             (user["id"], source)
         ).fetchone()
         entry_url = ad_row["entry_url"] if ad_row and ad_row["entry_url"] else None
         synced_at = ad_row["synced_at"] if ad_row else None
         connection_status = ad_row["connection_status"] if ad_row else None
+        extraction_status = ad_row["extraction_status"] if ad_row else None
+        acct = load_provider_account(
+            user["id"], {**dict(ad_row), "source": source},
+            decrypt_fn=decrypt_account_data,
+        ) if ad_row else None
         accounts.append({
             "source": source, "name": name, "icon": icon, "color": color,
             "entry_url": entry_url, "synced_at": synced_at,
             "connection_status": connection_status,
+            "extraction_status": extraction_status,
+            "data_source": acct.data_source if acct else None,
+            "is_synced": acct.is_synced if acct else False,
+            "adapter": extension_adapter.ADAPTER_ID,
         })
 
     return jsonify(accounts)
@@ -19110,6 +19165,13 @@ from mighty.email_scan import (
     get_imap_preset, CATEGORY_LABELS,
     fetch_recent_subjects,
 )
+from mighty.provider_account import (
+    EXTRACTION_PENDING,
+    ProviderAccount,
+    infer_extraction_status,
+    load_provider_account,
+)
+from mighty.adapters import extension as extension_adapter
 from mighty.connection_state import (
     AMEX_SOURCE,
     AMEX_CONNECTION_STATES,
@@ -19119,9 +19181,6 @@ from mighty.connection_state import (
     WAITING_FOR_EXTENSION as AMEX_WAITING,
     InvalidAmexConnectionTransition,
     advance_amex_to_waiting,
-    amex_extension_connected,
-    amex_extension_needs_login,
-    amex_show_as_synced,
     get_amex_connection_status,
     start_amex_connect,
     state_label as amex_state_label,
@@ -19133,30 +19192,60 @@ def _amex_conn_ctx():
     return dict(iso_fn=iso, encrypt_fn=encrypt_account_data, decrypt_fn=decrypt_account_data)
 
 
+def _provider_card_freshness(
+    account: ProviderAccount | None,
+    *,
+    active_connection_states: tuple = (),
+    connection_line_fn=None,
+) -> tuple[str, str, str]:
+    """Card freshness from provider account — Synced only when normalized data exists."""
+    if not account:
+        return ("Awaiting sync", "#9ca3af", "—")
+    if account.is_synced:
+        return _freshness_label(account.synced_at, account.sync_status)
+    if (
+        account.connection_status
+        and account.connection_status in active_connection_states
+        and connection_line_fn
+    ):
+        colors = {
+            "connecting": "#a78bfa",
+            "waiting_for_extension": "#6366f1",
+            "needs_login": "#dc2626",
+            "connected": "#22c55e",
+        }
+        return (
+            connection_line_fn(account.connection_status),
+            colors.get(account.connection_status, "#6b7280"),
+            "",
+        )
+    if account.extraction_status == EXTRACTION_PENDING:
+        return ("Awaiting data", "#6366f1", "")
+    if account.sync_status == "login_required":
+        return ("Sign in required", "#dc2626", "")
+    return ("Awaiting sync", "#9ca3af", "—")
+
+
 def _amex_card_freshness(
     connection_status: str,
     items: list,
     synced_at: str | None,
     sync_status: str = "ok",
 ) -> tuple[str, str, str]:
-    """Freshness label for Amex — never shows Synced without real extracted fields."""
-    if amex_show_as_synced(items):
-        return _freshness_label(synced_at, sync_status)
-    if connection_status in AMEX_CONNECTION_STATES:
-        colors = {
-            AMEX_CONNECTING: "#a78bfa",
-            AMEX_WAITING: "#6366f1",
-            AMEX_NEEDS_LOGIN: "#dc2626",
-            AMEX_CONNECTED: "#22c55e",
-        }
-        return (
-            amex_status_line_label(connection_status),
-            colors.get(connection_status, "#6b7280"),
-            "",
-        )
-    if sync_status == "login_required":
-        return ("Sign in required", "#dc2626", "")
-    return ("Awaiting sync", "#9ca3af", "—")
+    """Backward-compatible wrapper — prefer _provider_card_freshness."""
+    account = ProviderAccount(
+        source=AMEX_SOURCE,
+        connection_status=connection_status or None,
+        normalized_fields=items,
+        synced_at=synced_at,
+        sync_status=sync_status,
+        extraction_status=infer_extraction_status(items, sync_status=sync_status),
+    )
+    return _provider_card_freshness(
+        account,
+        active_connection_states=AMEX_CONNECTION_STATES,
+        connection_line_fn=amex_status_line_label,
+    )
 
 
 def _amex_connection_card_html(status: str, display_name: str) -> tuple[str, str]:
@@ -19173,7 +19262,7 @@ def _amex_connection_card_html(status: str, display_name: str) -> tuple[str, str
         AMEX_CONNECTING: "Setting up your American Express account…",
         AMEX_WAITING: "Install the Mighty Chrome extension and sign in with your API key.",
         AMEX_NEEDS_LOGIN: "Sign in to American Express in your browser so Mighty can verify your session.",
-        AMEX_CONNECTED: "Session verified — account sync will begin here once extraction is enabled.",
+        AMEX_CONNECTED: "Session verified — normalized account data will appear once extraction completes.",
     }.get(status, "")
     login_url = SOURCE_CAPABILITIES.get(AMEX_SOURCE, {}).get("login_url", SITE_ENTRY_URL.get(AMEX_SOURCE, ""))
     ext_link = ""
@@ -20018,42 +20107,15 @@ def api_connect_amex_status():
 
 @app.route("/api/extension/amex/needs-login", methods=["POST"])
 def api_extension_amex_needs_login():
-    """Extension saw Amex without a verified logged-in session."""
+    """Extension adapter: Amex session not verified."""
     user, _ = api_user()
     if not user:
         return jsonify({"error": "unauthorized"}), 401
     uid = user["id"]
     db  = get_db()
     try:
-        status = amex_extension_needs_login(db, uid, **_amex_conn_ctx())
-    except InvalidAmexConnectionTransition as e:
-        return jsonify({
-            "ok": False,
-            "error": str(e),
-            "connection_status": e.current,
-        }), 409
-    return jsonify({
-        "ok": True,
-        "source": AMEX_SOURCE,
-        "connection_status": status,
-        "label": amex_state_label(status),
-    })
-
-
-@app.route("/api/extension/amex/connected", methods=["POST"])
-def api_extension_amex_connected():
-    """Extension reports a verified logged-in Amex session → connection_status=connected."""
-    user, _ = api_user()
-    if not user:
-        return jsonify({"error": "unauthorized"}), 401
-    body = request.get_json(silent=True) or {}
-    if not body.get("session_verified"):
-        return jsonify({"ok": False, "error": "session_verified required"}), 400
-    uid = user["id"]
-    db  = get_db()
-    try:
-        status = amex_extension_connected(
-            db, uid, session_verified=True, **_amex_conn_ctx(),
+        status = extension_adapter.report_needs_login(
+            db, uid, AMEX_SOURCE, **_amex_conn_ctx(),
         )
     except InvalidAmexConnectionTransition as e:
         return jsonify({
@@ -20066,7 +20128,42 @@ def api_extension_amex_connected():
     return jsonify({
         "ok": True,
         "source": AMEX_SOURCE,
+        "adapter": extension_adapter.ADAPTER_ID,
         "connection_status": status,
+        "label": amex_state_label(status),
+    })
+
+
+@app.route("/api/extension/amex/connected", methods=["POST"])
+def api_extension_amex_connected():
+    """Extension adapter: verified provider session (connection layer only)."""
+    user, _ = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    if not body.get("session_verified"):
+        return jsonify({"ok": False, "error": "session_verified required"}), 400
+    uid = user["id"]
+    db  = get_db()
+    try:
+        status = extension_adapter.report_session_verified(
+            db, uid, AMEX_SOURCE, session_verified=True, **_amex_conn_ctx(),
+        )
+    except InvalidAmexConnectionTransition as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "connection_status": e.current,
+        }), 409
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    info = get_amex_connection_status(db, uid, decrypt_fn=decrypt_account_data)
+    return jsonify({
+        "ok": True,
+        "source": AMEX_SOURCE,
+        "adapter": extension_adapter.ADAPTER_ID,
+        "connection_status": status,
+        "extraction_status": info.get("extraction_status"),
         "label": amex_state_label(status),
     })
 
