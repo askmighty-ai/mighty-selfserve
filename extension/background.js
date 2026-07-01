@@ -199,6 +199,25 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const isLoginPage = _LOGIN_URL_RE.test(pathname);
 
   if (isLoginPage) {
+    // Amex connect flow: route to connection state, not sync login_required.
+    if (source === 'amex') {
+      const { api_key } = await chrome.storage.local.get('api_key');
+      if (api_key) {
+        const accounts = await _fetchExtensionAccounts(api_key);
+        const amex = accounts.find(a => a.source === 'amex');
+        if (amex && ['waiting_for_extension', 'needs_login', 'connected'].includes(amex.connection_status)) {
+          const now = Date.now();
+          if (!_loginReportedAt[source] || now - _loginReportedAt[source] >= 300_000) {
+            _loginReportedAt[source] = now;
+            console.log('[Mighty] Amex login page — marking needs_login');
+            await _postAmexNeedsLogin(api_key);
+          }
+          _tabLoginPending[tabId] = source;
+          return;
+        }
+      }
+    }
+
     // Debounce: don't re-report the same source within 5 minutes
     const now = Date.now();
     if (_loginReportedAt[source] && now - _loginReportedAt[source] < 300_000) {
@@ -222,6 +241,15 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     delete _tabLoginPending[tabId];
     const { api_key } = await chrome.storage.local.get('api_key');
     if (!api_key) return;
+
+    if (source === 'amex') {
+      console.log('[Mighty] Amex navigated away from login — probing session');
+      const accounts = await _fetchExtensionAccounts(api_key);
+      await probeAmexConnectionState(api_key, accounts);
+      chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+      return;
+    }
+
     console.log(`[Mighty] Login success detected for ${source} — clearing wall and syncing`);
     await _clearLoginWall(source);
     // Immediately clear login_required on the server so the dashboard updates right away
@@ -1532,25 +1560,123 @@ async function syncSingleAccount(source, apiKey) {
   }
 }
 
-// ── Amex connection stub (no extraction) ─────────────────────────────────────
-/** Report Amex as connected when the dashboard is waiting for the extension. */
-async function reportAmexConnectedIfNeeded(apiKey, accounts) {
-  if (!apiKey || !Array.isArray(accounts)) return;
-  const amex = accounts.find(a => a.source === 'amex');
-  if (!amex || amex.connection_status !== 'waiting_for_extension') return;
+// ── Amex connection state (session-gated, no extraction) ─────────────────────
+const _AMEX_ACTIVE_CONNECTION = new Set([
+  'connecting', 'waiting_for_extension', 'needs_login',
+]);
+
+const _AMEX_SESSION_SIGNALS = [
+  'membership rewards',
+  'account home',
+  'card ending',
+  'recent activity',
+  'payment due',
+  'available credit',
+  'manage account',
+  'account services',
+];
+
+const _amexConnReportedAt = {};
+
+async function _fetchExtensionAccounts(apiKey) {
   try {
-    const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/connected`, {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
+      headers: { 'X-Mighty-Key': apiKey },
+    });
+    if (!resp.ok) return [];
+    return await resp.json();
+  } catch {
+    return [];
+  }
+}
+
+/** Probe Amex with session cookies — true only when logged-in account content is present. */
+async function _probeAmexLoggedIn() {
+  const entry = ACCOUNT_ENTRY.amex;
+  const cfg = SITE_LOGIN_CONFIG.amex;
+  const _REDIRECT_LOGIN_RE = /\/(login|signin|sign-in|log-in|logon|log-on)(\/|$|\?)/i;
+  try {
+    const resp = await fetch(entry, { credentials: 'include', redirect: 'follow' });
+    if (!resp.ok) return false;
+    const finalUrl = resp.url;
+    const html = await resp.text();
+    try {
+      const finalU = new URL(finalUrl);
+      if (cfg?.loginPathRe?.test(finalU.pathname)) return false;
+      if (_REDIRECT_LOGIN_RE.test(finalU.pathname)) return false;
+      if (/^(login|sso|auth|signin|sign-in|logon|authenticate|identity)$/.test(
+        finalU.hostname.split('.')[0].toLowerCase()
+      )) return false;
+    } catch {}
+    const text = _htmlToText(html);
+    if (text.length < 300) return false;
+    if (_isSilentLoginPage(text)) return false;
+    const lower = text.toLowerCase();
+    return _AMEX_SESSION_SIGNALS.some(s => lower.includes(s));
+  } catch {
+    return false;
+  }
+}
+
+async function _postAmexNeedsLogin(apiKey) {
+  const now = Date.now();
+  if (_amexConnReportedAt.needs_login && now - _amexConnReportedAt.needs_login < 60_000) return;
+  _amexConnReportedAt.needs_login = now;
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/needs-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
     });
     if (resp.ok) {
-      console.log('[Mighty] Amex connection state → connected (stub)');
+      console.log('[Mighty] Amex connection state → needs_login');
       chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
-    } else {
-      console.log('[Mighty] Amex connected stub skipped:', resp.status);
     }
   } catch (e) {
-    console.warn('[Mighty] Amex connected stub failed:', e.message);
+    console.warn('[Mighty] Amex needs-login report failed:', e.message);
+  }
+}
+
+async function _postAmexConnected(apiKey) {
+  const now = Date.now();
+  if (_amexConnReportedAt.connected && now - _amexConnReportedAt.connected < 60_000) return;
+  _amexConnReportedAt.connected = now;
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/connected`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body: JSON.stringify({ session_verified: true }),
+    });
+    if (resp.ok) {
+      console.log('[Mighty] Amex connection state → connected (session verified)');
+      chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+    } else {
+      console.log('[Mighty] Amex connected report skipped:', resp.status);
+    }
+  } catch (e) {
+    console.warn('[Mighty] Amex connected report failed:', e.message);
+  }
+}
+
+/** Update Amex connection state from extension based on a real session probe. */
+async function probeAmexConnectionState(apiKey, accounts) {
+  if (!apiKey || !Array.isArray(accounts)) return;
+  const amex = accounts.find(a => a.source === 'amex');
+  if (!amex) return;
+
+  const status = amex.connection_status;
+  const loggedIn = await _probeAmexLoggedIn();
+
+  if (status === 'connected') {
+    if (!loggedIn) await _postAmexNeedsLogin(apiKey);
+    return;
+  }
+
+  if (!['waiting_for_extension', 'needs_login'].includes(status)) return;
+
+  if (loggedIn) {
+    await _postAmexConnected(apiKey);
+  } else if (status === 'waiting_for_extension') {
+    await _postAmexNeedsLogin(apiKey);
   }
 }
 
@@ -1629,7 +1755,9 @@ async function runSync() {
     return;
   }
 
-  await reportAmexConnectedIfNeeded(api_key, accounts);
+  await probeAmexConnectionState(api_key, accounts);
+  // Refresh accounts after connection probe may have changed Amex state
+  accounts = await _fetchExtensionAccounts(api_key);
 
   // Also load captured (custom) accounts from local storage
   const { captured_accounts = {} } = await chrome.storage.local.get('captured_accounts');
@@ -1648,7 +1776,10 @@ async function runSync() {
   // All per-account crawls reuse this single tab — no new windows appear mid-sync.
   // TAB_SYNC_SOURCES (xfinity etc.) are excluded: they rely on the supplement watcher
   // which needs a real tab in the user's main window.
-  const crawlAccounts = accounts.filter(a => (ACCOUNT_ENTRY[a.source] || a.entry_url) && !TAB_SYNC_SOURCES.has(a.source));
+  const crawlAccounts = accounts.filter(a => {
+    if (a.source === 'amex' && _AMEX_ACTIVE_CONNECTION.has(a.connection_status)) return false;
+    return (ACCOUNT_ENTRY[a.source] || a.entry_url) && !TAB_SYNC_SOURCES.has(a.source);
+  });
   const tabAccounts   = accounts.filter(a => ACCOUNT_ENTRY[a.source] &&  TAB_SYNC_SOURCES.has(a.source));
 
   // Progress + failure tracking — written to storage so the popup can display them.
@@ -2015,7 +2146,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           headers: { 'X-Mighty-Key': key },
         })
           .then(r => r.ok ? r.json() : [])
-          .then(accts => reportAmexConnectedIfNeeded(key, accts))
+          .then(accts => probeAmexConnectionState(key, accts))
           .catch(() => {});
         runSync();
       });

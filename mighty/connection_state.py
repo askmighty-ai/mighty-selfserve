@@ -3,7 +3,13 @@ mighty.connection_state
 ───────────────────────
 Amex-only connection state machine. States persist on account_data.connection_status.
 
-Flow: connecting → waiting_for_extension → connected
+Flow:
+  connecting → waiting_for_extension → needs_login | connected
+  needs_login → connected (after verified login)
+  connected → needs_login (session lost)
+
+Synced is separate: only when meaningful extracted account fields exist.
+Until extraction ships, Amex must never present as Synced in the UI.
 """
 
 from __future__ import annotations
@@ -12,22 +18,40 @@ AMEX_SOURCE = "amex"
 
 CONNECTING = "connecting"
 WAITING_FOR_EXTENSION = "waiting_for_extension"
+NEEDS_LOGIN = "needs_login"
 CONNECTED = "connected"
 
-AMEX_CONNECTION_STATES = (CONNECTING, WAITING_FOR_EXTENSION, CONNECTED)
+AMEX_CONNECTION_STATES = (
+    CONNECTING,
+    WAITING_FOR_EXTENSION,
+    NEEDS_LOGIN,
+    CONNECTED,
+)
 
 STATE_LABELS: dict[str, str] = {
     CONNECTING: "Connecting",
     WAITING_FOR_EXTENSION: "Waiting for Browser Extension",
+    NEEDS_LOGIN: "Sign in to Amex",
     CONNECTED: "Connected",
 }
+
+# Status line shown on dashboard / credentials (not the same as sync freshness)
+STATE_STATUS_LABELS: dict[str, str] = {
+    CONNECTING: "Setting up…",
+    WAITING_FOR_EXTENSION: "Waiting for extension",
+    NEEDS_LOGIN: "Sign in required",
+    CONNECTED: "Logged in — awaiting sync",
+}
+
+_EMPTY_ITEM_VALUES = frozenset({"", "—", "–", "-", "n/a", "none", "0", "no data"})
 
 # allowed transitions: current → {next states}
 _TRANSITIONS: dict[str | None, set[str]] = {
     None: {CONNECTING},
     CONNECTING: {WAITING_FOR_EXTENSION},
-    WAITING_FOR_EXTENSION: {CONNECTED},
-    CONNECTED: set(),
+    WAITING_FOR_EXTENSION: {NEEDS_LOGIN, CONNECTED},
+    NEEDS_LOGIN: {CONNECTED},
+    CONNECTED: {NEEDS_LOGIN},
 }
 
 
@@ -44,6 +68,28 @@ def state_label(status: str | None) -> str:
     if not status:
         return ""
     return STATE_LABELS.get(status, status.replace("_", " ").title())
+
+
+def status_line_label(status: str | None) -> str:
+    if not status:
+        return ""
+    return STATE_STATUS_LABELS.get(status, state_label(status))
+
+
+def amex_has_meaningful_items(items: list | None) -> bool:
+    """True when at least one extracted account field has a real value."""
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        val = str(item.get("value", "")).strip().lower()
+        if val and val not in _EMPTY_ITEM_VALUES:
+            return True
+    return False
+
+
+def amex_show_as_synced(items: list | None) -> bool:
+    """Amex may only show Synced after real extracted data exists."""
+    return amex_has_meaningful_items(items)
 
 
 def _can_transition(current: str | None, target: str) -> bool:
@@ -89,7 +135,7 @@ def _ensure_amex_account(db, uid: str, iso_fn, encrypt_fn) -> None:
             "INSERT INTO account_data "
             "(user_id, source, display_name, icon, color, data_enc, synced_at, connection_status) "
             "VALUES (?,?,?,?,?,?,?,?)",
-            (uid, AMEX_SOURCE, display, icon, color, stub, now, None),
+            (uid, AMEX_SOURCE, display, icon, color, stub, "", None),
         )
 
 
@@ -151,7 +197,26 @@ def advance_amex_to_waiting(db, uid: str, *, iso_fn, encrypt_fn, decrypt_fn) -> 
     )
 
 
-def amex_extension_connected(db, uid: str, *, iso_fn, encrypt_fn, decrypt_fn) -> str:
+def amex_extension_needs_login(db, uid: str, *, iso_fn, encrypt_fn, decrypt_fn) -> str:
+    """Extension saw Amex without a logged-in session."""
+    return set_amex_connection_status(
+        db, uid, NEEDS_LOGIN,
+        iso_fn=iso_fn, encrypt_fn=encrypt_fn, decrypt_fn=decrypt_fn,
+    )
+
+
+def amex_extension_connected(
+    db,
+    uid: str,
+    *,
+    iso_fn,
+    encrypt_fn,
+    decrypt_fn,
+    session_verified: bool = False,
+) -> str:
+    """Mark connected only after the extension verified a logged-in Amex session."""
+    if not session_verified:
+        raise ValueError("session_verified required to mark Amex connected")
     return set_amex_connection_status(
         db, uid, CONNECTED,
         iso_fn=iso_fn, encrypt_fn=encrypt_fn, decrypt_fn=decrypt_fn,
@@ -165,13 +230,22 @@ def get_amex_connection_status(db, uid: str, *, decrypt_fn) -> dict:
         (uid, AMEX_SOURCE),
     ).fetchone()
     if not row:
-        return {"source": AMEX_SOURCE, "connection_status": None, "label": ""}
+        return {
+            "source": AMEX_SOURCE,
+            "connection_status": None,
+            "label": "",
+            "status_line": "",
+            "show_synced": False,
+        }
 
     ad_data = decrypt_fn(uid, row["data_enc"] or "")
     status = _read_current_status(dict(row), ad_data)
+    items = ad_data.get("items") or ad_data.get("ai_items") or []
     return {
         "source": AMEX_SOURCE,
         "connection_status": status,
         "label": state_label(status),
+        "status_line": status_line_label(status),
         "synced_at": row["synced_at"],
+        "show_synced": amex_show_as_synced(items),
     }
