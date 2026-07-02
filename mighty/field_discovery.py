@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -113,6 +114,37 @@ class FieldSchemaCache:
     def clear(self) -> None:
         self._entries.clear()
 
+    def snapshot(self) -> list[dict[str, Any]]:
+        now = time.time()
+        rows = []
+        for key, entry in self._entries.items():
+            age = now - entry.timestamp
+            ttl = self._ttl_for(entry)
+            rows.append({"key": key, "source": key.split(":", 1)[0] if ":" in key else key,
+                "success": entry.success, "field_count": len(entry.fields or []),
+                "error_message": entry.error_message, "age_seconds": round(age, 1),
+                "ttl_seconds": ttl, "expires_in_seconds": round(max(0.0, ttl - age), 1),
+                "fields_preview": (entry.fields or [])[:5]})
+        return sorted(rows, key=lambda r: r["age_seconds"])
+
+_ai_call_log: list[dict[str, Any]] = []
+_ai_call_log_lock = threading.Lock()
+
+def record_ai_discovery_call(*, source, provider, model, cache_hit, field_count, latency_ms=None, error=None):
+    with _ai_call_log_lock:
+        _ai_call_log.append({"timestamp": time.time(), "source": source or "", "provider": provider,
+            "model": model, "cache_hit": cache_hit, "field_count": field_count,
+            "latency_ms": round(latency_ms, 2) if latency_ms is not None else None, "error": error})
+        if len(_ai_call_log) > 200:
+            del _ai_call_log[: len(_ai_call_log) - 200]
+
+def get_ai_discovery_log(limit: int = 100) -> list[dict[str, Any]]:
+    with _ai_call_log_lock:
+        return list(_ai_call_log[-max(1, limit):])
+
+def clear_ai_discovery_log() -> None:
+    with _ai_call_log_lock:
+        _ai_call_log.clear()
 
 # Shared in-process cache (cleared in tests via clear_field_schema_cache()).
 _field_schema_cache = FieldSchemaCache()

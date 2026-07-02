@@ -4806,15 +4806,21 @@ CRITICAL: Past reservations (date already occurred) must NEVER be included as "u
 
 from mighty.ai_provider import (
     DiscoveryContext,
+    ai_provider_name,
     discover_fields_with_provider,
     get_configured_field_discovery_provider,
+    get_field_discovery_provider,
 )
 from mighty.field_discovery import (
     DiscoveryError,
     assert_field_discovery_available,
+    field_discovery_cache_ttl_seconds,
+    field_discovery_failure_ttl_seconds,
     field_discovery_max_chars,
+    get_ai_discovery_log,
     get_field_schema_cache,
     is_field_discovery_enabled,
+    record_ai_discovery_call,
     schema_cache_key,
     truncate_discovery_input,
 )
@@ -4847,6 +4853,13 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
     except DiscoveryError:
         raise
     if cached_fields is not None:
+        try:
+            p = get_field_discovery_provider()
+            record_ai_discovery_call(source=source, provider=p.provider_name,
+                model=getattr(p, "model", "") or ai_provider_name(), cache_hit=True,
+                field_count=len(cached_fields))
+        except Exception:
+            pass
         return cached_fields
 
     try:
@@ -4904,10 +4917,20 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             category_hint=category_hint,
         )
         try:
+            _t0 = time.time()
             result = discover_fields_with_provider(source, snippets, context)
         except DiscoveryError as err:
             cache.record_failure(cache_key, err)
+            try:
+                p = get_field_discovery_provider()
+                record_ai_discovery_call(source=source, provider=p.provider_name,
+                    model=getattr(p, "model", "") or ai_provider_name(), cache_hit=False,
+                    field_count=0, latency_ms=(time.time()-_t0)*1000, error=str(err))
+            except Exception:
+                pass
             raise
+        record_ai_discovery_call(source=source, provider=result.provider, model=result.model,
+            cache_hit=False, field_count=len(result.fields), latency_ms=(time.time()-_t0)*1000)
         print(
             f"[Mighty] Field discovery via {result.provider} ({result.model}), "
             f"{len(result.fields)} raw fields",
@@ -5125,6 +5148,20 @@ def require_login(f):
         if not user:
             session.clear()
             return _redirect_to_login()
+        return f(*a, **kw)
+    return inner
+
+
+def require_admin(f):
+    @wraps(f)
+    @require_login
+    def inner(*a, **kw):
+        if not _is_admin_user(_session_user_row()):
+            return render_template_string(
+                "<!DOCTYPE html><body style='font-family:sans-serif;padding:40px'>"
+                "<h1>403 Forbidden</h1><p>Admin access required.</p>"
+                "<a href='/dashboard'>Dashboard</a></body></html>"
+            ), 403
         return f(*a, **kw)
     return inner
 
@@ -20791,6 +20828,205 @@ def api_extension_amex_extract():
         **result,
     })
 
+
+
+# ── Admin debug pages (internal only) ─────────────────────────────────────────
+
+def _admin_user_sources(uid):
+    return [r["source"] for r in get_db().execute(
+        "SELECT DISTINCT source FROM account_data WHERE user_id=? ORDER BY source", (uid,)).fetchall()]
+
+
+def _admin_pick_source(uid, requested):
+    sources = _admin_user_sources(uid)
+    if not sources:
+        return None, sources
+    if requested and requested in sources:
+        return requested, sources
+    return sources[0], sources
+
+
+def _admin_provider_info():
+    name = ai_provider_name()
+    return {"configured_provider": name,
+            "active_configured": get_field_discovery_provider(name).is_configured(),
+            "openai": {"configured": get_field_discovery_provider("openai").is_configured(),
+                       "model": getattr(get_field_discovery_provider("openai"), "model", "")},
+            "gemini": {"configured": get_field_discovery_provider("gemini").is_configured(),
+                       "models": list(getattr(get_field_discovery_provider("gemini"), "models", ()))}}
+
+
+def _admin_env_settings():
+    return {"AI_FIELD_DISCOVERY_ENABLED": is_field_discovery_enabled(),
+            "AI_FIELD_DISCOVERY_MAX_CHARS": field_discovery_max_chars(),
+            "AI_FIELD_DISCOVERY_CACHE_TTL_SECONDS": field_discovery_cache_ttl_seconds(),
+            "AI_FIELD_DISCOVERY_FAILURE_TTL_SECONDS": field_discovery_failure_ttl_seconds(),
+            "AI_PROVIDER": ai_provider_name(), "AI_ALLOW_FALLBACK": os.environ.get("AI_ALLOW_FALLBACK", "")}
+
+
+def _admin_json_safe(value):
+    if isinstance(value, set):
+        return sorted(value)
+    if isinstance(value, dict):
+        return {k: _admin_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_admin_json_safe(v) for v in value]
+    return value
+
+
+def _admin_replay_discovery(uid, source):
+    row = get_db().execute("SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)).fetchone()
+    if not row:
+        return {"error": "no data found for source"}
+    data = decrypt_account_data(uid, row["data_enc"] or "")
+    raw = data.get("raw_text", "")
+    if not raw:
+        return {"error": "raw_text is empty"}
+    site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == source), source.replace("_", " ").title())
+    max_chars = field_discovery_max_chars()
+    bounded = truncate_discovery_input(raw, max_chars)
+    hints = [r["trigger_phrase"] for r in get_db().execute(
+        "SELECT trigger_phrase FROM extraction_hints WHERE site=? ORDER BY success_count DESC LIMIT 50", (source,)).fetchall()]
+    snippets = _extract_candidate_snippets(bounded, hint_phrases=hints, max_chars=max_chars)
+    schema = _get_category_schema(source or "")
+    category_hint = (f"\nThis is a {schema['name']}. Prioritise:\n  {schema['priority_fields']}\n") if schema else ""
+    from datetime import datetime as _dtm
+    today = _dtm.utcnow().strftime("%B %d, %Y")
+    ctx = DiscoveryContext(site_name=site_name, source=source,
+        prompt=DISCOVER_PROMPT.format(site=site_name, text=snippets, today=today, category_hint=category_hint),
+        today=today, category_hint=category_hint)
+    before, after, status, prov, model = [], [], None, None, None
+    try:
+        t0 = time.time()
+        result = discover_fields_with_provider(source, snippets, ctx)
+        prov, model = result.provider, result.model
+        before, after = result.fields, _post_filter_fields(result.fields, source=source or "")
+        status = f"used {prov} {model} in {time.time()-t0:.2f}s"
+    except DiscoveryError as exc:
+        status = str(exc)
+    return {"source": source, "raw_text_chars": len(raw), "snippets_chars": len(snippets),
+            "snippets_preview": snippets[:3000], "provider_status": status, "provider": prov, "model": model,
+            "fields_before_filter": before, "fields_after_filter": after,
+            "field_count_before": len(before), "field_count_after": len(after),
+            "cache_key": schema_cache_key(source, bounded)}
+
+
+from mighty import admin_debug as _admin_debug
+
+
+@app.route("/admin")
+@app.route("/admin/")
+@require_admin
+def admin_debug_index():
+    return _admin_debug.render_admin_index()
+
+
+@app.route("/admin/account-json")
+@require_admin
+def admin_account_json_page():
+    uid = session["user_id"]
+    source, sources = _admin_pick_source(uid, request.args.get("source"))
+    if not source:
+        return _admin_debug.render_account_json_page(sources, None, None)
+    row = get_db().execute("SELECT data_enc, synced_at FROM account_data WHERE user_id=? AND source=?", (uid, source)).fetchone()
+    data = decrypt_account_data(uid, row["data_enc"] or "") if row else {}
+    return _admin_debug.render_account_json_page(sources, source, data, synced_at=row["synced_at"] if row else None)
+
+
+@app.route("/admin/extracted-fields")
+@require_admin
+def admin_extracted_fields_page():
+    uid = session["user_id"]
+    source, sources = _admin_pick_source(uid, request.args.get("source"))
+    if not source:
+        return _admin_debug.render_extracted_fields_page(sources, None, [], [])
+    ad = get_db().execute("SELECT data_enc, synced_at FROM account_data WHERE user_id=? AND source=?", (uid, source)).fetchone()
+    cred = get_db().execute("SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?", (uid, source)).fetchone()
+    items, discovered, synced_at = [], [], None
+    if ad:
+        synced_at = ad["synced_at"]
+        blob = decrypt_account_data(uid, ad["data_enc"] or "")
+        items = blob.get("ai_items") or blob.get("items") or []
+    if cred and cred["extra_enc"]:
+        try:
+            discovered = json.loads(decrypt_cred(uid, cred["extra_enc"])).get("discovered_fields", [])
+        except Exception:
+            pass
+    return _admin_debug.render_extracted_fields_page(sources, source, items, discovered, synced_at=synced_at)
+
+
+@app.route("/admin/provider-schemas")
+@require_admin
+def admin_provider_schemas_page():
+    hints = [dict(r) for r in get_db().execute(
+        "SELECT site, trigger_phrase, success_count, confidence FROM extraction_hints "
+        "ORDER BY success_count DESC LIMIT 100").fetchall()]
+    return _admin_debug.render_provider_schemas_page(
+        category_schemas=_admin_json_safe(_CATEGORY_SCHEMAS), expected_fields=_admin_json_safe(_EXPECTED_FIELDS),
+        site_connectors=_admin_json_safe(SITE_CONNECTORS), extraction_hints=hints, ai_provider_info=_admin_provider_info())
+
+
+@app.route("/admin/discovery-cache")
+@require_admin
+def admin_discovery_cache_page():
+    return _admin_debug.render_discovery_cache_page(get_field_schema_cache().snapshot(),
+        ttl_success=field_discovery_cache_ttl_seconds(), ttl_failure=field_discovery_failure_ttl_seconds())
+
+
+@app.route("/admin/ai-cache")
+@require_admin
+def admin_ai_cache_page():
+    return _admin_debug.render_ai_cache_page(provider_info=_admin_provider_info(),
+        env_settings=_admin_env_settings(), call_log=get_ai_discovery_log(100))
+
+
+@app.route("/admin/sync-history")
+@require_admin
+def admin_sync_history_page():
+    uid, filt = session["user_id"], request.args.get("source") or None
+    sources = _admin_user_sources(uid)
+    db = get_db()
+    fh_q, fh_a = "SELECT source, field_label, old_value, new_value, changed_at FROM field_history WHERE user_id=?", [uid]
+    au_q, au_a = "SELECT event_type, source, detail, created_at FROM privacy_audit_log WHERE user_id=?", [uid]
+    me_q, me_a = "SELECT source, synced_at, sync_status, sync_failure_reason FROM account_data WHERE user_id=?", [uid]
+    if filt:
+        fh_q += " AND source=?"; fh_a.append(filt)
+        au_q += " AND source=?"; au_a.append(filt)
+        me_q += " AND source=?"; me_a.append(filt)
+    return _admin_debug.render_sync_history_page(sources, filt,
+        [dict(r) for r in db.execute(fh_q + " ORDER BY changed_at DESC LIMIT 200", fh_a).fetchall()],
+        [dict(r) for r in db.execute(au_q + " ORDER BY created_at DESC LIMIT 100", au_a).fetchall()],
+        [dict(r) for r in db.execute(me_q + " ORDER BY source", me_a).fetchall()])
+
+
+@app.route("/admin/sync-timeline")
+@require_admin
+def admin_sync_timeline_page():
+    uid = session["user_id"]
+    user = get_db().execute("SELECT sync_running, sync_started_at FROM users WHERE id=?", (uid,)).fetchone()
+    timeline = []
+    for row in get_db().execute("SELECT source, synced_at, sync_status, sync_failure_reason, data_enc "
+                                "FROM account_data WHERE user_id=? ORDER BY synced_at DESC", (uid,)).fetchall():
+        blob = decrypt_account_data(uid, row["data_enc"] or "")
+        timeline.append({"source": row["source"], "synced_at": row["synced_at"],
+            "sync_status": row["sync_status"] or blob.get("sync_status"), "sync_failure_reason": row["sync_failure_reason"],
+            "connection_status": blob.get("connection_status"), "extraction_status": blob.get("extraction_status")})
+    return _admin_debug.render_sync_timeline_page(live_status=dict(_sync_status.get(uid, {})),
+        user_flags={"sync_running": bool(user["sync_running"]) if user else False,
+                    "sync_started_at": user["sync_started_at"] if user else None}, account_timeline=timeline)
+
+
+@app.route("/admin/replay-discovery")
+@require_admin
+def admin_replay_discovery_page():
+    source, sources = _admin_pick_source(session["user_id"], request.args.get("source"))
+    return _admin_debug.render_replay_discovery_page(sources, source, csrf_token=get_csrf_token())
+
+
+@app.route("/api/admin/debug/replay-discovery/<source>")
+@require_admin
+def api_admin_replay_discovery(source):
+    return jsonify(_admin_replay_discovery(session["user_id"], source))
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
