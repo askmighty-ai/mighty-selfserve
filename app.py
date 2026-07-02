@@ -4804,6 +4804,10 @@ CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included
 CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
 
+from mighty.discovery_pipeline import (
+    pipeline_cache_fingerprint,
+    prepare_discovery_input,
+)
 from mighty.ai_provider import (
     DiscoveryContext,
     discover_fields_with_provider,
@@ -4839,9 +4843,10 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         return []
 
     max_chars = field_discovery_max_chars()
-    bounded_text = truncate_discovery_input(raw_text, max_chars)
     cache = get_field_schema_cache()
-    cache_key = schema_cache_key(source, bounded_text)
+    cache_key = schema_cache_key(
+        source, pipeline_cache_fingerprint(raw_text, max_chars=max_chars),
+    )
     try:
         cached_fields = cache.get_fields(cache_key)
     except DiscoveryError:
@@ -4869,12 +4874,17 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         # ── Candidate snippet extraction ───────────────────────────────────────
         # Replace the raw page blob with focused windows around trigger words.
         # Falls back to raw_text[:8000] if no triggers match.
-        snippets = _extract_candidate_snippets(
-            bounded_text, hint_phrases=_hint_phrases, max_chars=max_chars,
+        prepared = prepare_discovery_input(
+            raw_text, hint_phrases=_hint_phrases, max_chars=max_chars,
         )
+        snippets = prepared.text
+        stats = prepared.stats
         print(
-            f"[Mighty] Discovering fields for {site_name} (raw={len(bounded_text)} chars, "
-            f"snippets={len(snippets)} chars). Preview: {bounded_text[:300]!r}",
+            f"[Mighty] Discovering fields for {site_name} "
+            f"(raw={stats.raw_chars}→prepared={stats.prepared_chars} chars, "
+            f"~{stats.raw_tokens}→~{stats.prepared_tokens} tokens, "
+            f"{stats.token_reduction_pct:.0f}% reduction). "
+            f"Preview: {snippets[:300]!r}",
             flush=True,
         )
 
@@ -4942,7 +4952,7 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
                         if _gc:
                             page_resp = _gc.models.generate_content(
                                 model="gemini-2.0-flash",
-                                contents=[{"role": "user", "parts": [{"text": page_prompt + "\n\n" + (bounded_text[:2000] if bounded_text else "")}]}],
+                                contents=[{"role": "user", "parts": [{"text": page_prompt + "\n\n" + (raw_text[:2000] if raw_text else "")}]}],
                                 config={"temperature": 0.3, "max_output_tokens": 200}
                             )
                             page_text = page_resp.text.strip() if page_resp.text else ""
