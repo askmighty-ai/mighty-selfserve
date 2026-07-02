@@ -14,6 +14,10 @@ Env vars (all optional):
   BASE_URL      — Public URL override (e.g. https://mighty-selfserve.up.railway.app)
   PORT          — Port to listen on (default: 5004)
   DEMO_MODE     — Set to true to show sample dashboard data (also: ?demo=1 on /dashboard)
+  AI_FIELD_DISCOVERY_ENABLED — Set to false to disable Gemini field discovery
+  AI_FIELD_DISCOVERY_MAX_CHARS — Max page chars sent to field discovery (default: 20000)
+  AI_FIELD_DISCOVERY_CACHE_TTL_SECONDS — Success cache TTL (default: 3600)
+  AI_FIELD_DISCOVERY_FAILURE_TTL_SECONDS — Negative-cache TTL after failures (default: 300)
 """
 
 from __future__ import annotations
@@ -2037,6 +2041,7 @@ def _extract_candidate_snippets(
     context_lines: int = 8,
     max_blocks: int = 25,
     hint_phrases: list[str] | None = None,
+    max_chars: int | None = None,
 ) -> str:
     """Extract and score line-based blocks around trigger words.
 
@@ -2050,12 +2055,16 @@ def _extract_candidate_snippets(
          long-line marketing copy. Known hint phrases add +5.0 per match.
       5. Keep the top max_blocks blocks by score; re-sort by original position
          so the returned text reads in document order.
-      6. Join with '···' separators and cap at 20k chars.
+      6. Join with '···' separators and cap at max_chars.
 
-    Falls back to the first 8 k chars if no triggers match.
+    Falls back to the first 8 k chars (or max_chars if smaller) if no triggers match.
     """
     if not raw_text:
         return ""
+
+    cap = field_discovery_max_chars() if max_chars is None else max_chars
+    raw_text = raw_text[:cap]
+    fallback_len = min(8_000, cap)
 
     lines = raw_text.splitlines()
     lower_lines = [ln.lower() for ln in lines]
@@ -2077,7 +2086,7 @@ def _extract_candidate_snippets(
                 hit_set.add(i)
 
     if not hit_set:
-        return raw_text[:8_000]
+        return raw_text[:fallback_len]
 
     # Step 2 — expand hits into (start, end) index ranges
     ranges: list[tuple[int, int]] = [
@@ -2116,7 +2125,7 @@ def _extract_candidate_snippets(
     scored = sorted(merged, key=lambda r: _score(*r), reverse=True)
     top = sorted(scored[:max_blocks])  # re-sort by position for coherent output
 
-    return "\n\n···\n\n".join("\n".join(lines[s:e]) for s, e in top)[:20_000]
+    return "\n\n···\n\n".join("\n".join(lines[s:e]) for s, e in top)[:cap]
 
 
 # ── Category schemas ──────────────────────────────────────────────────────────
@@ -4756,9 +4765,20 @@ CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included
 CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
 
-import hashlib as _hashlib
-import time as _time
-_discovery_cache: dict[str, tuple[float, list]] = {}  # content-hash -> (timestamp, results)
+from mighty.field_discovery import (
+    DiscoveryError,
+    assert_field_discovery_available,
+    field_discovery_max_chars,
+    get_field_schema_cache,
+    is_field_discovery_enabled,
+    schema_cache_key,
+    truncate_discovery_input,
+)
+
+GEMINI_DISCOVERY_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+]
 
 
 def claude_discover_fields(raw_text: str, site_name: str, source: str | None = None) -> list:
@@ -4770,15 +4790,22 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         source:    Account source key (e.g. "delta") used to look up the category schema.
                    If provided, the prompt gets a focused hint on which field types to prioritise.
     """
-    global _discovery_cache
-    # Cache key: hash of first 5000 chars of raw_text + source
-    cache_key = _hashlib.md5(((raw_text or "")[:5000] + str(source)).encode()).hexdigest()
-    cached = _discovery_cache.get(cache_key)
-    if cached and (_time.time() - cached[0]) < 60:
-        return cached[1]  # return cached result
-
+    if not is_field_discovery_enabled():
+        return []
     if not _claude or not raw_text:
         return []
+
+    max_chars = field_discovery_max_chars()
+    bounded_text = truncate_discovery_input(raw_text, max_chars)
+    cache = get_field_schema_cache()
+    cache_key = schema_cache_key(source, bounded_text)
+    try:
+        cached_fields = cache.get_fields(cache_key)
+    except DiscoveryError:
+        raise
+    if cached_fields is not None:
+        return cached_fields
+
     try:
         # ── Extraction hints — load known trigger phrases for this site ─────────
         # extraction_hints records phrases that previously yielded high-confidence
@@ -4799,10 +4826,12 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         # ── Candidate snippet extraction ───────────────────────────────────────
         # Replace the raw page blob with focused windows around trigger words.
         # Falls back to raw_text[:8000] if no triggers match.
-        snippets = _extract_candidate_snippets(raw_text, hint_phrases=_hint_phrases)
+        snippets = _extract_candidate_snippets(
+            bounded_text, hint_phrases=_hint_phrases, max_chars=max_chars,
+        )
         print(
-            f"[Mighty] Discovering fields for {site_name} (raw={len(raw_text)} chars, "
-            f"snippets={len(snippets)} chars). Preview: {raw_text[:300]!r}",
+            f"[Mighty] Discovering fields for {site_name} (raw={len(bounded_text)} chars, "
+            f"snippets={len(snippets)} chars). Preview: {bounded_text[:300]!r}",
             flush=True,
         )
 
@@ -4825,13 +4854,9 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             category_hint=category_hint,
         )
         # Try models in order until one works
-        _models = [
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash-preview-05-20",
-        ]
+        _model_errors: list[str] = []
         response = None
-        for _m in _models:
+        for _m in GEMINI_DISCOVERY_MODELS:
             try:
                 response = _claude.models.generate_content(
                     model=_m,
@@ -4844,9 +4869,14 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
                 print(f"[Mighty] Used model: {_m}", flush=True)
                 break
             except Exception as _me:
+                _model_errors.append(f"{_m}: {_me}")
                 print(f"[Mighty] Model {_m} failed: {_me}", flush=True)
         if response is None:
-            return []
+            err = DiscoveryError(
+                "All Gemini models failed: " + "; ".join(_model_errors)
+            )
+            cache.record_failure(cache_key, err)
+            raise err
         text = response.text.strip()
         print(f"[Mighty] Gemini response ({len(text)} chars): {text[:400]}", flush=True)
         fields = []
@@ -4892,7 +4922,7 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
                         if _gc:
                             page_resp = _gc.models.generate_content(
                                 model="gemini-2.0-flash",
-                                contents=[{"role": "user", "parts": [{"text": page_prompt + "\n\n" + (raw_text[:2000] if raw_text else "")}]}],
+                                contents=[{"role": "user", "parts": [{"text": page_prompt + "\n\n" + (bounded_text[:2000] if bounded_text else "")}]}],
                                 config={"temperature": 0.3, "max_output_tokens": 200}
                             )
                             page_text = page_resp.text.strip() if page_resp.text else ""
@@ -4901,8 +4931,10 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
                     except Exception:
                         pass
 
-        _discovery_cache[cache_key] = (_time.time(), fields)
+        cache.record_success(cache_key, fields)
         return fields
+    except DiscoveryError:
+        raise
     except Exception as e:
         print(f"[Mighty] Gemini discovery error: {e}", flush=True)
         return []
@@ -16002,6 +16034,8 @@ def credentials_discover(source):
         return jsonify({"ok": False, "error": "Session expired — refresh the page and try again"}), 403
     try:
         return _credentials_discover_impl(source)
+    except DiscoveryError as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
     except Exception as e:
         print(f"[Mighty] Discover endpoint error: {e}", flush=True)
         return jsonify({"ok": False, "error": f"Server error: {str(e)[:100]}"}), 500
@@ -16022,20 +16056,23 @@ def _credentials_discover_impl(source):
     if not raw_text:
         return jsonify({"ok": False, "error": "No page text stored — sync again"}), 404
 
-    if not _claude:
-        return jsonify({"ok": False, "error": "Gemini API not configured — add GEMINI_API_KEY to Railway"}), 503
+    try:
+        assert_field_discovery_available(_claude)
+    except DiscoveryError as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
 
     # Find site display name
     site_name = next((name for key, name, *_ in SUPPORTED_SITES if key == source), source)
 
-    # Single discovery call — the 60-second cache makes repeated calls return
-    # identical results at temperature 0, so one call is sufficient.
     try:
         fields = claude_discover_fields(raw_text, site_name, source=source)
+    except DiscoveryError as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
     except Exception as e:
-        return jsonify({"ok": False, "error": f"Discovery error: {str(e)[:100]}"}), 500
+        print(f"[Mighty] Field discovery failed for source={source}: {e}", flush=True)
+        return jsonify({"ok": False, "error": f"Discovery error: {str(e)[:100]}"}), 503
     if not fields:
-        return jsonify({"ok": False, "error": "Could not identify fields — try syncing again"}), 500
+        return jsonify({"ok": False, "error": "Could not identify fields — try syncing again"}), 200
 
     _save_discovered_fields(uid, source, fields)
     return jsonify({"ok": True, "fields": fields})
@@ -16551,7 +16588,7 @@ def api_data_sync():
         except Exception:
             pass
 
-    if raw_text and _claude and data.get("sync_status") == "ok":
+    if raw_text and _claude and is_field_discovery_enabled() and data.get("sync_status") == "ok":
         import threading
         site_name = display
         uid       = user["id"]
@@ -16873,7 +16910,7 @@ def api_extension_intercept():
         )
 
     # Re-run field discovery in background
-    if _claude:
+    if _claude and is_field_discovery_enabled():
         site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == source),
                          source.replace("_", " ").title())
         # Capture current stored items for stale-data clearing below
@@ -17019,7 +17056,7 @@ def api_extension_supplement():
         db.commit()
     print(f"[Supplement] {source}: appended {len(new_text)} chars from {url}", flush=True)
 
-    if _claude:
+    if _claude and is_field_discovery_enabled():
         site_name = next((n for k, n, *_ in SUPPORTED_SITES if k == source),
                          source.replace("_", " ").title())
         def _bg():
@@ -17421,7 +17458,7 @@ def api_debug_discover_now(source):
         fields_before_filter = []
         fields_after_filter = []
 
-        if _claude:
+        if _claude and is_field_discovery_enabled():
             _models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-preview-05-20"]
             for _m in _models:
                 try:
@@ -18301,7 +18338,7 @@ def api_extension_capture():
         print(f"[Mighty] populate_action_items (capture) error: {_pai_cap_err}", flush=True)
 
     # Trigger AI field discovery in background
-    if raw_text and _claude:
+    if raw_text and _claude and is_field_discovery_enabled():
         def _discover():
             # Run entirely inside app context — get_db() and hint-phrase loading
             # both require it; do NOT capture db from the outer request scope.
@@ -18632,7 +18669,7 @@ def _auto_discover_missing(uid: str) -> None:
     """Run field discovery for any connected account that has raw_text.
     Skips accounts whose raw_text hasn't changed since last discovery (hash check).
     Always establishes its own app context so it is safe to call from any thread."""
-    if not _claude:
+    if not _claude or not is_field_discovery_enabled():
         return
     with app.app_context():
         try:
@@ -18813,7 +18850,7 @@ def sync_account_cloud(source):
                 )
                 # Auto-discover fields after sync — no manual step needed
                 fields_found = 0
-                if result.get("synced", 0) > 0 and _claude:
+                if result.get("synced", 0) > 0 and _claude and is_field_discovery_enabled():
                     try:
                         _sync_status[uid] = {"running": True, "step": "discovering", "source": source}
                         ad = get_db().execute(
