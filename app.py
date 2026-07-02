@@ -149,6 +149,30 @@ class _RouteTimer:
         print(msg, flush=True)
 
 
+class _LoadAccountsProfiler:
+    """Break down load_accounts work — logs ranked steps and top-3 contributors."""
+
+    __slots__ = ("route", "_steps")
+
+    def __init__(self, route: str):
+        self.route = route
+        self._steps: dict[str, float] = {}
+
+    def record(self, name: str, ms: float) -> None:
+        self._steps[name] = self._steps.get(name, 0.0) + ms
+
+    def finish(self) -> None:
+        if not self._steps:
+            return
+        ranked = sorted(self._steps.items(), key=lambda x: -x[1])
+        parts = " | ".join(f"{n}={ms:.0f}ms" for n, ms in ranked)
+        top3 = ", ".join(f"{n}={ms:.0f}ms" for n, ms in ranked[:3])
+        print(
+            f"[LoadAccountsProfile] {self.route} {parts} | top3: {top3}",
+            flush=True,
+        )
+
+
 def _is_admin_user(user) -> bool:
     """True when user email matches ADMIN_EMAIL."""
     admin = os.environ.get("ADMIN_EMAIL", "")
@@ -1960,9 +1984,17 @@ def _fernet_base_material() -> bytes:
     sk = app.secret_key
     return sk.encode() if isinstance(sk, str) else sk
 
+_fernet_data_cache: dict[str, object] = {}
+_fernet_cred_cache: dict[str, object] = {}
+
+
 def _data_fernet(user_id: str):
     """Return a Fernet instance keyed to this user. Returns None if cryptography not installed."""
+    cached = _fernet_data_cache.get(user_id)
+    if cached is not None or user_id in _fernet_data_cache:
+        return cached
     if not _FERNET_AVAILABLE:
+        _fernet_data_cache[user_id] = None
         return None
     raw = hashlib.pbkdf2_hmac(
         "sha256",
@@ -1970,11 +2002,17 @@ def _data_fernet(user_id: str):
         b"mighty-account-data-v1",
         600_000,
     )
-    return Fernet(base64.urlsafe_b64encode(raw))
+    f = Fernet(base64.urlsafe_b64encode(raw))
+    _fernet_data_cache[user_id] = f
+    return f
 
 def _cred_fernet(user_id: str):
     """Fernet key for credential encryption — different salt from account data."""
+    cached = _fernet_cred_cache.get(user_id)
+    if cached is not None or user_id in _fernet_cred_cache:
+        return cached
     if not _FERNET_AVAILABLE:
+        _fernet_cred_cache[user_id] = None
         return None
     raw = hashlib.pbkdf2_hmac(
         "sha256",
@@ -1982,7 +2020,9 @@ def _cred_fernet(user_id: str):
         b"mighty-credentials-v1",
         600_000,
     )
-    return Fernet(base64.urlsafe_b64encode(raw))
+    f = Fernet(base64.urlsafe_b64encode(raw))
+    _fernet_cred_cache[user_id] = f
+    return f
 
 # ── AI field discovery (Gemini Flash via google-genai SDK) ───────────────────
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -4979,7 +5019,8 @@ def decrypt_cred(user_id: str, stored: str) -> str:
         return ""
     try:
         if stored.startswith("enc:"):
-            return _cred_fernet(user_id).decrypt(stored[4:].encode()).decode()
+            f = _cred_fernet(user_id)
+            return f.decrypt(stored[4:].encode()).decode() if f else ""
         if stored.startswith("plain:"):
             return stored[6:]
         return stored
@@ -8854,14 +8895,18 @@ def dashboard():
     except Exception:
         pass
     _rt.step("promote_candidates")
+    _lap = _LoadAccountsProfiler("/dashboard")
+    _t0 = time.perf_counter()
     cred_rows = get_db().execute(
         "SELECT source, extra_enc FROM account_credentials WHERE user_id=?",
         (user["id"],)
     ).fetchall()
+    _lap.record("sql_credentials", (time.perf_counter() - _t0) * 1000)
     connected_sources = {r["source"] for r in cred_rows if not r["source"].startswith("_")}
 
     # Step 2: load discovered fields and synced data per source
     discovered_by_source: dict = {}
+    _t0 = time.perf_counter()
     for cr in cred_rows:
         if cr["extra_enc"]:
             try:
@@ -8882,16 +8927,20 @@ def dashboard():
                     }
             except Exception:
                 pass
+    _lap.record("decrypt_cred", (time.perf_counter() - _t0) * 1000)
 
+    _t0 = time.perf_counter()
     acct_rows = get_db().execute(
         "SELECT * FROM account_data WHERE user_id=? ORDER BY synced_at DESC",
         (user["id"],)
     ).fetchall()
+    _lap.record("sql_account_data", (time.perf_counter() - _t0) * 1000)
     # Convert to plain dicts so .get() works safely even when columns are
     # missing from older production DB schemas (e.g. sync_status, sync_failure_reason).
     synced_map = {r["source"]: dict(r) for r in acct_rows}
     _decrypt_acct = _cached_decrypt_fn(uid, decrypt_account_data)
     _rt.step("load_accounts")
+    _lap.finish()
     # so the card rendering loop doesn't fire N+1 queries (one pair per account).
     _obs_by_source: dict = {}
     _cand_counts_by_source: dict = {}
@@ -8957,6 +9006,15 @@ def dashboard():
             _cat_map[c_cat] = []
         _cat_map[c_cat].append((src, c_name, c_icon, c_color))
 
+    _email_sources = {
+        r["site_key"]
+        for r in db.execute(
+            "SELECT site_key FROM email_suggestions WHERE user_id=? AND dismissed=0", (uid,),
+        ).fetchall()
+    }
+    _render_lap = _LoadAccountsProfiler("/dashboard render_cards")
+    _render_decrypt_ms = 0.0
+
     cards_html = ""
     total_expiring = 0
     login_required_accounts = []
@@ -8965,7 +9023,9 @@ def dashboard():
         grid_cards = ""
         for src, display_name, icon, color in _cat_map[cat]:
             row   = synced_map.get(src)
+            _t1 = time.perf_counter()
             data  = _decrypt_acct(user["id"], row["data_enc"] or "") if row else {}
+            _render_decrypt_ms += (time.perf_counter() - _t1) * 1000
 
             # Determine items to display
             review_required_keys: set = set()
@@ -9019,10 +9079,7 @@ def dashboard():
             _lc = resolve_account_lifecycle(
                 src,
                 in_credentials=True,
-                from_email=bool(db.execute(
-                    "SELECT 1 FROM email_suggestions WHERE user_id=? AND site_key=? AND dismissed=0",
-                    (uid, src),
-                ).fetchone()),
+                from_email=src in _email_sources,
                 account=_provider_acct_early,
             )
             if _lc.state != LC_SYNCED:
@@ -9622,6 +9679,8 @@ def dashboard():
         account_data_html = cards_html
     else:
         account_data_html = ""
+    _render_lap.record("decrypt_account", _render_decrypt_ms)
+    _render_lap.finish()
     _rt.step("render_cards")
 
     # Compute total tracked value across all accounts
@@ -15627,16 +15686,20 @@ fetch('/credentials/fields/load').then(r => r.json()).then(function(data) {{
 @require_login
 def credentials_page():
     _rt = _RouteTimer("/credentials")
+    _lap = _LoadAccountsProfiler("/credentials")
     user = get_db().execute(
         "SELECT * FROM users WHERE id=?", (session["user_id"],)
     ).fetchone()
+    _t0 = time.perf_counter()
     rows = get_db().execute(
         "SELECT source, username_enc, extra_enc FROM account_credentials WHERE user_id=?",
         (user["id"],)
     ).fetchall()
+    _lap.record("sql_credentials", (time.perf_counter() - _t0) * 1000)
     configured = {r["source"] for r in rows}
     # Load extra data (discovered fields, totp, etc.) per source
     extra_by_source = {}
+    _t0 = time.perf_counter()
     for r in rows:
         if r["extra_enc"]:
             try:
@@ -15645,13 +15708,16 @@ def credentials_page():
                 )
             except Exception:
                 pass
+    _lap.record("decrypt_cred", (time.perf_counter() - _t0) * 1000)
     # Load sync timestamps from account_data
+    _t0 = time.perf_counter()
     sync_rows = get_db().execute(
         "SELECT source, synced_at, connection_status, extraction_status, sync_status, "
         "sync_failure_reason, data_enc "
         "FROM account_data WHERE user_id=?",
         (user["id"],),
     ).fetchall()
+    _lap.record("sql_account_data", (time.perf_counter() - _t0) * 1000)
     synced_at_by_source = {}
     connection_status_by_source = {}
     extraction_status_by_source = {}
@@ -15660,18 +15726,28 @@ def credentials_page():
     show_debug = _is_dev_debug(user)
     db = get_db()
     uid = user["id"]
+    _t0 = time.perf_counter()
+    _lc_signals = _prefetch_lifecycle_signals(uid, db)
+    _lap.record("lifecycle_prefetch", (time.perf_counter() - _t0) * 1000)
     _decrypt_acct = _cached_decrypt_fn(uid, decrypt_account_data)
+    _provider_ms = 0.0
+    _lifecycle_ms = 0.0
     for r in sync_rows:
+        _t1 = time.perf_counter()
         acct = load_provider_account(uid, dict(r), decrypt_fn=_decrypt_acct)
+        _provider_ms += (time.perf_counter() - _t1) * 1000
         if acct and acct.is_synced and r["synced_at"]:
             synced_at_by_source[r["source"]] = r["synced_at"]
         if r["connection_status"]:
             connection_status_by_source[r["source"]] = r["connection_status"]
         if r["extraction_status"]:
             extraction_status_by_source[r["source"]] = r["extraction_status"]
+        _t1 = time.perf_counter()
         lifecycle_by_source[r["source"]] = _lifecycle_for_user_source(
             uid, r["source"], db, account=acct,
+            signals=_lc_signals.get(r["source"]),
         )
+        _lifecycle_ms += (time.perf_counter() - _t1) * 1000
         if show_debug:
             debug_by_source[r["source"]] = {
                 "source": r["source"],
@@ -15682,7 +15758,10 @@ def credentials_page():
                 "synced_at": r["synced_at"],
                 "last_error": r["sync_failure_reason"],
             }
+    _lap.record("provider_account", _provider_ms)
+    _lap.record("lifecycle_resolve", _lifecycle_ms)
     _rt.step("load_accounts")
+    _lap.finish()
     pending_added = db.execute(
         "SELECT site_key, display_name FROM email_suggestions "
         "WHERE user_id=? AND added=1 AND dismissed=0 ORDER BY email_count DESC",
@@ -15691,7 +15770,9 @@ def credentials_page():
     for row in pending_added:
         sk = row["site_key"]
         if sk not in lifecycle_by_source:
-            lifecycle_by_source[sk] = _lifecycle_for_user_source(uid, sk, db)
+            lifecycle_by_source[sk] = _lifecycle_for_user_source(
+                uid, sk, db, signals=_lc_signals.get(sk),
+            )
         if show_debug and sk not in debug_by_source:
             lc = lifecycle_by_source[sk]
             debug_by_source[sk] = {
@@ -15707,7 +15788,9 @@ def credentials_page():
         for src in configured:
             if src.startswith("_") or src in debug_by_source:
                 continue
-            lifecycle_by_source.setdefault(src, _lifecycle_for_user_source(uid, src, db))
+            lifecycle_by_source.setdefault(
+                src, _lifecycle_for_user_source(uid, src, db, signals=_lc_signals.get(src)),
+            )
             lc = lifecycle_by_source[src]
             debug_by_source[src] = {
                 "source": src,
@@ -19438,24 +19521,49 @@ def _amex_conn_ctx():
     return dict(iso_fn=iso, encrypt_fn=encrypt_account_data, decrypt_fn=decrypt_account_data)
 
 
+def _prefetch_lifecycle_signals(uid: str, db) -> dict[str, tuple[bool, bool, bool]]:
+    """Bulk-load lifecycle inputs per source: (in_credentials, from_email, email_added)."""
+    cred_sources = {
+        r["source"]
+        for r in db.execute(
+            "SELECT source FROM account_credentials WHERE user_id=?", (uid,),
+        ).fetchall()
+    }
+    email_by_source: dict[str, tuple[bool, bool]] = {}
+    for r in db.execute(
+        "SELECT site_key, added FROM email_suggestions WHERE user_id=? AND dismissed=0",
+        (uid,),
+    ).fetchall():
+        email_by_source[r["site_key"]] = (True, bool(r["added"]))
+    signals: dict[str, tuple[bool, bool, bool]] = {}
+    for src in cred_sources | set(email_by_source.keys()):
+        from_email, email_added = email_by_source.get(src, (False, False))
+        signals[src] = (src in cred_sources, from_email, email_added)
+    return signals
+
+
 def _lifecycle_for_user_source(
     uid: str,
     source: str,
     db=None,
     account: ProviderAccount | None = None,
+    signals: tuple[bool, bool, bool] | None = None,
 ) -> AccountLifecycle:
     """Load persisted signals and resolve unified lifecycle state."""
     db = db or get_db()
-    in_cred = bool(db.execute(
-        "SELECT 1 FROM account_credentials WHERE user_id=? AND source=?",
-        (uid, source),
-    ).fetchone())
-    email_row = db.execute(
-        "SELECT added FROM email_suggestions WHERE user_id=? AND site_key=? AND dismissed=0",
-        (uid, source),
-    ).fetchone()
-    from_email = email_row is not None
-    email_added = bool(email_row and email_row["added"])
+    if signals is not None:
+        in_cred, from_email, email_added = signals
+    else:
+        in_cred = bool(db.execute(
+            "SELECT 1 FROM account_credentials WHERE user_id=? AND source=?",
+            (uid, source),
+        ).fetchone())
+        email_row = db.execute(
+            "SELECT added FROM email_suggestions WHERE user_id=? AND site_key=? AND dismissed=0",
+            (uid, source),
+        ).fetchone()
+        from_email = email_row is not None
+        email_added = bool(email_row and email_row["added"])
     if account is None:
         ad_row = db.execute(
             "SELECT source, synced_at, connection_status, extraction_status, data_enc, sync_status "
