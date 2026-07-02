@@ -14,7 +14,12 @@ Env vars (all optional):
   BASE_URL      — Public URL override (e.g. https://mighty-selfserve.up.railway.app)
   PORT          — Port to listen on (default: 5004)
   DEMO_MODE     — Set to true to show sample dashboard data (also: ?demo=1 on /dashboard)
-  AI_FIELD_DISCOVERY_ENABLED — Set to false to disable Gemini field discovery
+  AI_PROVIDER — Field discovery provider: openai (default) or gemini
+  OPENAI_API_KEY — OpenAI API key for field discovery (default provider)
+  OPENAI_FIELD_DISCOVERY_MODEL — OpenAI model for field discovery (default: gpt-5.4-mini)
+  GEMINI_API_KEY — Gemini API key (used when AI_PROVIDER=gemini or AI_ALLOW_FALLBACK=true)
+  AI_ALLOW_FALLBACK — Set to true to fall back to Gemini when OpenAI fails
+  AI_FIELD_DISCOVERY_ENABLED — Set to false to disable AI field discovery
   AI_FIELD_DISCOVERY_MAX_CHARS — Max page chars sent to field discovery (default: 20000)
   AI_FIELD_DISCOVERY_CACHE_TTL_SECONDS — Success cache TTL (default: 3600)
   AI_FIELD_DISCOVERY_FAILURE_TTL_SECONDS — Negative-cache TTL after failures (default: 300)
@@ -4769,14 +4774,16 @@ CONCRETE INCLUDE EXAMPLES:
 LABELING: write labels that make sense without knowing the site (no abbreviations, no page jargon). Labels should say what the value IS, not repeat the site name.
 
 Return ONLY a JSON array, no other text:
-[{{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617","confidence":0.97,"source_snippet":"Rapid Rewards Points Balance 24,617"}}]
+[{{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617","value_type":"points","confidence":0.97,"source_snippet":"Rapid Rewards Points Balance 24,617"}}]
 
 Rules:
 - key: snake_case, 1-4 words
 - label: 2-5 words, self-explanatory out of context
 - value: exact current value — if empty, zero, or a login prompt, skip the field entirely
+- value_type: one of points, currency, date, status, text, certificate, credit, booking, payment, progress, other
 - confidence: float 0.0–1.0 — how certain you are this is a real personalized user fact (not generic copy). Aim for >0.85 on solid data; below 0.70 means you are guessing.
 - source_snippet: verbatim excerpt (≤15 words) from the page text that most directly supports this value
+- Optional metadata when clearly present: expiry_date, points, currency (strings)
 - Each concept ONCE, no duplicates
 - Max 25 fields
 - If you find zero fields that pass the hard-exclude test, return an empty array []
@@ -4797,6 +4804,11 @@ CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included
 CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
 
+from mighty.ai_provider import (
+    DiscoveryContext,
+    discover_fields_with_provider,
+    get_configured_field_discovery_provider,
+)
 from mighty.field_discovery import (
     DiscoveryError,
     assert_field_discovery_available,
@@ -4807,14 +4819,9 @@ from mighty.field_discovery import (
     truncate_discovery_input,
 )
 
-GEMINI_DISCOVERY_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-]
-
 
 def claude_discover_fields(raw_text: str, site_name: str, source: str | None = None) -> list:
-    """Use Gemini Flash to identify all useful data fields in a page.
+    """Use the configured AI provider to identify useful data fields in a page.
 
     Args:
         raw_text:  Full page text (or multi-page blob separated by === URL === markers).
@@ -4824,7 +4831,11 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
     """
     if not is_field_discovery_enabled():
         return []
-    if not _claude or not raw_text:
+    if not raw_text:
+        return []
+    try:
+        get_configured_field_discovery_provider()
+    except DiscoveryError:
         return []
 
     max_chars = field_discovery_max_chars()
@@ -4885,47 +4896,24 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             today=_today_str,
             category_hint=category_hint,
         )
-        # Try models in order until one works
-        _model_errors: list[str] = []
-        response = None
-        for _m in GEMINI_DISCOVERY_MODELS:
-            try:
-                response = _claude.models.generate_content(
-                    model=_m,
-                    contents=prompt,
-                    config=_genai_sdk.types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0,
-                    ),
-                )
-                print(f"[Mighty] Used model: {_m}", flush=True)
-                break
-            except Exception as _me:
-                _model_errors.append(f"{_m}: {_me}")
-                print(f"[Mighty] Model {_m} failed: {_me}", flush=True)
-        if response is None:
-            err = DiscoveryError(
-                "All Gemini models failed: " + "; ".join(_model_errors)
-            )
-            cache.record_failure(cache_key, err)
-            raise err
-        text = response.text.strip()
-        print(f"[Mighty] Gemini response ({len(text)} chars): {text[:400]}", flush=True)
-        fields = []
+        context = DiscoveryContext(
+            site_name=site_name,
+            source=source,
+            prompt=prompt,
+            today=_today_str,
+            category_hint=category_hint,
+        )
         try:
-            result = json.loads(text)
-            if isinstance(result, list):
-                fields = _post_filter_fields(result)
-            elif isinstance(result, dict):
-                for k in ("fields", "data", "items", "results"):
-                    if isinstance(result.get(k), list):
-                        fields = _post_filter_fields(result[k])
-                        break
-        except json.JSONDecodeError:
-            m = re.search(r'\[.*\]', text, re.DOTALL)
-            if m:
-                try: fields = _post_filter_fields(json.loads(m.group()))
-                except Exception: pass
+            result = discover_fields_with_provider(source, snippets, context)
+        except DiscoveryError as err:
+            cache.record_failure(cache_key, err)
+            raise
+        print(
+            f"[Mighty] Field discovery via {result.provider} ({result.model}), "
+            f"{len(result.fields)} raw fields",
+            flush=True,
+        )
+        fields = _post_filter_fields(result.fields, source=source or "")
 
         # Second pass: ask Gemini to identify missing high-value pages
         # Only run if coverage is low (< 3 high-confidence fields found)
@@ -4968,7 +4956,7 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
     except DiscoveryError:
         raise
     except Exception as e:
-        print(f"[Mighty] Gemini discovery error: {e}", flush=True)
+        print(f"[Mighty] Field discovery error: {e}", flush=True)
         return []
 
 
@@ -16128,7 +16116,7 @@ def _credentials_discover_impl(source):
         return jsonify({"ok": False, "error": "No page text stored — sync again"}), 404
 
     try:
-        assert_field_discovery_available(_claude)
+        assert_field_discovery_available()
     except DiscoveryError as e:
         return jsonify({"ok": False, "error": str(e)}), 503
 

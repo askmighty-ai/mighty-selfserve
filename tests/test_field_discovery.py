@@ -10,6 +10,7 @@ import pytest
 os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from mighty.ai_provider import DiscoveryProviderError, DiscoveryResult
 from mighty.field_discovery import (
     DiscoveryDisabledError,
     DiscoveryError,
@@ -24,12 +25,28 @@ from mighty.field_discovery import (
     truncate_discovery_input,
 )
 
+SAMPLE_FIELD = {
+    "key": "balance",
+    "label": "Balance",
+    "value": "$100",
+    "value_type": "currency",
+    "confidence": 0.99,
+    "source_snippet": "Balance $100",
+}
+
 
 @pytest.fixture(autouse=True)
 def _reset_discovery_cache():
     clear_field_schema_cache()
     yield
     clear_field_schema_cache()
+
+
+@pytest.fixture(autouse=True)
+def _default_openai_env(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
 
 class TestEnvConfig:
@@ -66,7 +83,7 @@ class TestSchemaCache:
     def test_success_cache_hit(self):
         cache = FieldSchemaCache()
         key = schema_cache_key("delta", "points 1000")
-        fields = [{"key": "points", "label": "Points", "value": "1000", "confidence": 0.99}]
+        fields = [SAMPLE_FIELD]
         cache.record_success(key, fields)
         assert cache.get_fields(key) == fields
 
@@ -88,18 +105,21 @@ class TestSchemaCache:
 
 
 class TestAvailability:
-    def test_assert_available_when_ready(self):
-        assert_field_discovery_available(object())
+    def test_assert_available_when_ready(self, monkeypatch):
+        monkeypatch.setenv("AI_PROVIDER", "openai")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        assert_field_discovery_available()
 
     def test_assert_disabled(self, monkeypatch):
         monkeypatch.setenv("AI_FIELD_DISCOVERY_ENABLED", "off")
         with pytest.raises(DiscoveryDisabledError):
-            assert_field_discovery_available(object())
+            assert_field_discovery_available()
 
-    def test_assert_unavailable_without_client(self, monkeypatch):
-        monkeypatch.delenv("AI_FIELD_DISCOVERY_ENABLED", raising=False)
-        with pytest.raises(DiscoveryUnavailableError):
-            assert_field_discovery_available(None)
+    def test_assert_unavailable_without_openai_key(self, monkeypatch):
+        monkeypatch.setenv("AI_PROVIDER", "openai")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with pytest.raises(DiscoveryUnavailableError, match="OPENAI_API_KEY"):
+            assert_field_discovery_available()
 
 
 @pytest.fixture()
@@ -172,70 +192,60 @@ def test_credentials_discover_disabled_returns_503(client, monkeypatch):
 
 
 def test_credentials_discover_unavailable_returns_503(client, monkeypatch):
-    import app as mighty
-
-    monkeypatch.setattr(mighty, "_claude", None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     csrf = _seed_discover_account(client, monkeypatch)
 
     r = client.post("/credentials/discover/amex", data={"_csrf": csrf})
     assert r.status_code == 503
     body = r.get_json()
     assert body["ok"] is False
-    assert "GEMINI_API_KEY" in body["error"]
+    assert "OPENAI_API_KEY" in body["error"]
 
 
 def test_credentials_discover_model_failure_returns_503(client, monkeypatch):
     import app as mighty
 
-    class FakeModels:
-        def generate_content(self, **kwargs):
-            raise RuntimeError("429 quota")
+    call_count = []
 
-    class FakeClient:
-        models = FakeModels()
+    def _fail_discovery(source, content, context):
+        call_count.append(1)
+        raise DiscoveryProviderError("OpenAI field discovery failed (gpt-5.4-mini): 429 quota")
 
-    monkeypatch.setattr(mighty, "_claude", FakeClient())
+    monkeypatch.setattr(mighty, "discover_fields_with_provider", _fail_discovery)
     csrf = _seed_discover_account(client, monkeypatch)
 
     r = client.post("/credentials/discover/amex", data={"_csrf": csrf})
     assert r.status_code == 503
-    assert "All Gemini models failed" in r.get_json()["error"]
+    assert "OpenAI field discovery failed" in r.get_json()["error"]
 
     r2 = client.post("/credentials/discover/amex", data={"_csrf": csrf})
     assert r2.status_code == 503
-    assert "All Gemini models failed" in r2.get_json()["error"]
+    assert "OpenAI field discovery failed" in r2.get_json()["error"]
+    assert len(call_count) == 1
 
 
 def test_claude_discover_fields_schema_cache(client, monkeypatch):
-    import json
-
     import app as mighty
 
-    sample_fields = [
-        {"key": "balance", "label": "Balance", "value": "$100", "confidence": 0.99},
-    ]
     call_count = []
 
-    class FakeResp:
-        text = json.dumps(sample_fields)
+    def _fake_discovery(source, content, context):
+        call_count.append(1)
+        return DiscoveryResult(
+            fields=[SAMPLE_FIELD],
+            provider="openai",
+            model="gpt-5.4-mini",
+        )
 
-    class FakeModels:
-        def generate_content(self, **kwargs):
-            call_count.append(1)
-            return FakeResp()
-
-    class FakeClient:
-        models = FakeModels()
-
-    monkeypatch.setattr(mighty, "_claude", FakeClient())
-    monkeypatch.setattr(mighty, "_post_filter_fields", lambda fields: fields)
+    monkeypatch.setattr(mighty, "discover_fields_with_provider", _fake_discovery)
+    monkeypatch.setattr(mighty, "_post_filter_fields", lambda fields, source="": fields)
 
     text = "Balance $100\nGold Medallion status"
     first = mighty.claude_discover_fields(text, "Amex", source="amex")
     count_after_first = len(call_count)
     second = mighty.claude_discover_fields(text, "Amex", source="amex")
-    assert first == sample_fields
-    assert second == sample_fields
+    assert first == [SAMPLE_FIELD]
+    assert second == [SAMPLE_FIELD]
     assert len(call_count) == count_after_first
 
 
@@ -244,15 +254,11 @@ def test_claude_discover_fields_failure_negative_cache(client, monkeypatch):
 
     call_count = []
 
-    class FakeModels:
-        def generate_content(self, **kwargs):
-            call_count.append(1)
-            raise RuntimeError("429 quota")
+    def _fail_discovery(source, content, context):
+        call_count.append(1)
+        raise DiscoveryProviderError("OpenAI field discovery failed (gpt-5.4-mini): 429 quota")
 
-    class FakeClient:
-        models = FakeModels()
-
-    monkeypatch.setattr(mighty, "_claude", FakeClient())
+    monkeypatch.setattr(mighty, "discover_fields_with_provider", _fail_discovery)
 
     text = "Balance $100\nGold Medallion status"
     with pytest.raises(mighty.DiscoveryError):
@@ -264,8 +270,6 @@ def test_claude_discover_fields_failure_negative_cache(client, monkeypatch):
 
 
 def test_claude_discover_fields_respects_max_chars(client, monkeypatch):
-    import json
-
     import app as mighty
 
     captured = []
@@ -274,36 +278,25 @@ def test_claude_discover_fields_respects_max_chars(client, monkeypatch):
         captured.append(len(raw_text))
         return raw_text
 
-    class FakeResp:
-        text = "[]"
-
-    class FakeModels:
-        def generate_content(self, **kwargs):
-            return FakeResp()
-
-    class FakeClient:
-        models = FakeModels()
+    def _fake_discovery(source, content, context):
+        return DiscoveryResult(fields=[], provider="openai", model="gpt-5.4-mini")
 
     monkeypatch.setenv("AI_FIELD_DISCOVERY_MAX_CHARS", "500")
-    monkeypatch.setattr(mighty, "_claude", FakeClient())
+    monkeypatch.setattr(mighty, "discover_fields_with_provider", _fake_discovery)
     monkeypatch.setattr(mighty, "_extract_candidate_snippets", _fake_snippets)
-    monkeypatch.setattr(mighty, "_post_filter_fields", lambda fields: fields)
+    monkeypatch.setattr(mighty, "_post_filter_fields", lambda fields, source="": fields)
 
     mighty.claude_discover_fields("x" * 5000, "Amex", source="amex")
     assert captured == [500]
 
 
-def test_claude_discover_fields_kill_switch_skips_gemini(client, monkeypatch):
+def test_claude_discover_fields_kill_switch_skips_openai(client, monkeypatch):
     import app as mighty
 
     monkeypatch.setenv("AI_FIELD_DISCOVERY_ENABLED", "false")
 
-    class FakeModels:
-        def generate_content(self, **kwargs):
-            raise AssertionError("Gemini should not be called when discovery is disabled")
+    def _should_not_run(*args, **kwargs):
+        raise AssertionError("OpenAI should not be called when discovery is disabled")
 
-    class FakeClient:
-        models = FakeModels()
-
-    monkeypatch.setattr(mighty, "_claude", FakeClient())
+    monkeypatch.setattr(mighty, "discover_fields_with_provider", _should_not_run)
     assert mighty.claude_discover_fields("Balance $100", "Amex", source="amex") == []
