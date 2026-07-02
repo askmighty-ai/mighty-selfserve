@@ -1,0 +1,138 @@
+"""
+AI field discovery budget guardrails.
+
+Kill switch, input caps, provider/content-hash schema cache, and failure
+negative-cache to avoid repeat Gemini spend on unchanged or failing inputs.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import time
+from dataclasses import dataclass
+from typing import Any
+
+
+class DiscoveryError(Exception):
+    """Raised when AI field discovery fails after attempting the provider."""
+
+
+class DiscoveryDisabledError(DiscoveryError):
+    """Field discovery is turned off via AI_FIELD_DISCOVERY_ENABLED."""
+
+
+class DiscoveryUnavailableError(DiscoveryError):
+    """Field discovery is enabled but the AI provider client is not configured."""
+
+
+def _env_bool(name: str, *, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _env_int(name: str, *, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
+def is_field_discovery_enabled() -> bool:
+    return _env_bool("AI_FIELD_DISCOVERY_ENABLED", default=True)
+
+
+def field_discovery_max_chars() -> int:
+    return _env_int("AI_FIELD_DISCOVERY_MAX_CHARS", default=20_000)
+
+
+def field_discovery_cache_ttl_seconds() -> int:
+    return _env_int("AI_FIELD_DISCOVERY_CACHE_TTL_SECONDS", default=3600)
+
+
+def field_discovery_failure_ttl_seconds() -> int:
+    return _env_int("AI_FIELD_DISCOVERY_FAILURE_TTL_SECONDS", default=300)
+
+
+def truncate_discovery_input(raw_text: str, max_chars: int | None = None) -> str:
+    limit = field_discovery_max_chars() if max_chars is None else max_chars
+    if limit <= 0:
+        return ""
+    return (raw_text or "")[:limit]
+
+
+def schema_cache_key(source: str | None, raw_text: str) -> str:
+    provider = (source or "").strip() or "_unknown"
+    content_hash = hashlib.sha256((raw_text or "").encode()).hexdigest()
+    return f"{provider}:{content_hash}"
+
+
+@dataclass
+class _CacheEntry:
+    timestamp: float
+    success: bool
+    fields: list[dict[str, Any]] | None = None
+    error_message: str | None = None
+
+
+class FieldSchemaCache:
+    """Provider + content-hash cache for discovered field schemas."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, _CacheEntry] = {}
+
+    def _ttl_for(self, entry: _CacheEntry) -> int:
+        if entry.success:
+            return field_discovery_cache_ttl_seconds()
+        return field_discovery_failure_ttl_seconds()
+
+    def get_fields(self, key: str) -> list[dict[str, Any]] | None:
+        """Return cached fields, raise DiscoveryError on a fresh failure hit, or miss."""
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        age = time.time() - entry.timestamp
+        if age >= self._ttl_for(entry):
+            del self._entries[key]
+            return None
+        if entry.success:
+            return list(entry.fields or [])
+        raise DiscoveryError(entry.error_message or "Field discovery recently failed")
+
+    def record_success(self, key: str, fields: list[dict[str, Any]]) -> None:
+        self._entries[key] = _CacheEntry(time.time(), True, fields=list(fields))
+
+    def record_failure(self, key: str, error: DiscoveryError) -> None:
+        self._entries[key] = _CacheEntry(time.time(), False, error_message=str(error))
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+# Shared in-process cache (cleared in tests via clear_field_schema_cache()).
+_field_schema_cache = FieldSchemaCache()
+
+
+def get_field_schema_cache() -> FieldSchemaCache:
+    return _field_schema_cache
+
+
+def clear_field_schema_cache() -> None:
+    _field_schema_cache.clear()
+
+
+def assert_field_discovery_available(client: Any | None) -> None:
+    """Raise a DiscoveryError subclass when discovery cannot run for a user request."""
+    if not is_field_discovery_enabled():
+        raise DiscoveryDisabledError(
+            "AI field discovery is disabled — set AI_FIELD_DISCOVERY_ENABLED=true to re-enable"
+        )
+    if not client:
+        raise DiscoveryUnavailableError(
+            "Gemini API not configured — add GEMINI_API_KEY to Railway"
+        )
