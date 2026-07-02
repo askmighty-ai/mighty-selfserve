@@ -16,6 +16,7 @@ from mighty.action import (
     parse_due_date,
     priority_from_urgency,
 )
+from mighty.user_copy import NEEDS_LOGIN_ACTION_CTA
 
 
 def _is_meaningful_value(value: str) -> bool:
@@ -51,7 +52,7 @@ def action_from_action_item(item: dict) -> Action:
         due_date=parse_due_date(item.get("exp_date")),
         days_until_due=days_left,
         source_accounts=[source] if source else [],
-        recommended_next_step="Log in to re-sync" if btype == "login_required" else "",
+        recommended_next_step=NEEDS_LOGIN_ACTION_CTA if btype == "login_required" else "",
         benefit_type=btype,
         display_name=source.replace("_", " ").title() if source else "",
     )

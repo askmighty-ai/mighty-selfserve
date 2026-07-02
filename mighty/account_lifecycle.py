@@ -24,6 +24,15 @@ from mighty.connection_state import (
     WAITING_FOR_EXTENSION as CONN_WAITING,
 )
 from mighty.provider_account import ProviderAccount, is_synced
+from mighty.user_copy import (
+    LIFECYCLE_CTAS,
+    LIFECYCLE_DESCRIPTIONS,
+    LIFECYCLE_LABELS,
+    SECONDARY_CTA_EXTENSION_RETRY,
+    SOURCE_EXTENSION,
+    SOURCE_FOUND_FROM_GMAIL,
+    SOURCE_MANUALLY_ADDED,
+)
 
 # ── Lifecycle state ids ───────────────────────────────────────────────────────
 DISCOVERED = "discovered"
@@ -43,12 +52,12 @@ ALL_STATES = (
 )
 
 STATE_LABELS: dict[str, str] = {
-    DISCOVERED: "Discovered",
-    ADDED: "Added",
-    WAITING_FOR_EXTENSION: "Waiting for extension",
-    NEEDS_LOGIN: "Needs login",
-    CONNECTED: "Connected",
-    SYNCED: "Synced",
+    DISCOVERED: LIFECYCLE_LABELS["discovered"],
+    ADDED: LIFECYCLE_LABELS["added"],
+    WAITING_FOR_EXTENSION: LIFECYCLE_LABELS["waiting_for_extension"],
+    NEEDS_LOGIN: LIFECYCLE_LABELS["needs_login"],
+    CONNECTED: LIFECYCLE_LABELS["connected"],
+    SYNCED: LIFECYCLE_LABELS["synced"],
 }
 
 STATE_COLORS: dict[str, str] = {
@@ -61,25 +70,25 @@ STATE_COLORS: dict[str, str] = {
 }
 
 STATE_DESCRIPTIONS: dict[str, str] = {
-    DISCOVERED: "Found from your email — not yet added to Mighty.",
-    ADDED: "Added to Mighty — connect to verify your provider session.",
-    WAITING_FOR_EXTENSION: "Install the Mighty Chrome extension and open your provider site.",
-    NEEDS_LOGIN: "Sign in to your provider in Chrome so Mighty can verify your session.",
-    CONNECTED: "Session verified — sync to pull your account data.",
-    SYNCED: "Account data extracted and stored.",
+    DISCOVERED: LIFECYCLE_DESCRIPTIONS["discovered"],
+    ADDED: LIFECYCLE_DESCRIPTIONS["added"],
+    WAITING_FOR_EXTENSION: LIFECYCLE_DESCRIPTIONS["waiting_for_extension"],
+    NEEDS_LOGIN: LIFECYCLE_DESCRIPTIONS["needs_login"],
+    CONNECTED: LIFECYCLE_DESCRIPTIONS["connected"],
+    SYNCED: LIFECYCLE_DESCRIPTIONS["synced"],
 }
 
 CTA_LABELS: dict[str, str] = {
-    DISCOVERED: "Add to Mighty",
-    ADDED: "Connect",
-    WAITING_FOR_EXTENSION: "Open provider site",
-    NEEDS_LOGIN: "Log in",
-    CONNECTED: "Sync now",
-    SYNCED: "View account",
+    DISCOVERED: LIFECYCLE_CTAS["discovered"],
+    ADDED: LIFECYCLE_CTAS["added"],
+    WAITING_FOR_EXTENSION: LIFECYCLE_CTAS["waiting_for_extension"],
+    NEEDS_LOGIN: LIFECYCLE_CTAS["needs_login"],
+    CONNECTED: LIFECYCLE_CTAS["connected"],
+    SYNCED: LIFECYCLE_CTAS["synced"],
 }
 
 SECONDARY_CTA: dict[str, str | None] = {
-    WAITING_FOR_EXTENSION: "I installed the extension / Retry",
+    WAITING_FOR_EXTENSION: SECONDARY_CTA_EXTENSION_RETRY,
 }
 
 
@@ -118,12 +127,12 @@ def _source_label(
     in_credentials: bool,
 ) -> str:
     if from_email:
-        return "Found from Gmail"
+        return SOURCE_FOUND_FROM_GMAIL
     if data_source == "extension":
-        return "Extension"
+        return SOURCE_EXTENSION
     if in_credentials:
-        return "Manually added"
-    return "Manually added"
+        return SOURCE_MANUALLY_ADDED
+    return SOURCE_MANUALLY_ADDED
 
 
 def _meaningful_field_count(account: ProviderAccount | None) -> int:
