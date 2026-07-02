@@ -145,13 +145,18 @@ class _RouteTimer:
         print(msg, flush=True)
 
 
-def _is_dev_debug(user) -> bool:
-    """True when ?debug=1 and user matches ADMIN_EMAIL."""
+def _is_admin_user(user) -> bool:
+    """True when user email matches ADMIN_EMAIL."""
     admin = os.environ.get("ADMIN_EMAIL", "")
     if not admin or not user:
         return False
     email = user["email"] if hasattr(user, "__getitem__") else user
-    return request.args.get("debug") == "1" and email == admin
+    return email == admin
+
+
+def _is_dev_debug(user) -> bool:
+    """True when ?debug=1 and user matches ADMIN_EMAIL."""
+    return request.args.get("debug") == "1" and _is_admin_user(user)
 
 
 def _account_debug_panel_html(info: dict) -> str:
@@ -4967,6 +4972,19 @@ def decrypt_account_data(user_id: str, stored: str) -> dict:
     except Exception:
         return {}
 
+
+def _cached_decrypt_fn(uid: str, decrypt_fn):
+    """Per-request decrypt wrapper — caches by ciphertext blob."""
+    cache: dict[str, object] = {}
+
+    def wrapped(uid_: str, stored: str):
+        key = stored or ""
+        if key not in cache:
+            cache[key] = decrypt_fn(uid_, stored)
+        return cache[key]
+
+    return wrapped
+
 def iso():
     return utcnow().isoformat()
 
@@ -8840,6 +8858,7 @@ def dashboard():
     # Convert to plain dicts so .get() works safely even when columns are
     # missing from older production DB schemas (e.g. sync_status, sync_failure_reason).
     synced_map = {r["source"]: dict(r) for r in acct_rows}
+    _decrypt_acct = _cached_decrypt_fn(uid, decrypt_account_data)
     _rt.step("load_accounts")
     # so the card rendering loop doesn't fire N+1 queries (one pair per account).
     _obs_by_source: dict = {}
@@ -8914,7 +8933,7 @@ def dashboard():
         grid_cards = ""
         for src, display_name, icon, color in _cat_map[cat]:
             row   = synced_map.get(src)
-            data  = decrypt_account_data(user["id"], row["data_enc"] or "") if row else {}
+            data  = _decrypt_acct(user["id"], row["data_enc"] or "") if row else {}
 
             # Determine items to display
             review_required_keys: set = set()
@@ -9581,7 +9600,7 @@ def dashboard():
             row_v = synced_map.get(src)
             if not row_v:
                 continue
-            data_v = decrypt_account_data(user["id"], row_v["data_enc"] or "")
+            data_v = _decrypt_acct(user["id"], row_v["data_enc"] or "")
             items_v = data_v.get("items", []) or data_v.get("ai_items", []) or []
             _bf_dirty = False
             for _bi in items_v:
@@ -9648,7 +9667,7 @@ def dashboard():
 
     _has_synced_data = False
     for _sr in acct_rows:
-        _pa = load_provider_account(uid, dict(_sr), decrypt_fn=decrypt_account_data)
+        _pa = load_provider_account(uid, dict(_sr), decrypt_fn=_decrypt_acct)
         if _pa and _pa.is_synced:
             _has_synced_data = True
             break
@@ -14774,6 +14793,36 @@ def _build_credentials_page(
     _site_info_json = _cred_json.dumps(_site_info_map)
     _connect_auto_json = _cred_json.dumps(connect_source) if connect_source else "null"
 
+    _dev_discover_html = ""
+    _dev_discover_js = ""
+    if show_debug:
+        _dev_discover_html = (
+            '<div style="margin-top:24px;padding:12px 14px;border:1px dashed #c7d2fe;'
+            'border-radius:10px;background:#eef2ff">'
+            '<div style="font-size:11px;font-weight:600;color:#4338ca;margin-bottom:8px">'
+            'Dev tools</div>'
+            '<button type="button" onclick="runAutoDiscover()" '
+            'style="padding:6px 12px;border-radius:7px;font-size:12px;font-weight:600;'
+            'cursor:pointer;border:1px solid #c7d2fe;background:#fff;color:#4338ca">'
+            'Run field discovery</button>'
+            '<span id="dev-discover-status" style="margin-left:10px;font-size:11px;color:#6366f1"></span>'
+            '</div>'
+        )
+        _dev_discover_js = """
+function runAutoDiscover() {
+  var el = document.getElementById('dev-discover-status');
+  if (el) el.textContent = 'Starting…';
+  fetch('/credentials/auto-discover', {method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams({_csrf:CSRF})})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (el) el.textContent = d.ok ? 'Discovery started in background' : (d.error || 'Failed');
+    })
+    .catch(function() { if (el) el.textContent = 'Request failed'; });
+}
+"""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14810,6 +14859,7 @@ def _build_credentials_page(
   {_sync_howto_html}
   {connected_cards_html}
   {_sync_note_html}
+  {_dev_discover_html}
 </div>
 
 
@@ -15459,11 +15509,7 @@ function clearAndRediscover(source) {{
   }}
 }})();
 
-// Auto-discover fields for connected accounts that need it
-fetch('/credentials/auto-discover', {{method:'POST',
-  headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
-  body:new URLSearchParams({{_csrf:CSRF}})}}).catch(function(){{}});
-
+{_dev_discover_js}
 // Live-updating relative sync timestamps
 function fmtRelative(ts) {{
   try {{
@@ -15582,15 +15628,18 @@ def credentials_page():
     show_debug = _is_dev_debug(user)
     db = get_db()
     uid = user["id"]
+    _decrypt_acct = _cached_decrypt_fn(uid, decrypt_account_data)
     for r in sync_rows:
-        acct = load_provider_account(uid, dict(r), decrypt_fn=decrypt_account_data)
+        acct = load_provider_account(uid, dict(r), decrypt_fn=_decrypt_acct)
         if acct and acct.is_synced and r["synced_at"]:
             synced_at_by_source[r["source"]] = r["synced_at"]
         if r["connection_status"]:
             connection_status_by_source[r["source"]] = r["connection_status"]
         if r["extraction_status"]:
             extraction_status_by_source[r["source"]] = r["extraction_status"]
-        lifecycle_by_source[r["source"]] = _lifecycle_for_user_source(uid, r["source"], db)
+        lifecycle_by_source[r["source"]] = _lifecycle_for_user_source(
+            uid, r["source"], db, account=acct,
+        )
         if show_debug:
             debug_by_source[r["source"]] = {
                 "source": r["source"],
@@ -15601,6 +15650,7 @@ def credentials_page():
                 "synced_at": r["synced_at"],
                 "last_error": r["sync_failure_reason"],
             }
+    _rt.step("load_accounts")
     pending_added = db.execute(
         "SELECT site_key, display_name FROM email_suggestions "
         "WHERE user_id=? AND added=1 AND dismissed=0 ORDER BY email_count DESC",
@@ -15636,9 +15686,8 @@ def credentials_page():
                 "synced_at": None,
                 "last_error": None,
             }
-    _rt.step("load_accounts")
-    _rt.finish()
-    return _build_credentials_page(
+    _rt.step("lifecycle")
+    page_html = _build_credentials_page(
         user, configured, extra_by_source, synced_at_by_source,
         connection_status_by_source, extraction_status_by_source,
         lifecycle_by_source, pending_added,
@@ -15646,6 +15695,9 @@ def credentials_page():
         debug_by_source=debug_by_source,
         show_debug=show_debug,
     )
+    _rt.step("build_html")
+    _rt.finish()
+    return page_html
 
 
 @app.route("/api/extension/poll/<source>")
@@ -15901,9 +15953,12 @@ def credentials_fields_save():
 @app.route("/credentials/auto-discover", methods=["POST"])
 @require_login
 def credentials_auto_discover():
-    """Background: discover fields for any connected account missing them."""
+    """Background: discover fields for any connected account missing them (admin only)."""
     check_csrf()
     uid = session["user_id"]
+    user = get_db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if not _is_admin_user(user):
+        return jsonify({"ok": False, "error": "Admin only"}), 403
     threading.Thread(target=_auto_discover_missing, args=(uid,), daemon=True).start()
     return jsonify({"ok": True})
 
@@ -19346,7 +19401,12 @@ def _amex_conn_ctx():
     return dict(iso_fn=iso, encrypt_fn=encrypt_account_data, decrypt_fn=decrypt_account_data)
 
 
-def _lifecycle_for_user_source(uid: str, source: str, db=None) -> AccountLifecycle:
+def _lifecycle_for_user_source(
+    uid: str,
+    source: str,
+    db=None,
+    account: ProviderAccount | None = None,
+) -> AccountLifecycle:
     """Load persisted signals and resolve unified lifecycle state."""
     db = db or get_db()
     in_cred = bool(db.execute(
@@ -19359,12 +19419,13 @@ def _lifecycle_for_user_source(uid: str, source: str, db=None) -> AccountLifecyc
     ).fetchone()
     from_email = email_row is not None
     email_added = bool(email_row and email_row["added"])
-    ad_row = db.execute(
-        "SELECT source, synced_at, connection_status, extraction_status, data_enc, sync_status "
-        "FROM account_data WHERE user_id=? AND source=?",
-        (uid, source),
-    ).fetchone()
-    account = load_provider_account(uid, dict(ad_row), decrypt_fn=decrypt_account_data) if ad_row else None
+    if account is None:
+        ad_row = db.execute(
+            "SELECT source, synced_at, connection_status, extraction_status, data_enc, sync_status "
+            "FROM account_data WHERE user_id=? AND source=?",
+            (uid, source),
+        ).fetchone()
+        account = load_provider_account(uid, dict(ad_row), decrypt_fn=decrypt_account_data) if ad_row else None
     return resolve_account_lifecycle(
         source,
         in_credentials=in_cred,
