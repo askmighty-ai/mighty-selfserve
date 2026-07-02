@@ -10,9 +10,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from mighty.ai_metrics import AIMetrics, build_metrics, record_metrics
+from mighty.ai_retry import ai_request_timeout_seconds, call_with_retry
 from mighty.field_discovery import (
     DiscoveryError,
     DiscoveryUnavailableError,
@@ -28,11 +31,48 @@ class DiscoveryValidationError(DiscoveryError):
     """The AI provider returned JSON that failed field validation."""
 
 
+FIELD_DISCOVERY_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "fields": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "label": {"type": "string"},
+                    "value": {"type": "string"},
+                    "value_type": {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "source_snippet": {"type": "string"},
+                    "expiry_date": {"type": ["string", "null"]},
+                    "points": {"type": ["string", "null"]},
+                    "currency": {"type": ["string", "null"]},
+                },
+                "required": [
+                    "key",
+                    "label",
+                    "value",
+                    "value_type",
+                    "confidence",
+                    "source_snippet",
+                ],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["fields"],
+    "additionalProperties": False,
+}
+
+
 @dataclass(frozen=True)
 class DiscoveryContext:
     site_name: str
     source: str | None
     prompt: str
+    prompt_id: str = ""
+    prompt_version: str = ""
     today: str = ""
     category_hint: str = ""
 
@@ -42,6 +82,7 @@ class DiscoveryResult:
     fields: list[dict[str, Any]]
     provider: str
     model: str
+    metrics: AIMetrics | None = None
 
 
 @dataclass
@@ -60,7 +101,10 @@ class OpenAIProvider:
             try:
                 from openai import OpenAI
 
-                self._client = OpenAI(api_key=self.api_key)
+                self._client = OpenAI(
+                    api_key=self.api_key,
+                    timeout=ai_request_timeout_seconds(),
+                )
             except ImportError:
                 self._client = None
 
@@ -79,59 +123,29 @@ class OpenAIProvider:
         if not self.is_configured():
             raise DiscoveryUnavailableError(self.unavailable_message())
 
-        schema = {
-            "type": "object",
-            "properties": {
-                "fields": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "key": {"type": "string"},
-                            "label": {"type": "string"},
-                            "value": {"type": "string"},
-                            "value_type": {"type": "string"},
-                            "confidence": {"type": "number"},
-                            "source_snippet": {"type": "string"},
-                            "expiry_date": {"type": ["string", "null"]},
-                            "points": {"type": ["string", "null"]},
-                            "currency": {"type": ["string", "null"]},
-                        },
-                        "required": [
-                            "key",
-                            "label",
-                            "value",
-                            "value_type",
-                            "confidence",
-                            "source_snippet",
-                        ],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["fields"],
-            "additionalProperties": False,
-        }
-
+        started = time.perf_counter()
         try:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": context.prompt}],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "discovered_fields",
-                        "strict": True,
-                        "schema": schema,
+            response = call_with_retry(
+                lambda: self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": context.prompt}],
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "discovered_fields",
+                            "strict": True,
+                            "schema": FIELD_DISCOVERY_JSON_SCHEMA,
+                        },
                     },
-                },
-                temperature=0,
+                    temperature=0,
+                )
             )
         except Exception as exc:
             raise DiscoveryProviderError(
                 f"OpenAI field discovery failed ({self.model}): {exc}"
             ) from exc
 
+        latency_ms = (time.perf_counter() - started) * 1000
         raw_text = (response.choices[0].message.content or "").strip()
         try:
             parsed = json.loads(raw_text)
@@ -141,7 +155,23 @@ class OpenAIProvider:
             ) from exc
 
         fields = validate_discovered_fields(parsed)
-        return DiscoveryResult(fields=fields, provider=self.provider_name, model=self.model)
+        metrics = build_metrics(
+            provider=self.provider_name,
+            model=self.model,
+            latency_ms=latency_ms,
+            cache_hit=False,
+            prompt_id=context.prompt_id or "field_discovery",
+            prompt_version=context.prompt_version or "unknown",
+            input_chars=len(context.prompt),
+            output_chars=len(raw_text),
+        )
+        record_metrics(metrics)
+        return DiscoveryResult(
+            fields=fields,
+            provider=self.provider_name,
+            model=self.model,
+            metrics=metrics,
+        )
 
 
 @dataclass
@@ -182,15 +212,18 @@ class GeminiProvider:
         model_errors: list[str] = []
         response = None
         used_model = ""
+        started = time.perf_counter()
         for model_name in self.models:
             try:
-                response = self._client.models.generate_content(
-                    model=model_name,
-                    contents=context.prompt,
-                    config=genai_sdk.types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0,
-                    ),
+                response = call_with_retry(
+                    lambda model_name=model_name: self._client.models.generate_content(
+                        model=model_name,
+                        contents=context.prompt,
+                        config=genai_sdk.types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0,
+                        ),
+                    )
                 )
                 used_model = model_name
                 break
@@ -202,6 +235,7 @@ class GeminiProvider:
                 "All Gemini models failed: " + "; ".join(model_errors)
             )
 
+        latency_ms = (time.perf_counter() - started) * 1000
         raw_text = (response.text or "").strip()
         try:
             parsed = json.loads(raw_text)
@@ -218,7 +252,23 @@ class GeminiProvider:
                 raise DiscoveryValidationError("Gemini returned invalid JSON")
 
         fields = validate_discovered_fields(parsed)
-        return DiscoveryResult(fields=fields, provider=self.provider_name, model=used_model)
+        metrics = build_metrics(
+            provider=self.provider_name,
+            model=used_model,
+            latency_ms=latency_ms,
+            cache_hit=False,
+            prompt_id=context.prompt_id or "field_discovery",
+            prompt_version=context.prompt_version or "unknown",
+            input_chars=len(context.prompt),
+            output_chars=len(raw_text),
+        )
+        record_metrics(metrics)
+        return DiscoveryResult(
+            fields=fields,
+            provider=self.provider_name,
+            model=used_model,
+            metrics=metrics,
+        )
 
 
 FieldDiscoveryProvider = OpenAIProvider | GeminiProvider

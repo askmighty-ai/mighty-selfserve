@@ -78,6 +78,7 @@ class TestDiscoverFieldsWithProvider:
     def test_openai_failure_returns_clean_error(self, monkeypatch):
         monkeypatch.setenv("AI_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("AI_REQUEST_MAX_RETRIES", "0")
 
         class FakeCompletions:
             def create(self, **kwargs):

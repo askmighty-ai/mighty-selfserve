@@ -23,6 +23,9 @@ Env vars (all optional):
   AI_FIELD_DISCOVERY_MAX_CHARS — Max page chars sent to field discovery (default: 20000)
   AI_FIELD_DISCOVERY_CACHE_TTL_SECONDS — Success cache TTL (default: 3600)
   AI_FIELD_DISCOVERY_FAILURE_TTL_SECONDS — Negative-cache TTL after failures (default: 300)
+  AI_REQUEST_TIMEOUT_SECONDS — Provider request timeout (default: 60)
+  AI_REQUEST_MAX_RETRIES — Retries for transient provider errors (default: 3)
+  AI_REQUEST_RETRY_BACKOFF_SECONDS — Initial retry backoff (default: 1.0)
 """
 
 from __future__ import annotations
@@ -4689,119 +4692,6 @@ def _post_filter_fields(fields: list, source: str = "") -> list:
     return out
 
 
-DISCOVER_PROMPT = """You are analyzing one or more pages from a user's {site} account.
-Pages may be separated by === URL === markers.
-Today's date: {today}.
-{category_hint}
-CRITICAL — How to read structured data blocks:
-=== EMBEDDED STATE === blocks contain JSON serialized directly into the page by the framework
-(Next.js __NEXT_DATA__, Apollo __APOLLO_STATE__, Redux, etc.) before any API call fires.
-This is the HIGHEST CONFIDENCE source — treat non-empty values here as ground truth.
-
-=== API RESPONSE === blocks contain JSON from a specific network API call.
-These are high-confidence but may be INCOMPLETE — a single API call often returns partial data.
-If an API block shows empty arrays ([]) or null/empty for a field, that does NOT mean the user
-has no data — the site loads different data from different endpoints.
-
-In both cases: if the block shows empty/null but the page text clearly displays a value
-(e.g. "Gold", "143,996 Points"), ALWAYS trust the displayed page text. A site may render
-status from a different API call than the one captured. Never let an empty JSON field suppress
-a value that is clearly visible on the page.
-
-Page text:
-{text}
-
-Extract ONLY data that is SPECIFIC TO THIS USER's account — personalized numbers, statuses, dates, and benefits.
-
-INCLUDE:
-- Loyalty/rewards points, miles, or cash-back balance totals
-- Tier or status level (Gold, Platinum, Diamond, A-List, etc.) — only meaningful named tiers, not generic labels like "Cardmember" or "Member"
-- Progress toward next tier or status goal (e.g. "4 of 20 flights to A-List")
-- Benefits the user CAN USE RIGHT NOW: certificates, upgrade awards, free nights, companion passes, lounge visits, travel credits, fee waivers — include the count or value and the expiry date if shown
-- Expiration dates for points, status, or any benefit (even if the benefit itself is listed above)
-- UPCOMING reservations or bookings — ONLY those with a future date (after today). If the trip date is in the past, REJECT it.
-- Payment info: current balance owed, minimum payment due, payment due date, whether autopay is active, last payment received (date + amount), any past-due or overdue amount
-- Personalized special offers with a specific deadline date AND a specific reward amount (e.g. "Earn 5,000 bonus points if you stay by Aug 31")
-
-HARD EXCLUDE — never include these even if they appear on the page:
-- Any value containing "log in", "sign in", "login to view", "sign in to see"
-- Search or booking form fields (departure city, destination, travel dates, passenger count, cabin class)
-- Site-wide availability windows (e.g. "Book travel through [date]", "Reservations Through: March 2027")
-- "No match found", "None", "N/A", "–", empty values, or zero values ("0", "$0", "$0.00")
-- Navigation labels, menu items, links, tab names, page headings with no data value
-- Generic account-type labels that carry no meaningful tier information: "Cardmember", "Member", "Basic", "Standard", "Registered" — these tell the user nothing they don't already know
-- PAST reservations, trips, or flights whose date has already occurred (before today) — these are history, not upcoming
-- Generic marketing copy available to ALL users with no personalized quantity, deadline, or condition
-- Contact and personal info: email addresses, phone numbers, mailing addresses, passport numbers — never useful on a dashboard
-- Promotional offers with no specific personalized deadline AND no specific personalized reward quantity (if both are missing, REJECT)
-
-CONCRETE REJECT EXAMPLES:
-- "Points Balance Alert: Log in to view points balance" → REJECT (login wall)
-- "Reservations Through: March 10, 2027" → REJECT (site-wide booking window, not a user reservation)
-- "Depart Date: Fri, Jun 12, 2026" from a search widget → REJECT (search form)
-- "Upcoming Flight: Jul 22, 2024" → REJECT (date is in the past)
-- "Cardmember Status: Cardmember" → REJECT (generic label, tells the user nothing)
-- "Membership Level: Member" → REJECT (redundant, not a meaningful tier)
-- "Upcoming Trips: None" → REJECT (empty value)
-- "Earn more points with our partners" → REJECT (generic marketing, no personalized amount or deadline)
-- "Gift Cards Balance: 0" → REJECT (zero value)
-- "Nights This Year: 0" → REJECT (zero value)
-- "Primary Email Address: user@example.com" → REJECT (contact info)
-- "Earn Up to 700 Points with Hertz" → REJECT (generic partner promotion, no personalized deadline or quantity)
-- "Earn 2,000 Bonus Points Every Night" → REJECT (generic promotion, not a personalized offer)
-
-CONCRETE INCLUDE EXAMPLES:
-- "Gold Medallion" status → INCLUDE as {{"key":"elite_status","label":"Elite Status","value":"Gold Medallion","confidence":0.99,"source_snippet":"SkyMiles Gold Medallion status"}}
-- "Gold" tier displayed prominently on account home page (e.g. "Gold\\nWelcome back, Jonathan") → INCLUDE as {{"key":"elite_status","label":"Elite Status","value":"Gold","confidence":0.97,"source_snippet":"Gold Welcome back"}}
-- "24,617 Rapid Rewards points" → INCLUDE as {{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617","confidence":0.97,"source_snippet":"Rapid Rewards Points Balance 24,617"}}
-- "0 of 20 flights" in A-List section → INCLUDE as {{"key":"alist_progress","label":"A-List Flights Progress","value":"0 of 20","confidence":0.93,"source_snippet":"A-List status 0 of 20 qualifying flights"}}
-- "$2,472.20 Total Payment Due" → INCLUDE as {{"key":"balance_due","label":"Balance Due","value":"$2,472.20","confidence":0.99,"source_snippet":"Total Payment Due $2,472.20"}}
-- "Minimum Payment Due: $35 by Jul 12, 2026" → INCLUDE as {{"key":"min_payment_due","label":"Minimum Payment Due","value":"$35 by Jul 12, 2026","confidence":0.98,"source_snippet":"Minimum Payment Due $35 by Jul 12, 2026"}}
-- "Past Due Amount: $150" → INCLUDE as {{"key":"past_due_amount","label":"Past Due Amount","value":"$150","confidence":0.99,"source_snippet":"Past Due Amount $150"}}
-- "Last payment: $2,472.20 received Jun 11, 2026" → INCLUDE as {{"key":"last_payment","label":"Last Payment Received","value":"$2,472.20 on Jun 11, 2026","confidence":0.97,"source_snippet":"last payment $2,472.20 received Jun 11"}}
-- "AutoPay: Enrolled" → INCLUDE as {{"key":"autopay_status","label":"Auto Pay Status","value":"Enrolled","confidence":0.98,"source_snippet":"AutoPay Enrolled"}}
-- "Free Night Award — expires Dec 31, 2026" → INCLUDE as {{"key":"free_night_award","label":"Free Night Award Expiry","value":"Dec 31, 2026","confidence":0.96,"source_snippet":"Free Night Award expires Dec 31, 2026"}}
-- "2 Suite Night Awards available" → INCLUDE as {{"key":"suite_night_awards","label":"Suite Night Awards","value":"2 available","confidence":0.95,"source_snippet":"2 Suite Night Awards available"}}
-- "Annual travel credit: $187 remaining" → INCLUDE as {{"key":"travel_credit_remaining","label":"Travel Credit Remaining","value":"$187","confidence":0.94,"source_snippet":"Annual travel credit $187 remaining"}}
-- "Earn 5,000 bonus miles — book by Jul 15" → INCLUDE as {{"key":"bonus_miles_offer","label":"Bonus Miles Offer Deadline","value":"Jul 15, 2026","confidence":0.92,"source_snippet":"Earn 5,000 bonus miles book by Jul 15"}}
-- "Global Upgrade Certificate — 1 available, expires Dec 31, 2026" → INCLUDE as {{"key":"upgrade_certificates","label":"Global Upgrade Certificates","value":"1 (exp Dec 31, 2026)","confidence":0.97,"source_snippet":"Global Upgrade Certificate 1 available expires Dec 31"}}
-- "Companion Certificate — valid through Jan 15, 2027" → INCLUDE as {{"key":"companion_certificate","label":"Companion Certificate","value":"Valid through Jan 15, 2027","confidence":0.98,"source_snippet":"Companion Certificate valid through Jan 15, 2027"}}
-- "Regional Upgrade Certificates: 4 available" → INCLUDE as {{"key":"regional_upgrade_certs","label":"Regional Upgrade Certificates","value":"4 available","confidence":0.97,"source_snippet":"Regional Upgrade Certificates 4 available"}}
-- "Priority Pass membership — unlimited lounge visits" → INCLUDE as {{"key":"priority_pass","label":"Priority Pass Lounge Access","value":"Unlimited visits","confidence":0.90,"source_snippet":"Priority Pass membership unlimited lounge visits"}}
-- "Free checked bag on all Delta flights" → INCLUDE as {{"key":"free_checked_bag","label":"Free Checked Bag Benefit","value":"All Delta flights","confidence":0.89,"source_snippet":"Free checked bag on all Delta flights"}}
-- "Upcoming flight: SFO → JFK, Aug 14, 2026" → INCLUDE as {{"key":"upcoming_flight","label":"Upcoming Flight","value":"SFO → JFK, Aug 14, 2026","confidence":0.98,"source_snippet":"Upcoming flight SFO to JFK Aug 14 2026"}}
-
-LABELING: write labels that make sense without knowing the site (no abbreviations, no page jargon). Labels should say what the value IS, not repeat the site name.
-
-Return ONLY a JSON array, no other text:
-[{{"key":"rapid_rewards_points","label":"Rapid Rewards Points","value":"24,617","value_type":"points","confidence":0.97,"source_snippet":"Rapid Rewards Points Balance 24,617"}}]
-
-Rules:
-- key: snake_case, 1-4 words
-- label: 2-5 words, self-explanatory out of context
-- value: exact current value — if empty, zero, or a login prompt, skip the field entirely
-- value_type: one of points, currency, date, status, text, certificate, credit, booking, payment, progress, other
-- confidence: float 0.0–1.0 — how certain you are this is a real personalized user fact (not generic copy). Aim for >0.85 on solid data; below 0.70 means you are guessing.
-- source_snippet: verbatim excerpt (≤15 words) from the page text that most directly supports this value
-- Optional metadata when clearly present: expiry_date, points, currency (strings)
-- Each concept ONCE, no duplicates
-- Max 25 fields
-- If you find zero fields that pass the hard-exclude test, return an empty array []
-
-ORDERING — sort fields in this exact priority order (most important first):
-1. Account status or tier (Gold, Platinum, Diamond, A-List — only meaningful named tiers)
-2. Primary balance, points, or miles total
-3. Available benefits (certificates, credits, awards with quantities)
-4. Expiration dates for benefits, points, or status
-5. Progress toward next tier goal
-6. Upcoming reservations or bookings (future dates only)
-7. Payment info (balance due, due date, past-due amount, autopay status)
-8. Account metadata (member since, loyalty ID/member number — these go LAST)
-
-The FIRST field in the array becomes the hero display — make it the single most meaningful thing about this account.
-CRITICAL: Member numbers, account IDs, and loyalty IDs must NEVER be first. Status tier or primary balance must always lead.
-CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included — only include named tiers with real meaning.
-CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
 
 from mighty.ai_provider import (
@@ -4817,6 +4707,13 @@ from mighty.field_discovery import (
     is_field_discovery_enabled,
     schema_cache_key,
     truncate_discovery_input,
+)
+from mighty.ai_platform import (
+    build_field_discovery_context,
+    discovery_log_suffix,
+    record_field_discovery_cache_hit,
+    render_field_discovery_prompt_text,
+    render_missing_pages_prompt,
 )
 
 
@@ -4847,6 +4744,7 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
     except DiscoveryError:
         raise
     if cached_fields is not None:
+        record_field_discovery_cache_hit(site_name=site_name)
         return cached_fields
 
     try:
@@ -4890,16 +4788,10 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
 
         from datetime import datetime as _dtm
         _today_str = _dtm.utcnow().strftime("%B %d, %Y")
-        prompt = DISCOVER_PROMPT.format(
-            site=site_name,
-            text=snippets,
-            today=_today_str,
-            category_hint=category_hint,
-        )
-        context = DiscoveryContext(
+        context = build_field_discovery_context(
             site_name=site_name,
             source=source,
-            prompt=prompt,
+            snippets=snippets,
             today=_today_str,
             category_hint=category_hint,
         )
@@ -4910,7 +4802,7 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             raise
         print(
             f"[Mighty] Field discovery via {result.provider} ({result.model}), "
-            f"{len(result.fields)} raw fields",
+            f"{len(result.fields)} raw fields{discovery_log_suffix(result)}",
             flush=True,
         )
         fields = _post_filter_fields(result.fields, source=source or "")
@@ -4931,12 +4823,7 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
                                    if not any(key.split("_")[0] in fl.lower() for fl in found_labels)]
                 if missing_expected:
                     missing_str = ", ".join(missing_expected[:4])
-                    page_prompt = (
-                        f"Based on this {source} account page text, what specific page URLs or sections "
-                        f"are probably missing that would contain: {missing_str}?\n\n"
-                        "List only specific paths like /my-account/certificates or /loyalty/wallet. "
-                        "Max 5 paths. One per line. No explanation."
-                    )
+                    page_prompt = render_missing_pages_prompt(source=source, missing_str=missing_str)
                     try:
                         _gc = _gemini_client()
                         if _gc:
@@ -8272,50 +8159,15 @@ def reset_password(token):
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 def build_prompt(api_key, url):
-    return (
-        f"MIGHTY AUTHORIZATION — follow every session.\n\n"
-        f"Your Mighty API key: \"{api_key}\"\n\n"
-        f"When the user asks you to do anything consequential (emails, purchases, file edits, deletions, external API calls):\n"
-        f"1. Ask: \"Shall I proceed?\"\n"
-        f"2. If yes: call mighty_log_decision ONCE with:\n"
-        f"   - api_key=\"{api_key}\"\n"
-        f"   - action_type: the category (e.g. \"email\", \"purchase\", \"file_edit\", \"deletion\", \"api_call\")\n"
-        f"   - label: a plain-English description of the specific action (e.g. \"Send email to john@example.com re: project update\")\n"
-        f"   - fields: the FULL content being acted on as key-value pairs — for email include [[\"To\", \"<recipient>\"], [\"Subject\", \"<subject>\"], [\"Body\", \"<full email body>\"]]; for purchases include amount, merchant, item; include whatever a person would need to verify exactly what was done\n"
-        f"   - decision=\"approved\"\n"
-        f"   Then carry out the action.\n"
-        f"3. If no: call mighty_log_decision ONCE with the same fields and decision=\"denied\" — then stop.\n\n"
-        f"Call mighty_log_decision exactly once per action. Never call it before asking. Never call it more than once.\n"
-        f"The fields you submit are the permanent record of what was approved — include enough detail that it could be verified later."
-    )
+    _ = url
+    from mighty.prompts import render_prompt
+    return render_prompt("mighty_authorization", api_key=api_key).text
 
 def call_claude_for_prompt(description, api_key, url):
     """Call Claude Haiku to generate a tailored checkpoint prompt from an agent description."""
-    system = (
-        "You generate concise system prompt instructions for AI agents that tell them when to call "
-        "the Mighty authorization API. Given a description of what an agent does, produce checkpoint "
-        "instructions that list the specific action types requiring authorization.\n\n"
-        "Return a JSON object with exactly two fields:\n"
-        "- \"prompt\": string — the complete checkpoint instructions, concise and specific to this agent\n"
-        "- \"warning\": string or null — null if the description was specific enough; a short plain-English "
-        "message (1 sentence) if the description was too vague to generate useful checkpoints\n\n"
-        "The prompt must include:\n"
-        "1. A specific list of action types derived from the agent's description\n"
-        "2. The exact API call format using the provided api_key and url\n"
-        "3. Brief instructions for polling and handling approved/denied/timeout responses\n\n"
-        "Keep the prompt under 120 words. Return JSON only, no markdown fences."
-    )
-    user_msg = (
-        f"Agent description: {description}\n"
-        f"API key: {api_key}\n"
-        f"Mighty URL: {url}\n\n"
-        f"API endpoints:\n"
-        f"  Authorize: POST {url}/api/authorize\n"
-        f"    body: {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<desc>\",\"fields\":[[\"Key\",\"Val\"]]}}\n"
-        f"  Poll status: GET {url}/api/status/<request_id>  →  approved | denied | pending | timeout\n"
-        f"  Record (no approval): POST {url}/api/record\n"
-        f"    body: {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<desc>\",\"outcome\":\"completed\"}}"
-    )
+    from mighty.prompts import render_prompt
+    system = render_prompt("onboarding_checkpoint_system").text
+    user_msg = render_prompt("onboarding_checkpoint_user", description=description, api_key=api_key, url=url).text
     body = json.dumps({
         "model": "claude-haiku-4-5-20251001",
         "max_tokens": 512,
@@ -17506,9 +17358,9 @@ def api_debug_discover_now(source):
             )
         else:
             category_hint = ""
-        prompt = DISCOVER_PROMPT.format(
-            site=site_name, text=snippets,
-            today=_today_str, category_hint=category_hint
+        prompt = render_field_discovery_prompt_text(
+            site_name=site_name, snippets=snippets,
+            today=_today_str, category_hint=category_hint,
         )
 
         # Call Gemini directly so we can capture the raw response
