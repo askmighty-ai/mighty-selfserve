@@ -419,3 +419,41 @@ def test_auto_discover_requires_admin(client, monkeypatch):
     assert r.status_code == 403
     assert started == []
 
+
+def test_dashboard_must_not_show_sync_now(client):
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    assert b"Sync now" not in r.data
+
+
+def test_accounts_shows_how_updates_work(client):
+    r = client.get("/credentials")
+    assert r.status_code == 200
+    assert b"How updates work" in r.data
+
+
+def test_login_required_account_shows_open_or_log_in(client):
+    import app as mighty
+
+    with client.session_transaction() as sess:
+        uid = sess["user_id"]
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        stub = mighty.encrypt_account_data(uid, {"items": [], "sync_status": "login_required"})
+        db.execute(
+            "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (uid, "delta", "", "", "", mighty.iso(), mighty.iso()),
+        )
+        db.execute(
+            "INSERT INTO account_data "
+            "(user_id, source, display_name, icon, color, data_enc, synced_at, connection_status) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (uid, "delta", "Delta", "✈️", "#e5e7eb", stub, "", "needs_login"),
+        )
+        db.commit()
+
+    r = client.get("/credentials")
+    assert r.status_code == 200
+    assert b"Needs login" in r.data or b"Log in" in r.data or b"Open provider" in r.data
+

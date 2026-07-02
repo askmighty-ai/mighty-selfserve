@@ -39,7 +39,7 @@ def test_discovered_from_email():
 def test_added_not_registered():
     lc = resolve_account_lifecycle("delta", email_added=True, from_email=True)
     assert lc.state == ADDED
-    assert lc.cta_label == "Connect"
+    assert lc.cta_label == "Open provider"
 
 
 def test_waiting_for_extension_needs_first_visit():
@@ -87,7 +87,7 @@ def test_connected_session_verified_no_fields():
         account=_acct(connection_status=CONN_CONNECTED, sync_status="ok"),
     )
     assert lc.state == CONNECTED
-    assert lc.cta_label == "Sync now"
+    assert lc.cta_label == "Open provider"
     assert lc.show_last_sync is False
 
 

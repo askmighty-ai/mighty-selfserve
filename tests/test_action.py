@@ -22,27 +22,32 @@ from mighty.action_builders import (
     recommendation_actions,
 )
 from mighty.decision_engine import Recommendation
+from mighty.user_copy import (
+    NEEDS_LOGIN_ACTION_CTA,
+    NEEDS_LOGIN_ACTION_LABEL,
+    login_required_action_value,
+)
 
 
 class TestActionModel:
     def test_core_fields(self):
         action = Action(
-            title="Login required",
-            summary="Marriott Bonvoy — log in to re-sync",
+            title=NEEDS_LOGIN_ACTION_LABEL,
+            summary=login_required_action_value("Marriott Bonvoy"),
             priority=ActionPriority.URGENT,
             category=ActionCategory.LOGIN_ISSUE,
-            estimated_value="Marriott Bonvoy — log in to re-sync",
+            estimated_value=login_required_action_value("Marriott Bonvoy"),
             due_date=date.today() + timedelta(days=14),
             days_until_due=14,
             confidence="high",
-            reasoning="Session expired during sync.",
+            reasoning="Session expired during update.",
             source_accounts=["marriott"],
-            recommended_next_step="Log in to re-sync",
+            recommended_next_step=NEEDS_LOGIN_ACTION_CTA,
             completion_state=CompletionState.OPEN,
         )
-        assert action.title == "Login required"
+        assert action.title == NEEDS_LOGIN_ACTION_LABEL
         assert action.category == ActionCategory.LOGIN_ISSUE
-        assert action.detail_line() == "Marriott Bonvoy — log in to re-sync"
+        assert action.detail_line() == login_required_action_value("Marriott Bonvoy")
         assert action.expiry_phrase() == "expires in 14 days"
 
     def test_recommendation_renderer_compat(self):
@@ -70,14 +75,15 @@ class TestActionBuilders:
         action = action_from_action_item(
             {
                 "source": "marriott",
-                "label": "Login required",
-                "value": "Marriott Bonvoy — log in to re-sync",
+                "label": NEEDS_LOGIN_ACTION_LABEL,
+                "value": login_required_action_value("Marriott Bonvoy"),
                 "btype": "login_required",
                 "urgency": "urgent",
             }
         )
         assert action.category == ActionCategory.LOGIN_ISSUE
         assert action.priority == ActionPriority.URGENT
+        assert action.recommended_next_step == NEEDS_LOGIN_ACTION_CTA
 
     def test_action_from_hero_candidate(self):
         action = action_from_hero_candidate(
