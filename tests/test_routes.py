@@ -419,3 +419,48 @@ def test_auto_discover_requires_admin(client, monkeypatch):
     assert r.status_code == 403
     assert started == []
 
+
+def test_credentials_discover_all_models_fail_returns_503(client, monkeypatch):
+    """POST /credentials/discover/<source> returns 503 JSON when every Gemini model fails."""
+    import app as mighty
+
+    def _raise_discovery_error(*args, **kwargs):
+        raise mighty.DiscoveryError(
+            "All Gemini models failed: gemini-2.5-flash: 429 quota; gemini-2.5-pro: 429 quota"
+        )
+
+    monkeypatch.setattr(mighty, "_claude", object())
+    monkeypatch.setattr(mighty, "claude_discover_fields", _raise_discovery_error)
+
+    with client.session_transaction() as sess:
+        uid = sess["user_id"]
+        csrf = sess["_csrf"]
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        now = mighty.iso()
+        stub = mighty.encrypt_account_data(uid, {
+            "items": [],
+            "raw_text": "Balance $100\nMember since 2020",
+            "sync_status": "ok",
+        })
+        db.execute(
+            "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (uid, "amex", "", "", "", now, now),
+        )
+        db.execute(
+            "INSERT INTO account_data (user_id, source, display_name, icon, color, data_enc, synced_at, connection_status) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (uid, "amex", "American Express", "💳", "#e5e7eb", stub, now, "connected"),
+        )
+        db.commit()
+
+    r = client.post(
+        "/credentials/discover/amex",
+        data={"_csrf": csrf},
+    )
+    assert r.status_code == 503
+    body = r.get_json()
+    assert body["ok"] is False
+    assert "All Gemini models failed" in body["error"]
+

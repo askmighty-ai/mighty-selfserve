@@ -18,7 +18,7 @@ Env vars (all optional):
 
 from __future__ import annotations
 
-import os, io, csv, json, re, secrets, hashlib, hmac, sqlite3, threading, urllib.request, urllib.error, html, time, base64
+import os, io, csv, json, re, secrets, hashlib, hmac, sqlite3, threading, urllib.request, urllib.error, html, time, base64, logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
@@ -66,6 +66,7 @@ def he(s):
     return html.escape(str(s)) if s is not None else ""
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 from werkzeug.middleware.proxy_fix import ProxyFix
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 _secret_key = os.environ.get("SECRET_KEY", "")
@@ -4760,6 +4761,15 @@ import hashlib as _hashlib
 import time as _time
 _discovery_cache: dict[str, tuple[float, list]] = {}  # content-hash -> (timestamp, results)
 
+GEMINI_DISCOVERY_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+]
+
+
+class DiscoveryError(Exception):
+    """Raised when AI field discovery fails (e.g. every Gemini model exhausted)."""
+
 
 def claude_discover_fields(raw_text: str, site_name: str, source: str | None = None) -> list:
     """Use Gemini Flash to identify all useful data fields in a page.
@@ -4825,13 +4835,9 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             category_hint=category_hint,
         )
         # Try models in order until one works
-        _models = [
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash-preview-05-20",
-        ]
+        _model_errors: list[str] = []
         response = None
-        for _m in _models:
+        for _m in GEMINI_DISCOVERY_MODELS:
             try:
                 response = _claude.models.generate_content(
                     model=_m,
@@ -4844,9 +4850,15 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
                 print(f"[Mighty] Used model: {_m}", flush=True)
                 break
             except Exception as _me:
-                print(f"[Mighty] Model {_m} failed: {_me}", flush=True)
+                _model_errors.append(f"{_m}: {_me}")
+                logger.exception(
+                    "Gemini model %s failed during field discovery for %s",
+                    _m, site_name,
+                )
         if response is None:
-            return []
+            raise DiscoveryError(
+                "All Gemini models failed: " + "; ".join(_model_errors)
+            )
         text = response.text.strip()
         print(f"[Mighty] Gemini response ({len(text)} chars): {text[:400]}", flush=True)
         fields = []
@@ -4903,8 +4915,10 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
 
         _discovery_cache[cache_key] = (_time.time(), fields)
         return fields
+    except DiscoveryError:
+        raise
     except Exception as e:
-        print(f"[Mighty] Gemini discovery error: {e}", flush=True)
+        logger.exception("Gemini discovery error for %s", site_name)
         return []
 
 
@@ -16003,7 +16017,7 @@ def credentials_discover(source):
     try:
         return _credentials_discover_impl(source)
     except Exception as e:
-        print(f"[Mighty] Discover endpoint error: {e}", flush=True)
+        logger.exception("Discover endpoint error for source=%s", source)
         return jsonify({"ok": False, "error": f"Server error: {str(e)[:100]}"}), 500
 
 def _credentials_discover_impl(source):
@@ -16032,10 +16046,13 @@ def _credentials_discover_impl(source):
     # identical results at temperature 0, so one call is sufficient.
     try:
         fields = claude_discover_fields(raw_text, site_name, source=source)
+    except DiscoveryError as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
     except Exception as e:
-        return jsonify({"ok": False, "error": f"Discovery error: {str(e)[:100]}"}), 500
+        logger.exception("Field discovery failed for source=%s", source)
+        return jsonify({"ok": False, "error": f"Discovery error: {str(e)[:100]}"}), 503
     if not fields:
-        return jsonify({"ok": False, "error": "Could not identify fields — try syncing again"}), 500
+        return jsonify({"ok": False, "error": "Could not identify fields — try syncing again"}), 200
 
     _save_discovered_fields(uid, source, fields)
     return jsonify({"ok": True, "fields": fields})
@@ -17422,8 +17439,7 @@ def api_debug_discover_now(source):
         fields_after_filter = []
 
         if _claude:
-            _models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-preview-05-20"]
-            for _m in _models:
+            for _m in GEMINI_DISCOVERY_MODELS:
                 try:
                     resp = _claude.models.generate_content(
                         model=_m,
