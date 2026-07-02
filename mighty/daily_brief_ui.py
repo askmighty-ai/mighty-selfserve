@@ -13,6 +13,7 @@ from typing import Any, Callable
 from mighty.action import Action, ActionCategory, ActionPriority
 from mighty.action_builders import attention_actions, savings_actions
 from mighty.daily_brief import DailyBrief
+from mighty.user_copy import ACTION_SURFACED_FROM, NEEDS_LOGIN_ACTION_CTA
 
 
 @dataclass
@@ -76,7 +77,7 @@ def _why_for_action(action: Action) -> str:
         return phrase.replace("expires", "Expires").capitalize()
     source = action.display_name or action.source_display()
     if source:
-        return f"Surfaced from {source} during your latest sync."
+        return ACTION_SURFACED_FROM.format(source=source)
     return "Worth a few minutes before it slips off your radar."
 
 
@@ -100,7 +101,7 @@ def _cta_for_action(action: Action) -> tuple[str, str]:
     if label and url:
         return label, url
     if action.category == ActionCategory.LOGIN_ISSUE:
-        return "Log in to re-sync", "/credentials"
+        return NEEDS_LOGIN_ACTION_CTA, "/credentials"
     if action.category == ActionCategory.EXPIRING_BENEFIT:
         return "Use before expiry", url or "#accounts"
     if action.category == ActionCategory.SAVINGS_OPPORTUNITY:
