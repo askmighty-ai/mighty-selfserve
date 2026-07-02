@@ -59,6 +59,8 @@ try:
 except ImportError:
     _demo_mode = None
 
+from mighty import user_copy
+
 import bcrypt as _bcrypt
 
 from datetime import datetime, timezone, timedelta
@@ -186,17 +188,7 @@ def _account_debug_panel_html(info: dict) -> str:
     )
 
 
-_SYNC_HOWTO_HTML = """
-<div class="sync-howto">
-  <div class="sync-howto-title">How syncing works</div>
-  <ol class="sync-howto-list">
-    <li><strong>Find accounts</strong> — Mighty scans Gmail sender addresses to suggest loyalty programs and subscriptions.</li>
-    <li><strong>Chrome extension syncs</strong> — When you visit a provider site while logged in, the Mighty extension captures account data and sends it here.</li>
-    <li><strong>Dashboard shows results</strong> — Balances, perks, and expiry dates appear on your Dashboard. Mighty does not log into provider sites for you.</li>
-    <li><strong>Needs login?</strong> — Open the provider in Chrome, sign in, and visit your account page. The extension picks up the session on its next sync.</li>
-  </ol>
-</div>
-"""
+_SYNC_HOWTO_HTML = user_copy.how_updates_html()
 
 
 DATABASE        = os.environ.get("DATABASE_PATH", "/app/data/mighty.db")
@@ -1805,7 +1797,7 @@ def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
     whether the color is '#dc2626' and apply font-weight:600 accordingly.
     """
     if sync_status == "login_required":
-        return ("🔐 Login required", "#dc2626", "")
+        return (user_copy.NEEDS_LOGIN_BADGE, "#dc2626", "")
     if sync_status == "no_data" or not synced_at:
         return ("No data", "#9ca3af", "—")
     try:
@@ -1828,7 +1820,7 @@ def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
         else:
             return ("Stale", "#dc2626", "!")
     except Exception:
-        return ("Not yet synced", "#9ca3af", "—")
+        return (user_copy.NOT_YET_UPDATED, "#9ca3af", "—")
 
 def _log_privacy_event(uid: str, event_type: str, source: str = None, domain: str = None, detail: str = None):
     """Log a privacy-relevant event for the user's audit log."""
@@ -6343,7 +6335,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
-    <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="Last extension sync">{global_sync_label}</span>
+    <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="{user_copy.GLOBAL_LAST_UPDATED_TITLE}">{global_sync_label}</span>
     <!-- Alpha: manual sync removed — extension is the primary sync mechanism. Server retry is in Settings. -->
     <a id="ext-install-link" href="javascript:void(0)" onclick="return false;"
        style="display:none;font-size:11px;color:#6366f1;white-space:nowrap;text-decoration:none;padding:4px 8px;background:rgba(99,102,241,0.08);border-radius:6px;border:1px solid rgba(99,102,241,0.2)">
@@ -6676,11 +6668,11 @@ if (document.querySelector('[data-discovering="1"]') && !window._syncPoll) {
       var syncStatus = card ? (card.getAttribute('data-sync-status') || '') : '';
       var msg;
       if (syncStatus === 'login_required') {
-        msg = '<div style="color:#92400e;background:#fef3c7;border-radius:6px;padding:10px 12px;font-size:13px;margin:0">⚠️ Log in to ' + (cardName || 'this site') + ' in Chrome to restore sync</div>';
+        msg = '<div style="color:#92400e;background:#fef3c7;border-radius:6px;padding:10px 12px;font-size:13px;margin:0">⚠️ Log in to ' + (cardName || 'this site') + ' in Chrome to restore updates</div>';
       } else if (syncStatus === 'no_data') {
         msg = '<div style="color:#6b7280;font-size:13px;font-style:italic">Visit ' + (cardName || 'this site') + ' in Chrome to capture your account data</div>';
       } else {
-        msg = '<span style="color:#9ca3af;font-size:12px;font-style:italic">No fields found — use ↻ to retry sync</span>';
+        msg = '<span style="color:#9ca3af;font-size:12px;font-style:italic">No fields found — visit the provider site in Chrome</span>';
       }
       el.innerHTML = msg;
     });
@@ -6711,7 +6703,7 @@ function updateSyncTimes() {
     var card = el.closest('[data-sync-status]');
     var syncStatus = card ? card.dataset.syncStatus : '';
     if (syncStatus === 'login_required') {
-      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">🔐 Login required</span>';
+      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">{user_copy.NEEDS_LOGIN_BADGE}</span>';
       return;
     }
     var rel = fmtRelative(ts);
@@ -6723,7 +6715,7 @@ function updateSyncTimes() {
       else if (hrs2 >= 48) { color = '#f59e0b'; icon = '~'; }
       else if (hrs2 >= 24) { color = '#f59e0b'; icon = '~'; }
       else if (hrs2 >= 2) { color = '#6b7280'; icon = '✓'; }
-      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' Synced ' + rel + '</span>';
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' {user_copy.LAST_UPDATED_PREFIX} ' + rel + '</span>';
     }
     try {
       var d = new Date(ts);
@@ -6744,7 +6736,7 @@ function _updateGlobalSyncTime(ts) {
   if (!el) return;
   if (!ts) return;  // never blank it if we don't have a timestamp
   var rel = fmtRelative(ts);
-  if (rel) { el.textContent = 'Synced ' + rel; el.style.color = '#9ca3af'; }
+  if (rel) { el.textContent = '{user_copy.LAST_UPDATED_PREFIX} ' + rel; el.style.color = '#9ca3af'; }
 }
 
 // ── Unified sync-status poll ────────────────────────────────────────────────
@@ -6785,7 +6777,7 @@ function _setSyncLabel(text) {
 }
 function _showSyncingHeader() {
   var el = document.getElementById('global-sync-time');
-  if (el) { el.textContent = 'Syncing…'; el.style.color = '#6366f1'; }
+  if (el) { el.textContent = 'Updating…'; el.style.color = '#6366f1'; }
 }
 function _triggerRescan(onDone) {
   fetch('/api/data/rediscover-all', {method:'POST',
@@ -6813,9 +6805,9 @@ if (_isMobile) {
     var lbl = document.getElementById('sync-label');
     if (btn) {
       btn.onclick = function() {
-        _showToast('Use the Mighty app or desktop browser to sync your accounts.', 4000);
+        _showToast('Use the Mighty app or desktop browser to update your accounts.', 4000);
       };
-      btn.title = 'Sync requires the Mighty extension or mobile app';
+      btn.title = 'Updates require the Mighty extension or mobile app';
       btn.style.opacity = '0.55';
     }
     if (lbl) lbl.textContent = 'View only';
@@ -7498,12 +7490,12 @@ SETTINGS_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card">
-    <div class="section-title">Sync (advanced)</div>
+    <div class="section-title">{user_copy.SETTINGS_UPDATES_ADVANCED_TITLE}</div>
     <div style="font-size:13px;color:#6b7280;margin-bottom:14px;line-height:1.55">
-      <strong style="color:#1c1917">Primary sync:</strong> the Mighty Chrome extension updates accounts when you visit provider sites while logged in.<br><br>
-      <strong style="color:#1c1917">Server sync (fallback):</strong> re-runs Mighty's server-side scraper for all connected accounts. Use only if extension data looks stale or missing — it may not work for sites that require an active browser session.
+      {user_copy.SETTINGS_UPDATES_PRIMARY}<br><br>
+      <strong style="color:#1c1917">Server-side retry (fallback):</strong> {user_copy.SETTINGS_UPDATES_FALLBACK}
     </div>
-    <button id="retry-server-sync-btn" class="btn-sm" onclick="retryServerSync()">Retry server sync</button>
+    <button id="retry-server-sync-btn" class="btn-sm" onclick="retryServerSync()">{user_copy.SETTINGS_RETRY_UPDATE_BTN}</button>
     <span id="retry-server-sync-msg" style="font-size:12px;color:#6b7280;margin-left:10px"></span>
   </div>
 
@@ -7553,25 +7545,25 @@ var CSRF = '{csrf_token}';
 function retryServerSync() {
   var btn = document.getElementById('retry-server-sync-btn');
   var msg = document.getElementById('retry-server-sync-msg');
-  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '{user_copy.SETTINGS_RETRY_RUNNING}'; }
   if (msg) { msg.textContent = ''; msg.style.color = '#6b7280'; }
   fetch('/sync/now', {
     method: 'POST',
     headers: {'X-CSRF-Token': CSRF}
   }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
     .then(function(res) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Retry server sync'; }
+      if (btn) { btn.disabled = false; btn.textContent = '{user_copy.SETTINGS_RETRY_UPDATE_BTN}'; }
       if (msg) {
         if (res.ok && res.d.ok !== false) {
-          msg.textContent = 'Server sync started — check Dashboard in a few minutes.';
+          msg.textContent = '{user_copy.SETTINGS_RETRY_STARTED}';
           msg.style.color = '#16a34a';
         } else {
-          msg.textContent = res.d.error || 'Server sync failed or already running.';
+          msg.textContent = res.d.error || '{user_copy.SETTINGS_RETRY_FAILED}';
           msg.style.color = '#dc2626';
         }
       }
     }).catch(function() {
-      if (btn) { btn.disabled = false; btn.textContent = 'Retry server sync'; }
+      if (btn) { btn.disabled = false; btn.textContent = '{user_copy.SETTINGS_RETRY_UPDATE_BTN}'; }
       if (msg) { msg.textContent = 'Request failed.'; msg.style.color = '#dc2626'; }
     });
 }
@@ -8918,7 +8910,10 @@ def dashboard():
     if _global_last_synced:
         _glbl, _glbc, _glbi = _freshness_label(_global_last_synced)
         # Only build "Synced X" for actual relative-time labels; hide for fallback states
-        _global_sync_label = f'Synced {_glbl}' if _glbl not in ("Not yet synced", "No data") else ""
+        _global_sync_label = (
+            f'{user_copy.LAST_UPDATED_PREFIX} {_glbl}'
+            if _glbl not in (user_copy.NOT_YET_UPDATED, "No data") else ""
+        )
     else:
         _global_sync_label = ""
 
@@ -9224,7 +9219,7 @@ def dashboard():
                 card_hero_html = (
                     f'<div class="acct-divider"></div>'
                     f'<div class="acct-hero">'
-                    f'<div style="color:#c0bab4;font-style:italic;font-size:12px">Awaiting sync…</div>'
+                    f'<div style="color:#c0bab4;font-style:italic;font-size:12px">Awaiting update…</div>'
                     f'</div>'
                 )
                 status_color = "#9ca3af"
@@ -9393,7 +9388,10 @@ def dashboard():
             if sync_status == "login_required" and _lc.state == LC_NEEDS_LOGIN:
                 login_required_accounts.append(display_name)
 
-            sync_label = f'Synced {_fmt_sync(synced_at)}' if synced_at else 'Not yet synced'
+            sync_label = (
+                f'{user_copy.LAST_UPDATED_PREFIX} {_fmt_sync(synced_at)}'
+                if synced_at else user_copy.NOT_YET_UPDATED
+            )
             stale_cls = " is-stale" if not synced_at else ""
             expiring_cls = " is-expiring" if alert_item else ""
             _provider_acct = _provider_acct_early
@@ -9406,10 +9404,10 @@ def dashboard():
                 )
                 freshness_html = (
                     f'<span style="font-size:11px;color:#6b7280">'
-                    f'Synced {_fmt_sync(synced_at)}{_field_note}'
+                    f'{user_copy.LAST_UPDATED_PREFIX} {_fmt_sync(synced_at)}{_field_note}'
                     f'</span>'
                 )
-                synced_title = f"Synced {_fmt_sync(synced_at)}"
+                synced_title = f'{user_copy.LAST_UPDATED_PREFIX} {_fmt_sync(synced_at)}'
             else:
                 freshness_html = (
                     f'<span style="font-size:11px;color:{_lc.color};font-weight:{_fw}">'
@@ -9733,8 +9731,8 @@ def dashboard():
            (synced_map[item[0]].get("sync_status") or "") == "login_required"
     ]:
         _lr_items.append({
-            "id": None, "source": _src, "label": "Login required",
-            "value": f"{_dname} — log in to re-sync",
+            "id": None, "source": _src, "label": user_copy.NEEDS_LOGIN_ACTION_LABEL,
+            "value": user_copy.login_required_action_value(_dname),
             "btype": "login_required", "urgency": "urgent", "days_left": None,
         })
     _all_action_items = _lr_items + _open_items
@@ -10003,7 +10001,7 @@ def dashboard():
             _hero_value_block = (
                 f'<div style="margin-top:10px;font-size:13px;color:#9ca3af">'
                 f'Watching {_account_count} account{"s" if _account_count != 1 else ""} — '
-                f'sync to see your benefits.</div>'
+                f'visit the provider to see your benefits.</div>'
             )
         else:
             _hero_value_block = ''
@@ -10328,12 +10326,12 @@ def dashboard():
         _ai_btype    = _ai.get("btype", "")
         _ai_days     = _ai.get("days_left")
         if _ai_btype == "login_required":
-            _ai_why = "Re-authenticate to continue syncing"
+            _ai_why = user_copy.NEEDS_LOGIN_ACTION_WHY
         elif _ai_days is not None and _ai_days < 0:
             _ai_why = "Expired"
         else:
             _ai_why = _why_shown(_ai_btype, _ai_days)
-        _ai_disp_lbl = _ai_val if not _ai_label or _ai_label == "Login required" else f"{_ai_label}: {_ai_val}"
+        _ai_disp_lbl = _ai_val if not _ai_label or _ai_label == user_copy.NEEDS_LOGIN_ACTION_LABEL else f"{_ai_label}: {_ai_val}"
 
         # Action buttons — only for persisted items (not transient login_required)
         if _ai_id is not None:
@@ -10708,9 +10706,9 @@ def dashboard():
         _ai_val     = _ai.get("value", "")
         _ai_btype   = _ai.get("btype", "")
         _ai_days    = _ai.get("days_left")
-        _ai_disp_lbl = _ai_val if not _ai_label or _ai_label == "Login required" else f"{_ai_label}: {_ai_val}"
+        _ai_disp_lbl = _ai_val if not _ai_label or _ai_label == user_copy.NEEDS_LOGIN_ACTION_LABEL else f"{_ai_label}: {_ai_val}"
         if _ai_btype == "login_required":
-            _ai_why = "Re-authenticate to continue syncing"
+            _ai_why = user_copy.NEEDS_LOGIN_ACTION_WHY
         elif _ai_days is not None and _ai_days < 0:
             _ai_why = "Expired"
         else:
@@ -10784,7 +10782,7 @@ def dashboard():
         _rai_val     = _rai.get("value", "")
         _rai_btype   = _rai.get("btype", "")
         _rai_days    = _rai.get("days_left")
-        _rai_disp    = _rai_val if not _rai_label or _rai_label == "Login required" else f"{_rai_label}: {_rai_val}"
+        _rai_disp    = _rai_val if not _rai_label or _rai_label == user_copy.NEEDS_LOGIN_ACTION_LABEL else f"{_rai_label}: {_rai_val}"
         if _rai_btype == "login_required":
             _rai_why = "Re-authenticate to continue syncing"
         elif _rai_days is not None and _rai_days < 0:
@@ -11172,8 +11170,8 @@ def dashboard():
             f'border-radius:10px;padding:11px 14px;display:flex;align-items:center;gap:10px">'
             f'<span style="font-size:15px">🔐</span>'
             f'<span style="flex:1;font-size:12.5px;color:#991b1b;line-height:1.45">'
-            f'<strong>{_n} {_acct_word} need re-authentication:</strong> {_names_html} — '
-            f'open each site in Chrome, sign in, and visit your account page. The extension syncs automatically.</span>'
+            f'<strong>{_n} {_acct_word} need login:</strong> {_names_html} — '
+            f'{user_copy.NEEDS_LOGIN_BANNER_SUFFIX}</span>'
             f'<button onclick="this.closest(\'div\').remove()" style="background:none;border:none;'
             f'cursor:pointer;color:#ef4444;font-size:16px;line-height:1;padding:0 2px" title="Dismiss">×</button>'
             f'</div>'
@@ -11273,7 +11271,7 @@ function dismissOnboarding() {
         account_data_html = _demo_mode.render_demo_account_cards(reg_domain=_reg_domain)
         recently_found_html = _demo_mode.render_demo_recent_discoveries()
         total_expiring = _demo_mode.expiring_count()
-        _global_sync_label = "Demo · Synced 2h ago"
+        _global_sync_label = f"Demo · {user_copy.LAST_UPDATED_PREFIX} 2h ago"
         onboarding_banner = ""
         reauth_banner = ""
         new_accounts_banner = ""
@@ -13074,17 +13072,7 @@ SITE_CONNECT_NOTES = {
 }
 
 # Failure reason codes → (short label, what to do)
-SYNC_FAILURE_MESSAGES = {
-    "login_wall":          ("Logged out",      "Log back into this site in Chrome, then click sync."),
-    "login_required":      ("Logged out",      "Log back into this site in Chrome, then click sync."),
-    "no_data":             ("No data found",   "Visit your account overview page in Chrome, then click sync."),
-    "llm_empty":           ("No data found",   "Visit your account overview page in Chrome, then click sync."),
-    "low_confidence_only": ("Partial data",    "Visit your full account page in Chrome, then click sync."),
-    "stale_date_only":     ("Dates only",      "Visit your account overview page — Mighty only found date fields."),
-    "timeout":             ("Timed out",       "The sync took too long. Try clicking sync again."),
-    "extension_missing":   ("Extension needed","Install the Mighty Chrome extension, then sync again."),
-    "domain_unreachable":  ("Site may have moved", "This account's website couldn't be reached — it may have changed its address. Check the Mighty admin URL health panel."),
-}
+SYNC_FAILURE_MESSAGES = user_copy.FAILURE_ACTIONS
 
 # Direct account URLs — mirrors ACCOUNT_ENTRY in background.js.
 # Used to render the "open account" link on each dashboard card.
@@ -13720,7 +13708,7 @@ def _build_dash_modals(configured: set, csrf: str) -> str:
                 action = (
                     f'<button class="dash-modal-connect-btn" '
                     f'onclick="dashOpenCredForm(\'{he(key)}\',\'{he(name)}\',\'{icon}\',\'{he(color)}\')">'
-                    f'Connect</button>'
+                    f'Add account</button>'
                 )
             site_rows += (
                 f'<div class="dash-modal-site-row" data-name="{he(name.lower())}">'
@@ -13767,7 +13755,7 @@ def _build_dash_modals(configured: set, csrf: str) -> str:
     <div id="dash-screen-picker" style="display:flex;flex-direction:column;flex:1;min-height:0">
       <div class="dash-modal-head">
         <div class="dash-modal-title">
-          <span>Connect an account</span>
+          <span>{user_copy.MODAL_ADD_ACCOUNT}</span>
           <button onclick="closeDashConnectModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px">✕</button>
         </div>
         <input class="dash-modal-search" id="dash-modal-search" placeholder="Search sites…"
@@ -14201,18 +14189,18 @@ function saveCredModal() {{
       }})
       .then(function(d) {{
         if (!d.ok) {{
-          if (saveBtn) {{ saveBtn.textContent = 'Save & Sync'; saveBtn.disabled = false; }}
+          if (saveBtn) {{ saveBtn.textContent = 'Save account'; saveBtn.disabled = false; }}
           if (err) {{ err.textContent = d.error || 'Save failed.'; err.style.display = 'block'; }}
           return;
         }}
         closeCredModal();
-        if (saveBtn) {{ saveBtn.textContent = 'Save & Sync'; saveBtn.disabled = false; }}
+        if (saveBtn) {{ saveBtn.textContent = 'Save account'; saveBtn.disabled = false; }}
         var t = document.getElementById('mighty-toast');
         if (t) {{ t.textContent = 'Credentials saved — syncing…'; t.classList.add('show'); setTimeout(function(){{t.classList.remove('show');}}, 3000); }}
         setTimeout(function(){{ location.reload(); }}, 2000);
       }})
       .catch(function(e) {{
-        if (saveBtn) {{ saveBtn.textContent = 'Save & Sync'; saveBtn.disabled = false; }}
+        if (saveBtn) {{ saveBtn.textContent = 'Save account'; saveBtn.disabled = false; }}
         if (err) {{ err.textContent = 'Error: ' + (e.message || 'Network error'); err.style.display = 'block'; }}
       }});
   }} catch(e) {{
@@ -14608,7 +14596,7 @@ def _lifecycle_badge_html(lifecycle: AccountLifecycle, synced_fmt: str = "") -> 
         field_note = f" · {n} field{'s' if n != 1 else ''}" if n else ""
         parts.append(
             f'<div style="font-size:11px;color:#8892a4;margin-top:2px">'
-            f'Last synced {he(synced_fmt)}{field_note}</div>'
+            f'Last updated {he(synced_fmt)}{field_note}</div>'
         )
     elif lifecycle.state != LC_SYNCED:
         parts.append(
@@ -14690,7 +14678,7 @@ def _build_credentials_page(
       <input type="text" name="totp" placeholder="TOTP secret key" style="margin-top:6px" id="t-{he(key)}">
       <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
     </details>
-    <button class="btn-save" onclick="saveCred('{he(key)}', '{he(name)}')">Save & Sync</button>
+    <button class="btn-save" onclick="saveCred('{he(key)}', '{he(name)}')">Save account</button>
   </div>
   {_field_config_html(key, configured, extra_by_source.get(key, {}))}
 </div>"""
@@ -14744,7 +14732,7 @@ def _build_credentials_page(
 <div class="accounts-onboard">
   <div class="accounts-onboard-card">
     <div class="accounts-onboard-title">Never miss another credit or perk.</div>
-    <p class="accounts-onboard-desc">Connect an account once. Mighty watches your balances and benefits, then surfaces opportunities on your Dashboard.</p>
+    <p class="accounts-onboard-desc">Add an account once. Mighty watches your balances and benefits, then surfaces opportunities on your Dashboard.</p>
     <div class="accounts-onboard-value">
       <div class="accounts-onboard-value-item">
         <span class="accounts-onboard-value-icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.5l2.5 2.5L10 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
@@ -14798,7 +14786,7 @@ def _build_credentials_page(
                 action = (
                     f'<button class="modal-connect-btn" '
                     f'onclick="openCredForm(\'{he(key)}\',\'{he(name)}\',\'{icon}\',\'{he(color)}\')">'
-                    f'Connect</button>'
+                    f'Add account</button>'
                 )
             site_rows += f"""
 <div class="modal-site-row" data-name="{he(name.lower())}">
@@ -14884,7 +14872,7 @@ function runAutoDiscover() {
   <div class="page-header">
     <div class="page-header-text">
       <h1>Connected accounts</h1>
-      <p class="page-subtitle">Connect accounts so Mighty can find expiring perks, unused value, and savings for you.</p>
+      <p class="page-subtitle">Add accounts so Mighty can find expiring perks, unused value, and savings for you.</p>
     </div>
     <a href="/email-scan" class="btn-connect-new" style="text-decoration:none;display:inline-flex;align-items:center">Find accounts</a>
   </div>
@@ -14903,7 +14891,7 @@ function runAutoDiscover() {
     <div id="screen-picker" style="display:flex;flex-direction:column;flex:1;min-height:0">
       <div class="modal-head">
         <div class="modal-title">
-          <span>Connect an account</span>
+          <span>{user_copy.MODAL_ADD_ACCOUNT}</span>
           <button class="modal-close" onclick="closeModal()">✕</button>
         </div>
         <input class="modal-search" id="modal-search" placeholder="Search sites…"
@@ -14926,10 +14914,10 @@ function runAutoDiscover() {
       <div class="modal-cred-body">
         <div style="text-align:center;padding:8px 0 20px">
           <div style="font-size:32px;margin-bottom:12px" id="modal-ext-icon-lg"></div>
-          <div style="font-size:14px;font-weight:600;color:#1c1917;margin-bottom:8px">Connect via Chrome</div>
+          <div style="font-size:14px;font-weight:600;color:#1c1917;margin-bottom:8px">Open provider in Chrome</div>
           <div style="font-size:13px;color:#6b7280;line-height:1.6;margin-bottom:20px">
             Make sure you're <strong>logged into <span id="modal-ext-site-name"></span></strong> in Chrome,
-            then click the button below. The Mighty extension will capture your account data automatically.
+            then click the button below. The Mighty extension captures your account data automatically.
           </div>
           <a id="modal-open-chrome-btn"
              href="#" target="_blank"
@@ -14959,7 +14947,7 @@ function runAutoDiscover() {
             🔐 <strong>Sign in required.</strong> Log in to your provider in Chrome, then keep this tab open while Mighty verifies your session.
           </div>
           <div id="modal-ext-connected" style="display:none;margin-top:16px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;font-size:12px;color:#166534;text-align:left">
-            ✓ <strong>Connected.</strong> Session verified. Sync will pull your account data — no fields extracted yet.
+            ✓ <strong>Connected.</strong> {user_copy.MODAL_CONNECTED_NO_FIELDS}
           </div>
         </div>
       </div>
@@ -14972,8 +14960,8 @@ function runAutoDiscover() {
         <div id="sync-step-1" data-label="Saving credentials" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
           <span style="margin-right:6px">○</span>Saving credentials
         </div>
-        <div id="sync-step-2" data-label="Syncing account" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
-          <span style="margin-right:6px">○</span>Syncing account
+        <div id="sync-step-2" data-label="Updating account" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
+          <span style="margin-right:6px">○</span>Updating account
         </div>
         <div id="sync-step-3" data-label="Discovering fields" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
           <span style="margin-right:6px">○</span>Discovering fields
@@ -15237,7 +15225,7 @@ function _startExtPoll(source) {{
 function _setStep_ext(state) {{
   var waiting = document.getElementById('modal-ext-waiting');
   if (state === 'done' && waiting) {{
-    waiting.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#16a34a"><span>✓</span> Synced — account data saved</div>';
+    waiting.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#16a34a"><span>✓</span> Updated — account data saved</div>';
   }}
   if (state === 'connected' && waiting) {{
     waiting.style.display = 'none';
@@ -15387,13 +15375,13 @@ function _updateSyncOverlay(step, fieldsFound, error) {{
     var btn = document.getElementById('sync-ol-btn');
     var msg = fieldsFound > 0
       ? '🎉 Found ' + fieldsFound + ' benefit' + (fieldsFound !== 1 ? 's' : '')
-      : 'Sync complete';
+      : 'Update complete';
     resultEl.textContent = msg;
     resultEl.style.display = 'block';
     btn.style.display = 'block';
   }} else if (step === 'error') {{
     var resultEl = document.getElementById('sync-ol-result');
-    resultEl.textContent = error || 'Sync failed — try again';
+    resultEl.textContent = error || 'Update failed — try again';
     resultEl.style.color = '#d04040';
     resultEl.style.display = 'block';
     var btn = document.getElementById('sync-ol-btn');
@@ -15435,7 +15423,7 @@ function saveCred(key, siteName) {{
       }});
     }} else {{
       toast(d.error || 'Error', false);
-      if (saveBtn) {{ saveBtn.textContent = 'Save & Sync'; saveBtn.disabled = false; }}
+      if (saveBtn) {{ saveBtn.textContent = 'Save account'; saveBtn.disabled = false; }}
     }}
   }});
 }}
@@ -15563,7 +15551,7 @@ function updateSyncTimes() {{
     var card = el.closest('[data-sync-status]');
     var syncStatus = card ? card.dataset.syncStatus : '';
     if (syncStatus === 'login_required') {{
-      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">🔐 Login required</span>';
+      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">{user_copy.NEEDS_LOGIN_BADGE}</span>';
       return;
     }}
     var rel = fmtRelative(ts);
@@ -15575,7 +15563,7 @@ function updateSyncTimes() {{
       else if (hrs2 >= 48) {{ color = '#f59e0b'; icon = '~'; }}
       else if (hrs2 >= 24) {{ color = '#f59e0b'; icon = '~'; }}
       else if (hrs2 >= 2) {{ color = '#6b7280'; icon = '✓'; }}
-      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' Synced ' + rel + '</span>';
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' {user_copy.LAST_UPDATED_PREFIX} ' + rel + '</span>';
     }}
   }});
 }}
@@ -19517,11 +19505,18 @@ def _lifecycle_primary_cta_html(
             f'\'{icon}\',\'{he(color)}\')" style="{btn_style}">{he(cta)}</button>'
         )
     if lifecycle.state == LC_CONNECTED:
+        login_url = _provider_login_url(source)
+        if login_url:
+            return (
+                f'<a href="{he(login_url)}" target="_blank" rel="noopener" '
+                f'style="{btn_style};background:#ecfdf5;color:#059669;border-color:#6ee7b7">'
+                f'{he(cta)}</a>'
+            )
         if surface == "credentials":
             return (
                 f'<button type="button" onclick="triggerSync(\'{he(source)}\')" '
                 f'style="{btn_style};background:#ecfdf5;color:#059669;border-color:#6ee7b7">'
-                f'{he(cta)}</button>'
+                f'{he(user_copy.CTA_RETRY_UPDATE)}</button>'
             )
         return (
             f'<a href="/credentials?connect={he(source)}" '
@@ -19609,7 +19604,7 @@ def _provider_card_freshness(
             return _freshness_label(account.synced_at, account.sync_status)
         label = lifecycle_status_line(lifecycle)
         if lifecycle.state == LC_SYNCED and lifecycle.last_sync_at:
-            return (f"Synced {_fmt_sync(lifecycle.last_sync_at)}", lifecycle.color, "✓")
+            return (f"{user_copy.LAST_UPDATED_PREFIX} {_fmt_sync(lifecycle.last_sync_at)}", lifecycle.color, "✓")
         return (label, lifecycle.color, "")
     if not account:
         return ("Not connected", "#9ca3af", "—")
@@ -20061,7 +20056,7 @@ function renderResults(suggestions, alreadyCount) {
       html += '</div>';
       html += '<div class="sugg-actions" id="actions-' + s.site_key + '">';
       if (isAdded) {
-        html += '<button class="btn-connect-sm" onclick="connectOne(\'' + s.site_key + '\')">Connect</button>';
+        html += '<button class="btn-connect-sm" onclick="connectOne(\'' + s.site_key + '\')">Open provider</button>';
       } else {
         html += '<button class="btn-add" id="btn-add-' + s.site_key + '" onclick="addSuggestion(\'' + s.site_key + '\',\'' + escHtml(s.display_name) + '\')">Add to Mighty</button>';
       }
@@ -20084,7 +20079,7 @@ function _markAdded(siteKey, fromClick) {
   if (actions && fromClick !== false) {
     var nameEl = card ? card.querySelector('.sugg-name') : null;
     var dname = nameEl ? nameEl.textContent : siteKey;
-    actions.innerHTML = '<button class="btn-connect-sm" onclick="connectOne(\'' + siteKey + '\')">Connect</button>'
+    actions.innerHTML = '<button class="btn-connect-sm" onclick="connectOne(\'' + siteKey + '\')">Open provider</button>'
       + '<button class="btn-dismiss" onclick="dismissSuggestion(\'' + siteKey + '\')" title="Dismiss">✕</button>';
     var stateEl = card ? card.querySelector('.sugg-state') : null;
     if (stateEl) { stateEl.textContent = 'Added'; stateEl.classList.remove('discovered'); }
