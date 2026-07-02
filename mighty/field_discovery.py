@@ -2,7 +2,7 @@
 AI field discovery budget guardrails.
 
 Kill switch, input caps, provider/content-hash schema cache, and failure
-negative-cache to avoid repeat Gemini spend on unchanged or failing inputs.
+negative-cache to avoid repeat AI spend on unchanged or failing inputs.
 """
 
 from __future__ import annotations
@@ -126,13 +126,13 @@ def clear_field_schema_cache() -> None:
     _field_schema_cache.clear()
 
 
-def assert_field_discovery_available(client: Any | None) -> None:
+def assert_field_discovery_available(client: Any | None = None) -> None:
     """Raise a DiscoveryError subclass when discovery cannot run for a user request."""
     if not is_field_discovery_enabled():
         raise DiscoveryDisabledError(
             "AI field discovery is disabled — set AI_FIELD_DISCOVERY_ENABLED=true to re-enable"
         )
-    if not client:
-        raise DiscoveryUnavailableError(
-            "Gemini API not configured — add GEMINI_API_KEY to Railway"
-        )
+    # client is ignored — availability follows AI_PROVIDER configuration.
+    from mighty.ai_provider import get_configured_field_discovery_provider
+
+    get_configured_field_discovery_provider()
