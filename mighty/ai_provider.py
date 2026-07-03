@@ -14,8 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from mighty.ai_metrics import build_metrics, record_metrics
-from mighty.ai_retry import call_with_retry
+from mighty.ai_metrics import AIMetrics, build_metrics, record_metrics
+from mighty.ai_retry import ai_request_timeout_seconds, call_with_retry
 from mighty.field_discovery import (
     DiscoveryError,
     DiscoveryUnavailableError,
@@ -82,7 +82,7 @@ class DiscoveryResult:
     fields: list[dict[str, Any]]
     provider: str
     model: str
-    metrics: Any | None = None
+    metrics: AIMetrics | None = None
 
 
 @dataclass
@@ -101,7 +101,10 @@ class OpenAIProvider:
             try:
                 from openai import OpenAI
 
-                self._client = OpenAI(api_key=self.api_key)
+                self._client = OpenAI(
+                    api_key=self.api_key,
+                    timeout=ai_request_timeout_seconds(),
+                )
             except ImportError:
                 self._client = None
 
