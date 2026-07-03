@@ -777,6 +777,11 @@ def init_db():
         except Exception:
             pass
         try:
+            db.execute("ALTER TABLE users ADD COLUMN sync_current_source TEXT")
+            db.commit()
+        except Exception:
+            pass
+        try:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS ai_request_log (
                     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6619,6 +6624,50 @@ function updateSyncTimes() {
 updateSyncTimes();
 setInterval(updateSyncTimes, 30000);
 
+// ── Canonical account-status poll ───────────────────────────────────────────
+// Keeps card labels and sync header aligned with extension popup via /api/account-status.
+function _pollAccountStatus() {
+  fetch('/api/account-status').then(function(r){return r.json();}).then(function(d){
+    if (!d.ok) return;
+    var bySource = {};
+    (d.accounts || []).forEach(function(a){ bySource[a.source] = a; });
+    document.querySelectorAll('[data-account-source]').forEach(function(card) {
+      var src = card.dataset.accountSource;
+      var acct = bySource[src];
+      if (!acct) return;
+      card.dataset.accountStatus = acct.status;
+      if (acct.status === 'needs_login') {
+        card.dataset.syncStatus = 'login_required';
+      }
+      var el = card.querySelector('.acct-sync-time[data-synced]');
+      if (!el) return;
+      if (acct.status === 'up_to_date' && acct.last_successful_sync_at) {
+        el.dataset.synced = acct.last_successful_sync_at;
+        return;
+      }
+      if (acct.status === 'needs_login') {
+        el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">' + acct.status_label + '</span>';
+      } else if (acct.status === 'updating') {
+        el.innerHTML = '<span style="font-size:11px;color:#6366f1;font-weight:600">' + acct.status_label + '</span>';
+      } else if (acct.status !== 'up_to_date') {
+        el.innerHTML = '<span style="font-size:11px;color:' + (acct.status_color || '#6b7280') + ';font-weight:500">' + acct.status_label + '</span>';
+      }
+    });
+    if (d.summary && d.summary.is_syncing && d.summary.headline) {
+      var hdr = document.getElementById('global-sync-time');
+      if (hdr) { hdr.textContent = d.summary.headline; hdr.style.color = '#6366f1'; }
+    } else if (d.summary && !d.sync_running && d.summary.needs_login_count > 0) {
+      var hdr2 = document.getElementById('global-sync-time');
+      if (hdr2 && !window._syncPoll) {
+        hdr2.textContent = d.summary.headline;
+        hdr2.style.color = '#dc2626';
+      }
+    }
+  }).catch(function(){});
+}
+_pollAccountStatus();
+setInterval(_pollAccountStatus, 10000);
+
 // ── Sync-state tracking via sessionStorage ─────────────────────────────────
 var _syncTs = parseInt(sessionStorage.getItem('mighty-sync-ts') || '0');
 
@@ -6668,8 +6717,20 @@ function _setSyncLabel(text) {
   if (lbl) lbl.textContent = text;
 }
 function _showSyncingHeader() {
-  var el = document.getElementById('global-sync-time');
-  if (el) { el.textContent = 'Updating…'; el.style.color = '#6366f1'; }
+  fetch('/api/account-status').then(function(r){return r.json();}).then(function(d){
+    var el = document.getElementById('global-sync-time');
+    if (!el) return;
+    if (d.ok && d.summary && d.summary.is_syncing && d.summary.headline) {
+      el.textContent = d.summary.headline;
+      el.style.color = '#6366f1';
+    } else {
+      el.textContent = 'Updating…';
+      el.style.color = '#6366f1';
+    }
+  }).catch(function(){
+    var el = document.getElementById('global-sync-time');
+    if (el) { el.textContent = 'Updating…'; el.style.color = '#6366f1'; }
+  });
 }
 function _triggerRescan(onDone) {
   fetch('/api/data/rediscover-all', {method:'POST',
@@ -8873,6 +8934,14 @@ def dashboard():
     total_expiring = 0
     login_required_accounts = []
 
+    _user_sync = get_db().execute(
+        "SELECT sync_running, sync_started_at, sync_current_source FROM users WHERE id=?",
+        (uid,),
+    ).fetchone()
+    _sync_running = bool(_user_sync and _user_sync["sync_running"])
+    _updating_source = _user_sync["sync_current_source"] if _user_sync else None
+    _sync_started_at = _user_sync["sync_started_at"] if _user_sync else None
+
     for cat in _cat_order:
         grid_cards = ""
         for src, display_name, icon, color in _cat_map[cat]:
@@ -8935,6 +9004,17 @@ def dashboard():
                 in_credentials=True,
                 from_email=src in _email_sources,
                 account=_provider_acct_early,
+            )
+            _acct_canon = build_account_status(
+                src,
+                display_name,
+                _lc,
+                _provider_acct_early,
+                sync_status=sync_status,
+                updating_source=_updating_source if _sync_running else None,
+                sync_started_at=_sync_started_at,
+                login_url=_provider_login_url(src),
+                connect_url=f"/credentials?connect={src}",
             )
             if _lc.state != LC_SYNCED:
                 status_color = _lc.color
@@ -9301,7 +9381,7 @@ def dashboard():
                 f'</div>'
             ) if bad_fields else ""
 
-            if sync_status == "login_required" and _lc.state == LC_NEEDS_LOGIN:
+            if sync_status == "login_required" and _acct_canon.status == CANON_NEEDS_LOGIN:
                 login_required_accounts.append(display_name)
 
             sync_label = (
@@ -9311,8 +9391,8 @@ def dashboard():
             stale_cls = " is-stale" if not synced_at else ""
             expiring_cls = " is-expiring" if alert_item else ""
             _provider_acct = _provider_acct_early
-            _fw = "700" if _lc.color == "#dc2626" else "500"
-            if _provider_acct.is_synced and synced_at:
+            _fw = "700" if _acct_canon.status in (CANON_NEEDS_LOGIN, "error") else "500"
+            if _acct_canon.status == CANON_UP_TO_DATE and synced_at:
                 _field_note = (
                     f" · {_lc.extracted_field_count} field"
                     f"{'s' if _lc.extracted_field_count != 1 else ''}"
@@ -9325,11 +9405,12 @@ def dashboard():
                 )
                 synced_title = f'{user_copy.LAST_UPDATED_PREFIX} {_fmt_sync(synced_at)}'
             else:
+                _canon = _acct_canon.to_dict()
                 freshness_html = (
-                    f'<span style="font-size:11px;color:{_lc.color};font-weight:{_fw}">'
-                    f'{he(_lc.label)}</span>'
+                    f'<span style="font-size:11px;color:{_canon["status_color"]};font-weight:{_fw}">'
+                    f'{he(_canon["status_label"])}</span>'
                 )
-                synced_title = _lc.label
+                synced_title = _canon["status_label"]
             stale_cls = " is-stale" if not _provider_acct.is_synced else stale_cls
             if status_color == "#30d158" and _lc.color in ("#f59e0b", "#dc2626"):
                 status_color = "#ef4444"
@@ -9488,7 +9569,7 @@ def dashboard():
             ) if _fav_domain else ''
 
             grid_cards += (
-                f'<div class="acct-card{stale_cls}{expiring_cls}{_compact_cls}" data-name="{he(display_name)}" data-sync-status="{he(sync_status)}" data-connection-status="{he(_connection_status)}">'
+                f'<div class="acct-card{stale_cls}{expiring_cls}{_compact_cls}" data-name="{he(display_name)}" data-account-source="{he(src)}" data-account-status="{he(_acct_canon.status)}" data-sync-status="{he(sync_status)}" data-connection-status="{he(_connection_status)}">'
                 f'<div class="acct-card-header">'
                 f'{_fav_html}'
                 f'<div style="flex:1;min-width:0">'
@@ -18117,9 +18198,83 @@ def api_sync_start():
     # Preserve the last-known timestamp if we have one
     existing = _sync_status.get(uid, {})
     _sync_status[uid] = {"running": True, "last": existing.get("last")}
-    get_db().execute("UPDATE users SET sync_running=1, sync_started_at=? WHERE id=?", (iso(), uid))
+    get_db().execute(
+        "UPDATE users SET sync_running=1, sync_started_at=?, sync_current_source=NULL WHERE id=?",
+        (iso(), uid),
+    )
     get_db().commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/sync/progress", methods=["POST"])
+def api_sync_progress():
+    """Extension reports which account is actively being synced.
+    Auth: X-Mighty-Key header.
+    """
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    source = (body or {}).get("source", "").strip()
+    if not source:
+        return jsonify({"error": "source required"}), 400
+    get_db().execute(
+        "UPDATE users SET sync_current_source=? WHERE id=?",
+        (source, user["id"]),
+    )
+    get_db().commit()
+    return jsonify({"ok": True, "source": source})
+
+
+@app.route("/api/account-status")
+@require_login_or_key
+def api_account_status():
+    """Canonical per-account update state for dashboard and extension."""
+    from mighty.account_status import (
+        ERROR,
+        NEEDS_LOGIN,
+        STATUS_LABELS,
+        UPDATING,
+        UP_TO_DATE,
+        WAITING_FOR_EXTENSION,
+        load_all_account_statuses,
+    )
+
+    uid = get_current_user_id()
+    db = get_db()
+    user_row = db.execute(
+        "SELECT sync_running, sync_started_at, sync_current_source FROM users WHERE id=?",
+        (uid,),
+    ).fetchone()
+    sync_running = bool(user_row and user_row["sync_running"])
+    sync_started_at = user_row["sync_started_at"] if user_row else None
+    updating_source = user_row["sync_current_source"] if user_row else None
+
+    display_names = {key: name for key, name, *_ in SUPPORTED_SITES}
+    accounts, summary = load_all_account_statuses(
+        uid,
+        db,
+        decrypt_fn=decrypt_account_data,
+        display_names=display_names,
+        login_url_fn=_provider_login_url,
+        lifecycle_signals=_prefetch_lifecycle_signals(uid, db),
+        sync_running=sync_running,
+        sync_started_at=sync_started_at,
+        updating_source=updating_source,
+    )
+    return jsonify({
+        "ok": True,
+        "accounts": [a.to_dict() for a in accounts],
+        "summary": summary.to_dict(),
+        "sync_running": sync_running,
+        "status_labels": STATUS_LABELS,
+        "status_values": {
+            "up_to_date": UP_TO_DATE,
+            "updating": UPDATING,
+            "needs_login": NEEDS_LOGIN,
+            "waiting_for_extension": WAITING_FOR_EXTENSION,
+            "error": ERROR,
+        },
+    })
 
 
 @app.route("/api/sync/finalize", methods=["POST"])
@@ -18163,7 +18318,10 @@ def api_sync_finalize():
     # Tell the dashboard's auto-sync check that a fresh sync just landed so it
     # doesn't immediately re-trigger cloudSync() on the next page load.
     _sync_status[user["id"]] = {"running": False, "last": session_ts}
-    get_db().execute("UPDATE users SET sync_running=0, sync_started_at=NULL WHERE id=?", (user["id"],))
+    get_db().execute(
+        "UPDATE users SET sync_running=0, sync_started_at=NULL, sync_current_source=NULL WHERE id=?",
+        (user["id"],),
+    )
     get_db().commit()
     return jsonify({"ok": True, "updated": result.rowcount, "session_ts": session_ts})
 
@@ -19483,6 +19641,12 @@ from mighty.account_lifecycle import (
     connection_status_for_connect_start,
     lifecycle_status_line,
     resolve_account_lifecycle,
+)
+from mighty.account_status import (
+    NEEDS_LOGIN as CANON_NEEDS_LOGIN,
+    UPDATING as CANON_UPDATING,
+    UP_TO_DATE as CANON_UP_TO_DATE,
+    build_account_status,
 )
 
 
