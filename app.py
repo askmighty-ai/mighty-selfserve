@@ -5780,7 +5780,7 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-name">Mighty</div>
   </div>
   <h1>Create your account</h1>
-  <p class="sub">You'll be connected in about 5 minutes.</p>
+  <p class="sub">You'll be connected in about 5 minutes. Account syncing requires desktop Chrome with the Mighty extension.</p>
   {error}
   <form method="POST" action="/signup">
 <input type="hidden" name="_csrf" value="{csrf_token}">
@@ -6366,9 +6366,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="{user_copy.GLOBAL_LAST_UPDATED_TITLE}">{global_sync_label}</span>
     <!-- Alpha: manual sync removed — extension is the primary sync mechanism. Server retry is in Settings. -->
-    <a id="ext-install-link" href="javascript:void(0)" onclick="return false;"
+    <a id="ext-install-link" href="/extension-setup" target="_blank"
        style="display:none;font-size:11px;color:#6366f1;white-space:nowrap;text-decoration:none;padding:4px 8px;background:rgba(99,102,241,0.08);border-radius:6px;border:1px solid rgba(99,102,241,0.2)">
-      Get Chrome Extension (coming soon)
+      Setup Chrome Extension
     </a>
   </div>
 
@@ -11286,6 +11286,7 @@ def dashboard():
     <p style="font-size:14px;color:#4b5563;text-align:center;margin:0 0 20px;line-height:1.6">
       Mighty reads your connected account pages and extracts only the facts you care about &mdash; balances, expiry dates, due dates, and credits.
       <strong>Raw page text is never shared</strong> and is discarded after extraction.
+      Use <strong>desktop Chrome</strong> with the Mighty extension to connect and update accounts.
     </p>
     <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;margin-bottom:20px">
       <div style="font-size:13px;color:#374151;display:flex;flex-direction:column;gap:8px">
@@ -11479,11 +11480,16 @@ def extension_setup():
       document.getElementById('status').style.background = '#f0fdf4';
     }}
   }}, 500);
-  // Fallback: show success after 3s (extension may have already read and navigated away)
+  // Fallback: if extension never confirms, show actionable guidance (not a false success)
   setTimeout(() => {{
-    if (!sessionStorage.getItem('mighty_setup_done'))
-      document.getElementById('status').innerHTML = '✓ Done — the extension should be configured now';
-  }}, 3000);
+    if (!sessionStorage.getItem('mighty_setup_done')) {{
+      document.getElementById('status').innerHTML =
+        '⚠ Extension not detected — install Mighty Sync in Chrome, enable it, then reload this page.';
+      document.getElementById('status').style.background = '#fffbeb';
+      document.getElementById('status').style.borderColor = '#fde68a';
+      document.getElementById('status').style.color = '#92400e';
+    }}
+  }}, 8000);
 </script>
 </body></html>""", 200, {"Content-Type": "text/html"}
 
@@ -11624,6 +11630,7 @@ def delete_account():
     db.execute("DELETE FROM action_items WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM benefit_corrections WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM email_connections WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM email_suggestions WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM pending_2fa WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM users WHERE id=?", (user_id,))
     db.commit()
@@ -16364,6 +16371,13 @@ def credentials_delete(source):
         db.execute("DELETE FROM field_observations WHERE user_id=? AND source=?", (uid, source))
     except Exception as _ce:
         print(f"[Mighty] cleanup error on disconnect {source}: {_ce}", flush=True)
+    try:
+        db.execute(
+            "UPDATE email_suggestions SET added=0 WHERE user_id=? AND site_key=?",
+            (uid, source),
+        )
+    except Exception as _es:
+        print(f"[Mighty] email_suggestions reset on disconnect {source}: {_es}", flush=True)
     db.commit()
     return jsonify({"ok": True})
 
@@ -18207,6 +18221,16 @@ def api_sync_finalize():
 
 
 
+def _connection_status_for_login_state(source: str, *, logged_in: bool) -> str | None:
+    """Persist connection_status only for providers with formal session verification."""
+    from mighty.adapters.extension import supports_connection_probe
+    from mighty.connection_state import CONNECTED, NEEDS_LOGIN
+
+    if not supports_connection_probe(source):
+        return None
+    return CONNECTED if logged_in else NEEDS_LOGIN
+
+
 @app.route("/api/sync/failure", methods=["POST"])
 def api_sync_failure():
     """Called by the extension when an account sync attempt fails.
@@ -18246,14 +18270,17 @@ def api_sync_failure():
     _status_for_reason = {"login_required": "login_required", "domain_unreachable": "no_data"}
     payload["sync_status"]         = _status_for_reason.get(reason, "no_data")
     payload["sync_failure_reason"] = reason
+    conn_status = None
     if reason == "login_required":
-        payload["connection_status"] = AMEX_NEEDS_LOGIN
+        conn_status = _connection_status_for_login_state(source, logged_in=False)
+        if conn_status:
+            payload["connection_status"] = conn_status
     now = iso()
     _sets = "data_enc=?, sync_failure_reason=?, sync_status=?, synced_at=?"
     _params = [encrypt_account_data(uid, payload), reason, payload["sync_status"], now]
-    if reason == "login_required":
+    if conn_status:
         _sets += ", connection_status=?"
-        _params.append(AMEX_NEEDS_LOGIN)
+        _params.append(conn_status)
     _params.extend([uid, source])
     db.execute(
         f"UPDATE account_data SET {_sets} WHERE user_id=? AND source=?",
@@ -18290,12 +18317,20 @@ def api_sync_login_cleared():
         return jsonify({"ok": True, "updated": False, "note": "not login_required"})
     payload["sync_status"] = "ok"
     payload.pop("sync_failure_reason", None)
-    payload["connection_status"] = AMEX_CONNECTED
+    conn_status = _connection_status_for_login_state(source, logged_in=True)
+    if conn_status:
+        payload["connection_status"] = conn_status
     now = iso()
-    db.execute(
-        "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL, synced_at=?, connection_status=? WHERE user_id=? AND source=?",
-        (encrypt_account_data(uid, payload), "ok", now, AMEX_CONNECTED, uid, source)
-    )
+    if conn_status:
+        db.execute(
+            "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL, synced_at=?, connection_status=? WHERE user_id=? AND source=?",
+            (encrypt_account_data(uid, payload), "ok", now, conn_status, uid, source)
+        )
+    else:
+        db.execute(
+            "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL, synced_at=? WHERE user_id=? AND source=?",
+            (encrypt_account_data(uid, payload), "ok", now, uid, source)
+        )
     db.commit()
     print(f"[LoginCleared] uid={uid} source={source} — status reset to ok, synced_at={now}", flush=True)
     return jsonify({"ok": True, "updated": True})
