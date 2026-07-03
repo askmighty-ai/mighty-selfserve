@@ -21024,6 +21024,65 @@ def api_admin_ai_playground(source):
     )
 
 
+@app.route("/api/admin/prompt-eval")
+@require_admin
+def api_admin_prompt_eval():
+    days = request.args.get("days", 30, type=int)
+    days = max(1, min(days or 30, 365))
+    from mighty.prompt_eval import compare_prompt_versions
+
+    metrics = compare_prompt_versions(get_db(), days=days)
+    return jsonify({
+        "days": days,
+        "versions": [m.to_dict() for m in metrics],
+    })
+
+
+@app.route("/api/admin/prompt-eval/run", methods=["POST"])
+@require_admin
+def api_admin_prompt_eval_run():
+    from mighty.prompt_eval import (
+        collect_prompt_version_metrics,
+        run_fixture_evaluations,
+    )
+
+    provider = (request.get_json(silent=True) or {}).get("provider") or ai_provider_name()
+    try:
+        fixture_results = run_fixture_evaluations(provider_name=provider)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    metrics = collect_prompt_version_metrics(
+        get_db(),
+        days=30,
+        fixture_results=fixture_results,
+    )
+    return jsonify({
+        "redirect": "/admin/prompt-eval?fixture=1",
+        "provider": provider,
+        "versions": [m.to_dict() for m in metrics],
+        "fixtures": {
+            prompt_id: [r.to_dict() for r in results]
+            for prompt_id, results in fixture_results.items()
+        },
+    })
+
+
+@app.route("/admin/prompt-eval")
+@require_admin
+def admin_prompt_eval_page():
+    days = request.args.get("days", 30, type=int)
+    days = max(1, min(days or 30, 365))
+    fixture_ran = request.args.get("fixture") == "1"
+    from mighty.prompt_eval import compare_prompt_versions
+
+    return _admin_debug.render_prompt_eval_page(
+        compare_prompt_versions(get_db(), days=days),
+        days=days,
+        fixture_ran=fixture_ran,
+    )
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
