@@ -23,6 +23,14 @@
     .header img { width: 24px; height: 24px; border-radius: 5px; }
     .header-text h1 { font-size: 15px; font-weight: 700; }
     .header-text p  { font-size: 11px; opacity: 0.7; margin-top: 1px; }
+    .header-role {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      opacity: 0.85;
+      margin-top: 2px;
+    }
 
     .body {
       padding: 16px 16px 16px;
@@ -111,6 +119,13 @@
     .setup-box a { color: #b45309; font-weight: 600; text-decoration: none; }
     .setup-box a:hover { text-decoration: underline; }
 
+    .model-line {
+      font-size: 11px;
+      color: #6b7280;
+      line-height: 1.45;
+      text-align: center;
+    }
+
     /* ── Buttons ── */
     .btn-dashboard {
       display: block;
@@ -141,21 +156,22 @@
   <div class="header">
     <img src="icons/icon48.png" alt="M">
     <div class="header-text">
-      <h1>Mighty Sync</h1>
-      <p id="header-sub">Background sync active</p>
+      <h1 id="header-title">Mighty</h1>
+      <div class="header-role">Worker · Chrome</div>
+      <p id="header-sub">Running in Chrome</p>
     </div>
   </div>
 
   <div class="body">
 
-    <!-- Status card — shows current sync state and last result -->
+    <!-- Status card — shows current activity and last result -->
     <div class="status-card" id="status-card">
       <div class="status-top">
         <div class="status-dot" id="status-dot"></div>
         <div class="status-label" id="status-label">Loading…</div>
       </div>
       <div class="status-detail hidden" id="status-detail"></div>
-      <!-- Progress bar — shown only during active sync -->
+      <!-- Progress bar — shown only during active update -->
       <div class="progress-wrap hidden" id="progress-wrap">
         <div class="progress-track">
           <div class="progress-fill" id="progress-fill"></div>
@@ -164,13 +180,15 @@
       </div>
     </div>
 
+    <p class="model-line" id="model-line">Login is the only manual step. Everything else is automatic.</p>
+
     <!-- Shown only when no API key -->
     <div class="setup-box hidden" id="setup-box">
-      Visit your <a href="https://mighty-selfserve-production.up.railway.app/extension-setup" target="_blank">Mighty dashboard</a> in Chrome and the extension will configure itself automatically.
+      Visit your <a href="https://mighty-selfserve-production.up.railway.app/extension-setup" target="_blank">control center</a> in Chrome — the worker configures itself automatically.
     </div>
 
-    <a class="btn-dashboard" href="https://mighty-selfserve-production.up.railway.app/dashboard" target="_blank">
-      Open Dashboard →
+    <a class="btn-dashboard" id="dashboard-btn" href="https://mighty-selfserve-production.up.railway.app/dashboard" target="_blank">
+      Open control center →
     </a>
 
   </div>
