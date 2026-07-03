@@ -5648,7 +5648,7 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-name">Mighty</div>
   </div>
   <h1>Create your account</h1>
-  <p class="sub">You'll be connected in about 5 minutes. Account syncing requires desktop Chrome with the Mighty extension.</p>
+  <p class="sub">{user_copy.SIGNUP_SUB}</p>
   {error}
   <form method="POST" action="/signup">
 <input type="hidden" name="_csrf" value="{csrf_token}">
@@ -6233,10 +6233,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       {pending_count} awaiting decision
     </div>
     <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="{user_copy.GLOBAL_LAST_UPDATED_TITLE}">{global_sync_label}</span>
+    <span id="worker-active-badge" style="display:none;font-size:11px;color:#059669;white-space:nowrap;padding:4px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0" title="{user_copy.ROLE_EXTENSION_DESC}">
+      Worker · {user_copy.ACTIVITY_LABELS['watching']}
+    </span>
     <!-- Alpha: manual sync removed — extension is the primary sync mechanism. Server retry is in Settings. -->
     <a id="ext-install-link" href="/extension-setup" target="_blank"
        style="display:none;font-size:11px;color:#6366f1;white-space:nowrap;text-decoration:none;padding:4px 8px;background:rgba(99,102,241,0.08);border-radius:6px;border:1px solid rgba(99,102,241,0.2)">
-      Setup Chrome Extension
+      {user_copy.EXT_SETUP_LINK}
     </a>
   </div>
 
@@ -6758,7 +6761,7 @@ if (_isMobile) {
     var lbl = document.getElementById('sync-label');
     if (btn) {
       btn.onclick = function() {
-        _showToast('Use the Mighty app or desktop browser to update your accounts.', 4000);
+        _showToast('{user_copy.MOBILE_WORKER_TOAST}', 4000);
       };
       btn.title = 'Updates require the Mighty extension or mobile app';
       btn.style.opacity = '0.55';
@@ -6773,6 +6776,10 @@ window.addEventListener('message', function(e) {
   if (!e.data) return;
   if (e.data.type === '__mighty_ext_present__') {
     _extPresent = true;
+    var workerBadge = document.getElementById('worker-active-badge');
+    if (workerBadge) workerBadge.style.display = '';
+    var installLink = document.getElementById('ext-install-link');
+    if (installLink) installLink.style.display = 'none';
     // On extension connect, check which login_required accounts already have
     // credentials stored so the "Auto-login enabled" state is shown correctly.
     document.querySelectorAll('[id^="ali-"][id$="-btn"]').forEach(function(el) {
@@ -6834,7 +6841,7 @@ function _startSyncPoller(baseline) {
 function cloudSync() {
   // Mobile browsers can never run the extension — show a helpful message instead
   if (_isMobile) {
-    _showToast('Use the Mighty app or desktop browser to sync your accounts.', 4000);
+    _showToast('{user_copy.MOBILE_WORKER_TOAST}', 4000);
     return;
   }
 
@@ -6844,7 +6851,7 @@ function cloudSync() {
   // Desktop without extension — nudge to install rather than attempt a server-side sync
   // that won't be able to log into any of the major loyalty sites
   if (!_extPresent) {
-    _showToast('Install the Mighty Chrome extension to sync your accounts.', 4000);
+    _showToast('{user_copy.EXT_INSTALL_TOAST}', 4000);
     // Show install link if it exists on the page
     var installLink = document.getElementById('ext-install-link');
     if (installLink) installLink.style.display = '';
@@ -6852,7 +6859,7 @@ function cloudSync() {
   }
 
   btn.classList.add('syncing');
-  _setSyncLabel('Syncing…');
+  _setSyncLabel('{user_copy.STATUS_LABEL_UPDATING}');
   _showSyncingHeader();
   btn.disabled = true;
   // Set sentinel immediately so checkForUpdates is blocked before the async fetch returns
@@ -7384,7 +7391,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
     </div>
     <div style="font-size:11px;color:#9ca3af;margin-top:8px">Anyone with this key can submit actions on your behalf.</div>
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid #f5f2ed;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <a href="/extension-setup" target="_blank" style="display:inline-block;padding:8px 14px;background:#f0fdf4;color:#059669;border:1px solid #bbf7d0;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">🔌 Setup Chrome Extension</a>
+      <a href="/extension-setup" target="_blank" style="display:inline-block;padding:8px 14px;background:#f0fdf4;color:#059669;border:1px solid #bbf7d0;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">🔌 {user_copy.EXT_SETUP_LINK}</a>
       <span style="font-size:11px;color:#9ca3af">Opens a page the extension reads to auto-configure itself</span>
     </div>
   </div>
@@ -8710,7 +8717,7 @@ def dashboard():
             '<div style="font-size:22px;font-weight:700;color:#1c1917;margin-bottom:10px">'
             'Find your accounts</div>'
             '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
-            'Scan your Gmail to discover loyalty programs and subscriptions, then connect them with the Mighty Chrome extension.</div>'
+            'Scan your Gmail to discover loyalty programs and subscriptions, then connect them — the worker handles the rest automatically.</div>'
             '<a href="/email-scan" style="display:block;padding:13px 20px;'
             'background:#6366f1;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
             'text-decoration:none">Scan Gmail &#8594;</a>'
@@ -11234,17 +11241,16 @@ def dashboard():
 <div id="onboarding-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px">
   <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:28px 28px 24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
     <div style="font-size:28px;text-align:center;margin-bottom:12px">&#128272;</div>
-    <h2 style="font-size:20px;font-weight:700;text-align:center;color:#111;margin:0 0 8px">How Mighty works</h2>
+    <h2 style="font-size:20px;font-weight:700;text-align:center;color:#111;margin:0 0 8px">{user_copy.ONBOARDING_TITLE}</h2>
     <p style="font-size:14px;color:#4b5563;text-align:center;margin:0 0 20px;line-height:1.6">
-      Mighty reads your connected account pages and extracts only the facts you care about &mdash; balances, expiry dates, due dates, and credits.
-      <strong>Raw page text is never shared</strong> and is discarded after extraction.
-      Use <strong>desktop Chrome</strong> with the Mighty extension to connect and update accounts.
+      {user_copy.ONBOARDING_BODY}
+      {user_copy.ONBOARDING_CHROME_LINE}
     </p>
     <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;margin-bottom:20px">
       <div style="font-size:13px;color:#374151;display:flex;flex-direction:column;gap:8px">
-        <div>&#9989; <strong>What we extract:</strong> Account balances, expiry dates, payment due dates, credits</div>
-        <div>&#128683; <strong>What we don&#39;t store:</strong> Full browsing history, passwords, or raw page content (unless you disable deletion)</div>
-        <div>&#128274; <strong>Your data:</strong> Encrypted at rest, never sold or shared</div>
+        <div>&#128187; <strong>Worker:</strong> {user_copy.ROLE_EXTENSION_DESC}</div>
+        <div>&#128202; <strong>Control center:</strong> {user_copy.ROLE_DASHBOARD_DESC}</div>
+        <div>&#128274; <strong>Manual step:</strong> {user_copy.MANUAL_STEP_LINE}</div>
       </div>
     </div>
     <button onclick="dismissOnboarding()" style="width:100%;padding:12px;background:#111;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">
@@ -11416,11 +11422,10 @@ def extension_setup():
 </head><body>
 <div class="card">
   <div class="icon">🔌</div>
-  <h1>Connecting Mighty Extension</h1>
-  <p>The Mighty Chrome extension is reading this page to configure itself automatically.
-     You can close this tab once it confirms.</p>
+  <h1>{user_copy.EXT_SETUP_TITLE}</h1>
+  <p>{user_copy.EXT_SETUP_BODY}</p>
   <div class="status" id="status">
-    <span class="spinner"></span> Waiting for extension…
+    <span class="spinner"></span> {user_copy.EXT_SETUP_WAITING}
   </div>
 </div>
 <script>
@@ -11428,7 +11433,7 @@ def extension_setup():
   const check = setInterval(() => {{
     if (sessionStorage.getItem('mighty_setup_done')) {{
       clearInterval(check);
-      document.getElementById('status').innerHTML = '✓ Extension configured successfully — you can close this tab';
+      document.getElementById('status').innerHTML = '✓ {user_copy.EXT_SETUP_SUCCESS}';
       document.getElementById('status').style.background = '#f0fdf4';
     }}
   }}, 500);
@@ -11436,7 +11441,7 @@ def extension_setup():
   setTimeout(() => {{
     if (!sessionStorage.getItem('mighty_setup_done')) {{
       document.getElementById('status').innerHTML =
-        '⚠ Extension not detected — install Mighty Sync in Chrome, enable it, then reload this page.';
+        '⚠ {user_copy.EXT_SETUP_NOT_DETECTED}';
       document.getElementById('status').style.background = '#fffbeb';
       document.getElementById('status').style.borderColor = '#fde68a';
       document.getElementById('status').style.color = '#92400e';
@@ -13795,21 +13800,7 @@ def _build_dash_modals(configured: set, csrf: str) -> str:
           🔐 <strong>2-step verification likely</strong> — <span id="dash-twofa-note"></span>
         </div>
         <div style="margin-bottom:20px">
-          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af;margin-bottom:10px">How this works</div>
-          <div style="display:flex;flex-direction:column;gap:10px">
-            <div style="display:flex;align-items:flex-start;gap:10px">
-              <div style="width:22px;height:22px;border-radius:50%;background:#059669;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">1</div>
-              <div style="font-size:13px;color:#374151;line-height:1.5">Click <strong>Open in Chrome</strong> — we'll take you to the <span class="dash-site-name-ref" style="font-weight:600"></span> login page</div>
-            </div>
-            <div style="display:flex;align-items:flex-start;gap:10px">
-              <div style="width:22px;height:22px;border-radius:50%;background:#059669;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">2</div>
-              <div style="font-size:13px;color:#374151;line-height:1.5"><strong>Log in yourself</strong> <span id="dash-cred-type-note" style="color:#6b7280;font-size:12px"></span> — complete any verification steps if asked</div>
-            </div>
-            <div style="display:flex;align-items:flex-start;gap:10px">
-              <div style="width:22px;height:22px;border-radius:50%;background:#059669;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">3</div>
-              <div style="font-size:13px;color:#374151;line-height:1.5">The Mighty extension <strong>automatically captures your data</strong> — you don't need to do anything else</div>
-            </div>
-          </div>
+          {user_copy.connect_steps_html()}
         </div>
         <div style="text-align:center;margin-bottom:4px">
           <a id="dash-open-chrome-btn" href="#" target="_blank"
@@ -13821,14 +13812,14 @@ def _build_dash_modals(configured: set, csrf: str) -> str:
         <div id="dash-ext-waiting" style="display:none;margin-top:16px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px">
           <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#15803d;font-weight:500;margin-bottom:4px">
             <span style="display:inline-block;width:14px;height:14px;border:2px solid #bbf7d0;border-top-color:#16a34a;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0"></span>
-            Waiting for Mighty to detect your session…
+            {user_copy.CONNECT_WAITING}
           </div>
-          <div style="font-size:12px;color:#16a34a;padding-left:22px">Stay on your account page after logging in — usually takes 5–15 seconds</div>
+          <div style="font-size:12px;color:#16a34a;padding-left:22px">{user_copy.CONNECT_WAITING_SUB}</div>
         </div>
         <div id="dash-ext-trouble" style="display:none;margin-top:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 14px;font-size:12px;color:#991b1b">
-          <div style="font-weight:600;margin-bottom:8px">⚠ Mighty didn't detect your login. Try these:</div>
+          <div style="font-weight:600;margin-bottom:8px">⚠ {user_copy.CONNECT_TROUBLE_TITLE}</div>
           <ol style="margin:0;padding-left:18px;line-height:1.9">
-            <li>Make sure the <a href="/extension-setup" target="_blank" style="color:#b91c1c;font-weight:500">Mighty Chrome extension is installed</a></li>
+            <li>{user_copy.CONNECT_TROUBLE_EXT}</li>
             <li>Navigate to your <strong class="dash-site-name-ref"></strong> account page (not just the home page)</li>
             <li>Make sure you're fully logged in — complete any 2FA prompts</li>
             <li>Stay on the account page for a few seconds</li>
@@ -14029,7 +14020,7 @@ function _updateArchivedFooter() {{
 }}
 function forceClearLoginWall(source, btn) {{
   btn.disabled = true;
-  btn.textContent = 'Syncing…';
+  btn.textContent = '{user_copy.STATUS_LABEL_UPDATING}';
   // 1. Clear server-side login_required status
   fetch('/api/sync/login-cleared', {{
     method: 'POST',
@@ -14550,6 +14541,7 @@ _CREDENTIALS_PAGE_CSS = """
 .sync-howto-list{margin:0;padding-left:18px;font-size:13px;color:#374151;line-height:1.65}
 .sync-howto-list li{margin-bottom:6px}
 .sync-howto-list li:last-child{margin-bottom:0}
+.sync-howto-tagline{margin:12px 0 0;font-size:12px;color:#0369a1;font-weight:600}
 @media(max-width:768px){.page{padding:24px 16px 32px}.page-header{flex-wrap:wrap}.btn-connect-new{width:100%;justify-content:center;margin-top:0}.accounts-onboard-card{padding:26px 20px;border-radius:16px}.accounts-onboard-title{font-size:21px;max-width:none}.accounts-onboard-desc{font-size:14px}.accounts-onboard-cta{width:100%;box-sizing:border-box}}
 /* ── Cred cards ── */
 .cred-card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
@@ -14888,7 +14880,7 @@ function runAutoDiscover() {
   <div class="page-header">
     <div class="page-header-text">
       <h1>Connected accounts</h1>
-      <p class="page-subtitle">Add accounts so Mighty can find expiring perks, unused value, and savings for you.</p>
+      <p class="page-subtitle">{user_copy.INTERACTION_TAGLINE}</p>
     </div>
     <a href="/email-scan" class="btn-connect-new" style="text-decoration:none;display:inline-flex;align-items:center">Find accounts</a>
   </div>
@@ -14932,8 +14924,7 @@ function runAutoDiscover() {
           <div style="font-size:32px;margin-bottom:12px" id="modal-ext-icon-lg"></div>
           <div style="font-size:14px;font-weight:600;color:#1c1917;margin-bottom:8px">Open provider in Chrome</div>
           <div style="font-size:13px;color:#6b7280;line-height:1.6;margin-bottom:20px">
-            Make sure you're <strong>logged into <span id="modal-ext-site-name"></span></strong> in Chrome,
-            then click the button below. The Mighty extension captures your account data automatically.
+            {user_copy.CONNECT_MODAL_INTRO}
           </div>
           <a id="modal-open-chrome-btn"
              href="#" target="_blank"
@@ -14944,23 +14935,23 @@ function runAutoDiscover() {
           <div id="modal-ext-waiting" style="display:none;margin-top:20px;text-align:center">
             <div id="modal-ext-waiting-spinner" style="display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#6b7280">
               <span style="display:inline-block;width:14px;height:14px;border:2px solid #d1fae5;border-top-color:#059669;border-radius:50%;animation:spin 0.8s linear infinite"></span>
-              <span id="modal-ext-waiting-text">Waiting for extension…</span>
+              <span id="modal-ext-waiting-text">{user_copy.CONNECT_MODAL_WAITING}</span>
             </div>
             <div id="modal-ext-waiting-sub" style="font-size:11px;color:#9ca3af;margin-top:6px;line-height:1.5">
-              Open your provider site in Chrome while logged in. The Mighty extension verifies your session — visiting the domain alone is not enough.
+              {user_copy.CONNECT_MODAL_WAITING_SUB}
             </div>
             <button id="modal-ext-retry" type="button" onclick="retryExtPoll()"
               style="display:none;margin-top:10px;padding:6px 12px;background:none;border:1px solid #d1d5db;color:#6b7280;border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit">
-              I installed the extension / Retry
+              {user_copy.SECONDARY_CTA_EXTENSION_RETRY}
             </button>
           </div>
           <div id="modal-ext-no-ext" style="display:none;margin-top:16px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:#92400e;text-align:left">
-            💡 <strong>Extension not detected.</strong> Install the Mighty Chrome extension from
-            <a href="/extension-setup" target="_blank" style="color:#b45309">Settings → Setup Chrome Extension</a>,
+            💡 <strong>{user_copy.EXT_NOT_DETECTED_SHORT}</strong> Install the Mighty worker from
+            <a href="/extension-setup" target="_blank" style="color:#b45309">Settings → {user_copy.EXT_SETUP_LINK}</a>,
             then click Retry above.
           </div>
           <div id="modal-ext-needs-login" style="display:none;margin-top:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px;font-size:12px;color:#991b1b;text-align:left">
-            🔐 <strong>Sign in required.</strong> Log in to your provider in Chrome, then keep this tab open while Mighty verifies your session.
+            🔐 <strong>{user_copy.STATUS_LABEL_NEEDS_LOGIN}.</strong> {user_copy.CONNECT_MODAL_NEEDS_LOGIN}
           </div>
           <div id="modal-ext-connected" style="display:none;margin-top:16px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;font-size:12px;color:#166534;text-align:left">
             ✓ <strong>Connected.</strong> {user_copy.MODAL_CONNECTED_NO_FIELDS}
@@ -15172,7 +15163,7 @@ function _applyLifecyclePoll(d) {{
     return 'synced';
   }}
   if (waiting) waiting.style.display = 'block';
-  if (waitText) waitText.textContent = lc.label || 'Waiting for extension…';
+  if (waitText) waitText.textContent = lc.label || '{user_copy.CONNECT_MODAL_WAITING}';
   if (retry && lc.state === 'waiting_for_extension') retry.style.display = 'inline-block';
   return 'waiting';
 }}
@@ -18267,6 +18258,7 @@ def api_account_status():
         "summary": summary.to_dict(),
         "sync_running": sync_running,
         "status_labels": STATUS_LABELS,
+        "copy": user_copy.api_copy_bundle(),
         "status_values": {
             "up_to_date": UP_TO_DATE,
             "updating": UPDATING,
@@ -19888,6 +19880,8 @@ def _amex_card_freshness(
 
 def _amex_connection_card_html(status: str, display_name: str) -> tuple[str, str]:
     """Return (card_hero_html, status_color) for an Amex connection state."""
+    from mighty.user_copy import CONNECTION_SUBCOPY
+
     label = amex_state_label(status)
     colors = {
         AMEX_CONNECTING: "#a78bfa",
@@ -19896,12 +19890,7 @@ def _amex_connection_card_html(status: str, display_name: str) -> tuple[str, str
         AMEX_CONNECTED: "#22c55e",
     }
     color = colors.get(status, "#a78bfa")
-    subcopy = {
-        AMEX_CONNECTING: "Setting up your American Express account…",
-        AMEX_WAITING: "Waiting for extension — install Mighty in Chrome and open Amex while logged in.",
-        AMEX_NEEDS_LOGIN: "Needs login — sign in to American Express in Chrome so Mighty can verify your session.",
-        AMEX_CONNECTED: "Connected — session verified. No account data extracted yet.",
-    }.get(status, "")
+    subcopy = CONNECTION_SUBCOPY.get(status, "")
     login_url = SOURCE_CAPABILITIES.get(AMEX_SOURCE, {}).get("login_url", SITE_ENTRY_URL.get(AMEX_SOURCE, ""))
     ext_link = ""
     if status == AMEX_WAITING:
@@ -19909,7 +19898,7 @@ def _amex_connection_card_html(status: str, display_name: str) -> tuple[str, str
             f'<a href="/extension-setup" '
             f'style="display:inline-block;margin-top:8px;padding:5px 12px;background:#6366f1;'
             f'color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none">'
-            f'Set up extension →</a>'
+            f'{he(user_copy.CTA_SET_UP_WORKER)}</a>'
         )
     elif status in (AMEX_NEEDS_LOGIN, AMEX_CONNECTED) and login_url:
         btn_bg = "#ef4444" if status == AMEX_NEEDS_LOGIN else "#22c55e"

@@ -1,5 +1,37 @@
 const MIGHTY_URL = 'https://mighty-selfserve-production.up.railway.app';
 
+// Fallback copy — kept in sync with mighty/user_copy.py
+const DEFAULT_COPY = {
+  taglines: { manual_step: 'Login is the only manual step. Everything else is automatic.' },
+  worker: {
+    name: 'Mighty',
+    subtitle_running: 'Running in Chrome',
+    subtitle_updating: 'Updating accounts',
+    subtitle_not_configured: 'Not configured',
+    setup_needed: 'Setup needed',
+    setup_detail: 'Open your control center to connect the worker.',
+    open_dashboard: 'Open control center →',
+    not_updated_yet: 'Not updated yet',
+    needs_login_subline: 'Needs login means: open the provider and sign in.',
+  },
+  failure_hints: {
+    login_required: 'Needs login means: open the provider and sign in.',
+    login_wall: 'Needs login means: open the provider and sign in.',
+    timeout: 'Site took too long — will retry on the next automatic update',
+    no_data: 'Could not read account data',
+    domain_unreachable: 'Site unreachable',
+  },
+  failure_icons: {
+    login_required: '🔐',
+    login_wall: '🔐',
+    timeout: '⏱',
+    no_data: '⚠️',
+    domain_unreachable: '🌐',
+  },
+};
+
+let _copy = DEFAULT_COPY;
+
 function timeAgo(isoStr) {
   if (!isoStr) return null;
   const diff = Math.floor((Date.now() - new Date(isoStr).getTime()) / 1000);
@@ -16,15 +48,31 @@ function minsUntil(ts) {
   return mins > 0 ? mins : 0;
 }
 
-// Human-readable failure descriptions
-const FAILURE_COPY = {
-  login_required: { icon: '🔐', msg: 'Log back in to fix' },
-  timeout:        { icon: '⏱', msg: 'Site took too long — will retry next sync' },
-  no_data:        { icon: '⚠️', msg: 'Could not read account data' },
-  domain_unreachable: { icon: '🌐', msg: 'Site unreachable' },
-};
+function w() { return _copy.worker || DEFAULT_COPY.worker; }
 function failureCopy(reason) {
-  return FAILURE_COPY[reason] || { icon: '⚠️', msg: 'Sync failed' };
+  const hints = _copy.failure_hints || DEFAULT_COPY.failure_hints;
+  const icons = _copy.failure_icons || DEFAULT_COPY.failure_icons;
+  return {
+    icon: icons[reason] || '⚠️',
+    msg: hints[reason] || 'Update failed',
+  };
+}
+
+function applyStaticCopy() {
+  const worker = w();
+  const title = document.getElementById('header-title');
+  const modelLine = document.getElementById('model-line');
+  const dashBtn = document.getElementById('dashboard-btn');
+  const setupBox = document.getElementById('setup-box');
+  if (title && worker.name) title.textContent = worker.name;
+  if (modelLine && _copy.taglines && _copy.taglines.manual_step) {
+    modelLine.textContent = _copy.taglines.manual_step;
+  }
+  if (dashBtn && worker.open_dashboard) dashBtn.textContent = worker.open_dashboard;
+  if (setupBox) {
+    setupBox.innerHTML =
+      'Visit your <a href="' + MIGHTY_URL + '/extension-setup" target="_blank">control center</a> in Chrome — the worker configures itself automatically.';
+  }
 }
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -49,7 +97,8 @@ function setDot(cls) {
 function _isLocallySyncing(data) {
   const progress = data.sync_progress;
   const status = data.sync_status || '';
-  return status.startsWith('Syncing') || status === 'sync_active'
+  return status.startsWith('Syncing') || status.startsWith('Updating')
+    || status === 'sync_active'
     || (progress && progress.total > 0 && progress.done < progress.total);
 }
 
@@ -61,23 +110,24 @@ function _resolveHeadline(data) {
     return summary.headline;
   }
   if (progress && progress.name) {
-    return 'Syncing ' + progress.name;
+    return 'Updating ' + progress.name;
   }
   return '';
 }
 
-// ── Render: active sync / needs-login mix ─────────────────────────────────────
+// ── Render: active update / needs-login mix ───────────────────────────────────
 function renderActive(data) {
   const summary = data.account_status && data.account_status.summary;
   const progress = data.sync_progress;
   const headline = _resolveHeadline(data);
   const isSyncing = (summary && summary.is_syncing) || _isLocallySyncing(data);
+  const worker = w();
 
   if (isSyncing) {
     setDot('green pulse');
-    label.textContent = headline || (progress && progress.name ? 'Syncing ' + progress.name : 'Syncing…');
-    headerSub.textContent = (summary && summary.subline) || 'Updating your accounts';
-    showDetail(data.last_sync ? 'Last completed ' + timeAgo(data.last_sync) : 'First sync running');
+    label.textContent = headline || (progress && progress.name ? 'Updating ' + progress.name : worker.subtitle_updating || 'Updating…');
+    headerSub.textContent = (summary && summary.subline) || worker.subtitle_updating || 'Updating accounts';
+    showDetail(data.last_sync ? 'Last completed ' + timeAgo(data.last_sync) : 'First update running');
     progressWrap.classList.remove('hidden');
 
     if (progress && progress.total > 0) {
@@ -92,7 +142,6 @@ function renderActive(data) {
     return;
   }
 
-  // Needs login without active sync
   if (summary && summary.needs_login_count > 0) {
     renderNeedsLogin(data, summary);
   }
@@ -102,17 +151,18 @@ function renderNeedsLogin(data, summary) {
   progressWrap.classList.add('hidden');
   setDot('red');
   label.textContent = summary.headline;
-  headerSub.textContent = 'Sign in to your provider in Chrome';
+  headerSub.textContent = w().needs_login_subline || DEFAULT_COPY.worker.needs_login_subline;
   const lines = (summary.needs_login_accounts || []).map(function(name) {
-    return '🔐 <strong>' + name + '</strong> — Log back in to fix';
+    const c = failureCopy('login_required');
+    return c.icon + ' <strong>' + name + '</strong> — ' + c.msg;
   });
   showDetail(lines.join('<br>') || summary.subline);
 }
 
-// ── Render: idle state ────────────────────────────────────────────────────────
+// ── Render: idle state (worker running in Chrome) ───────────────────────────────
 function renderIdle(data) {
   progressWrap.classList.add('hidden');
-  headerSub.textContent = 'Background sync active';
+  headerSub.textContent = w().subtitle_running || DEFAULT_COPY.worker.subtitle_running;
 
   const summary = data.account_status && data.account_status.summary;
   if (summary && summary.needs_login_count > 0 && !summary.is_syncing) {
@@ -125,15 +175,16 @@ function renderIdle(data) {
   const capturedCount = Object.keys(captured_accounts || {}).length;
   const ago = timeAgo(last_sync);
   const failures = last_sync_failures || [];
+  const worker = w();
 
   chrome.alarms.get('mighty-sync', function(alarm) {
     const nextMins = minsUntil(alarm && alarm.scheduledTime);
 
     if (!ago) {
       setDot('amber');
-      label.textContent = 'Not synced yet';
+      label.textContent = worker.not_updated_yet || DEFAULT_COPY.worker.not_updated_yet;
       showDetail(
-        (nextMins !== null ? 'First sync in ' + nextMins + 'm' : 'Waiting for first sync…') +
+        (nextMins !== null ? 'First update in ' + nextMins + 'm' : 'Waiting for first update…') +
         (ext_version ? '<br><span class="dim">' + ext_version + '</span>' : '')
       );
       return;
@@ -143,9 +194,8 @@ function renderIdle(data) {
     const allFailed   = typeof last_sync_ok === 'number' && last_sync_ok === 0 && hadFailures;
 
     setDot(allFailed ? 'red' : hadFailures ? 'amber' : 'green');
-    label.textContent = 'Synced ' + ago;
+    label.textContent = 'Updated ' + ago;
 
-    // Summary line
     let summaryStr = '';
     if (typeof last_sync_ok === 'number') {
       const total = (last_sync_ok || 0) + (last_sync_failed || 0);
@@ -155,13 +205,12 @@ function renderIdle(data) {
       if (capturedCount > 0) summaryStr += ' · ' + capturedCount + ' captured';
     }
 
-    // Per-account failure lines (actionable)
     const failureLines = failures.map(function(f) {
       const c = failureCopy(f.reason);
       return c.icon + ' <strong>' + f.name + '</strong> — ' + c.msg;
     });
 
-    const nextStr = nextMins !== null ? 'Next sync in ' + nextMins + 'm' : '';
+    const nextStr = nextMins !== null ? 'Next update in ' + nextMins + 'm' : '';
 
     const lines = [summaryStr]
       .concat(failureLines)
@@ -173,16 +222,16 @@ function renderIdle(data) {
 
 // ── Main render ───────────────────────────────────────────────────────────────
 function render(data) {
-  // Reset transient elements before each render
   progressWrap.classList.add('hidden');
   setupBox.classList.add('hidden');
 
   if (!data.api_key) {
+    const worker = w();
     setDot('amber');
-    label.textContent = 'Setup needed';
-    showDetail('Open your Mighty dashboard to connect.');
+    label.textContent = worker.setup_needed || DEFAULT_COPY.worker.setup_needed;
+    showDetail(worker.setup_detail || DEFAULT_COPY.worker.setup_detail);
     setupBox.classList.remove('hidden');
-    headerSub.textContent = 'Not configured';
+    headerSub.textContent = worker.subtitle_not_configured || DEFAULT_COPY.worker.subtitle_not_configured;
     return;
   }
 
@@ -214,7 +263,14 @@ async function fetchAccountStatus(apiKey) {
 
 async function loadAndRender(storageData) {
   if (storageData.api_key) {
-    storageData.account_status = await fetchAccountStatus(storageData.api_key);
+    const statusPayload = await fetchAccountStatus(storageData.api_key);
+    if (statusPayload) {
+      storageData.account_status = statusPayload;
+      if (statusPayload.copy) {
+        _copy = statusPayload.copy;
+        applyStaticCopy();
+      }
+    }
   }
   render(storageData);
   return storageData;
@@ -235,11 +291,17 @@ function _scheduleStatusPoll() {
     fetchAccountStatus(_currentData.api_key).then(function(status) {
       if (status) {
         _currentData.account_status = status;
+        if (status.copy) {
+          _copy = status.copy;
+          applyStaticCopy();
+        }
         render(_currentData);
       }
     });
   }, 5000);
 }
+
+applyStaticCopy();
 
 chrome.storage.local.get(KEYS, function(d) {
   _currentData = d;

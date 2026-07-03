@@ -14,6 +14,7 @@ Connection is separate from extraction. Synced means normalized fields exist
 
 from __future__ import annotations
 
+from mighty.user_copy import CONNECTION_LABELS, CONNECTION_STATUS_LINES
 from mighty.provider_account import (
     EXTRACTION_NOT_STARTED,
     EXTRACTION_PENDING,
@@ -37,19 +38,9 @@ AMEX_CONNECTION_STATES = (
     CONNECTED,
 )
 
-STATE_LABELS: dict[str, str] = {
-    CONNECTING: "Connecting",
-    WAITING_FOR_EXTENSION: "Waiting for verification",
-    NEEDS_LOGIN: "Sign in to Amex",
-    CONNECTED: "Connected",
-}
+STATE_LABELS: dict[str, str] = CONNECTION_LABELS
 
-STATE_STATUS_LABELS: dict[str, str] = {
-    CONNECTING: "Setting up…",
-    WAITING_FOR_EXTENSION: "Awaiting verification",
-    NEEDS_LOGIN: "Sign in required",
-    CONNECTED: "Connected — awaiting data",
-}
+STATE_STATUS_LABELS: dict[str, str] = CONNECTION_STATUS_LINES
 
 _CONNECTION_EXTRACTION: dict[str, str] = {
     CONNECTING: EXTRACTION_NOT_STARTED,
