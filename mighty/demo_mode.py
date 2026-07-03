@@ -367,6 +367,19 @@ def get_demo_recommendations() -> list[Recommendation]:
                 f"Matches your {s.destination} trip ({trip_str}) and unused "
                 "Amex hotel credit."
             ),
+            evidence=[
+                "Platinum card with Fine Hotels + Resorts eligibility",
+                f"{s.destination} trip on {trip_str} in connected account data",
+                "$300 Amex hotel credit remaining this year",
+            ],
+            why_now=(
+                f"Your {s.destination} trip is {trip_str} — book now to apply "
+                "FHR benefits and the hotel credit before rates rise."
+            ),
+            alternative_options=[
+                "Transfer Chase UR to Hyatt and book with points",
+                "Book direct with Hyatt and use elite status benefits",
+            ],
             recommendation_type="hotel",
             confidence="high",
             bullets=[
@@ -387,6 +400,19 @@ def get_demo_recommendations() -> list[Recommendation]:
                 f"You have 92K Ultimate Rewards and a {s.destination} trip on "
                 f"{trip_str}."
             ),
+            evidence=[
+                "92K Ultimate Rewards balance in connected Chase account",
+                f"{s.destination} trip on {trip_str}",
+                "Park Hyatt Tokyo ~30K/night off-peak award rate",
+            ],
+            why_now=(
+                f"Transfer before {trip_str} to lock in award availability at "
+                "Park Hyatt Tokyo."
+            ),
+            alternative_options=[
+                "Book via Amex Travel with FHR and pay cash",
+                "Use Marriott free night certificate instead",
+            ],
             recommendation_type="hotel",
             confidence="high",
             bullets=[
@@ -407,6 +433,19 @@ def get_demo_recommendations() -> list[Recommendation]:
                 f"Certificate expires in {s.delta_upgrade_days} days; "
                 f"your {s.destination} flight is {trip_str}."
             ),
+            evidence=[
+                "Regional upgrade certificate available on Delta account",
+                f"Certificate expires in {s.delta_upgrade_days} days",
+                f"SFO→NRT flight on {trip_str}",
+            ],
+            why_now=(
+                f"Certificate expires in {s.delta_upgrade_days} days — apply "
+                "before your {trip_str} departure."
+            ),
+            alternative_options=[
+                "Rely on Gold Medallion complimentary upgrade eligibility",
+                "Save the certificate for a future long-haul trip",
+            ],
             recommendation_type="travel",
             confidence="medium",
             bullets=[

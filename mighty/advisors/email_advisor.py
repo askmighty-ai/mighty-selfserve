@@ -29,6 +29,8 @@ class _KeywordRule:
     category: str
     confidence: str
     rationale: str
+    why_now: str
+    alternative_options: tuple[str, ...]
     bullets: tuple[str, ...]
     action_label: str
     action_url: str
@@ -43,6 +45,11 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         category="hotel",
         confidence="medium",
         rationale="A recent email subject mentioned Hyatt.",
+        why_now="The email arrived recently — offers and promotions often expire within days.",
+        alternative_options=(
+            "Ignore the email if you have no upcoming Hyatt stays",
+            "Check your Hyatt account directly instead of acting on the email",
+        ),
         bullets=(
             "Check for bonus points or status promotions",
             "Confirm upcoming reservation details",
@@ -59,6 +66,11 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         category="hotel",
         confidence="medium",
         rationale="A recent email subject mentioned Marriott.",
+        why_now="The email arrived recently — free-night and points offers often have short windows.",
+        alternative_options=(
+            "Check Marriott Bonvoy app for the same offers",
+            "Wait for a better targeted promotion before booking",
+        ),
         bullets=(
             "Look for free-night or points promotions",
             "Verify upcoming reservation details",
@@ -75,6 +87,11 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         category="hotel",
         confidence="medium",
         rationale="A recent email subject mentioned Hilton.",
+        why_now="The email arrived recently — status and bonus offers may expire soon.",
+        alternative_options=(
+            "Book through Amex FHR if the property is eligible",
+            "Check Hilton Honors app instead of the email link",
+        ),
         bullets=(
             "Check for bonus points or status offers",
             "Confirm upcoming reservation details",
@@ -91,6 +108,11 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         category="travel",
         confidence="medium",
         rationale="A recent email subject mentioned Airbnb.",
+        why_now="Trip-related emails often contain time-sensitive check-in or change details.",
+        alternative_options=(
+            "Open the Airbnb app to view the same trip details",
+            "Contact the host directly through the platform",
+        ),
         bullets=(
             "Confirm check-in instructions and dates",
             "Review cancellation policy before changes",
@@ -107,6 +129,11 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         category="travel",
         confidence="medium",
         rationale="A recent email subject mentioned Southwest.",
+        why_now="Flight and Companion Pass notices often require action before departure.",
+        alternative_options=(
+            "Check southwest.com My Trips for the same updates",
+            "Call Southwest if the email mentions a schedule change",
+        ),
         bullets=(
             "Check Companion Pass status before booking",
             "Review change or cancellation notices",
@@ -123,6 +150,11 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         category="travel",
         confidence="medium",
         rationale="A recent email subject mentioned United.",
+        why_now="Upgrade and schedule-change notices often have response deadlines.",
+        alternative_options=(
+            "Check united.com My Trips for the same flight status",
+            "Use the United app for real-time gate and seat updates",
+        ),
         bullets=(
             "Check upgrade or schedule-change notices",
             "Review expiring miles or certificate offers",
@@ -139,6 +171,11 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         category="travel",
         confidence="medium",
         rationale="A recent email subject mentioned Delta.",
+        why_now="Certificate and upgrade offers often expire before your next trip.",
+        alternative_options=(
+            "Check delta.com My Trips for the same updates",
+            "Use the Fly Delta app for live flight status",
+        ),
         bullets=(
             "Check upgrade or schedule-change notices",
             "Review Medallion or certificate offers",
@@ -155,6 +192,11 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         category="credit_card",
         confidence="medium",
         rationale="A recent email subject mentioned Amex.",
+        why_now="Amex Offers and expiring credits typically have enrollment or use-by dates.",
+        alternative_options=(
+            "Check Amex app Offers tab for the same deals",
+            "Log in to americanexpress.com to review all active credits",
+        ),
         bullets=(
             "Check for new Amex Offers",
             "Review expiring credits or benefits",
@@ -171,6 +213,11 @@ _KEYWORD_RULES: tuple[_KeywordRule, ...] = (
         category="credit_card",
         confidence="medium",
         rationale="A recent email subject mentioned Chase.",
+        why_now="Bonus category and transfer promotions often have limited enrollment windows.",
+        alternative_options=(
+            "Check Chase app for the same offers and credits",
+            "Review Ultimate Rewards portal before transferring points",
+        ),
         bullets=(
             "Check for new Chase Offers",
             "Review expiring credits or bonus categories",
@@ -196,15 +243,15 @@ def _recent_subjects(
 
 def _match_subjects(subjects: list[str]) -> list[Opportunity]:
     """Keyword matcher — replace this function to swap in an LLM or rules engine."""
-    normalized = [s.lower() for s in subjects]
     matched: list[Opportunity] = []
     seen_ids: set[str] = set()
 
     for rule in _KEYWORD_RULES:
         if rule.id in seen_ids:
             continue
-        for subject in normalized:
-            if any(keyword in subject for keyword in rule.keywords):
+        for subject in subjects:
+            subject_lower = subject.lower()
+            if any(keyword in subject_lower for keyword in rule.keywords):
                 matched.append(
                     Opportunity(
                         id=rule.id,
@@ -213,6 +260,9 @@ def _match_subjects(subjects: list[str]) -> list[Opportunity]:
                         category=rule.category,
                         confidence=rule.confidence,
                         rationale=rule.rationale,
+                        evidence=[f"Email subject: {subject.strip()}"],
+                        why_now=rule.why_now,
+                        alternative_options=list(rule.alternative_options),
                         bullets=list(rule.bullets),
                         action_label=rule.action_label,
                         action_url=rule.action_url,

@@ -71,6 +71,15 @@ def evaluate(
             rationale=(
                 "A hotel booking was detected and eligible hotel benefits appear available."
             ),
+            evidence=[
+                "hotel_booking intent detected on current page",
+                "Amex Fine Hotels / FHR benefit appears available",
+            ],
+            why_now="You're on a hotel booking page — benefits must be applied at checkout.",
+            alternative_options=[
+                "Book direct with the hotel loyalty program",
+                "Use points through the hotel's own award portal",
+            ],
             bullets=[
                 "Book through Amex Travel",
                 "Use Fine Hotels & Resorts if eligible",

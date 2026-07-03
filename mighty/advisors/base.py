@@ -23,6 +23,9 @@ class Opportunity:
     category: str = ""
     confidence: str = "low"
     rationale: str = ""
+    evidence: list[str] = field(default_factory=list)
+    why_now: str = ""
+    alternative_options: list[str] = field(default_factory=list)
     bullets: list[str] = field(default_factory=list)
     action_label: str = ""
     action_url: str = ""
