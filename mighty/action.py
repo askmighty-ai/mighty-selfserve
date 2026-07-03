@@ -52,6 +52,9 @@ class Action:
     due_date: date | None = None
     confidence: str = "low"
     reasoning: str = ""
+    evidence: list[str] = field(default_factory=list)
+    why_now: str = ""
+    alternative_options: list[str] = field(default_factory=list)
     source_accounts: list[str] = field(default_factory=list)
     recommended_next_step: str = ""
     completion_state: CompletionState = CompletionState.OPEN

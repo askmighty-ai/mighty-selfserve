@@ -37,11 +37,30 @@ class Recommendation:
     title: str
     summary: str
     rationale: str = ""
+    evidence: list[str] = field(default_factory=list)
+    why_now: str = ""
+    alternative_options: list[str] = field(default_factory=list)
     bullets: list[str] = field(default_factory=list)
     confidence: str = "low"
     action_label: str = ""
     action_url: str = ""
     recommendation_type: str = "general"
+
+
+def recommendation_contract_violations(rec: Recommendation) -> list[str]:
+    """Return missing required recommendation fields (empty list = complete)."""
+    missing: list[str] = []
+    if not rec.rationale.strip():
+        missing.append("rationale")
+    if not rec.confidence.strip():
+        missing.append("confidence")
+    if not rec.why_now.strip():
+        missing.append("why_now")
+    if not rec.evidence:
+        missing.append("evidence")
+    if not rec.alternative_options:
+        missing.append("alternative_options")
+    return missing
 
 
 from mighty.advisors.email_advisor import evaluate as evaluate_email
@@ -57,6 +76,12 @@ def _dashboard_demo_recommendations() -> list[Recommendation]:
             rationale="Demo recommendation.",
             recommendation_type="hotel",
             confidence="high",
+            evidence=["Platinum card with Fine Hotels + Resorts eligibility"],
+            why_now="Demo scenario — booking window is open for your upcoming stay.",
+            alternative_options=[
+                "Book direct with the hotel loyalty program",
+                "Use Chase portal with Sapphire Reserve travel credits",
+            ],
             bullets=[
                 "Fine Hotels + Resorts eligible",
                 "Potential room upgrade",
@@ -71,6 +96,12 @@ def _dashboard_demo_recommendations() -> list[Recommendation]:
             rationale="Demo recommendation.",
             recommendation_type="hotel",
             confidence="high",
+            evidence=["Ultimate Rewards balance available for 1:1 transfer to Hyatt"],
+            why_now="Demo scenario — transfer before booking to lock in Hyatt award rates.",
+            alternative_options=[
+                "Pay cash and earn points on the stay",
+                "Book via Amex Travel with FHR benefits instead",
+            ],
             bullets=[
                 "1:1 transfer from Chase Ultimate Rewards",
                 "Strong redemption value at Category 1–4 hotels",
@@ -85,6 +116,12 @@ def _dashboard_demo_recommendations() -> list[Recommendation]:
             rationale="Demo recommendation.",
             recommendation_type="travel",
             confidence="medium",
+            evidence=["Companion Pass active on your Southwest account"],
+            why_now="Demo scenario — pass expires at end of calendar year.",
+            alternative_options=[
+                "Book solo at standard Southwest fares",
+                "Use points on a partner airline instead",
+            ],
             bullets=[
                 "Companion flies for taxes and fees only",
                 "Valid on both paid and points bookings",
@@ -102,6 +139,9 @@ def _opportunities_to_recommendations(opportunities: list[Any]) -> list[Recommen
             title=opp.title,
             summary=opp.summary,
             rationale=opp.rationale,
+            evidence=list(opp.evidence),
+            why_now=opp.why_now,
+            alternative_options=list(opp.alternative_options),
             bullets=opp.bullets,
             confidence=opp.confidence,
             action_label=opp.action_label,

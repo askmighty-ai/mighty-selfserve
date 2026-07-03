@@ -99,6 +99,9 @@ class TestActionBuilders:
             title="Book via Amex Travel",
             summary="Use FHR benefits.",
             rationale="Live match.",
+            evidence=["Platinum FHR eligibility"],
+            why_now="Booking window is open.",
+            alternative_options=["Book direct with hotel"],
             recommendation_type="hotel",
             confidence="high",
             action_label="Open Amex Travel",
@@ -109,6 +112,9 @@ class TestActionBuilders:
         assert action.category == ActionCategory.SAVINGS_OPPORTUNITY
         assert action.subcategory == "hotel"
         assert action.is_demo is False
+        assert action.evidence == ["Platinum FHR eligibility"]
+        assert action.why_now == "Booking window is open."
+        assert action.alternative_options == ["Book direct with hotel"]
 
     def test_build_dashboard_actions_filters_demo_recommendations_for_cards(self):
         actions = build_dashboard_actions(
