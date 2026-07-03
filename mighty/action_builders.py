@@ -102,10 +102,12 @@ def action_from_hero_candidate(candidate: tuple) -> Action | None:
 def action_from_recommendation(recommendation: Any) -> Action:
     reasoning = str(getattr(recommendation, "rationale", "") or "").strip()
     subcategory = str(getattr(recommendation, "recommendation_type", "") or "general").strip().lower()
+    urgency = str(getattr(recommendation, "urgency", "") or "").strip().lower()
+    score = getattr(recommendation, "score", None)
     return Action(
         title=str(getattr(recommendation, "title", "") or "").strip(),
         summary=str(getattr(recommendation, "summary", "") or "").strip(),
-        priority=ActionPriority.INFO,
+        priority=priority_from_urgency(urgency),
         category=ActionCategory.SAVINGS_OPPORTUNITY,
         confidence=str(getattr(recommendation, "confidence", "") or "low").strip().lower() or "low",
         reasoning=reasoning,
@@ -113,6 +115,7 @@ def action_from_recommendation(recommendation: Any) -> Action:
         action_url=str(getattr(recommendation, "action_url", "") or "").strip(),
         bullets=list(getattr(recommendation, "bullets", None) or []),
         subcategory=subcategory or "general",
+        score=int(score) if score is not None else None,
     )
 
 
