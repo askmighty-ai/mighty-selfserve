@@ -40,6 +40,13 @@ except ImportError:
     _FERNET_AVAILABLE = False
 
 try:
+    from mighty.home_state import resolve_home_state
+    from mighty.home_ui import render_home_page
+except ImportError:
+    resolve_home_state = None
+    render_home_page = None
+
+try:
     from mighty.daily_brief import build_daily_brief
 except ImportError:
     build_daily_brief = None
@@ -6088,6 +6095,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-brief-onboard-primary:hover{background:#292524;color:#fff;text-decoration:none}
 .dash-brief-onboard-secondary{font-size:13px;font-weight:500;color:#78716c;text-decoration:none;transition:color 0.12s}
 .dash-brief-onboard-secondary:hover{color:#1c1917;text-decoration:none}
+.dash-brief-featured-body{font-size:14px;color:#57534e;line-height:1.55;margin:0 0 16px;max-width:52ch}
+.dash-brief-featured-cta--disabled{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;color:#a8a29e;background:#f5f5f4;border-radius:10px;cursor:default}
+.dash-home-priority-summary{font-size:14px;color:#78716c;margin:8px 0 0;line-height:1.4}
+.dash-home-health{margin-top:20px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06)}
+.dash-home-freshness{font-size:12px;font-weight:500;color:#a8a29e;margin-left:4px}
+.dash-home-waiting-rows{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.dash-home-waiting-row{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:6px 0;border-bottom:0.5px solid rgba(0,0,0,0.05)}
+.dash-home-waiting-name{color:#1c1917;font-weight:500}
+.dash-home-waiting-status{color:#78716c;text-align:right}
+.dash-home-activity-link{margin:16px 0 0;font-size:13px}
+.dash-home-activity-link a{color:#78716c;text-decoration:none}
+.dash-home-activity-link a:hover{text-decoration:underline;color:#57534e}
+.dash-home-footer{margin-top:24px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06);font-size:12px;color:#a8a29e}
 /* Demo mode banner */
 .demo-mode-banner{background:linear-gradient(90deg,rgba(124,58,237,0.08),rgba(99,102,241,0.06));border-bottom:0.5px solid rgba(124,58,237,0.18);flex-shrink:0}
 .demo-mode-banner-inner{max-width:1600px;margin:0 auto;padding:10px 32px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -6341,48 +6361,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </script>
     </div><!-- /insight-panel -->
 
-    <!-- Recommendations -->
-    {recommendations_section_html}
-
-    <!-- Connected accounts -->
-    <div class="cards-panel">
-      <div class="cards-panel-inner">
-      {insights_html}
-      {relevant_now_html}
-      {progress_section_html}
-      <div class="cards-panel-header">
-        <span style="font-size:13px;font-weight:600;color:#1c1917">Connected accounts</span>
-        <div style="display:flex;align-items:center;gap:8px">
-          <a href="/email-scan" class="btn-connect" style="text-decoration:none;display:inline-flex;align-items:center">Find accounts</a>
-        </div>
-      </div>
-
-      <div id="expiring-banner" style="display:{expiring_display};align-items:center;gap:10px;background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;cursor:pointer" data-base-display="{expiring_display}" onclick="toggleExpiringFilter(this)">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        <span style="font-size:13px;font-weight:600;color:#92400e"><span id="expiring-count">{expiring_count}</span> account{expiring_plural} with expiring benefits or upcoming due dates</span>
-        <span style="font-size:11px;color:#b45309;margin-left:auto" id="expiring-filter-label">Click to highlight</span>
-      </div>
-
-      {account_data_html}
-
-      <div id="fview-activity" style="display:none">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-        <input type="text" class="feed-search" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)" style="flex:1;min-width:160px;margin-bottom:0">
-        <div style="display:flex;gap:6px;flex-shrink:0" id="status-filters">
-          <button class="status-chip active" onclick="setStatusFilter('all',this)">All</button>
-          <button class="status-chip" onclick="setStatusFilter('pending',this)">Pending</button>
-          <button class="status-chip" onclick="setStatusFilter('approved',this)">Approved</button>
-          <button class="status-chip" onclick="setStatusFilter('denied',this)">Denied</button>
-          <button class="status-chip" onclick="setStatusFilter('timed_out',this)">Timed out</button>
-        </div>
-      </div>
-      <div id="feed">
-        {feed_html}
-        <div id="feed-no-results" style="display:none;padding:40px 0;text-align:center;color:#b8b2ac;font-size:13px">No matching actions</div>
-      </div>
-      </div><!-- /fview-activity -->
-      </div><!-- /cards-panel-inner -->
-    </div><!-- /cards-panel -->
   </div><!-- /page-body -->
 </div><!-- /main-content -->
 </div><!-- /app-shell -->
@@ -8713,28 +8691,6 @@ def dashboard():
     welcome_state = ''
     agent_status_indicator = ''
     feed_col_hidden = ''
-    if len(acts) == 0:
-        feed_col_hidden = 'style="display:none"'
-        welcome_state = (
-            '<div style="display:flex;flex-direction:column;align-items:center;'
-            'justify-content:center;padding:60px 24px;min-height:60vh">'
-            '<div style="width:100%;max-width:360px;text-align:center">'
-            '<div style="width:52px;height:52px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.2);border-radius:14px;'
-            'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
-            '<svg width="22" height="22" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-            '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg></div>'
-            '<div style="font-size:22px;font-weight:700;color:#1c1917;margin-bottom:10px">'
-            'Find your accounts</div>'
-            '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
-            'Scan your Gmail to discover loyalty programs and subscriptions, then connect them — the worker handles the rest automatically.</div>'
-            '<a href="/email-scan" style="display:block;padding:13px 20px;'
-            'background:#6366f1;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
-            'text-decoration:none">Scan Gmail &#8594;</a>'
-            '</div>'
-            '</div>'
-        )
-    else:
-        feed_col_hidden = ''
 
     # ── Account data tab ──────────────────────────────────────────────────────
     # _fmt_sync is defined at module level (line ~762) — no local redefinition needed
@@ -8949,6 +8905,7 @@ def dashboard():
     cards_html = ""
     total_expiring = 0
     login_required_accounts = []
+    _home_account_statuses = []
 
     _user_sync = get_db().execute(
         "SELECT sync_running, sync_started_at, sync_current_source FROM users WHERE id=?",
@@ -9032,6 +8989,7 @@ def dashboard():
                 login_url=_provider_login_url(src),
                 connect_url=f"/credentials?connect={src}",
             )
+            _home_account_statuses.append(_acct_canon)
             if _lc.state != LC_SYNCED:
                 status_color = _lc.color
 
@@ -9630,7 +9588,7 @@ def dashboard():
             )
 
     if cards_html:
-        account_data_html = cards_html
+        account_data_html = ""
     else:
         account_data_html = ""
     _render_lap.record("decrypt_account", _render_decrypt_ms)
@@ -10205,38 +10163,52 @@ def dashboard():
     import datetime as _brief_dt
     _today_label = _brief_dt.date.today().strftime("%A, %B %-d")
 
-    def _render_daily_brief_hero(brief, first_name: str) -> str:
-        if build_executive_briefing is not None and render_executive_briefing_hero is not None:
-            exec_brief = build_executive_briefing(
-                brief,
-                account_count=_account_count,
-                benefit_count=len(_hero_candidates),
-                expiring_count=total_expiring,
-                use_demo_when_empty=not _suppress_demo_content,
+    _last_checked = ""
+    if _global_sync_label:
+        _last_checked = _global_sync_label.replace(user_copy.LAST_UPDATED_PREFIX, "").strip()
+
+    _tracked_value_label = ""
+    if total_value >= 1000:
+        _tracked_value_label = f"${total_value:,.0f}"
+    elif total_value > 0:
+        _tracked_value_label = f"${int(total_value)}"
+
+    def _render_home_hero() -> str:
+        if resolve_home_state is None or render_home_page is None:
+            return (
+                f'<div class="dash-hero">'
+                f'<div class="dash-brief-card">'
+                f'<div class="dash-brief-greeting">Hello, {he(_first_name)}</div>'
+                f'</div></div>'
             )
-            return render_executive_briefing_hero(
-                exec_brief,
-                first_name=first_name,
-                today_label=_today_label,
-                escape=he,
-            )
-        return (
-            f'<div class="dash-hero">'
-            f'<div class="dash-brief-card">'
-            f'<div class="dash-brief-greeting">Hello, {he(first_name)}</div>'
-            f'</div></div>'
+        _updating_name = None
+        if _updating_source:
+            for _ha in _home_account_statuses:
+                if _ha.source == _updating_source:
+                    _updating_name = _ha.display_name
+                    break
+        _home_result = resolve_home_state(
+            accounts=_home_account_statuses,
+            actions=_dashboard_actions if build_dashboard_actions is not None else None,
+            sync_running=_sync_running,
+            updating_source=_updating_source,
+            updating_display_name=_updating_name,
+            pending_activity_count=pending_count,
+            benefit_count=len(_hero_candidates),
+            tracked_value_label=_tracked_value_label,
+            freshness_label=_last_checked,
+        )
+        return render_home_page(
+            _home_result,
+            first_name=_first_name,
+            today_label=_today_label,
+            last_checked=_last_checked,
+            escape=he,
         )
 
-    hero_section_html = _render_daily_brief_hero(daily_brief, _first_name)
+    hero_section_html = _render_home_hero()
 
-    topbar_search_html = (
-        '<div class="topbar-search">'
-        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-        '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
-        '<input type="text" placeholder="Search accounts…" oninput="filterCards(this.value)" id="card-search">'
-        '</div>'
-        if _account_count > 0 else ''
-    )
+    topbar_search_html = ''
 
     # ── INSIGHTS: Benefits available now — horizontal 3-card row ─────────────────
     import json as _json_ins
@@ -11291,10 +11263,10 @@ function dismissOnboarding() {{
         hero_section_html = _demo_mode.render_demo_daily_brief_hero(
             _demo_mode.get_demo_daily_brief(), _demo_first, _demo_today,
         )
-        recommendations_section_html = _demo_mode.render_demo_recommendations()
-        insights_html = _demo_mode.render_demo_benefits_row()
-        account_data_html = _demo_mode.render_demo_account_cards(reg_domain=_reg_domain)
-        recently_found_html = _demo_mode.render_demo_recent_discoveries()
+        recommendations_section_html = ""
+        insights_html = ""
+        account_data_html = ""
+        recently_found_html = ""
         total_expiring = _demo_mode.expiring_count()
         _global_sync_label = f"Demo · {user_copy.LAST_UPDATED_PREFIX} 2h ago"
         onboarding_banner = ""
@@ -11312,6 +11284,19 @@ function dismissOnboarding() {{
             '<div style="width:7px;height:7px;border-radius:50%;background:#7c3aed;flex-shrink:0"></div>'
             'Demo</div>'
         )
+
+    if not demo_mode_active:
+        account_data_html = ""
+        insights_html = ""
+        recommendations_section_html = ""
+        available_rail_html = ""
+        action_center_html = ""
+        recently_found_html = ""
+        relevant_now_html = ""
+        wallet_insights_html = ""
+        value_center_html = ""
+        top_benefits_html = ""
+        progress_section_html = ""
 
     import json as _json_dash_poll
     _latest_sync_baseline = _json_dash_poll.dumps(_global_last_synced or "")
