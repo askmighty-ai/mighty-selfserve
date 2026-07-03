@@ -773,8 +773,37 @@ def init_db():
             db.commit()
         except Exception:
             pass
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS ai_request_log (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at          TEXT NOT NULL,
+                    provider            TEXT NOT NULL,
+                    model               TEXT NOT NULL,
+                    cache_hit           INTEGER NOT NULL DEFAULT 0,
+                    latency_ms          REAL NOT NULL DEFAULT 0,
+                    prompt_chars        INTEGER NOT NULL DEFAULT 0,
+                    completion_chars    INTEGER NOT NULL DEFAULT 0,
+                    estimated_tokens    INTEGER NOT NULL DEFAULT 0,
+                    estimated_cost_usd  REAL,
+                    failure_reason      TEXT,
+                    prompt_id           TEXT,
+                    prompt_version      TEXT,
+                    source              TEXT
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_airl_created ON ai_request_log(created_at)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_airl_provider ON ai_request_log(provider)")
+            db.commit()
+        except Exception:
+            pass
 
 init_db()
+
+from mighty.ai_observability import configure_db, get_daily_stats
+
+configure_db(get_db)
+
 print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", flush=True)
 
 
@@ -2029,49 +2058,15 @@ try:
 except ImportError:
     _claude = None
 
-# ── Candidate snippet extraction ─────────────────────────────────────────────
-# Trigger words indicating nearby text likely contains an account fact.
-# We extract windows around each hit before calling Gemini, replacing raw page
-# blobs with focused excerpts. Improves precision and cuts token cost.
-SNIPPET_TRIGGERS = [
-    "expires", "expiration", "expiry", "valid through", "valid until",
-    "valid thru", "use by", "book by", "fly by", "book and fly by",
-    "certificate", "voucher", "e-credit", "ecredit", "travel fund",
-    "award", "benefit", "companion", "upgrade", "free night",
-    "points", "miles", "balance", "rewards", "cash back",
-    "due", "due date", "payment due", "autopay", "auto pay",
-    "available", "remaining", "redeemable",
-    "status", "tier", "medallion", "elite",
-    "offer", "promotion", "bonus", "anniversary",
-    "plan", "renewal", "billing", "subscription",
-    "amount due", "total due", "minimum payment",
-    "credit limit", "available credit",
-]
-
-# High-value triggers: category-specific terms that strongly predict account facts
-# rather than navigation copy. Scored 4× vs generic triggers (2×) in the block scorer.
-_HIGH_VALUE_TRIGGERS: frozenset = frozenset([
-    "companion", "certificate", "valid through", "valid until", "valid thru",
-    "ecredit", "e-credit", "travel fund", "travel credit",
-    "minimum payment", "amount due", "total due", "payment due",
-    "upgrade", "global upgrade", "regional upgrade", "suite night",
-    "free night", "lounge", "priority pass",
-    "medallion", "elite", "autopay", "auto pay",
-    "cash back", "annual fee", "statement credit",
-    "book by", "fly by", "expires", "expiry", "expiration",
-])
-
-# Matches values likely to appear in account pages: dollar amounts, numbers with
-# commas/decimals, compact dates (22JUL2024), ISO dates, and written month-name
-# dates like "Jan 15, 2027" or "August 31 2026".
-_SNIPPET_VALUE_RE = re.compile(
-    r'[$€£]\s*\d[\d,\.]*'           # currency: $187, €50
-    r'|\b\d[\d,\.]*\b'              # plain numbers: 45,320 / 157.43
-    r'|\b\d{1,2}[A-Za-z]{3}\d{4}\b' # compact date: 22JUL2024
-    r'|\b\d{4}-\d{2}-\d{2}\b'       # ISO date: 2026-07-15
-    r'|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}'  # Aug 14, 2026
-    , re.IGNORECASE
+# ── Candidate snippet extraction (delegates to preprocessing pipeline) ────────
+from mighty.field_discovery_preprocess import (
+    SNIPPET_TRIGGERS,
+    _HIGH_VALUE_TRIGGERS,
+    _SNIPPET_VALUE_RE,
+    extract_visible_sections,
+    prepare_discovery_input,
 )
+
 
 def _extract_candidate_snippets(
     raw_text: str,
@@ -2080,89 +2075,14 @@ def _extract_candidate_snippets(
     hint_phrases: list[str] | None = None,
     max_chars: int | None = None,
 ) -> str:
-    """Extract and score line-based blocks around trigger words.
-
-    Algorithm:
-      1. Split text into lines; find lines containing any SNIPPET_TRIGGER.
-         If hint_phrases are provided (from extraction_hints for this site),
-         those lines are force-included and receive a scorer bonus.
-      2. Expand each hit line into a ±context_lines block.
-      3. Merge blocks that are close together (avoids tiny isolated fragments).
-      4. Score each block: trigger-word density + value-pattern count, penalise
-         long-line marketing copy. Known hint phrases add +5.0 per match.
-      5. Keep the top max_blocks blocks by score; re-sort by original position
-         so the returned text reads in document order.
-      6. Join with '···' separators and cap at max_chars.
-
-    Falls back to the first 8 k chars (or max_chars if smaller) if no triggers match.
-    """
-    if not raw_text:
-        return ""
-
-    cap = field_discovery_max_chars() if max_chars is None else max_chars
-    raw_text = raw_text[:cap]
-    fallback_len = min(8_000, cap)
-
-    lines = raw_text.splitlines()
-    lower_lines = [ln.lower() for ln in lines]
-    n = len(lines)
-
-    # Step 1 — find hit line indices from general triggers
-    hit_set: set[int] = set()
-    for trigger in SNIPPET_TRIGGERS:
-        for i, ll in enumerate(lower_lines):
-            if trigger in ll:
-                hit_set.add(i)
-
-    # Force-include lines matching known extraction hints for this site.
-    # These are previously successful trigger phrases stored in extraction_hints.
-    _hint_lower: list[str] = [p.lower() for p in (hint_phrases or [])]
-    if _hint_lower:
-        for i, ll in enumerate(lower_lines):
-            if any(h in ll for h in _hint_lower):
-                hit_set.add(i)
-
-    if not hit_set:
-        return raw_text[:fallback_len]
-
-    # Step 2 — expand hits into (start, end) index ranges
-    ranges: list[tuple[int, int]] = [
-        (max(0, i - context_lines), min(n, i + context_lines + 1))
-        for i in sorted(hit_set)
-    ]
-
-    # Step 3 — merge overlapping / adjacent ranges (gap ≤ 3 lines)
-    merged: list[tuple[int, int]] = []
-    cs, ce = ranges[0]
-    for s, e in ranges[1:]:
-        if s <= ce + 3:
-            ce = max(ce, e)
-        else:
-            merged.append((cs, ce))
-            cs, ce = s, e
-    merged.append((cs, ce))
-
-    # Step 4 — score each block
-    def _score(s: int, e: int) -> float:
-        block_lines = lines[s:e]
-        block_lower = "\n".join(block_lines).lower()
-        # High-value category-specific triggers (companion, certificate, etc.) → 4×
-        high_count = sum(1 for t in _HIGH_VALUE_TRIGGERS if t in block_lower)
-        # Generic trigger words → 2×
-        generic_count = sum(1 for t in SNIPPET_TRIGGERS if t in block_lower)
-        # Value-like patterns (numbers, dates, currency) → 1.5×
-        val_count = len(_SNIPPET_VALUE_RE.findall(block_lower))
-        # Penalise dense marketing prose (very long average line = wall of text)
-        avg_len = sum(len(ln) for ln in block_lines) / max(len(block_lines), 1)
-        prose_penalty = max(0.0, (avg_len - 100) / 150)
-        # Bonus for blocks matching known extraction hints (previously successful phrases)
-        hint_bonus = 5.0 * sum(1 for h in _hint_lower if h in block_lower)
-        return high_count * 4.0 + generic_count * 2.0 + val_count * 1.5 - prose_penalty + hint_bonus
-
-    scored = sorted(merged, key=lambda r: _score(*r), reverse=True)
-    top = sorted(scored[:max_blocks])  # re-sort by position for coherent output
-
-    return "\n\n···\n\n".join("\n".join(lines[s:e]) for s, e in top)[:cap]
+    """Extract scored blocks around trigger words (visible-sections stage only)."""
+    return extract_visible_sections(
+        raw_text,
+        context_lines=context_lines,
+        max_blocks=max_blocks,
+        hint_phrases=hint_phrases,
+        max_chars=max_chars,
+    )
 
 
 # ── Category schemas ──────────────────────────────────────────────────────────
@@ -4804,10 +4724,6 @@ CRITICAL: Generic account labels ("Cardmember", "Member") must NEVER be included
 CRITICAL: Past reservations (date already occurred) must NEVER be included as "upcoming"."""
 
 
-from mighty.discovery_pipeline import (
-    pipeline_cache_fingerprint,
-    prepare_discovery_input,
-)
 from mighty.ai_provider import (
     DiscoveryContext,
     discover_fields_with_provider,
@@ -4822,6 +4738,8 @@ from mighty.field_discovery import (
     schema_cache_key,
     truncate_discovery_input,
 )
+from mighty.ai_metrics import build_metrics, cache_hit_metrics
+from mighty.ai_observability import observe_request
 
 
 def claude_discover_fields(raw_text: str, site_name: str, source: str | None = None) -> list:
@@ -4843,15 +4761,27 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         return []
 
     max_chars = field_discovery_max_chars()
+    bounded_text = truncate_discovery_input(raw_text, max_chars)
     cache = get_field_schema_cache()
-    cache_key = schema_cache_key(
-        source, pipeline_cache_fingerprint(raw_text, max_chars=max_chars),
-    )
+    cache_key = schema_cache_key(source, bounded_text)
     try:
         cached_fields = cache.get_fields(cache_key)
     except DiscoveryError:
         raise
     if cached_fields is not None:
+        from mighty.ai_provider import ai_provider_name, get_field_discovery_provider
+
+        provider = get_field_discovery_provider()
+        model = getattr(provider, "model", "") or (
+            provider.models[0] if getattr(provider, "models", None) else ""
+        )
+        cache_hit_metrics(
+            provider=ai_provider_name(),
+            model=model or "cached",
+            prompt_id="field_discovery",
+            prompt_version="1.0.0",
+            source=source,
+        )
         return cached_fields
 
     try:
@@ -4871,19 +4801,16 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             except Exception:
                 pass
 
-        # ── Candidate snippet extraction ───────────────────────────────────────
-        # Replace the raw page blob with focused windows around trigger words.
-        # Falls back to raw_text[:8000] if no triggers match.
+        # ── Preprocess: normalize → filter → sections → compress ─────────────
         prepared = prepare_discovery_input(
-            raw_text, hint_phrases=_hint_phrases, max_chars=max_chars,
+            bounded_text, hint_phrases=_hint_phrases, max_chars=max_chars,
         )
         snippets = prepared.text
         stats = prepared.stats
         print(
             f"[Mighty] Discovering fields for {site_name} "
-            f"(raw={stats.raw_chars}→prepared={stats.prepared_chars} chars, "
-            f"~{stats.raw_tokens}→~{stats.prepared_tokens} tokens, "
-            f"{stats.token_reduction_pct:.0f}% reduction). "
+            f"(raw={stats.raw_chars} → prepared={stats.final_chars} chars, "
+            f"~{stats.reduction_ratio:.0%} reduction). "
             f"Preview: {snippets[:300]!r}",
             flush=True,
         )
@@ -4910,6 +4837,8 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             site_name=site_name,
             source=source,
             prompt=prompt,
+            prompt_id="field_discovery",
+            prompt_version="1.0.0",
             today=_today_str,
             category_hint=category_hint,
         )
@@ -4918,9 +4847,18 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         except DiscoveryError as err:
             cache.record_failure(cache_key, err)
             raise
+        metrics_suffix = ""
+        if result.metrics:
+            m = result.metrics
+            metrics_suffix = (
+                f", prompt={m.prompt_id}@{m.prompt_version}, "
+                f"latency={m.latency_ms:.0f}ms, cache_hit={m.cache_hit}"
+            )
+            if m.estimated_cost_usd is not None:
+                metrics_suffix += f", est_cost=${m.estimated_cost_usd:.6f}"
         print(
             f"[Mighty] Field discovery via {result.provider} ({result.model}), "
-            f"{len(result.fields)} raw fields",
+            f"{len(result.fields)} raw fields{metrics_suffix}",
             flush=True,
         )
         fields = _post_filter_fields(result.fields, source=source or "")
@@ -4947,19 +4885,50 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
                         "List only specific paths like /my-account/certificates or /loyalty/wallet. "
                         "Max 5 paths. One per line. No explanation."
                     )
+                    page_input = page_prompt + "\n\n" + (bounded_text[:2000] if bounded_text else "")
+                    import time as _time
+                    _page_started = _time.perf_counter()
                     try:
                         _gc = _gemini_client()
                         if _gc:
                             page_resp = _gc.models.generate_content(
                                 model="gemini-2.0-flash",
-                                contents=[{"role": "user", "parts": [{"text": page_prompt + "\n\n" + (raw_text[:2000] if raw_text else "")}]}],
+                                contents=[{"role": "user", "parts": [{"text": page_input}]}],
                                 config={"temperature": 0.3, "max_output_tokens": 200}
                             )
                             page_text = page_resp.text.strip() if page_resp.text else ""
+                            _page_latency = (_time.perf_counter() - _page_started) * 1000
+                            observe_request(
+                                build_metrics(
+                                    provider="gemini",
+                                    model="gemini-2.0-flash",
+                                    latency_ms=_page_latency,
+                                    cache_hit=False,
+                                    prompt_id="field_discovery_missing_pages",
+                                    prompt_version="1.0.0",
+                                    input_text=page_input,
+                                    output_text=page_text,
+                                ),
+                                source=source,
+                            )
                             if page_text and source:
                                 _store_suggested_paths(source, page_text)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _page_latency = (_time.perf_counter() - _page_started) * 1000
+                        observe_request(
+                            build_metrics(
+                                provider="gemini",
+                                model="gemini-2.0-flash",
+                                latency_ms=_page_latency,
+                                cache_hit=False,
+                                prompt_id="field_discovery_missing_pages",
+                                prompt_version="1.0.0",
+                                input_text=page_input,
+                                output_text="",
+                            ),
+                            failure_reason=str(exc),
+                            source=source,
+                        )
 
         cache.record_success(cache_key, fields)
         return fields
@@ -5790,7 +5759,7 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-name">Mighty</div>
   </div>
   <h1>Create your account</h1>
-  <p class="sub">You'll be connected in about 5 minutes.</p>
+  <p class="sub">You'll be connected in about 5 minutes. Account syncing requires desktop Chrome with the Mighty extension.</p>
   {error}
   <form method="POST" action="/signup">
 <input type="hidden" name="_csrf" value="{csrf_token}">
@@ -6376,9 +6345,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="{user_copy.GLOBAL_LAST_UPDATED_TITLE}">{global_sync_label}</span>
     <!-- Alpha: manual sync removed — extension is the primary sync mechanism. Server retry is in Settings. -->
-    <a id="ext-install-link" href="javascript:void(0)" onclick="return false;"
+    <a id="ext-install-link" href="/extension-setup" target="_blank"
        style="display:none;font-size:11px;color:#6366f1;white-space:nowrap;text-decoration:none;padding:4px 8px;background:rgba(99,102,241,0.08);border-radius:6px;border:1px solid rgba(99,102,241,0.2)">
-      Get Chrome Extension (coming soon)
+      Setup Chrome Extension
     </a>
   </div>
 
@@ -8301,6 +8270,9 @@ def build_prompt(api_key, url):
 
 def call_claude_for_prompt(description, api_key, url):
     """Call Claude Haiku to generate a tailored checkpoint prompt from an agent description."""
+    import time as _time
+
+    model = "claude-haiku-4-5-20251001"
     system = (
         "You generate concise system prompt instructions for AI agents that tell them when to call "
         "the Mighty authorization API. Given a description of what an agent does, produce checkpoint "
@@ -8327,28 +8299,61 @@ def call_claude_for_prompt(description, api_key, url):
         f"    body: {{\"api_key\":\"{api_key}\",\"action_type\":\"<type>\",\"label\":\"<desc>\",\"outcome\":\"completed\"}}"
     )
     body = json.dumps({
-        "model": "claude-haiku-4-5-20251001",
+        "model": model,
         "max_tokens": 512,
         "system": system,
         "messages": [{"role": "user", "content": user_msg}]
     }).encode()
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01"
-        }
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read())
-    text = result["content"][0]["text"].strip()
-    if text.startswith("```"):
-        text = "\n".join(text.split("\n")[1:])
-        if text.endswith("```"):
-            text = text[:-3].strip()
-    return json.loads(text)
+    input_text = system + "\n" + user_msg
+    started = _time.perf_counter()
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+        text_out = result["content"][0]["text"].strip()
+        if text_out.startswith("```"):
+            text_out = "\n".join(text_out.split("\n")[1:])
+            if text_out.endswith("```"):
+                text_out = text_out[:-3].strip()
+        latency_ms = (_time.perf_counter() - started) * 1000
+        observe_request(
+            build_metrics(
+                provider="anthropic",
+                model=model,
+                latency_ms=latency_ms,
+                cache_hit=False,
+                prompt_id="onboarding_checkpoint",
+                prompt_version="1.0.0",
+                input_text=input_text,
+                output_text=text_out,
+            ),
+        )
+        return json.loads(text_out)
+    except Exception as exc:
+        latency_ms = (_time.perf_counter() - started) * 1000
+        observe_request(
+            build_metrics(
+                provider="anthropic",
+                model=model,
+                latency_ms=latency_ms,
+                cache_hit=False,
+                prompt_id="onboarding_checkpoint",
+                prompt_version="1.0.0",
+                input_text=input_text,
+                output_text="",
+            ),
+            failure_reason=str(exc),
+        )
+        raise
+
 
 def build_mcp_config(api_key, url):
     return (
@@ -11286,6 +11291,7 @@ def dashboard():
     <p style="font-size:14px;color:#4b5563;text-align:center;margin:0 0 20px;line-height:1.6">
       Mighty reads your connected account pages and extracts only the facts you care about &mdash; balances, expiry dates, due dates, and credits.
       <strong>Raw page text is never shared</strong> and is discarded after extraction.
+      Use <strong>desktop Chrome</strong> with the Mighty extension to connect and update accounts.
     </p>
     <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;margin-bottom:20px">
       <div style="font-size:13px;color:#374151;display:flex;flex-direction:column;gap:8px">
@@ -11479,11 +11485,16 @@ def extension_setup():
       document.getElementById('status').style.background = '#f0fdf4';
     }}
   }}, 500);
-  // Fallback: show success after 3s (extension may have already read and navigated away)
+  // Fallback: if extension never confirms, show actionable guidance (not a false success)
   setTimeout(() => {{
-    if (!sessionStorage.getItem('mighty_setup_done'))
-      document.getElementById('status').innerHTML = '✓ Done — the extension should be configured now';
-  }}, 3000);
+    if (!sessionStorage.getItem('mighty_setup_done')) {{
+      document.getElementById('status').innerHTML =
+        '⚠ Extension not detected — install Mighty Sync in Chrome, enable it, then reload this page.';
+      document.getElementById('status').style.background = '#fffbeb';
+      document.getElementById('status').style.borderColor = '#fde68a';
+      document.getElementById('status').style.color = '#92400e';
+    }}
+  }}, 8000);
 </script>
 </body></html>""", 200, {"Content-Type": "text/html"}
 
@@ -11624,6 +11635,7 @@ def delete_account():
     db.execute("DELETE FROM action_items WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM benefit_corrections WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM email_connections WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM email_suggestions WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM pending_2fa WHERE user_id=?", (user_id,))
     db.execute("DELETE FROM users WHERE id=?", (user_id,))
     db.commit()
@@ -16364,6 +16376,13 @@ def credentials_delete(source):
         db.execute("DELETE FROM field_observations WHERE user_id=? AND source=?", (uid, source))
     except Exception as _ce:
         print(f"[Mighty] cleanup error on disconnect {source}: {_ce}", flush=True)
+    try:
+        db.execute(
+            "UPDATE email_suggestions SET added=0 WHERE user_id=? AND site_key=?",
+            (uid, source),
+        )
+    except Exception as _es:
+        print(f"[Mighty] email_suggestions reset on disconnect {source}: {_es}", flush=True)
     db.commit()
     return jsonify({"ok": True})
 
@@ -17443,6 +17462,83 @@ def api_admin_site_health():
     return jsonify({"sites": result, "total_sites": len(result)})
 
 
+@app.route("/api/admin/ai-observability")
+@require_login
+def api_admin_ai_observability():
+    uid = session.get("user_id")
+    user = get_db().execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+    if not _is_admin_user(user):
+        return jsonify({"error": "admin only"}), 403
+    return jsonify(get_daily_stats(get_db()))
+
+
+@app.route("/admin/ai-observability")
+@require_login
+def admin_ai_observability():
+    uid = session.get("user_id")
+    user = get_db().execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+    if not _is_admin_user(user):
+        return redirect("/dashboard")
+
+    stats = get_daily_stats(get_db())
+    provider_rows = ""
+    total_providers = sum(p["count"] for p in stats["provider_distribution"]) or 1
+    for item in stats["provider_distribution"]:
+        pct = round(item["count"] / total_providers * 100, 1)
+        provider_rows += (
+            f'<tr><td style="padding:10px 12px;font-size:13px;color:#111">{he(item["provider"])}</td>'
+            f'<td style="padding:10px 12px;font-size:13px;color:#374151;text-align:right">{item["count"]}</td>'
+            f'<td style="padding:10px 12px;font-size:13px;color:#374151;text-align:right">{pct}%</td></tr>'
+        )
+    if not provider_rows:
+        provider_rows = (
+            '<tr><td colspan="3" style="padding:16px;text-align:center;color:#9ca3af;font-size:13px">'
+            'No AI requests logged today</td></tr>'
+        )
+
+    def _stat_card(label: str, value: str, sub: str = "") -> str:
+        sub_html = (
+            f'<div style="font-size:11px;color:#9ca3af;margin-top:4px">{he(sub)}</div>'
+            if sub else ""
+        )
+        return (
+            f'<div style="background:#fff;border-radius:10px;padding:16px;'
+            f'box-shadow:0 1px 3px rgba(0,0,0,.08)">'
+            f'<div style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;'
+            f'letter-spacing:.04em">{he(label)}</div>'
+            f'<div style="font-size:24px;font-weight:700;color:#111;margin-top:6px">{he(value)}</div>'
+            f'{sub_html}</div>'
+        )
+
+    cards = (
+        _stat_card("Requests today", str(stats["requests_today"]), "UTC day")
+        + _stat_card("Cache hit rate", f'{stats["cache_hit_pct"]}%')
+        + _stat_card("Avg latency", f'{stats["avg_latency_ms"]} ms')
+        + _stat_card("Avg cost", f'${stats["avg_cost_usd"]:.6f}')
+        + _stat_card("Failures", str(stats["failures"]))
+    )
+
+    return render_template_string("""<!DOCTYPE html><html><head><title>AI Observability — Mighty Admin</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{font-family:-apple-system,sans-serif;margin:0;background:#f9fafb}
+    .container{max-width:960px;margin:0 auto;padding:24px}</style></head>
+    <body>
+    <div class="container">
+    <h2 style="font-size:20px;font-weight:700;color:#111;margin:0 0 4px">AI Observability</h2>
+    <p style="font-size:13px;color:#6b7280;margin:0 0 20px">Production AI request metrics for today (UTC). Structured logs emit as JSON to stdout on every call.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px">"""
+    + cards + """</div>
+    <h3 style="font-size:14px;font-weight:600;color:#374151;margin:0 0 10px">Provider distribution</h3>
+    <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)">
+    <thead><tr style="background:#f3f4f6">
+    <th style="padding:10px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600">Provider</th>
+    <th style="padding:10px 12px;text-align:right;font-size:12px;color:#6b7280;font-weight:600">Requests</th>
+    <th style="padding:10px 12px;text-align:right;font-size:12px;color:#6b7280;font-weight:600">Share</th>
+    </tr></thead><tbody>""" + provider_rows + """</tbody></table>
+    <p style="font-size:12px;color:#9ca3af;margin-top:16px">JSON API: <code>/api/admin/ai-observability</code></p>
+    </div></body></html>""")
+
+
 @app.route("/api/admin/site-url-health", methods=["GET", "POST"])
 def api_admin_site_url_health():
     """GET: return last URL health check results.
@@ -18207,6 +18303,16 @@ def api_sync_finalize():
 
 
 
+def _connection_status_for_login_state(source: str, *, logged_in: bool) -> str | None:
+    """Persist connection_status only for providers with formal session verification."""
+    from mighty.adapters.extension import supports_connection_probe
+    from mighty.connection_state import CONNECTED, NEEDS_LOGIN
+
+    if not supports_connection_probe(source):
+        return None
+    return CONNECTED if logged_in else NEEDS_LOGIN
+
+
 @app.route("/api/sync/failure", methods=["POST"])
 def api_sync_failure():
     """Called by the extension when an account sync attempt fails.
@@ -18246,14 +18352,17 @@ def api_sync_failure():
     _status_for_reason = {"login_required": "login_required", "domain_unreachable": "no_data"}
     payload["sync_status"]         = _status_for_reason.get(reason, "no_data")
     payload["sync_failure_reason"] = reason
+    conn_status = None
     if reason == "login_required":
-        payload["connection_status"] = AMEX_NEEDS_LOGIN
+        conn_status = _connection_status_for_login_state(source, logged_in=False)
+        if conn_status:
+            payload["connection_status"] = conn_status
     now = iso()
     _sets = "data_enc=?, sync_failure_reason=?, sync_status=?, synced_at=?"
     _params = [encrypt_account_data(uid, payload), reason, payload["sync_status"], now]
-    if reason == "login_required":
+    if conn_status:
         _sets += ", connection_status=?"
-        _params.append(AMEX_NEEDS_LOGIN)
+        _params.append(conn_status)
     _params.extend([uid, source])
     db.execute(
         f"UPDATE account_data SET {_sets} WHERE user_id=? AND source=?",
@@ -18290,12 +18399,20 @@ def api_sync_login_cleared():
         return jsonify({"ok": True, "updated": False, "note": "not login_required"})
     payload["sync_status"] = "ok"
     payload.pop("sync_failure_reason", None)
-    payload["connection_status"] = AMEX_CONNECTED
+    conn_status = _connection_status_for_login_state(source, logged_in=True)
+    if conn_status:
+        payload["connection_status"] = conn_status
     now = iso()
-    db.execute(
-        "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL, synced_at=?, connection_status=? WHERE user_id=? AND source=?",
-        (encrypt_account_data(uid, payload), "ok", now, AMEX_CONNECTED, uid, source)
-    )
+    if conn_status:
+        db.execute(
+            "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL, synced_at=?, connection_status=? WHERE user_id=? AND source=?",
+            (encrypt_account_data(uid, payload), "ok", now, conn_status, uid, source)
+        )
+    else:
+        db.execute(
+            "UPDATE account_data SET data_enc=?, sync_status=?, sync_failure_reason=NULL, synced_at=? WHERE user_id=? AND source=?",
+            (encrypt_account_data(uid, payload), "ok", now, uid, source)
+        )
     db.commit()
     print(f"[LoginCleared] uid={uid} source={source} — status reset to ok, synced_at={now}", flush=True)
     return jsonify({"ok": True, "updated": True})

@@ -274,20 +274,24 @@ def test_claude_discover_fields_respects_max_chars(client, monkeypatch):
 
     captured = []
 
-    def _fake_pipeline(raw_text, hint_phrases=None, max_chars=None):
+    def _fake_prepare(raw_text, hint_phrases=None, max_chars=None):
         captured.append(len(raw_text))
-        from mighty.discovery_pipeline import PipelineResult, PipelineStats
-
-        cap = max_chars or len(raw_text)
-        stats = PipelineStats(5000, 5000, 5000, 5000, min(5000, cap), 1250, min(1250, cap // 4))
-        return PipelineResult(text=raw_text[:cap], stats=stats)
+        from mighty.field_discovery_preprocess import PreprocessResult, PreprocessStats
+        stats = PreprocessStats(
+            raw_chars=len(raw_text),
+            normalized_chars=len(raw_text),
+            filtered_chars=len(raw_text),
+            sections_chars=len(raw_text),
+            final_chars=len(raw_text),
+        )
+        return PreprocessResult(text=raw_text[:max_chars or len(raw_text)], stats=stats)
 
     def _fake_discovery(source, content, context):
         return DiscoveryResult(fields=[], provider="openai", model="gpt-5.4-mini")
 
     monkeypatch.setenv("AI_FIELD_DISCOVERY_MAX_CHARS", "500")
     monkeypatch.setattr(mighty, "discover_fields_with_provider", _fake_discovery)
-    monkeypatch.setattr(mighty, "prepare_discovery_input", _fake_pipeline)
+    monkeypatch.setattr(mighty, "prepare_discovery_input", _fake_prepare)
     monkeypatch.setattr(mighty, "_post_filter_fields", lambda fields, source="": fields)
 
     mighty.claude_discover_fields("x" * 5000, "Amex", source="amex")
