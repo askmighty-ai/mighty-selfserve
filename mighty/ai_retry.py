@@ -1,4 +1,4 @@
-"""Standardized retry and timeout for AI provider calls."""
+"""Standard retry and timeout settings for AI provider calls."""
 
 from __future__ import annotations
 
@@ -8,55 +8,47 @@ from typing import Callable, TypeVar
 
 T = TypeVar("T")
 
-_TRANSIENT_PATTERNS = (
-    "429",
-    "rate limit",
-    "timeout",
-    "timed out",
-    "503",
-    "502",
-    "500",
-    "connection",
-    "temporarily unavailable",
-    "overloaded",
+_TRANSIENT_MARKERS = (
+    "429", "503", "502", "504", "timeout", "timed out", "rate limit",
+    "overloaded", "temporarily unavailable", "connection reset",
+    "connection error", "server error", "resource exhausted",
 )
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
+def _env_float(name: str, *, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
         return default
     try:
-        return float(raw)
+        return max(0.0, float(raw))
     except ValueError:
         return default
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
+def _env_int(name: str, *, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
         return default
     try:
-        return int(raw)
+        return max(0, int(raw))
     except ValueError:
         return default
 
 
 def ai_request_timeout_seconds() -> float:
-    return _env_float("AI_REQUEST_TIMEOUT_SECONDS", 60.0)
+    return _env_float("AI_REQUEST_TIMEOUT_SECONDS", default=60.0)
 
 
 def ai_request_max_retries() -> int:
-    return _env_int("AI_REQUEST_MAX_RETRIES", 3)
+    return _env_int("AI_REQUEST_MAX_RETRIES", default=3)
 
 
 def ai_request_retry_backoff_seconds() -> float:
-    return _env_float("AI_REQUEST_RETRY_BACKOFF_SECONDS", 1.0)
+    return _env_float("AI_REQUEST_RETRY_BACKOFF_SECONDS", default=1.0)
 
 
-def is_transient_error(exc: BaseException) -> bool:
-    message = str(exc).lower()
-    return any(pattern in message for pattern in _TRANSIENT_PATTERNS)
+def is_transient_error(exc: Exception) -> bool:
+    return any(m in str(exc).lower() for m in _TRANSIENT_MARKERS)
 
 
 def call_with_retry(
@@ -64,20 +56,19 @@ def call_with_retry(
     *,
     max_retries: int | None = None,
     backoff_seconds: float | None = None,
+    retry_on: Callable[[Exception], bool] | None = None,
 ) -> T:
-    retries = ai_request_max_retries() if max_retries is None else max_retries
-    backoff = (
-        ai_request_retry_backoff_seconds()
-        if backoff_seconds is None
-        else backoff_seconds
-    )
-    attempt = 0
-    while True:
+    attempts = (max_retries if max_retries is not None else ai_request_max_retries()) + 1
+    delay = backoff_seconds if backoff_seconds is not None else ai_request_retry_backoff_seconds()
+    should_retry = retry_on or is_transient_error
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
         try:
             return fn()
         except Exception as exc:
-            if attempt >= retries or not is_transient_error(exc):
+            last_exc = exc
+            if attempt >= attempts - 1 or not should_retry(exc):
                 raise
-            attempt += 1
-            if backoff > 0:
-                time.sleep(backoff * attempt)
+            time.sleep(delay * (2**attempt))
+    assert last_exc is not None
+    raise last_exc

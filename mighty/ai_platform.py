@@ -38,7 +38,7 @@ def build_field_discovery_context(
     )
 
 
-def record_field_discovery_cache_hit(*, site_name: str) -> None:
+def record_field_discovery_cache_hit(*, site_name: str, source: str | None = None) -> None:
     provider = get_field_discovery_provider()
     model = getattr(provider, "model", "") or (
         provider.models[0] if getattr(provider, "models", None) else "cached"
@@ -55,6 +55,7 @@ def record_field_discovery_cache_hit(*, site_name: str) -> None:
         model=model or "cached",
         prompt_id=rendered.prompt_id,
         prompt_version=rendered.version,
+        source=source,
     )
 
 

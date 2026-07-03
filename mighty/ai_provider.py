@@ -71,8 +71,8 @@ class DiscoveryContext:
     site_name: str
     source: str | None
     prompt: str
-    prompt_id: str = ""
-    prompt_version: str = ""
+    prompt_id: str = "field_discovery"
+    prompt_version: str = "1.0.0"
     today: str = ""
     category_hint: str = ""
 
@@ -138,34 +138,66 @@ class OpenAIProvider:
                         },
                     },
                     temperature=0,
-                )
+                ),
             )
         except Exception as exc:
+            latency_ms = (time.perf_counter() - started) * 1000
+            record_metrics(
+                build_metrics(
+                    provider=self.provider_name,
+                    model=self.model,
+                    latency_ms=latency_ms,
+                    cache_hit=False,
+                    prompt_id=context.prompt_id,
+                    prompt_version=context.prompt_version,
+                    input_text=context.prompt,
+                    output_text="",
+                ),
+                failure_reason=str(exc),
+                source=source,
+            )
             raise DiscoveryProviderError(
                 f"OpenAI field discovery failed ({self.model}): {exc}"
             ) from exc
 
-        latency_ms = (time.perf_counter() - started) * 1000
         raw_text = (response.choices[0].message.content or "").strip()
         try:
             parsed = json.loads(raw_text)
         except json.JSONDecodeError as exc:
+            latency_ms = (time.perf_counter() - started) * 1000
+            record_metrics(
+                build_metrics(
+                    provider=self.provider_name,
+                    model=self.model,
+                    latency_ms=latency_ms,
+                    cache_hit=False,
+                    prompt_id=context.prompt_id,
+                    prompt_version=context.prompt_version,
+                    input_text=context.prompt,
+                    output_text=raw_text,
+                ),
+                failure_reason=str(exc),
+                source=source,
+            )
             raise DiscoveryValidationError(
                 f"OpenAI returned invalid JSON: {exc}"
             ) from exc
 
         fields = validate_discovered_fields(parsed)
-        metrics = build_metrics(
-            provider=self.provider_name,
-            model=self.model,
-            latency_ms=latency_ms,
-            cache_hit=False,
-            prompt_id=context.prompt_id or "field_discovery",
-            prompt_version=context.prompt_version or "unknown",
-            input_chars=len(context.prompt),
-            output_chars=len(raw_text),
+        latency_ms = (time.perf_counter() - started) * 1000
+        metrics = record_metrics(
+            build_metrics(
+                provider=self.provider_name,
+                model=self.model,
+                latency_ms=latency_ms,
+                cache_hit=False,
+                prompt_id=context.prompt_id,
+                prompt_version=context.prompt_version,
+                input_text=context.prompt,
+                output_text=raw_text,
+            ),
+            source=source,
         )
-        record_metrics(metrics)
         return DiscoveryResult(
             fields=fields,
             provider=self.provider_name,
@@ -209,10 +241,10 @@ class GeminiProvider:
 
         from google import genai as genai_sdk
 
+        started = time.perf_counter()
         model_errors: list[str] = []
         response = None
         used_model = ""
-        started = time.perf_counter()
         for model_name in self.models:
             try:
                 response = call_with_retry(
@@ -223,7 +255,7 @@ class GeminiProvider:
                             response_mime_type="application/json",
                             temperature=0,
                         ),
-                    )
+                    ),
                 )
                 used_model = model_name
                 break
@@ -231,11 +263,26 @@ class GeminiProvider:
                 model_errors.append(f"{model_name}: {exc}")
 
         if response is None:
+            latency_ms = (time.perf_counter() - started) * 1000
+            failure = "; ".join(model_errors)
+            record_metrics(
+                build_metrics(
+                    provider=self.provider_name,
+                    model=self.models[0],
+                    latency_ms=latency_ms,
+                    cache_hit=False,
+                    prompt_id=context.prompt_id,
+                    prompt_version=context.prompt_version,
+                    input_text=context.prompt,
+                    output_text="",
+                ),
+                failure_reason=failure,
+                source=source,
+            )
             raise DiscoveryProviderError(
-                "All Gemini models failed: " + "; ".join(model_errors)
+                "All Gemini models failed: " + failure
             )
 
-        latency_ms = (time.perf_counter() - started) * 1000
         raw_text = (response.text or "").strip()
         try:
             parsed = json.loads(raw_text)
@@ -245,24 +292,57 @@ class GeminiProvider:
                 try:
                     parsed = json.loads(match.group())
                 except json.JSONDecodeError as exc:
+                    latency_ms = (time.perf_counter() - started) * 1000
+                    record_metrics(
+                        build_metrics(
+                            provider=self.provider_name,
+                            model=used_model,
+                            latency_ms=latency_ms,
+                            cache_hit=False,
+                            prompt_id=context.prompt_id,
+                            prompt_version=context.prompt_version,
+                            input_text=context.prompt,
+                            output_text=raw_text,
+                        ),
+                        failure_reason=str(exc),
+                        source=source,
+                    )
                     raise DiscoveryValidationError(
                         f"Gemini returned invalid JSON: {exc}"
                     ) from exc
             else:
+                latency_ms = (time.perf_counter() - started) * 1000
+                record_metrics(
+                    build_metrics(
+                        provider=self.provider_name,
+                        model=used_model,
+                        latency_ms=latency_ms,
+                        cache_hit=False,
+                        prompt_id=context.prompt_id,
+                        prompt_version=context.prompt_version,
+                        input_text=context.prompt,
+                        output_text=raw_text,
+                    ),
+                    failure_reason="invalid JSON",
+                    source=source,
+                )
                 raise DiscoveryValidationError("Gemini returned invalid JSON")
 
         fields = validate_discovered_fields(parsed)
-        metrics = build_metrics(
-            provider=self.provider_name,
-            model=used_model,
-            latency_ms=latency_ms,
-            cache_hit=False,
-            prompt_id=context.prompt_id or "field_discovery",
-            prompt_version=context.prompt_version or "unknown",
-            input_chars=len(context.prompt),
-            output_chars=len(raw_text),
+        latency_ms = (time.perf_counter() - started) * 1000
+        metrics = record_metrics(
+            build_metrics(
+                provider=self.provider_name,
+                model=used_model,
+                latency_ms=latency_ms,
+                cache_hit=False,
+                prompt_id=context.prompt_id,
+                prompt_version=context.prompt_version,
+                input_text=context.prompt,
+                output_text=raw_text,
+            ),
+            source=source,
         )
-        record_metrics(metrics)
         return DiscoveryResult(
             fields=fields,
             provider=self.provider_name,
