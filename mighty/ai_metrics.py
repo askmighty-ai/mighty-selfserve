@@ -25,6 +25,7 @@ class AIMetrics:
 
 _COST_PER_MILLION: dict[str, tuple[float, float]] = {
     "gpt-5.4-mini": (0.15, 0.60),
+    "gpt-5.5": (0.25, 1.00),
     "gpt-4o-mini": (0.15, 0.60),
     "gemini-2.5-flash": (0.075, 0.30),
     "gemini-2.5-pro": (1.25, 5.00),
