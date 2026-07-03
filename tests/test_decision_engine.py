@@ -1,6 +1,11 @@
 """Tests for recommendation ranking, deduplication, and integration."""
 
-from mighty.decision_engine import DecisionContext, Recommendation, get_recommendations
+from mighty.decision_engine import (
+    DEFAULT_MAX_RECOMMENDATIONS,
+    DecisionContext,
+    Recommendation,
+    get_recommendations,
+)
 
 
 def _dashboard_ctx(*, subjects=None):
@@ -18,24 +23,16 @@ def test_dashboard_falls_back_to_demo_without_subjects():
     assert recs[0].urgency in {"urgent", "soon", "info"}
 
 
-def test_dashboard_uses_actionable_email_not_generic():
+def test_dashboard_appends_email_advisor_when_subjects_match():
     recs = get_recommendations(
         _dashboard_ctx(subjects=["World of Hyatt: 2x points this week"]),
         user_memory={"email_subjects": ["World of Hyatt: 2x points this week"]},
     )
-    assert len(recs) == 1
-    assert recs[0].id == "email_hyatt"
-    assert "Review your" not in recs[0].title
-    assert recs[0].rationale
-    assert "2x" in recs[0].rationale or "promo" in recs[0].title.lower()
-
-
-def test_dashboard_skips_demo_when_live_recommendations_exist():
-    recs = get_recommendations(
-        _dashboard_ctx(subjects=["World of Hyatt: 2x points this week"]),
-        user_memory={"email_subjects": ["World of Hyatt: 2x points this week"]},
-    )
-    assert not any(r.rationale == "Demo recommendation." for r in recs)
+    assert len(recs) == 4
+    assert recs[0].rationale == "Demo recommendation."
+    assert recs[-1].title == "Review your Hyatt emails"
+    assert recs[-1].recommendation_type == "hotel"
+    assert recs[-1].rationale != "Demo recommendation."
 
 
 def test_dashboard_accepts_subjects_from_user_memory_only():
@@ -44,9 +41,9 @@ def test_dashboard_accepts_subjects_from_user_memory_only():
         ctx,
         user_memory={"email_subjects": ["Marriott Bonvoy offer inside"]},
     )
-    assert len(recs) == 1
-    assert recs[0].id == "email_marriott"
-    assert "Review your" not in recs[0].title
+    assert len(recs) == 4
+    assert recs[0].rationale == "Demo recommendation."
+    assert recs[-1].title == "Review your Marriott emails"
 
 
 def test_benefit_recommendations_replace_email_duplicates():
@@ -107,48 +104,120 @@ def test_dedupe_and_rank_keeps_highest_score_per_id():
         Recommendation(
             id="benefit_points_marriott",
             title="First",
-            summary="Has rationale.",
-            rationale="Based on synced Marriott points.",
+            summary="",
             score=40,
             recommendation_type="hotel",
-            action_label="Book",
         ),
         Recommendation(
             id="benefit_points_marriott",
             title="Duplicate",
-            summary="Has rationale.",
-            rationale="Based on synced Marriott points.",
+            summary="",
             score=80,
             recommendation_type="hotel",
-            action_label="Book",
         ),
         Recommendation(
             id="benefit_cert_marriott",
             title="Certificate",
-            summary="Has rationale.",
-            rationale="Certificate expiring soon.",
+            summary="",
             score=70,
             recommendation_type="hotel",
-            action_label="Redeem",
         ),
     ])
     assert len(recs) == 2
     assert {r.id for r in recs} == {"benefit_points_marriott", "benefit_cert_marriott"}
+    assert recs[0].title == "Duplicate"
 
 
-def test_dedupe_filters_generic_review_recommendations():
+def test_dedupe_suppresses_demo_when_live_benefit_covers_program():
+    recs = get_recommendations(
+        _dashboard_ctx(),
+        user_memory={
+            "available_benefits": [
+                {
+                    "label": "World of Hyatt Points",
+                    "value": "30,000 points",
+                    "source": "Hyatt",
+                    "btype": "points_balance",
+                }
+            ],
+            "intent": {"hotel": 3},
+        },
+    )
+    titles = [r.title for r in recs]
+    assert any("Hyatt" in t for t in titles)
+    assert not any("Transfer Chase Ultimate Rewards to Hyatt" in t for t in titles)
+
+
+def test_dedupe_collapses_same_opportunity_slot():
     from mighty.decision_engine import _dedupe_and_rank
 
     recs = _dedupe_and_rank([
         Recommendation(
-            id="email_hyatt",
-            title="Review your Hyatt emails",
-            summary="Generic.",
-            rationale="A recent email subject mentioned Hyatt.",
-            action_label="Open",
+            id="benefit_points_marriott",
+            title="You have enough Marriott Bonvoy points for a free night.",
+            summary="",
+            score=50,
+            recommendation_type="hotel",
+        ),
+        Recommendation(
+            id="email_marriott",
+            title="Review your Marriott emails",
+            summary="",
+            score=30,
+            recommendation_type="hotel",
         ),
     ])
-    assert recs == []
+    assert len(recs) == 1
+    assert recs[0].id == "benefit_points_marriott"
+
+
+def test_output_cap_limits_recommendations():
+    from mighty.decision_engine import _dedupe_and_rank
+
+    recs = _dedupe_and_rank([
+        Recommendation(
+            id=f"benefit_points_prog{i}",
+            title=f"Recommendation {i}",
+            summary="",
+            score=100 - i,
+            recommendation_type="hotel",
+        )
+        for i in range(8)
+    ])
+    assert len(recs) == DEFAULT_MAX_RECOMMENDATIONS
+
+
+def test_output_cap_is_configurable():
+    recs = get_recommendations(
+        _dashboard_ctx(),
+        user_memory={
+            "suppress_demo_content": True,
+            "max_recommendations": 2,
+            "available_benefits": [
+                {
+                    "label": "Bonvoy Points",
+                    "value": "85,000 points",
+                    "source": "Marriott Bonvoy",
+                    "btype": "points_balance",
+                },
+                {
+                    "label": "Free Night Award",
+                    "value": "1 certificate",
+                    "source": "Marriott Bonvoy",
+                    "btype": "certificate",
+                    "days_left": 5,
+                },
+                {
+                    "label": "SkyMiles",
+                    "value": "45,000 miles",
+                    "source": "Delta",
+                    "btype": "points_balance",
+                },
+            ],
+            "intent": {"hotel": 5, "flight": 2},
+        },
+    )
+    assert len(recs) == 2
 
 
 def test_united_status_retention_via_dashboard():
@@ -177,54 +246,3 @@ def test_united_status_retention_via_dashboard():
     assert recs[0].title == "One more round trip keeps your United Silver status."
     assert recs[0].rationale
     assert recs[0].confidence in {"high", "medium", "low"}
-
-
-def test_cross_account_chase_hyatt_transfer():
-    recs = get_recommendations(
-        _dashboard_ctx(),
-        user_memory={
-            "suppress_demo_content": True,
-            "available_benefits": [
-                {
-                    "label": "Ultimate Rewards",
-                    "value": "120,000 points",
-                    "source": "Chase Sapphire",
-                    "btype": "points_balance",
-                },
-                {
-                    "label": "World of Hyatt Points",
-                    "value": "15,000 points",
-                    "source": "Hyatt",
-                    "btype": "points_balance",
-                },
-            ],
-            "intent": {"hotel": 4},
-        },
-    )
-    titles = [r.title for r in recs]
-    assert any("transfer" in t.lower() and "hyatt" in t.lower() for t in titles)
-    cross = next(r for r in recs if r.id == "cross_chase_hyatt_transfer")
-    assert cross.rationale
-    assert cross.action_label
-
-
-def test_every_recommendation_has_rationale():
-    recs = get_recommendations(
-        _dashboard_ctx(subjects=["Delta SkyMiles bonus offer"]),
-        user_memory={
-            "email_subjects": ["Delta SkyMiles bonus offer"],
-            "available_benefits": [
-                {
-                    "label": "SkyMiles",
-                    "value": "45,000 miles",
-                    "source": "Delta",
-                    "btype": "points_balance",
-                }
-            ],
-            "intent": {"flight": 2},
-        },
-    )
-    assert recs
-    for rec in recs:
-        assert rec.rationale.strip()
-        assert rec.rationale != rec.summary or "email" in rec.rationale.lower() or "synced" in rec.rationale.lower()

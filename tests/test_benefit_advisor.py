@@ -21,7 +21,7 @@ def test_no_benefits_returns_empty():
     assert evaluate(_ctx(), _memory()) == []
 
 
-def test_marriott_points_free_night_in_boston():
+def test_marriott_points_free_night_without_invented_destination():
     recs = evaluate(
         _ctx(),
         _memory(
@@ -38,7 +38,8 @@ def test_marriott_points_free_night_in_boston():
     )
     assert len(recs) == 1
     assert recs[0].id == "benefit_points_marriott"
-    assert "free night in Boston" in recs[0].title
+    assert "free night" in recs[0].title
+    assert "Boston" not in recs[0].title
     assert recs[0].rationale
     assert recs[0].confidence in {"high", "medium", "low"}
     assert recs[0].score > 0

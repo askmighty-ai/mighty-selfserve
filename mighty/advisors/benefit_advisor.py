@@ -83,12 +83,6 @@ _PROGRAM_META: dict[str, dict[str, str]] = {
     },
 }
 
-_DEFAULT_CITIES: dict[str, str] = {
-    "hotel": "Boston",
-    "flight": "Chicago",
-    "car": "Denver",
-}
-
 _CITY_PATTERN = re.compile(
     r"\b(?:to|in|for|visit(?:ing)?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"
 )
@@ -201,13 +195,6 @@ def _infer_destination(user_memory: dict[str, Any] | None) -> str | None:
             if city_match:
                 return city_match.group(1).strip()
 
-    intent = user_memory.get("intent") or {}
-    if isinstance(intent, dict):
-        if intent.get("hotel", 0) > 0:
-            return _DEFAULT_CITIES["hotel"]
-        if intent.get("flight", 0) > 0:
-            return _DEFAULT_CITIES["flight"]
-
     return None
 
 
@@ -261,8 +248,12 @@ def _recommend_points(
     round_trip_threshold = _ROUND_TRIP_MILES.get(program)
 
     if free_night_threshold and points >= free_night_threshold:
-        city = destination or _DEFAULT_CITIES["hotel"]
-        title = f"You have enough {meta['display']} points for a free night in {city}."
+        if destination:
+            title = f"You have enough {meta['display']} points for a free night in {destination}."
+            location_bullet = f"Strong fit for a stay in {destination}"
+        else:
+            title = f"You have enough {meta['display']} points for a free night."
+            location_bullet = "Search award availability at your destination"
         summary = f"{points:,} points covers a standard award night at many {meta['display']} properties."
         rationale = (
             f"Your synced balance meets the typical {free_night_threshold:,}-point threshold "
@@ -271,7 +262,7 @@ def _recommend_points(
         bullets = [
             f"Balance: {points:,} points",
             f"Typical free-night cost: {free_night_threshold:,} points",
-            f"Strong fit for a stay in {city}" if destination else "Search award availability at your destination",
+            location_bullet,
         ]
         category = meta["category"]
     elif round_trip_threshold and points >= round_trip_threshold:
