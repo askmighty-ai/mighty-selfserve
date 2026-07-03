@@ -9583,7 +9583,7 @@ def dashboard():
     _rt.step("value_items")
     # Get latest intent for context-aware sorting + load 30-day intent summary
     _latest_intent = get_db().execute(
-        "SELECT intent_type FROM intent_history WHERE user_id=? ORDER BY detected_at DESC LIMIT 1",
+        "SELECT intent_type, page_url FROM intent_history WHERE user_id=? ORDER BY detected_at DESC LIMIT 1",
         (session["user_id"],)
     ).fetchone()
     _sort_context = _latest_intent["intent_type"] if _latest_intent else None
@@ -9753,13 +9753,23 @@ def dashboard():
             _dash_user_memory = {
                 "email_subjects": _dash_email_subjects,
                 "available_benefits": [
-                    {"label": lbl, "value": val, "source": disp}
-                    for disp, lbl, val, _, _, _btype in value_items
+                    {
+                        "label": lbl,
+                        "value": val,
+                        "source": disp,
+                        "btype": _dash_corrections.get(f"{disp}::{lbl}", btype),
+                        "days_left": _parse_exp_days_hero(lbl, val),
+                    }
+                    for disp, lbl, val, _, _, btype in value_items
                 ],
                 "suppress_demo_content": _suppress_demo_content,
             }
             if _dash_user_intent:
                 _dash_user_memory["intent"] = _dash_user_intent
+            if _dash_type_affinity:
+                _dash_user_memory["type_affinity"] = _dash_type_affinity
+            if _latest_intent and _latest_intent["page_url"]:
+                _dash_user_memory["recent_page_url"] = _latest_intent["page_url"]
             _dashboard_recommendations = get_recommendations(
                 DecisionContext(
                     url="",
