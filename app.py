@@ -20974,6 +20974,56 @@ def api_admin_replay_discovery(source):
     return jsonify(_admin_replay_discovery(session["user_id"], source))
 
 
+from mighty.admin_ai_playground import admin_ai_playground_run, admin_ai_playground_snapshot
+
+
+@app.route("/admin/ai-playground")
+@require_admin
+def admin_ai_playground_page():
+    uid = session["user_id"]
+    source, sources = _admin_pick_source(uid, request.args.get("source"))
+    return _admin_debug.render_ai_playground_page(
+        sources,
+        source,
+        provider_info=_admin_provider_info(),
+    )
+
+
+@app.route("/api/admin/debug/ai-playground/<source>", methods=["GET", "POST"])
+@require_admin
+def api_admin_ai_playground(source):
+    uid = session["user_id"]
+    _, sources = _admin_pick_source(uid, source)
+    if source not in sources:
+        return jsonify({"error": "unknown source"}), 404
+    provider = (request.args.get("provider") if request.method == "GET" else None) or (
+        (request.get_json(silent=True) or {}).get("provider")
+    ) or ai_provider_name()
+    if request.method == "GET":
+        return jsonify(
+            admin_ai_playground_snapshot(
+                uid,
+                source,
+                provider_name=provider,
+                decrypt_account_data=decrypt_account_data,
+                decrypt_cred=decrypt_cred,
+                get_db=get_db,
+            )
+        )
+    body = request.get_json(silent=True) or {}
+    body["provider"] = body.get("provider") or provider
+    return jsonify(
+        admin_ai_playground_run(
+            uid,
+            source,
+            body,
+            decrypt_account_data=decrypt_account_data,
+            decrypt_cred=decrypt_cred,
+            get_db=get_db,
+        )
+    )
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

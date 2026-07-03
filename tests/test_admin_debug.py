@@ -9,9 +9,9 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ADMIN_PAGES = [
-    "/admin", "/admin/account-json", "/admin/extracted-fields", "/admin/provider-schemas",
-    "/admin/discovery-cache", "/admin/ai-cache", "/admin/sync-history", "/admin/sync-timeline",
-    "/admin/replay-discovery",
+    "/admin", "/admin/prompt-eval", "/admin/account-json", "/admin/extracted-fields",
+    "/admin/provider-schemas", "/admin/discovery-cache", "/admin/ai-cache", "/admin/sync-history",
+    "/admin/sync-timeline", "/admin/replay-discovery", "/admin/ai-playground",
 ]
 
 

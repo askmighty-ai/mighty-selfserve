@@ -9,7 +9,14 @@ from typing import Any
 
 from flask import render_template_string
 
+from mighty.prompt_eval import PromptVersionMetrics
+
 ADMIN_TOOLS: list[tuple[str, str, str]] = [
+    (
+        "prompt-eval",
+        "Prompt eval",
+        "Compare prompt versions — latency, cost, success rate, and extraction completeness",
+    ),
     ("account-json", "Account JSON", "Decrypted account_data blobs per source"),
     ("extracted-fields", "Extracted fields", "Synced items, provenance, and classification"),
     ("provider-schemas", "Provider schemas", "Category schemas, connectors, and extraction hints"),
@@ -18,6 +25,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
     ("sync-history", "Sync history", "Field changes, audit events, and sync metadata"),
     ("sync-timeline", "Sync timeline", "Live sync state and per-account sync timestamps"),
     ("replay-discovery", "Replay field discovery", "Run discovery synchronously with step-by-step output"),
+    (
+        "ai-playground",
+        "AI Playground",
+        "Inspect extraction pipeline, compare preprocessing, prompts, and models",
+    ),
 ]
 
 
@@ -228,3 +240,262 @@ document.getElementById('run-replay')?.addEventListener('click', async (ev) => {
 });
 </script>"""
     return _admin_shell("replay-discovery", "Replay Field Discovery", picker + btn + script)
+
+
+def render_ai_playground_page(
+    sources: list[str],
+    source: str | None,
+    *,
+    provider_info: dict[str, Any],
+) -> str:
+    picker = _source_picker(sources, source, "/admin/ai-playground")
+    openai_cfg = provider_info.get("openai") or {}
+    provider_opts = (
+        f'<option value="openai"{" selected" if provider_info.get("configured_provider") == "openai" else ""}>'
+        f'OpenAI ({_he(openai_cfg.get("model") or "—")})</option>'
+        f'<option value="gemini"{" selected" if provider_info.get("configured_provider") == "gemini" else ""}>'
+        f'Gemini</option>'
+    )
+    controls = f"""
+<div class="card">
+  <h3>Controls</h3>
+  <form class="source-picker" id="provider-form">
+    <label>Provider</label>
+    <select id="playground-provider" name="provider">{provider_opts}</select>
+  </form>
+  <div class="btn-row">
+    <button type="button" class="btn" id="btn-load" data-source="{_he(source or '')}" disabled>Load snapshot</button>
+    <button type="button" class="btn" id="btn-extract" data-mode="extract" disabled>Run extraction again</button>
+    <button type="button" class="btn" id="btn-preprocess" data-mode="compare_preprocess" disabled>Compare preprocessing on/off</button>
+    <button type="button" class="btn" id="btn-prompts" data-mode="compare_prompts" disabled>Compare prompt versions</button>
+    <button type="button" class="btn" id="btn-models" data-mode="compare_models" disabled>Compare GPT-5.4-mini vs GPT-5.5</button>
+  </div>
+  <p class="muted">Dry-run only — does not save discovered fields. OpenAI calls require API keys on this server.</p>
+</div>
+<div class="card" id="playground-output"><h3>Output</h3><p class="muted">Select an account to load the pipeline snapshot.</p></div>
+<style>
+.btn-row{{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}}
+.btn-row .btn{{margin:0}}
+</style>
+<script>
+(function() {{
+  const srcSelect = document.querySelector('.source-picker select[name="source"]');
+  const providerSel = document.getElementById('playground-provider');
+  const out = document.getElementById('playground-output');
+  const btns = document.querySelectorAll('#btn-load,#btn-extract,#btn-preprocess,#btn-prompts,#btn-models');
+
+  function currentSource() {{
+    return srcSelect?.value || document.getElementById('btn-load')?.dataset.source || '';
+  }}
+
+  function setBusy(busy) {{
+    btns.forEach(b => {{ b.disabled = busy || !currentSource(); }});
+  }}
+
+  function show(data) {{
+    out.innerHTML = '<h3>Output</h3>';
+    const pre = document.createElement('pre');
+    pre.className = 'json-block';
+    pre.textContent = JSON.stringify(data, null, 2);
+    out.appendChild(pre);
+  }}
+
+  async function callApi(mode) {{
+    const src = currentSource();
+    if (!src) return;
+    setBusy(true);
+    try {{
+      const r = await fetch('/api/admin/debug/ai-playground/' + encodeURIComponent(src), {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ mode, provider: providerSel.value }}),
+      }});
+      show(await r.json());
+    }} catch (e) {{
+      show({{ error: String(e) }});
+    }} finally {{
+      setBusy(false);
+    }}
+  }}
+
+  async function loadSnapshot() {{
+    const src = currentSource();
+    if (!src) return;
+    setBusy(true);
+    try {{
+      const q = new URLSearchParams({{ provider: providerSel.value }});
+      const r = await fetch('/api/admin/debug/ai-playground/' + encodeURIComponent(src) + '?' + q);
+      show(await r.json());
+    }} catch (e) {{
+      show({{ error: String(e) }});
+    }} finally {{
+      setBusy(false);
+    }}
+  }}
+
+  btns.forEach(b => {{
+    if (b.id === 'btn-load') b.addEventListener('click', loadSnapshot);
+    else b.addEventListener('click', () => callApi(b.dataset.mode));
+  }});
+  srcSelect?.addEventListener('change', () => {{
+    btns.forEach(b => {{ b.disabled = !currentSource(); }});
+    document.getElementById('btn-load').dataset.source = currentSource();
+  }});
+  if (currentSource()) {{
+    btns.forEach(b => {{ b.disabled = false; }});
+    loadSnapshot();
+  }}
+}})();
+</script>"""
+    body = (
+        '<p class="lede">Inspect the full field-discovery pipeline for a connected account. '
+        'Compare preprocessing, prompt versions, and models without writing to production storage.</p>'
+        + picker
+        + controls
+    )
+    return _admin_shell("ai-playground", "AI Playground", body)
+
+
+def _fmt_pct(value: float | None) -> str:
+    if value is None:
+        return "—"
+    return f"{value:.1f}%"
+
+
+def _fmt_ms(value: float | None) -> str:
+    if value is None:
+        return "—"
+    return f"{value:.1f} ms"
+
+
+def _fmt_cost(value: float | None) -> str:
+    if value is None:
+        return "—"
+    return f"${value:.6f}"
+
+
+def _fmt_completeness(value: float | None) -> str:
+    if value is None:
+        return "—"
+    return f"{value:.1f}%"
+
+
+def _metric_badge(value: float | None, *, good_at: float = 90.0, warn_at: float = 70.0) -> str:
+    if value is None:
+        return '<span class="badge badge-muted">—</span>'
+    if value >= good_at:
+        cls = "badge-ok"
+    elif value >= warn_at:
+        cls = "badge-warn"
+    else:
+        cls = "badge-err"
+    return f'<span class="badge {cls}">{_he(value)}</span>'
+
+
+def render_prompt_eval_page(
+    metrics: list[PromptVersionMetrics],
+    *,
+    days: int,
+    fixture_ran: bool,
+) -> str:
+    if not metrics:
+        body = (
+            '<p class="lede">Side-by-side metrics for each field-discovery prompt version.</p>'
+            '<div class="card"><p class="muted">No prompt versions found. Add prompts under '
+            '<code>prompts/</code> or run field discovery to populate <code>ai_request_log</code>.</p></div>'
+        )
+        return _admin_shell("prompt-eval", "Prompt Evaluation", body)
+
+    header = (
+        f'<p class="lede">Compare field-discovery prompt versions side-by-side. '
+        f'Production metrics cover the last <strong>{days}</strong> days from '
+        f'<code>ai_request_log</code>.</p>'
+    )
+    if fixture_ran:
+        header += (
+            '<p class="muted">Fixture completeness reflects the latest live eval run against '
+            '<code>tests/fixtures</code> + <code>tests/expected</code>.</p>'
+        )
+    else:
+        header += (
+            '<p class="muted">Run fixture eval to score extraction completeness against golden fixtures '
+            '(requires configured AI provider).</p>'
+        )
+
+    rows = ""
+    for m in metrics:
+        rows += (
+            f"<tr>"
+            f"<td><strong>{_he(m.version_label)}</strong>"
+            f"<div class='muted' style='font-size:11px;margin-top:4px'>{_he(m.description or '')}</div></td>"
+            f"<td>{m.request_count}</td>"
+            f"<td>{_he(_fmt_ms(m.avg_latency_ms))}</td>"
+            f"<td>{_he(_fmt_cost(m.total_cost_usd))}<div class='muted' style='font-size:11px'>"
+            f"avg {_he(_fmt_cost(m.avg_cost_usd))}</div></td>"
+            f"<td>{_metric_badge(m.success_rate)} {_he(_fmt_pct(m.success_rate))}</td>"
+            f"<td>{m.validation_failures}</td>"
+            f"<td>{_metric_badge(m.extraction_completeness)} {_he(_fmt_completeness(m.extraction_completeness))}"
+            f"<div class='muted' style='font-size:11px'>{m.fixture_count} fixture(s)</div></td>"
+            f"</tr>"
+        )
+
+    controls = """
+<div class="card">
+  <h3>Actions</h3>
+  <div class="btn-row">
+    <button type="button" class="btn" id="btn-run-fixtures">Run fixture eval</button>
+    <button type="button" class="btn" id="btn-refresh">Refresh production metrics</button>
+  </div>
+  <p class="muted">Fixture eval calls the configured provider once per fixture × prompt version.</p>
+</div>
+<div class="card" id="prompt-eval-output"></div>
+<style>
+.btn-row{display:flex;flex-wrap:wrap;gap:8px}
+.compare-table td{vertical-align:top}
+.badge-muted{background:#1f2937;color:#9ca3af}
+</style>
+<script>
+(function() {
+  const out = document.getElementById('prompt-eval-output');
+  async function refresh() {
+    const r = await fetch('/api/admin/prompt-eval?days=30');
+    const data = await r.json();
+    if (!r.ok) { out.innerHTML = '<p class="muted">' + (data.error || 'Request failed') + '</p>'; return; }
+    out.innerHTML = '<h3>JSON</h3><pre class="json-block">' + JSON.stringify(data, null, 2) + '</pre>';
+  }
+  document.getElementById('btn-refresh')?.addEventListener('click', refresh);
+  document.getElementById('btn-run-fixtures')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-run-fixtures');
+    btn.disabled = true; btn.textContent = 'Running…';
+    try {
+      const r = await fetch('/api/admin/prompt-eval/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const data = await r.json();
+      if (r.ok && data.redirect) { window.location.href = data.redirect; return; }
+      out.innerHTML = '<h3>Fixture eval</h3><pre class="json-block">' + JSON.stringify(data, null, 2) + '</pre>';
+    } finally { btn.disabled = false; btn.textContent = 'Run fixture eval'; }
+  });
+})();
+</script>"""
+
+    table = f"""
+<div class="card">
+  <h3>Prompt version comparison</h3>
+  <table class="compare-table">
+    <thead><tr>
+      <th>Version</th>
+      <th>Requests</th>
+      <th>Avg latency</th>
+      <th>Est. cost</th>
+      <th>Success rate</th>
+      <th>Validation failures</th>
+      <th>Extraction completeness</th>
+    </tr></thead>
+    <tbody>{rows}</tbody>
+  </table>
+</div>"""
+
+    return _admin_shell("prompt-eval", "Prompt Evaluation", header + controls + table)
