@@ -1901,12 +1901,21 @@ async function runSync() {
   const _totalAccounts = crawlAccounts.length + tabAccounts.length + capturedList.length;
   let _syncDone = 0;
   const _syncFailures = []; // { name, reason } — per-account failures for popup display
-  async function _setProgress(name) {
+  async function _setProgress(account) {
+    const name = account && (account.name || account.source) || '';
+    const source = account && account.source || '';
     try {
-      await chrome.storage.local.set({ sync_progress: { done: _syncDone, total: _totalAccounts, name } });
+      await chrome.storage.local.set({ sync_progress: { done: _syncDone, total: _totalAccounts, name, source } });
     } catch {}
+    if (source) {
+      fetch(`${MIGHTY_URL}/api/sync/progress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': api_key },
+        body: JSON.stringify({ source }),
+      }).catch(() => {});
+    }
   }
-  await _setProgress('');
+  await _setProgress(null);
 
   // Shared tab is only created if needed (crawl fallback) — most accounts will use
   // silent fetch and never need it. Created lazily on first tab-based fallback.
@@ -1948,7 +1957,7 @@ async function runSync() {
   // Tab-based accounts (xfinity etc.) — supplement watcher handles these passively;
   // open a real tab only to warm up the session and let supplement fire.
   for (const account of tabAccounts) {
-    await _setProgress(account.name || account.source);
+    await _setProgress(account);
     try {
       await Promise.race([
         syncAccountViaTab(api_key, account, [ACCOUNT_ENTRY[account.source]], syncSessionTime),
@@ -1967,7 +1976,7 @@ async function runSync() {
 
   // Crawl-based accounts — silent fetch first; shared tab only as fallback
   for (const account of crawlAccounts) {
-    await _setProgress(account.name || account.source);
+    await _setProgress(account);
     try {
       // Patch crawlAccount to use lazy shared tab
       const _lazySharedTabId = { get: getSharedTab };
@@ -2010,7 +2019,7 @@ async function runSync() {
   for (const [source, info] of capturedList) {
     if (!info.urls || !info.urls.length) continue;
     console.log(`[Mighty] Re-syncing captured: ${info.name} (${info.urls.length} URL(s))`);
-    await _setProgress(info.name || source);
+    await _setProgress({ name: info.name || source, source });
     try {
       const tabId = await getSharedTab();
       await resyncCaptured(api_key, source, info, syncSessionTime, tabId);
