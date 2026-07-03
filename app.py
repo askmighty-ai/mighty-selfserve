@@ -20984,6 +20984,91 @@ def api_admin_replay_discovery(source):
     return jsonify(_admin_replay_discovery(session["user_id"], source))
 
 
+def _admin_build_recommendation_eval(uid: str):
+    """Gather account data and run three-engine recommendation comparison."""
+    from mighty.recommendation_eval import evaluate_accounts
+
+    db = get_db()
+    rows = db.execute(
+        "SELECT source, display_name, data_enc FROM account_data WHERE user_id=? ORDER BY source",
+        (uid,),
+    ).fetchall()
+
+    accounts: list[dict[str, str]] = []
+    available_benefits: list[dict] = []
+    benefit_count = 0
+
+    for row in rows:
+        source = row["source"]
+        display_name = row["display_name"] or source.replace("_", " ").title()
+        accounts.append({"source": source, "display_name": display_name})
+        try:
+            data = decrypt_account_data(uid, row["data_enc"] or "")
+        except Exception:
+            continue
+        items = data.get("items", []) or data.get("ai_items", []) or []
+        for item in items:
+            label = str(item.get("label") or "").strip()
+            value = str(item.get("value") or "").strip()
+            if not label or not value or value in {"—", "-", "N/A", "None", "TBD", "0"}:
+                continue
+            btype = item.get("_type") or classify_benefit(label, value, source)
+            days_left = _parse_expiry_days(label, value)
+            available_benefits.append({
+                "label": label,
+                "value": value,
+                "source": display_name,
+                "btype": btype,
+                "days_left": days_left,
+            })
+            benefit_count += 1
+
+    user_intent: dict = {}
+    type_affinity: dict = {}
+    try:
+        ui_row = db.execute(
+            "SELECT intent_summary, type_affinity FROM users WHERE id=?", (uid,),
+        ).fetchone()
+        if ui_row and ui_row["intent_summary"]:
+            user_intent = json.loads(ui_row["intent_summary"])
+        if ui_row and ui_row["type_affinity"]:
+            type_affinity = json.loads(ui_row["type_affinity"])
+    except Exception:
+        pass
+
+    latest_intent = db.execute(
+        "SELECT page_url FROM intent_history WHERE user_id=? ORDER BY detected_at DESC LIMIT 1",
+        (uid,),
+    ).fetchone()
+    email_subjects = _cached_dashboard_email_subjects(uid, db)
+
+    user_memory = {
+        "available_benefits": available_benefits,
+        "email_subjects": email_subjects,
+        "intent": user_intent,
+        "type_affinity": type_affinity,
+        "suppress_demo_content": True,
+    }
+    if latest_intent and latest_intent["page_url"]:
+        user_memory["recent_page_url"] = latest_intent["page_url"]
+
+    evaluations = evaluate_accounts(accounts, user_memory, email_subjects=email_subjects)
+    return evaluations, len(accounts), benefit_count, len(email_subjects)
+
+
+@app.route("/admin/recommendation-eval")
+@require_admin
+def admin_recommendation_eval_page():
+    uid = session["user_id"]
+    evaluations, account_count, benefit_count, email_subject_count = _admin_build_recommendation_eval(uid)
+    return _admin_debug.render_recommendation_eval_page(
+        evaluations,
+        account_count=account_count,
+        benefit_count=benefit_count,
+        email_subject_count=email_subject_count,
+    )
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
