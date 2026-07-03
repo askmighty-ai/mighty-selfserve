@@ -8906,6 +8906,7 @@ def dashboard():
     total_expiring = 0
     login_required_accounts = []
     _home_account_statuses = []
+    _home_provider_urls: dict[str, str] = {}
 
     _user_sync = get_db().execute(
         "SELECT sync_running, sync_started_at, sync_current_source FROM users WHERE id=?",
@@ -8990,6 +8991,9 @@ def dashboard():
                 connect_url=f"/credentials?connect={src}",
             )
             _home_account_statuses.append(_acct_canon)
+            _card_url = SITE_ENTRY_URL.get(src) or (row or {}).get("entry_url", "") or _provider_login_url(src)
+            if _card_url:
+                _home_provider_urls[src] = _card_url
             if _lc.state != LC_SYNCED:
                 status_color = _lc.color
 
@@ -10197,6 +10201,7 @@ def dashboard():
             benefit_count=len(_hero_candidates),
             tracked_value_label=_tracked_value_label,
             freshness_label=_last_checked,
+            provider_open_urls=_home_provider_urls,
         )
         return render_home_page(
             _home_result,

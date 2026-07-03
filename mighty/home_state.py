@@ -177,6 +177,7 @@ def resolve_home_state(
     tracked_value_label: str = "",
     freshness_label: str = "",
     worker_setup_needed: bool = False,
+    provider_open_urls: dict[str, str] | None = None,
 ) -> HomeStateResult:
     """Pick the dominant Home state and featured content."""
     actions = list(actions or [])
@@ -273,7 +274,12 @@ def resolve_home_state(
             cta_url = "/extension-setup"
         elif wait_acct:
             cta_label = user_copy.home_open_provider_cta(wait_acct.display_name)
-            cta_url = wait_acct.user_action_url or "/credentials"
+            open_urls = provider_open_urls or {}
+            cta_url = (
+                open_urls.get(wait_acct.source)
+                or wait_acct.user_action_url
+                or "/credentials"
+            )
         else:
             cta_label = user_copy.HOME_VIEW_ACCOUNTS_LABEL
             cta_url = "/credentials"
