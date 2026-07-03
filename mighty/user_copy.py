@@ -351,8 +351,8 @@ ONBOARDING_CHROME_LINE = (
     "The dashboard is your control center."
 )
 SIGNUP_SUB = (
-    "Mighty runs in Chrome and updates accounts automatically. "
-    "You'll set up the worker in about 5 minutes."
+    "You'll be connected in about 5 minutes. "
+    "Account syncing requires desktop Chrome with the Mighty worker."
 )
 
 # ── Daily brief / actions ─────────────────────────────────────────────────────

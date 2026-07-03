@@ -5648,7 +5648,7 @@ input:focus{outline:none;border-color:#7c3aed}
     <div class="logo-name">Mighty</div>
   </div>
   <h1>Create your account</h1>
-  <p class="sub">{user_copy.SIGNUP_SUB}</p>
+  <p class="sub">{signup_sub}</p>
   {error}
   <form method="POST" action="/signup">
 <input type="hidden" name="_csrf" value="{csrf_token}">
@@ -7864,27 +7864,36 @@ def landing():
         return redirect("/dashboard")
     return LANDING_HTML
 
+def _render_signup_html(error: str = "") -> str:
+    return (
+        SIGNUP_HTML
+        .replace("{signup_sub}", user_copy.SIGNUP_SUB)
+        .replace("{error}", error)
+        .replace("{csrf_token}", get_csrf_token())
+    )
+
+
 @app.route("/signup", methods=["GET"])
 def signup_page():
     if "user_id" in session:
         return redirect("/dashboard")
-    return SIGNUP_HTML.replace("{error}", "").replace("{csrf_token}", get_csrf_token())
+    return _render_signup_html()
 
 @app.route("/signup", methods=["POST"])
 def signup():
     if not _rate_limit(request.remote_addr, "signup", limit=5):
         err = '<div class="err">Too many attempts. Please wait a minute and try again.</div>'
-        return SIGNUP_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token()), 429
+        return _render_signup_html(err), 429
     check_csrf()
     email    = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
     if not email or "@" not in email or not password or len(password) < 6 or len(password) > 128:
         err = '<div class="err">Please enter a valid email and a password (6–128 characters).</div>'
-        return SIGNUP_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token())
+        return _render_signup_html(err)
     db = get_db()
     if db.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
         err = '<div class="err">An account with that email already exists. <a href="/login">Sign in</a></div>'
-        return SIGNUP_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token())
+        return _render_signup_html(err)
     uid = secrets.token_hex(16)
     key = "mk_" + secrets.token_hex(20)
     db.execute(
@@ -11237,7 +11246,7 @@ def dashboard():
 
     onboarding_modal = ""
     if not user["onboarded"]:
-        onboarding_modal = """
+        onboarding_modal = f"""
 <div id="onboarding-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px">
   <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:28px 28px 24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
     <div style="font-size:28px;text-align:center;margin-bottom:12px">&#128272;</div>
@@ -11259,15 +11268,15 @@ def dashboard():
   </div>
 </div>
 <script>
-function dismissOnboarding() {
+function dismissOnboarding() {{
   document.getElementById('onboarding-overlay').style.display = 'none';
-  var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
-  fetch('/api/onboarding/complete', {
+  var csrf = (document.querySelector('input[name="_csrf"]') || {{}}).value || '';
+  fetch('/api/onboarding/complete', {{
     method: 'POST',
-    headers: {'X-CSRF-Token': csrf, 'Content-Type': 'application/json'},
+    headers: {{'X-CSRF-Token': csrf, 'Content-Type': 'application/json'}},
     credentials: 'same-origin'
-  }).catch(function(){});
-}
+  }}).catch(function(){{}});
+}}
 </script>"""
 
     _csrf = get_csrf_token()
