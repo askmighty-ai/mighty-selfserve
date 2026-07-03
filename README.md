@@ -2,6 +2,12 @@
 
 Personal authorization layer for AI agents. Sign up, get an API key, paste a system prompt into your Claude project — your agents log every action and request your approval before doing anything consequential.
 
+## Product Philosophy
+
+Mighty discovers accounts from email, keeps them current through passive browser capture, and surfaces attention only when something needs you. Login is the only manual step; sync is infrastructure, not a user ritual.
+
+Read the full [Product Manifesto](docs/PRODUCT_MANIFESTO.md). Engineers: see [CONTRIBUTING_PRODUCT.md](CONTRIBUTING_PRODUCT.md) for how to apply these principles in pull requests.
+
 ## Deploy to Railway
 
 1. Fork or push this repo to GitHub

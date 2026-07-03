@@ -24,7 +24,15 @@ from mighty.account_lifecycle import (
     resolve_account_lifecycle,
 )
 from mighty.provider_account import ProviderAccount, infer_extraction_status, load_provider_account
-from mighty.user_copy import LIFECYCLE_CTAS, LIFECYCLE_LABELS
+from mighty.user_copy import (
+    FAILURE_HINTS,
+    LIFECYCLE_CTAS,
+    STATUS_LABELS,
+    summary_needs_login,
+    summary_needs_login_plural,
+    summary_updating,
+    summary_updating_plural,
+)
 
 UP_TO_DATE = "up_to_date"
 UPDATING = "updating"
@@ -40,13 +48,7 @@ ALL_CANONICAL = (
     ERROR,
 )
 
-STATUS_LABELS: dict[str, str] = {
-    UP_TO_DATE: "Up to date",
-    UPDATING: "Updating…",
-    NEEDS_LOGIN: LIFECYCLE_LABELS["needs_login"],
-    WAITING_FOR_EXTENSION: LIFECYCLE_LABELS["waiting_for_extension"],
-    ERROR: "Sync error",
-}
+# STATUS_LABELS imported from user_copy (shared with dashboard + worker popup)
 
 _STATUS_COLORS: dict[str, str] = {
     UP_TO_DATE: "#16a34a",
@@ -58,13 +60,7 @@ _STATUS_COLORS: dict[str, str] = {
 
 _SYNC_SEVERITY = {"": 0, "ok": 0, "needs_first_visit": 1, "no_data": 1, "login_required": 2}
 
-_FAILURE_MESSAGES: dict[str, str] = {
-    "login_required": "Session expired — log in to your provider",
-    "login_wall": "Session expired — log in to your provider",
-    "timeout": "Site took too long to respond",
-    "no_data": "Could not read account data",
-    "domain_unreachable": "Site unreachable",
-}
+_FAILURE_MESSAGES: dict[str, str] = dict(FAILURE_HINTS)
 
 
 @dataclass
@@ -220,20 +216,20 @@ def build_status_summary(accounts: list[AccountStatus]) -> AccountStatusSummary:
     subline = ""
 
     if updating:
-        headline = f"Syncing {updating[0].display_name}"
+        headline = summary_updating(updating[0].display_name)
         if len(updating) > 1:
-            subline = f"{len(updating)} accounts updating"
+            subline = summary_updating_plural(len(updating))
     elif needs_login:
         if len(needs_login) == 1:
-            headline = f"{needs_login[0].display_name} needs login"
+            headline = summary_needs_login(needs_login[0].display_name)
         else:
-            headline = f"{len(needs_login)} accounts need login"
+            headline = summary_needs_login_plural(len(needs_login))
 
     if updating and needs_login:
         if len(needs_login) == 1:
-            subline = f"{needs_login[0].display_name} needs login"
+            subline = summary_needs_login(needs_login[0].display_name)
         else:
-            subline = f"{len(needs_login)} accounts need login"
+            subline = summary_needs_login_plural(len(needs_login))
 
     return AccountStatusSummary(
         headline=headline,
