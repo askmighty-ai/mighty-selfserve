@@ -9,9 +9,10 @@ Pure interface only — no database, AI, or network calls.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
 
-from mighty.decision_engine import DecisionContext
+if TYPE_CHECKING:
+    from mighty.decision_engine import DecisionContext
 
 
 @dataclass

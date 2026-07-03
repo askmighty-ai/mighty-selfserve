@@ -9,9 +9,9 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ADMIN_PAGES = [
-    "/admin", "/admin/account-json", "/admin/extracted-fields", "/admin/provider-schemas",
-    "/admin/discovery-cache", "/admin/ai-cache", "/admin/sync-history", "/admin/sync-timeline",
-    "/admin/replay-discovery",
+    "/admin", "/admin/recommendation-eval", "/admin/account-json", "/admin/extracted-fields",
+    "/admin/provider-schemas", "/admin/discovery-cache", "/admin/ai-cache", "/admin/sync-history",
+    "/admin/sync-timeline", "/admin/replay-discovery",
 ]
 
 
@@ -57,3 +57,12 @@ def test_field_schema_cache_snapshot():
     cache.record_failure("delta:def", DiscoveryError("fail"))
     assert len(cache.snapshot()) == 2
     cache.clear()
+
+
+def test_recommendation_eval_page_shows_engine_labels(client, monkeypatch):
+    c, email = client
+    monkeypatch.setenv("ADMIN_EMAIL", email)
+    r = c.get("/admin/recommendation-eval")
+    assert r.status_code == 200
+    assert b"Recommendation Evaluation" in r.data
+    assert b"recommendation engines" in r.data.lower()
