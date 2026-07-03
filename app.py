@@ -63,6 +63,27 @@ except ImportError:
     get_recommendations = None
 
 try:
+    from mighty.recommendation_lifecycle import (
+        CLICKED,
+        COMPLETED,
+        DISMISSED,
+        attach_lifecycle_ids,
+        filter_visible_recommendations,
+        mark_recommendations_shown,
+        recommendation_key_for,
+        sync_generated_recommendations,
+        transition_recommendation,
+    )
+except ImportError:
+    attach_lifecycle_ids = None
+    filter_visible_recommendations = None
+    mark_recommendations_shown = None
+    recommendation_key_for = None
+    sync_generated_recommendations = None
+    transition_recommendation = None
+    CLICKED = COMPLETED = DISMISSED = None
+
+try:
     from mighty import demo_mode as _demo_mode
 except ImportError:
     _demo_mode = None
@@ -638,6 +659,32 @@ def init_db():
         except Exception as _e:
             if "duplicate column" not in str(_e).lower() and "already exists" not in str(_e).lower():
                 raise
+        try:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS recommendation_lifecycle (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id             TEXT NOT NULL,
+                    recommendation_key  TEXT NOT NULL,
+                    title               TEXT NOT NULL,
+                    recommendation_type TEXT NOT NULL,
+                    source              TEXT NOT NULL DEFAULT 'dashboard',
+                    state               TEXT NOT NULL DEFAULT 'generated',
+                    generated_at        TEXT NOT NULL,
+                    shown_at            TEXT,
+                    clicked_at          TEXT,
+                    dismissed_at        TEXT,
+                    completed_at        TEXT,
+                    expired_at          TEXT,
+                    UNIQUE(user_id, recommendation_key)
+                )
+            """)
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rec_lifecycle_user "
+                "ON recommendation_lifecycle(user_id, state)"
+            )
+            db.commit()
+        except Exception:
+            pass
         # Migration: intent aggregation summary on users
         try:
             db.execute("ALTER TABLE users ADD COLUMN intent_summary TEXT")
@@ -9770,6 +9817,40 @@ def dashboard():
                 ),
                 user_memory=_dash_user_memory,
             ) or []
+            _non_demo_recs = [
+                rec for rec in _dashboard_recommendations
+                if str(getattr(rec, "rationale", "") or "").strip().lower()
+                != "demo recommendation."
+            ]
+            if sync_generated_recommendations is not None and _non_demo_recs:
+                _rec_lifecycle = sync_generated_recommendations(
+                    db, uid, _non_demo_recs, source="dashboard",
+                )
+                _visible_recs = filter_visible_recommendations(
+                    _non_demo_recs,
+                    _rec_lifecycle,
+                    source="dashboard",
+                )
+                attach_lifecycle_ids(_visible_recs, source="dashboard")
+                mark_recommendations_shown(
+                    db,
+                    uid,
+                    [
+                        recommendation_key_for(rec, source="dashboard")
+                        for rec in _visible_recs
+                    ],
+                    existing=_rec_lifecycle,
+                )
+                _visible_keys = {
+                    recommendation_key_for(rec, source="dashboard")
+                    for rec in _visible_recs
+                }
+                _dashboard_recommendations = [
+                    rec for rec in _dashboard_recommendations
+                    if str(getattr(rec, "rationale", "") or "").strip().lower()
+                    == "demo recommendation."
+                    or recommendation_key_for(rec, source="dashboard") in _visible_keys
+                ]
         except Exception:
             _dashboard_recommendations = []
     if build_dashboard_actions is not None:
@@ -9994,6 +10075,9 @@ def dashboard():
                 _confidence = str(getattr(_rec, "confidence", "") or "").strip().lower()
                 _action_label = str(getattr(_rec, "action_label", "") or "").strip()
                 _action_url = str(getattr(_rec, "action_url", "") or "").strip()
+                _rec_key = str(getattr(_rec, "id", "") or "").strip()
+                if not _rec_key and recommendation_key_for is not None:
+                    _rec_key = recommendation_key_for(_rec, source="dashboard")
 
                 _badge_html = ""
                 if _confidence == "high":
@@ -10036,9 +10120,17 @@ def dashboard():
 
                 _cta_html = ""
                 if _action_label and _action_url:
+                    _click_js = ""
+                    if _rec_key:
+                        _click_js = (
+                            f"fetch('/api/recommendations/{he(_rec_key)}/clicked',{{method:'POST',"
+                            f"headers:{{'X-CSRF-Token':(document.querySelector('[name=_csrf]')||{{}}).value||''}}}})"
+                            f".catch(function(){{}});"
+                        )
                     _cta_html = (
                         f'<div style="display:flex;justify-content:flex-end;margin-top:8px">'
                         f'<a href="{he(_action_url)}" target="_blank" rel="noopener noreferrer" '
+                        f'onclick="{_click_js}" '
                         f'style="display:inline-block;font-size:12px;font-weight:600;'
                         f'color:#fff;background:#1c1917;border-radius:8px;padding:7px 14px;'
                         f'text-decoration:none;line-height:1">{he(_action_label)}</a>'
@@ -17834,6 +17926,51 @@ def api_action_item_complete(item_id):
     except Exception:
         pass
     return jsonify({"ok": True, "completed_at": now})
+
+
+@app.route("/api/recommendations/<recommendation_key>/clicked", methods=["POST"])
+@require_login
+def api_recommendation_clicked(recommendation_key):
+    check_csrf()
+    uid = session["user_id"]
+    if transition_recommendation is None:
+        return jsonify({"error": "lifecycle unavailable"}), 503
+    row = transition_recommendation(
+        get_db(), uid, recommendation_key[:200], CLICKED,
+    )
+    if row is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, "state": row.state})
+
+
+@app.route("/api/recommendations/<recommendation_key>/dismissed", methods=["POST"])
+@require_login
+def api_recommendation_dismissed(recommendation_key):
+    check_csrf()
+    uid = session["user_id"]
+    if transition_recommendation is None:
+        return jsonify({"error": "lifecycle unavailable"}), 503
+    row = transition_recommendation(
+        get_db(), uid, recommendation_key[:200], DISMISSED,
+    )
+    if row is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, "state": row.state})
+
+
+@app.route("/api/recommendations/<recommendation_key>/completed", methods=["POST"])
+@require_login
+def api_recommendation_completed(recommendation_key):
+    check_csrf()
+    uid = session["user_id"]
+    if transition_recommendation is None:
+        return jsonify({"error": "lifecycle unavailable"}), 503
+    row = transition_recommendation(
+        get_db(), uid, recommendation_key[:200], COMPLETED,
+    )
+    if row is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, "state": row.state})
 
 
 @app.route("/candidates/<source>")

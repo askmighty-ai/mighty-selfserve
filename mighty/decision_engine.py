@@ -36,6 +36,7 @@ class Situation:
 class Recommendation:
     title: str
     summary: str
+    id: str = ""
     rationale: str = ""
     bullets: list[str] = field(default_factory=list)
     confidence: str = "low"
@@ -52,6 +53,7 @@ def _dashboard_demo_recommendations() -> list[Recommendation]:
     """Deterministic fallback recommendations when the email advisor has no matches."""
     return [
         Recommendation(
+            id="demo_amex_fhr",
             title="Book this hotel through Amex Travel",
             summary="Your Platinum benefits may unlock breakfast, upgrades and late checkout.",
             rationale="Demo recommendation.",
@@ -66,6 +68,7 @@ def _dashboard_demo_recommendations() -> list[Recommendation]:
             action_url="https://www.americanexpress.com/travel/",
         ),
         Recommendation(
+            id="demo_chase_hyatt_transfer",
             title="Transfer Chase Ultimate Rewards to Hyatt",
             summary="World of Hyatt points often deliver strong value at premium properties.",
             rationale="Demo recommendation.",
@@ -80,6 +83,7 @@ def _dashboard_demo_recommendations() -> list[Recommendation]:
             action_url="https://www.hyatt.com/",
         ),
         Recommendation(
+            id="demo_southwest_companion",
             title="Use Southwest Companion Pass before booking",
             summary="Bring a companion for nearly free on Southwest flights this year.",
             rationale="Demo recommendation.",
@@ -99,6 +103,7 @@ def _dashboard_demo_recommendations() -> list[Recommendation]:
 def _opportunities_to_recommendations(opportunities: list[Any]) -> list[Recommendation]:
     return [
         Recommendation(
+            id=opp.id,
             title=opp.title,
             summary=opp.summary,
             rationale=opp.rationale,

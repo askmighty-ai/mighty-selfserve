@@ -102,7 +102,9 @@ def action_from_hero_candidate(candidate: tuple) -> Action | None:
 def action_from_recommendation(recommendation: Any) -> Action:
     reasoning = str(getattr(recommendation, "rationale", "") or "").strip()
     subcategory = str(getattr(recommendation, "recommendation_type", "") or "general").strip().lower()
+    rec_id = str(getattr(recommendation, "id", "") or "").strip()
     return Action(
+        id=rec_id or None,
         title=str(getattr(recommendation, "title", "") or "").strip(),
         summary=str(getattr(recommendation, "summary", "") or "").strip(),
         priority=ActionPriority.INFO,
