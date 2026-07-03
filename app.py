@@ -2029,49 +2029,15 @@ try:
 except ImportError:
     _claude = None
 
-# ── Candidate snippet extraction ─────────────────────────────────────────────
-# Trigger words indicating nearby text likely contains an account fact.
-# We extract windows around each hit before calling Gemini, replacing raw page
-# blobs with focused excerpts. Improves precision and cuts token cost.
-SNIPPET_TRIGGERS = [
-    "expires", "expiration", "expiry", "valid through", "valid until",
-    "valid thru", "use by", "book by", "fly by", "book and fly by",
-    "certificate", "voucher", "e-credit", "ecredit", "travel fund",
-    "award", "benefit", "companion", "upgrade", "free night",
-    "points", "miles", "balance", "rewards", "cash back",
-    "due", "due date", "payment due", "autopay", "auto pay",
-    "available", "remaining", "redeemable",
-    "status", "tier", "medallion", "elite",
-    "offer", "promotion", "bonus", "anniversary",
-    "plan", "renewal", "billing", "subscription",
-    "amount due", "total due", "minimum payment",
-    "credit limit", "available credit",
-]
-
-# High-value triggers: category-specific terms that strongly predict account facts
-# rather than navigation copy. Scored 4× vs generic triggers (2×) in the block scorer.
-_HIGH_VALUE_TRIGGERS: frozenset = frozenset([
-    "companion", "certificate", "valid through", "valid until", "valid thru",
-    "ecredit", "e-credit", "travel fund", "travel credit",
-    "minimum payment", "amount due", "total due", "payment due",
-    "upgrade", "global upgrade", "regional upgrade", "suite night",
-    "free night", "lounge", "priority pass",
-    "medallion", "elite", "autopay", "auto pay",
-    "cash back", "annual fee", "statement credit",
-    "book by", "fly by", "expires", "expiry", "expiration",
-])
-
-# Matches values likely to appear in account pages: dollar amounts, numbers with
-# commas/decimals, compact dates (22JUL2024), ISO dates, and written month-name
-# dates like "Jan 15, 2027" or "August 31 2026".
-_SNIPPET_VALUE_RE = re.compile(
-    r'[$€£]\s*\d[\d,\.]*'           # currency: $187, €50
-    r'|\b\d[\d,\.]*\b'              # plain numbers: 45,320 / 157.43
-    r'|\b\d{1,2}[A-Za-z]{3}\d{4}\b' # compact date: 22JUL2024
-    r'|\b\d{4}-\d{2}-\d{2}\b'       # ISO date: 2026-07-15
-    r'|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}'  # Aug 14, 2026
-    , re.IGNORECASE
+# ── Candidate snippet extraction (delegates to preprocessing pipeline) ────────
+from mighty.field_discovery_preprocess import (
+    SNIPPET_TRIGGERS,
+    _HIGH_VALUE_TRIGGERS,
+    _SNIPPET_VALUE_RE,
+    extract_visible_sections,
+    prepare_discovery_input,
 )
+
 
 def _extract_candidate_snippets(
     raw_text: str,
@@ -2080,89 +2046,14 @@ def _extract_candidate_snippets(
     hint_phrases: list[str] | None = None,
     max_chars: int | None = None,
 ) -> str:
-    """Extract and score line-based blocks around trigger words.
-
-    Algorithm:
-      1. Split text into lines; find lines containing any SNIPPET_TRIGGER.
-         If hint_phrases are provided (from extraction_hints for this site),
-         those lines are force-included and receive a scorer bonus.
-      2. Expand each hit line into a ±context_lines block.
-      3. Merge blocks that are close together (avoids tiny isolated fragments).
-      4. Score each block: trigger-word density + value-pattern count, penalise
-         long-line marketing copy. Known hint phrases add +5.0 per match.
-      5. Keep the top max_blocks blocks by score; re-sort by original position
-         so the returned text reads in document order.
-      6. Join with '···' separators and cap at max_chars.
-
-    Falls back to the first 8 k chars (or max_chars if smaller) if no triggers match.
-    """
-    if not raw_text:
-        return ""
-
-    cap = field_discovery_max_chars() if max_chars is None else max_chars
-    raw_text = raw_text[:cap]
-    fallback_len = min(8_000, cap)
-
-    lines = raw_text.splitlines()
-    lower_lines = [ln.lower() for ln in lines]
-    n = len(lines)
-
-    # Step 1 — find hit line indices from general triggers
-    hit_set: set[int] = set()
-    for trigger in SNIPPET_TRIGGERS:
-        for i, ll in enumerate(lower_lines):
-            if trigger in ll:
-                hit_set.add(i)
-
-    # Force-include lines matching known extraction hints for this site.
-    # These are previously successful trigger phrases stored in extraction_hints.
-    _hint_lower: list[str] = [p.lower() for p in (hint_phrases or [])]
-    if _hint_lower:
-        for i, ll in enumerate(lower_lines):
-            if any(h in ll for h in _hint_lower):
-                hit_set.add(i)
-
-    if not hit_set:
-        return raw_text[:fallback_len]
-
-    # Step 2 — expand hits into (start, end) index ranges
-    ranges: list[tuple[int, int]] = [
-        (max(0, i - context_lines), min(n, i + context_lines + 1))
-        for i in sorted(hit_set)
-    ]
-
-    # Step 3 — merge overlapping / adjacent ranges (gap ≤ 3 lines)
-    merged: list[tuple[int, int]] = []
-    cs, ce = ranges[0]
-    for s, e in ranges[1:]:
-        if s <= ce + 3:
-            ce = max(ce, e)
-        else:
-            merged.append((cs, ce))
-            cs, ce = s, e
-    merged.append((cs, ce))
-
-    # Step 4 — score each block
-    def _score(s: int, e: int) -> float:
-        block_lines = lines[s:e]
-        block_lower = "\n".join(block_lines).lower()
-        # High-value category-specific triggers (companion, certificate, etc.) → 4×
-        high_count = sum(1 for t in _HIGH_VALUE_TRIGGERS if t in block_lower)
-        # Generic trigger words → 2×
-        generic_count = sum(1 for t in SNIPPET_TRIGGERS if t in block_lower)
-        # Value-like patterns (numbers, dates, currency) → 1.5×
-        val_count = len(_SNIPPET_VALUE_RE.findall(block_lower))
-        # Penalise dense marketing prose (very long average line = wall of text)
-        avg_len = sum(len(ln) for ln in block_lines) / max(len(block_lines), 1)
-        prose_penalty = max(0.0, (avg_len - 100) / 150)
-        # Bonus for blocks matching known extraction hints (previously successful phrases)
-        hint_bonus = 5.0 * sum(1 for h in _hint_lower if h in block_lower)
-        return high_count * 4.0 + generic_count * 2.0 + val_count * 1.5 - prose_penalty + hint_bonus
-
-    scored = sorted(merged, key=lambda r: _score(*r), reverse=True)
-    top = sorted(scored[:max_blocks])  # re-sort by position for coherent output
-
-    return "\n\n···\n\n".join("\n".join(lines[s:e]) for s, e in top)[:cap]
+    """Extract scored blocks around trigger words (visible-sections stage only)."""
+    return extract_visible_sections(
+        raw_text,
+        context_lines=context_lines,
+        max_blocks=max_blocks,
+        hint_phrases=hint_phrases,
+        max_chars=max_chars,
+    )
 
 
 # ── Category schemas ──────────────────────────────────────────────────────────
@@ -4866,15 +4757,17 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             except Exception:
                 pass
 
-        # ── Candidate snippet extraction ───────────────────────────────────────
-        # Replace the raw page blob with focused windows around trigger words.
-        # Falls back to raw_text[:8000] if no triggers match.
-        snippets = _extract_candidate_snippets(
+        # ── Preprocess: normalize → filter → sections → compress ─────────────
+        prepared = prepare_discovery_input(
             bounded_text, hint_phrases=_hint_phrases, max_chars=max_chars,
         )
+        snippets = prepared.text
+        stats = prepared.stats
         print(
-            f"[Mighty] Discovering fields for {site_name} (raw={len(bounded_text)} chars, "
-            f"snippets={len(snippets)} chars). Preview: {bounded_text[:300]!r}",
+            f"[Mighty] Discovering fields for {site_name} "
+            f"(raw={stats.raw_chars} → prepared={stats.final_chars} chars, "
+            f"~{stats.reduction_ratio:.0%} reduction). "
+            f"Preview: {snippets[:300]!r}",
             flush=True,
         )
 
