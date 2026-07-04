@@ -812,6 +812,11 @@ def init_db():
             db.commit()
         except Exception:
             pass
+        try:
+            from mighty.pipeline_inspector import ensure_pipeline_tables
+            ensure_pipeline_tables(db)
+        except Exception:
+            pass
 
 init_db()
 
@@ -4656,7 +4661,13 @@ from mighty.ai_observability import observe_request
 from mighty.ai_metrics import build_metrics
 
 
-def claude_discover_fields(raw_text: str, site_name: str, source: str | None = None) -> list:
+def claude_discover_fields(
+    raw_text: str,
+    site_name: str,
+    source: str | None = None,
+    *,
+    pipeline_run_id: str | None = None,
+) -> list:
     """Use the configured AI provider to identify useful data fields in a page.
 
     Args:
@@ -4665,13 +4676,25 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         source:    Account source key (e.g. "delta") used to look up the category schema.
                    If provided, the prompt gets a focused hint on which field types to prioritise.
     """
+    from mighty.pipeline_inspector import record_intelligent_stage
+
     if not is_field_discovery_enabled():
+        record_intelligent_stage(
+            get_db(), pipeline_run_id, enabled=False, raw_field_count=0,
+        )
         return []
     if not raw_text:
+        record_intelligent_stage(
+            get_db(), pipeline_run_id, enabled=True, raw_field_count=0,
+        )
         return []
     try:
         get_configured_field_discovery_provider()
-    except DiscoveryError:
+    except DiscoveryError as _disc_err:
+        record_intelligent_stage(
+            get_db(), pipeline_run_id, enabled=False, raw_field_count=0,
+            error=str(_disc_err),
+        )
         return []
 
     max_chars = field_discovery_max_chars()
@@ -4684,6 +4707,13 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         raise
     if cached_fields is not None:
         record_field_discovery_cache_hit(site_name=site_name, source=source)
+        record_intelligent_stage(
+            get_db(),
+            pipeline_run_id,
+            enabled=True,
+            raw_field_count=len(cached_fields),
+            cache_hit=True,
+        )
         return cached_fields
 
     try:
@@ -4740,12 +4770,27 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
             result = discover_fields_with_provider(source, snippets, context)
         except DiscoveryError as err:
             cache.record_failure(cache_key, err)
+            record_intelligent_stage(
+                get_db(),
+                pipeline_run_id,
+                enabled=True,
+                raw_field_count=0,
+                error=str(err),
+            )
             raise
         metrics_suffix = discovery_log_suffix(result)
         print(
             f"[Mighty] Field discovery via {result.provider} ({result.model}), "
             f"{len(result.fields)} raw fields{metrics_suffix}",
             flush=True,
+        )
+        record_intelligent_stage(
+            get_db(),
+            pipeline_run_id,
+            enabled=True,
+            raw_field_count=len(result.fields),
+            provider=result.provider,
+            model=result.model,
         )
         fields = _post_filter_fields(result.fields, source=source or "")
 
@@ -4817,6 +4862,13 @@ def claude_discover_fields(raw_text: str, site_name: str, source: str | None = N
         raise
     except Exception as e:
         print(f"[Mighty] Field discovery error: {e}", flush=True)
+        record_intelligent_stage(
+            get_db(),
+            pipeline_run_id,
+            enabled=True,
+            raw_field_count=0,
+            error=str(e),
+        )
         return []
 
 
@@ -12668,8 +12720,21 @@ def _system_confidence(
     return round(score, 3)
 
 
-def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
+def _save_discovered_fields(
+    uid: str,
+    source: str,
+    fields: list,
+    *,
+    pipeline_run_id: str | None = None,
+) -> None:
     """Save AI-discovered fields and update account_data items. Shared by auto and manual discovery."""
+    from mighty.pipeline_inspector import (
+        finalize_pipeline_from_save,
+        record_trusted_observations_stage,
+        record_validation_stage,
+    )
+    from mighty.pipeline_stages import FAIL_NO_TRUSTED_OBSERVATIONS
+
     db = get_db()
     cred_row = db.execute(
         "SELECT extra_enc FROM account_credentials WHERE user_id=? AND source=?",
@@ -12805,13 +12870,47 @@ def _save_discovered_fields(uid: str, source: str, fields: list) -> None:
     ad = db.execute(
         "SELECT data_enc FROM account_data WHERE user_id=? AND source=?", (uid, source)
     ).fetchone()
-    if ad and ai_items:
+    ad_data: dict = {}
+    if ad:
         ad_data = decrypt_account_data(uid, ad["data_enc"] or "")
+    if ad and ai_items:
         ad_data["items"] = ai_items
         db.execute(
             "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
             (encrypt_account_data(uid, ad_data), uid, source)
         )
+
+    items_written = len(ai_items)
+    extraction_status = infer_extraction_status(
+        ai_items,
+        sync_status=ad_data.get("sync_status", "ok"),
+    ) if items_written else infer_extraction_status([], sync_status=ad_data.get("sync_status", "ok"))
+
+    record_validation_stage(
+        db,
+        pipeline_run_id,
+        fields_in=len(fields),
+        fields_out=len(deduped),
+        auto_enabled_count=len(auto_enabled),
+        failure_reason=_failure_reason,
+    )
+    trusted_status, trusted_reason = record_trusted_observations_stage(
+        db,
+        pipeline_run_id,
+        trusted_items=ai_items,
+        discovered_field_count=len(deduped),
+        enabled_field_count=len(auto_enabled),
+        extraction_status=extraction_status,
+        items_written=items_written,
+    )
+    finalize_pipeline_from_save(
+        db,
+        pipeline_run_id,
+        trusted_status=trusted_status,
+        trusted_reason=trusted_reason,
+        validation_failed=len(deduped) == 0,
+        validation_reason=_failure_reason or FAIL_NO_TRUSTED_OBSERVATIONS,
+    )
 
     # Field history diff: compare new fields against pre-write snapshot
     try:
@@ -15625,6 +15724,37 @@ def _is_login_page(raw_text: str) -> bool:
 
 # ── Account data sync API ─────────────────────────────────────────────────────
 
+@app.route("/api/pipeline/stages", methods=["POST"])
+def api_pipeline_stages():
+    """Accept client-recorded pipeline stages (connection, navigation, capture)."""
+    user, body = api_user()
+    if not user:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    source = (body.get("source") or "").strip().lower()
+    run_id = (body.get("run_id") or body.get("pipeline_run_id") or "").strip()
+    stages = body.get("stages") or []
+    if not source or not run_id or not isinstance(stages, list):
+        return jsonify({"ok": False, "error": "source, run_id, and stages required"}), 400
+    if len(source) > 50 or not re.match(r"^[a-z0-9_]+$", source):
+        return jsonify({"ok": False, "error": "invalid source"}), 400
+
+    from mighty.pipeline_inspector import ingest_client_stages, sync_initiator
+
+    initiator = (body.get("initiator") or sync_initiator(body.get("sync_source") or "extension")).strip()
+    data_source = (body.get("data_source") or body.get("sync_source") or "extension").strip().lower()
+    ingest_client_stages(
+        get_db(),
+        user_id=user["id"],
+        source=source,
+        run_id=run_id,
+        initiator=initiator,
+        data_source=data_source,
+        stages=stages,
+    )
+    return jsonify({"ok": True, "run_id": run_id})
+
+
 @app.route("/api/data/sync", methods=["POST"])
 def api_data_sync():
     """Receive scraped account data from the local scraper and store it encrypted.
@@ -15769,6 +15899,32 @@ def api_data_sync():
     _extraction = infer_extraction_status(_normalized, sync_status=data.get("sync_status", "ok"))
     data["extraction_status"] = _extraction
 
+    from mighty.pipeline_inspector import (
+        finalize_sync_without_discovery,
+        new_run_id,
+        record_inferred_client_stages,
+        start_run,
+        sync_initiator,
+    )
+    _pipeline_run_id = (body.get("pipeline_run_id") or "").strip() or new_run_id()
+    start_run(
+        db,
+        user_id=user["id"],
+        source=source,
+        initiator=sync_initiator(sync_source),
+        data_source=sync_source,
+        run_id=_pipeline_run_id,
+    )
+    _pipeline_may_continue, _pipeline_aborted = record_inferred_client_stages(
+        db,
+        _pipeline_run_id,
+        sync_status=data.get("sync_status"),
+        sync_failure_reason=data.get("sync_failure_reason"),
+        connection_status=data.get("connection_status") or ex_data.get("connection_status"),
+        raw_text=raw_text,
+        items=_normalized,
+    )
+
     data_enc   = encrypt_account_data(user["id"], data)
 
     db = get_db()
@@ -15814,6 +15970,8 @@ def api_data_sync():
         import threading
         site_name = display
         uid       = user["id"]
+        _sync_pipeline_run_id = _pipeline_run_id
+        _sync_has_connector = source in SITE_CONNECTORS
         # Materialise cred_row data before spawning threads — sqlite3.Row objects
         # reference the request-scoped connection which closes when the request ends.
         _cred_extra_enc = (cred_row["extra_enc"] if cred_row else None)
@@ -15824,12 +15982,47 @@ def api_data_sync():
             # including the hint-phrase query inside claude_discover_fields.
             def _bg_discover():
                 with app.app_context():
-                    fields = claude_discover_fields(raw_text, site_name, source=source)
+                    from mighty.pipeline_inspector import (
+                        finalize_pipeline_after_empty_discovery,
+                        pipeline_run_guard,
+                        record_structured_stage,
+                    )
                     _db = get_db()
-                    if fields:
-                        # Route through _save_discovered_fields so hint population,
-                        # confidence-based auto-selection, and failure tracking all apply.
-                        _save_discovered_fields(uid, source, fields)
+                    with pipeline_run_guard(_db, _sync_pipeline_run_id):
+                        record_structured_stage(
+                            _db,
+                            _sync_pipeline_run_id,
+                            fields=[],
+                            has_extractor=_sync_has_connector,
+                        )
+                        fields = claude_discover_fields(
+                            raw_text, site_name, source=source, pipeline_run_id=_sync_pipeline_run_id,
+                        )
+                        if fields:
+                            _save_discovered_fields(
+                                uid, source, fields, pipeline_run_id=_sync_pipeline_run_id,
+                            )
+                        else:
+                            finalize_pipeline_after_empty_discovery(
+                                _db,
+                                _sync_pipeline_run_id,
+                                has_structured_extractor=_sync_has_connector,
+                            )
+                            ex2 = {}
+                            if _cred_extra_enc:
+                                try: ex2 = json.loads(decrypt_cred(uid, _cred_extra_enc))
+                                except Exception: pass
+                            ex2["discovery_failed"] = True
+                            ex2.setdefault("enabled_fields",    [])
+                            ex2.setdefault("discovered_fields", [])
+                            _db.execute(
+                                "UPDATE account_credentials SET extra_enc=?, updated_at=? "
+                                "WHERE user_id=? AND source=?",
+                                (encrypt_cred(uid, json.dumps(ex2)), iso(), uid, source)
+                            )
+                            _db.commit()
+                            _record_path_failures(source, raw_text, succeeded=False)
+                            return
                         # Store snippets hash so the first _bg_refresh can skip
                         # discovery if the page content hasn't changed.
                         try:
@@ -15906,23 +16099,6 @@ def api_data_sync():
                         except Exception:
                             pass
                         _record_path_failures(source, raw_text, succeeded=True)
-                    else:
-                        # Discovery ran but LLM returned nothing — set discovery_failed
-                        # flag so the dashboard can show "couldn't read this account".
-                        ex2 = {}
-                        if _cred_extra_enc:
-                            try: ex2 = json.loads(decrypt_cred(uid, _cred_extra_enc))
-                            except Exception: pass
-                        ex2["discovery_failed"] = True
-                        ex2.setdefault("enabled_fields",    [])
-                        ex2.setdefault("discovered_fields", [])
-                        _db.execute(
-                            "UPDATE account_credentials SET extra_enc=?, updated_at=? "
-                            "WHERE user_id=? AND source=?",
-                            (encrypt_cred(uid, json.dumps(ex2)), iso(), uid, source)
-                        )
-                        _db.commit()
-                        _record_path_failures(source, raw_text, succeeded=False)
             threading.Thread(target=_bg_discover, daemon=True).start()
         else:
             # Existing prefs: re-run full discovery so new fields (credits, offers, certs)
@@ -15968,6 +16144,14 @@ def api_data_sync():
                             f"— snippets unchanged (hash {_new_hash[:8]})",
                             flush=True,
                         )
+                        from mighty.pipeline_inspector import finalize_sync_without_discovery
+                        finalize_sync_without_discovery(
+                            _db_r,
+                            _sync_pipeline_run_id,
+                            items=_normalized,
+                            extraction_status=_extraction,
+                            has_structured_extractor=_sync_has_connector,
+                        )
                         return
 
                     print(
@@ -15977,12 +16161,33 @@ def api_data_sync():
                     )
 
                     # ── Run discovery ──────────────────────────────────────────
-                    new_fields = claude_discover_fields(raw_text, site_name, source=source)
-                    if not new_fields:
-                        _record_path_failures(source, raw_text, succeeded=False)
-                        return
-                    _record_path_failures(source, raw_text, succeeded=True)
-                    _save_discovered_fields(uid, source, new_fields)
+                    from mighty.pipeline_inspector import (
+                        finalize_pipeline_after_empty_discovery,
+                        pipeline_run_guard,
+                        record_structured_stage,
+                    )
+                    with pipeline_run_guard(_db_r, _sync_pipeline_run_id):
+                        record_structured_stage(
+                            _db_r,
+                            _sync_pipeline_run_id,
+                            fields=[],
+                            has_extractor=_sync_has_connector,
+                        )
+                        new_fields = claude_discover_fields(
+                            raw_text, site_name, source=source, pipeline_run_id=_sync_pipeline_run_id,
+                        )
+                        if not new_fields:
+                            _record_path_failures(source, raw_text, succeeded=False)
+                            finalize_pipeline_after_empty_discovery(
+                                _db_r,
+                                _sync_pipeline_run_id,
+                                has_structured_extractor=_sync_has_connector,
+                            )
+                            return
+                        _record_path_failures(source, raw_text, succeeded=True)
+                        _save_discovered_fields(
+                            uid, source, new_fields, pipeline_run_id=_sync_pipeline_run_id,
+                        )
 
                     # Persist the new hash so the next sync can skip if unchanged
                     _cred_r2 = _db_r.execute(
@@ -16053,8 +16258,16 @@ def api_data_sync():
                     except Exception:
                         pass
             threading.Thread(target=_bg_refresh, daemon=True).start()
+    elif _pipeline_may_continue:
+        finalize_sync_without_discovery(
+            db,
+            _pipeline_run_id,
+            items=_normalized,
+            extraction_status=_extraction,
+            has_structured_extractor=source in SITE_CONNECTORS,
+        )
 
-    return jsonify({"ok": True, "source": source})
+    return jsonify({"ok": True, "source": source, "pipeline_run_id": _pipeline_run_id})
 
 
 @app.route("/api/extension/intercept", methods=["POST"])
@@ -16120,6 +16333,35 @@ def api_extension_intercept():
     _log_privacy_event(uid, "api_intercepted", source=source, domain=real_url[:80])
     print(f"[Intercept] {source} (tier {acquisition_tier}): {len(json_data)} chars from {url[:80]}", flush=True)
 
+    from mighty.pipeline_inspector import (
+        finalize_pipeline_after_empty_discovery,
+        new_run_id,
+        record_inferred_client_stages,
+        record_structured_stage,
+        start_run,
+    )
+    from mighty.pipeline_stages import RunInitiator
+    from mighty.provider_account import DATA_SOURCE_EXTENSION
+    _intercept_run_id = (body.get("pipeline_run_id") or "").strip() or new_run_id()
+    start_run(
+        db,
+        user_id=uid,
+        source=source,
+        initiator=RunInitiator.INTERCEPT.value,
+        data_source=DATA_SOURCE_EXTENSION,
+        run_id=_intercept_run_id,
+    )
+    record_inferred_client_stages(
+        db,
+        _intercept_run_id,
+        sync_status="ok",
+        sync_failure_reason=None,
+        connection_status=ad.get("connection_status"),
+        raw_text=combined,
+        items=ad.get("items") or [],
+        json_payload_chars=len(json_data),
+    )
+
     # ── Connector fast path (deterministic, no Gemini) ───────────────────────
     # Try known JSON path extractors before falling back to Gemini.
     # connector_fields is passed into _bg() so it can merge with Gemini output.
@@ -16138,71 +16380,97 @@ def api_extension_intercept():
         # Capture current stored items for stale-data clearing below
         _current_items = list(ad.get("items") or ad.get("ai_items") or [])
         _connector_fields_snap = list(connector_fields)  # close over current value
+        _intercept_has_connector = source in SITE_CONNECTORS
         def _bg():
             with app.app_context():
+                from mighty.pipeline_inspector import (
+                    finalize_pipeline_after_empty_discovery,
+                    pipeline_run_guard,
+                    record_structured_stage,
+                )
                 _tier_boost = 1.10 if acquisition_tier == 2 else 1.05
                 _connector_keys = {f["key"] for f in _connector_fields_snap}
+                _db_i = get_db()
 
-                # Always run Gemini to catch fields the connector doesn't cover
-                fields = claude_discover_fields(combined, site_name, source=source)
-
-                # Log candidate connector paths from Gemini's output
-                if fields and json_data:
-                    _record_connector_candidates(source, json_data, fields)
-
-                # Merge: connector fields take priority for keys they cover,
-                # Gemini fills in anything the connector missed.
-                gemini_unique = [f for f in fields if f.get("key") not in _connector_keys]
-                merged = _connector_fields_snap + gemini_unique
-
-                if merged:
-                    # Tag all fields with acquisition tier
-                    for _f in merged:
-                        _f["from_api"] = True
-                        _f["acquisition_tier"] = acquisition_tier
-                        # Connector fields already have confidence=0.99; only boost Gemini fields
-                        if "confidence" in _f and not _f.get("from_connector"):
-                            _f["confidence"] = min(0.99, _f["confidence"] * _tier_boost)
-                    _save_discovered_fields(uid, source, merged)
-                    connector_count = len(_connector_fields_snap)
-                    gemini_count    = len(gemini_unique)
-                    print(
-                        f"[Intercept] {source} (tier {acquisition_tier}): "
-                        f"{len(merged)} fields saved "
-                        f"({connector_count} connector + {gemini_count} Gemini)",
-                        flush=True,
+                with pipeline_run_guard(_db_i, _intercept_run_id):
+                    record_structured_stage(
+                        _db_i,
+                        _intercept_run_id,
+                        fields=_connector_fields_snap,
+                        has_extractor=_intercept_has_connector,
+                        source_label="connector",
                     )
-                else:
-                    # Discovery returned nothing usable. If all stored items are placeholder "–"
-                    # values (stale defaults), clear them so they don't persist indefinitely.
-                    _EMPTY_VALS = frozenset({"", "0", "-", "–", "—", "n/a", "none"})
-                    _all_stale = _current_items and all(
-                        str(it.get("value", "")).strip() in _EMPTY_VALS
-                        for it in _current_items
+
+                    # Always run Gemini to catch fields the connector doesn't cover
+                    fields = claude_discover_fields(
+                        combined, site_name, source=source, pipeline_run_id=_intercept_run_id,
                     )
-                    if _all_stale:
-                        try:
-                            _db2 = get_db()
-                            _ad2 = _db2.execute(
-                                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
-                                (uid, source)
-                            ).fetchone()
-                            if _ad2:
-                                _d2 = decrypt_account_data(uid, _ad2["data_enc"] or "")
-                                _d2["items"] = []
-                                _d2.pop("ai_items", None)
-                                _db2.execute(
-                                    "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
-                                    (encrypt_account_data(uid, _d2), uid, source)
-                                )
-                                _db2.commit()
-                            print(f"[Intercept] {source}: cleared stale placeholder items", flush=True)
-                        except Exception:
-                            pass
+
+                    # Log candidate connector paths from Gemini's output
+                    if fields and json_data:
+                        _record_connector_candidates(source, json_data, fields)
+
+                    # Merge: connector fields take priority for keys they cover,
+                    # Gemini fills in anything the connector missed.
+                    gemini_unique = [f for f in fields if f.get("key") not in _connector_keys]
+                    merged = _connector_fields_snap + gemini_unique
+
+                    if merged:
+                        # Tag all fields with acquisition tier
+                        for _f in merged:
+                            _f["from_api"] = True
+                            _f["acquisition_tier"] = acquisition_tier
+                            # Connector fields already have confidence=0.99; only boost Gemini fields
+                            if "confidence" in _f and not _f.get("from_connector"):
+                                _f["confidence"] = min(0.99, _f["confidence"] * _tier_boost)
+                        _save_discovered_fields(
+                            uid, source, merged, pipeline_run_id=_intercept_run_id,
+                        )
+                        connector_count = len(_connector_fields_snap)
+                        gemini_count    = len(gemini_unique)
+                        print(
+                            f"[Intercept] {source} (tier {acquisition_tier}): "
+                            f"{len(merged)} fields saved "
+                            f"({connector_count} connector + {gemini_count} Gemini)",
+                            flush=True,
+                        )
+                    else:
+                        finalize_pipeline_after_empty_discovery(
+                            _db_i,
+                            _intercept_run_id,
+                            has_structured_extractor=_intercept_has_connector,
+                            structured_fields=_connector_fields_snap,
+                        )
+                        # Discovery returned nothing usable. If all stored items are placeholder "–"
+                        # values (stale defaults), clear them so they don't persist indefinitely.
+                        _EMPTY_VALS = frozenset({"", "0", "-", "–", "—", "n/a", "none"})
+                        _all_stale = _current_items and all(
+                            str(it.get("value", "")).strip() in _EMPTY_VALS
+                            for it in _current_items
+                        )
+                        if _all_stale:
+                            try:
+                                _db2 = get_db()
+                                _ad2 = _db2.execute(
+                                    "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                                    (uid, source)
+                                ).fetchone()
+                                if _ad2:
+                                    _d2 = decrypt_account_data(uid, _ad2["data_enc"] or "")
+                                    _d2["items"] = []
+                                    _d2.pop("ai_items", None)
+                                    _db2.execute(
+                                        "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+                                        (encrypt_account_data(uid, _d2), uid, source)
+                                    )
+                                    _db2.commit()
+                                print(f"[Intercept] {source}: cleared stale placeholder items", flush=True)
+                            except Exception:
+                                pass
         threading.Thread(target=_bg, daemon=True).start()
 
     _registry_report_path(source, url)
-    return jsonify({"ok": True, "source": source, "chars": len(json_data)})
+    return jsonify({"ok": True, "source": source, "chars": len(json_data), "pipeline_run_id": _intercept_run_id})
 
 
 @app.route("/api/extension/supplement", methods=["POST"])
@@ -17582,7 +17850,35 @@ def api_sync_failure():
     )
     db.commit()
     print(f"[SyncFailure] uid={uid} source={source} reason={reason}", flush=True)
-    return jsonify({"ok": True, "updated": True})
+
+    from mighty.pipeline_inspector import (
+        map_sync_failure_reason,
+        new_run_id,
+        record_inferred_client_stages,
+        start_run,
+    )
+    from mighty.pipeline_stages import RunInitiator
+
+    _failure_run_id = ((body or {}).get("pipeline_run_id") or "").strip() or new_run_id()
+    start_run(
+        db,
+        user_id=uid,
+        source=source,
+        initiator=RunInitiator.SYNC_FAILURE.value,
+        data_source="extension",
+        run_id=_failure_run_id,
+    )
+    record_inferred_client_stages(
+        db,
+        _failure_run_id,
+        sync_status=payload.get("sync_status"),
+        sync_failure_reason=map_sync_failure_reason(reason),
+        connection_status=payload.get("connection_status"),
+        raw_text="",
+        items=payload.get("items") or [],
+    )
+
+    return jsonify({"ok": True, "updated": True, "pipeline_run_id": _failure_run_id})
 
 
 @app.route("/api/sync/login-cleared", methods=["POST"])
