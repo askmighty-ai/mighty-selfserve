@@ -52,7 +52,14 @@ def apply_amex_membership_rewards_extraction(
     data_source: str = DATA_SOURCE_EXTENSION,
 ) -> dict:
     """Persist a single Membership Rewards balance as the normalized provider field."""
-    item = build_amex_mr_item(raw_value)
+    from mighty.pipeline_inspector import record_adapter_extraction_run
+
+    invalid_value = False
+    try:
+        item = build_amex_mr_item(raw_value)
+    except ValueError:
+        invalid_value = True
+        item = None
     now = iso_fn()
 
     row = db.execute(
@@ -61,6 +68,18 @@ def apply_amex_membership_rewards_extraction(
     ).fetchone()
     if not row:
         raise ValueError("amex account not found")
+
+    if invalid_value:
+        record_adapter_extraction_run(
+            db,
+            user_id=uid,
+            source=AMEX_SOURCE,
+            data_source=data_source,
+            structured_item=None,
+            extraction_status="failed",
+            invalid_value=True,
+        )
+        raise ValueError("invalid Membership Rewards value")
 
     ad_data = decrypt_fn(uid, row["data_enc"] or "")
     ad_data["items"] = [item]
@@ -79,6 +98,15 @@ def apply_amex_membership_rewards_extraction(
         iso_fn=iso_fn,
     )
     db.commit()
+
+    record_adapter_extraction_run(
+        db,
+        user_id=uid,
+        source=AMEX_SOURCE,
+        data_source=data_source,
+        structured_item=item,
+        extraction_status=EXTRACTION_COMPLETE,
+    )
 
     return {
         "source": AMEX_SOURCE,
