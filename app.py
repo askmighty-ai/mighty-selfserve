@@ -20670,6 +20670,68 @@ def admin_pipeline_run_detail_page(run_id):
     return _admin_debug.render_pipeline_run_detail_page(run, stages)
 
 
+def _provider_category_map() -> dict[str, str]:
+    return {
+        src: cat_key
+        for cat_key, schema in _CATEGORY_SCHEMAS.items()
+        for src in schema.get("sources", set())
+    }
+
+
+def _all_provider_sources() -> list[str]:
+    sources = set(SOURCE_CAPABILITIES.keys())
+    for schema in _CATEGORY_SCHEMAS.values():
+        sources.update(schema.get("sources", set()))
+    return sorted(sources)
+
+
+def _provider_display_names() -> dict[str, str]:
+    return {
+        src: caps.get("display_name", src.replace("_", " ").title())
+        for src, caps in SOURCE_CAPABILITIES.items()
+    }
+
+
+@app.route("/admin/coverage")
+@require_admin
+def admin_coverage_page():
+    from mighty.observation_coverage import compute_all_provider_coverage
+
+    rows = compute_all_provider_coverage(
+        get_db(),
+        _all_provider_sources(),
+        _provider_category_map(),
+        display_names=_provider_display_names(),
+    )
+    return _admin_debug.render_coverage_page(rows)
+
+
+@app.route("/admin/coverage/<source>")
+@require_admin
+def admin_coverage_detail_page(source):
+    from mighty.observation_catalog import field_keys_to_observations
+    from mighty.observation_coverage import (
+        collect_field_keys_from_pipeline,
+        compute_provider_coverage,
+    )
+
+    providers = _all_provider_sources()
+    if source not in providers:
+        return _admin_debug.render_coverage_page([]), 404
+
+    cat_map = _provider_category_map()
+    names = _provider_display_names()
+    field_keys_by_source = collect_field_keys_from_pipeline(get_db())
+    raw_keys = field_keys_by_source.get(source, set())
+    row = compute_provider_coverage(
+        source,
+        category=cat_map.get(source),
+        observed_observations=field_keys_to_observations(sorted(raw_keys)),
+        display_name=names.get(source),
+    )
+    return _admin_debug.render_coverage_detail_page(row, raw_field_keys=sorted(raw_keys))
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

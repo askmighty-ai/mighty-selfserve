@@ -19,6 +19,7 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
     ("sync-timeline", "Sync timeline", "Live sync state and per-account sync timestamps"),
     ("replay-discovery", "Replay field discovery", "Run discovery synchronously with step-by-step output"),
     ("pipeline-runs", "Pipeline runs", "Recent provider pipeline runs and stage traces"),
+    ("coverage", "Observation coverage", "Expected vs observed observation types per provider"),
 ]
 
 
@@ -356,3 +357,86 @@ def render_pipeline_run_detail_page(run: dict[str, Any], stages: list[dict[str, 
         f"<h3 style=\"font-size:14px;color:#d1d5db;margin:0 0 12px\">Stages</h3>{stage_cards}"
     )
     return _admin_shell("pipeline-runs", "Pipeline Run Detail", body)
+
+
+def _coverage_pct_badge(pct: int | None) -> str:
+    if pct is None:
+        return '<span class="badge badge-muted">n/a</span>'
+    if pct >= 80:
+        return f'<span class="badge badge-ok">{pct}%</span>'
+    if pct >= 50:
+        return f'<span class="badge badge-warn">{pct}%</span>'
+    return f'<span class="badge badge-err">{pct}%</span>'
+
+
+def _observation_list(obs_ids: list[str], *, empty_msg: str = "None") -> str:
+    if not obs_ids:
+        return f'<p class="muted">{_he(empty_msg)}</p>'
+    from mighty.observation_catalog import observation_label
+
+    items = "".join(
+        f'<li><code>{_he(obs)}</code> — {_he(observation_label(obs))}</li>'
+        for obs in obs_ids
+    )
+    return f'<ul style="margin:0;padding-left:18px;font-size:12px">{items}</ul>'
+
+
+def render_coverage_page(rows: list[Any]) -> str:
+    table_rows = "".join(
+        f"<tr>"
+        f'<td><a href="/admin/coverage/{_he(r.source)}">{_he(r.display_name)}</a>'
+        f'<div class="muted" style="font-size:10px">{_he(r.source)}</div></td>'
+        f"<td>{len(r.expected)}</td>"
+        f"<td>{len(r.observed)}</td>"
+        f"<td>{_coverage_pct_badge(r.coverage_pct)}</td>"
+        f"</tr>"
+        for r in rows
+    ) or '<tr><td colspan="4" class="muted">No providers configured</td></tr>'
+
+    body = (
+        '<p class="lede">How much of each provider do we actually understand? '
+        "Observed types come from successful pipeline <code>trusted_observations</code> stages.</p>"
+        '<div class="card"><table><thead><tr>'
+        "<th>Provider</th><th>Expected</th><th>Observed</th><th>Coverage</th>"
+        f"</tr></thead><tbody>{table_rows}</tbody></table></div>"
+    )
+    return _admin_shell("coverage", "Observation Coverage", body)
+
+
+def render_coverage_detail_page(
+    row: Any,
+    *,
+    raw_field_keys: list[str] | None = None,
+) -> str:
+    pct_display = f"{row.coverage_pct}%" if row.coverage_pct is not None else "n/a"
+    meta_html = (
+        f'<div class="run-meta">'
+        f'<div class="stat"><div class="label">Provider</div><div class="val">{_he(row.display_name)}</div></div>'
+        f'<div class="stat"><div class="label">Source key</div><div class="val"><code>{_he(row.source)}</code></div></div>'
+        f'<div class="stat"><div class="label">Coverage</div><div class="val">{_coverage_pct_badge(row.coverage_pct)} ({_he(pct_display)})</div></div>'
+        f"</div>"
+    )
+
+    grid = (
+        '<div class="grid-2">'
+        f'<div class="card"><h3>Expected observations ({len(row.expected)})</h3>'
+        f"{_observation_list(row.expected, empty_msg='No expected observations defined')}</div>"
+        f'<div class="card"><h3>Observed observations ({len(row.observed)})</h3>'
+        f"{_observation_list(row.observed, empty_msg='None observed in pipeline runs')}</div>"
+        f'<div class="card"><h3>Missing observations ({len(row.missing)})</h3>'
+        f"{_observation_list(row.missing, empty_msg='Full coverage — nothing missing')}</div>"
+    )
+    if raw_field_keys:
+        keys_html = ", ".join(f"<code>{_he(k)}</code>" for k in raw_field_keys)
+        grid += (
+            f'<div class="card"><h3>Raw trusted field keys ({len(raw_field_keys)})</h3>'
+            f'<p class="muted" style="font-size:11px;margin:0 0 8px">From pipeline trusted_observations artifacts</p>'
+            f"<p style=\"font-size:11px;margin:0\">{keys_html or '—'}</p></div>"
+        )
+    grid += "</div>"
+
+    body = (
+        f'<p><a href="/admin/coverage" class="btn">&larr; All providers</a></p>'
+        f"{meta_html}{grid}"
+    )
+    return _admin_shell("coverage", f"Coverage — {row.display_name}", body)
