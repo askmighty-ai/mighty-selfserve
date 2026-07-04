@@ -438,6 +438,31 @@ HOME_FOOTER_WORKER = "Mighty runs in Chrome"
 HOME_FOOTER_LAST_CHECKED = "Last checked {time}"
 HOME_ACTIVITY_LINK = "{count} awaiting decision"
 
+# ── Accounts maintenance page (/credentials) ─────────────────────────────────
+ACCOUNTS_PAGE_TITLE = "Accounts"
+ACCOUNTS_PAGE_SUBTITLE = "Every account Mighty knows about."
+ACCOUNTS_EMPTY_HEADLINE = "No accounts yet"
+ACCOUNTS_EMPTY_BODY = "Add accounts from Gmail or pick a provider manually."
+ACCOUNTS_EMPTY_CTA_EMAIL = "Find accounts from email"
+ACCOUNTS_EMPTY_CTA_MANUAL = "Add account manually"
+ACCOUNTS_ADD_COVERAGE_NOTE = "Add accounts from Gmail or pick a provider manually."
+ACCOUNTS_FILTER_ALL = "All"
+ACCOUNTS_FILTER_NEEDS_ATTENTION = "Needs attention"
+ACCOUNTS_FILTER_WAITING = "Waiting"
+ACCOUNTS_FILTER_UP_TO_DATE = "Up to date"
+ACCOUNTS_NOT_CHECKED_YET = "Not checked yet"
+ACCOUNTS_SUBLINE_FIRST_VISIT = "Waiting for first visit"
+ACCOUNTS_SUBLINE_CONNECTED = "Connected — awaiting data"
+ACCOUNTS_SUBLINE_UPDATING = "Updating…"
+ACCOUNTS_DISCONNECT = "Disconnect"
+ACCOUNTS_VIEW_ACCOUNT = CTA_VIEW_ACCOUNT
+ACCOUNTS_FILTER_EMPTY = "No accounts in this view."
+ACCOUNTS_FILTER_CLEAR = "Show all accounts"
+
+
+def accounts_last_checked(relative_time: str) -> str:
+    return f"Last checked {relative_time}"
+
 
 def home_waiting_headline(count: int, provider_name: str | None = None) -> str:
     if count == 1 and provider_name:

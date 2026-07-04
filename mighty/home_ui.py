@@ -11,6 +11,7 @@ from typing import Any, Callable
 from mighty.action import Action
 from mighty.home_state import HomeState, HomeStateResult
 from mighty import user_copy
+from mighty.accounts_ui import filter_chip_url
 
 
 def _secondary_link(label: str, url: str, escape: Callable[[Any], str]) -> str:
@@ -60,9 +61,10 @@ def _featured_block(result: HomeStateResult, escape: Callable[[Any], str]) -> st
     )
 
 
-def _health_chip(label: str, count: int, escape: Callable[[Any], str]) -> str:
+def _health_chip(label: str, count: int, filter_key: str, escape: Callable[[Any], str]) -> str:
     return (
-        f'<a href="/credentials" class="dash-brief-else-chip dash-home-health-chip">'
+        f'<a href="{escape(filter_chip_url(filter_key))}" '
+        f'class="dash-brief-else-chip dash-home-health-chip">'
         f"{escape(label)}</a>"
     )
 
@@ -75,14 +77,14 @@ def _account_health_strip(result: HomeStateResult, escape: Callable[[Any], str])
     health = result.health
     if health.up_to_date:
         label = f"{health.up_to_date} up to date"
-        chips.append(_health_chip(label, health.up_to_date, escape))
+        chips.append(_health_chip(label, health.up_to_date, "up_to_date", escape))
     if health.waiting:
         label = f"{health.waiting} waiting"
-        chips.append(_health_chip(label, health.waiting, escape))
+        chips.append(_health_chip(label, health.waiting, "waiting", escape))
     if health.needs_login:
         n = health.needs_login
         label = f"{n} need{'s' if n == 1 else ''} attention"
-        chips.append(_health_chip(label, health.needs_login, escape))
+        chips.append(_health_chip(label, health.needs_login, "needs_attention", escape))
 
     freshness = escape(result.freshness_label or "")
     freshness_html = (
