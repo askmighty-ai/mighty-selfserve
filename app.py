@@ -20732,6 +20732,39 @@ def admin_coverage_detail_page(source):
     return _admin_debug.render_coverage_detail_page(row, raw_field_keys=sorted(raw_keys))
 
 
+@app.route("/admin/recommendation-unlocks")
+@require_admin
+def admin_recommendation_unlocks_page():
+    from mighty.recommendation_unlocks import compute_all_provider_unlocks
+
+    rows = compute_all_provider_unlocks(
+        get_db(),
+        _all_provider_sources(),
+        display_names=_provider_display_names(),
+    )
+    return _admin_debug.render_recommendation_unlocks_page(rows)
+
+
+@app.route("/admin/recommendation-unlocks/<source>")
+@require_admin
+def admin_recommendation_unlocks_detail_page(source):
+    from mighty.observation_coverage import collect_observed_from_pipeline
+    from mighty.recommendation_unlocks import compute_provider_unlocks
+
+    providers = _all_provider_sources()
+    if source not in providers:
+        return _admin_debug.render_recommendation_unlocks_page([]), 404
+
+    names = _provider_display_names()
+    observed_by_source = collect_observed_from_pipeline(get_db())
+    row = compute_provider_unlocks(
+        source,
+        observed_by_source.get(source, set()),
+        display_name=names.get(source),
+    )
+    return _admin_debug.render_recommendation_unlocks_detail_page(row)
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

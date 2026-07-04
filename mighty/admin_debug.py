@@ -20,6 +20,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
     ("replay-discovery", "Replay field discovery", "Run discovery synchronously with step-by-step output"),
     ("pipeline-runs", "Pipeline runs", "Recent provider pipeline runs and stage traces"),
     ("coverage", "Observation coverage", "Expected vs observed observation types per provider"),
+    (
+        "recommendation-unlocks",
+        "Recommendation unlocks",
+        "Which recommendations are possible given observed extraction data",
+    ),
 ]
 
 
@@ -440,3 +445,83 @@ def render_coverage_detail_page(
         f"{meta_html}{grid}"
     )
     return _admin_shell("coverage", f"Coverage — {row.display_name}", body)
+
+
+def render_recommendation_unlocks_page(rows: list[Any]) -> str:
+    table_rows = "".join(
+        f"<tr>"
+        f'<td><a href="/admin/recommendation-unlocks/{_he(r.source)}">{_he(r.display_name)}</a>'
+        f'<div class="muted" style="font-size:10px">{_he(r.source)}</div></td>'
+        f"<td>{len(r.observed)}</td>"
+        f"<td>{len(r.unlocked)}</td>"
+        f"<td>{len(r.blocked)}</td>"
+        f"</tr>"
+        for r in rows
+    ) or '<tr><td colspan="4" class="muted">No providers configured</td></tr>'
+
+    body = (
+        '<p class="lede">Which recommendations could we generate if we turned on the engine today? '
+        "Observed types come from successful pipeline <code>trusted_observations</code> stages. "
+        "This is an engineering diagnostic — no recommendations are generated here.</p>"
+        '<div class="card"><table><thead><tr>'
+        "<th>Provider</th><th>Observed</th><th>Unlocked</th><th>Blocked</th>"
+        f"</tr></thead><tbody>{table_rows}</tbody></table></div>"
+    )
+    return _admin_shell("recommendation-unlocks", "Recommendation Unlocks", body)
+
+
+def render_recommendation_unlocks_detail_page(row: Any) -> str:
+    meta_html = (
+        f'<div class="run-meta">'
+        f'<div class="stat"><div class="label">Provider</div><div class="val">{_he(row.display_name)}</div></div>'
+        f'<div class="stat"><div class="label">Source key</div><div class="val"><code>{_he(row.source)}</code></div></div>'
+        f'<div class="stat"><div class="label">Unlocked</div><div class="val">{len(row.unlocked)}</div></div>'
+        f'<div class="stat"><div class="label">Blocked</div><div class="val">{len(row.blocked)}</div></div>'
+        f"</div>"
+    )
+
+    if row.unlocked:
+        from mighty.recommendation_unlock_catalog import RECOMMENDATION_TYPES
+
+        unlocked_items = "".join(
+            f"<li><strong>{_he(RECOMMENDATION_TYPES[rid].title)}</strong> "
+            f'<span class="muted">({_he(rid)})</span></li>'
+            for rid in row.unlocked
+            if rid in RECOMMENDATION_TYPES
+        )
+        unlocked_html = (
+            f'<ul style="margin:0;padding-left:18px;font-size:12px">{unlocked_items}</ul>'
+            if unlocked_items
+            else '<p class="muted">None</p>'
+        )
+    else:
+        unlocked_html = '<p class="muted">No recommendations unlocked — missing required observations</p>'
+
+    blocked_rows = "".join(
+        f"<tr>"
+        f"<td><strong>{_he(b.title)}</strong>"
+        f'<div class="muted" style="font-size:10px">{_he(b.recommendation_id)}</div></td>'
+        f"<td>{_observation_list(b.missing_observations, empty_msg='—')}</td>"
+        f"</tr>"
+        for b in row.blocked
+    ) or '<tr><td colspan="2" class="muted">All catalog recommendations unlocked</td></tr>'
+
+    body = (
+        f'<p><a href="/admin/recommendation-unlocks" class="btn">&larr; All providers</a></p>'
+        f"{meta_html}"
+        '<div class="grid-2">'
+        f'<div class="card"><h3>Observed observations ({len(row.observed)})</h3>'
+        f"{_observation_list(row.observed, empty_msg='None observed in pipeline runs')}</div>"
+        f'<div class="card"><h3>Unlocked recommendations ({len(row.unlocked)})</h3>'
+        f"{unlocked_html}</div>"
+        "</div>"
+        f'<div class="card" style="margin-top:16px"><h3>Blocked recommendations ({len(row.blocked)})</h3>'
+        '<p class="muted" style="font-size:11px;margin:0 0 8px">Missing observations per blocked recommendation</p>'
+        '<table><thead><tr><th>Recommendation</th><th>Missing observations</th></tr></thead>'
+        f"<tbody>{blocked_rows}</tbody></table></div>"
+    )
+    return _admin_shell(
+        "recommendation-unlocks",
+        f"Recommendation Unlocks — {row.display_name}",
+        body,
+    )
