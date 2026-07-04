@@ -18,6 +18,7 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
     ("sync-history", "Sync history", "Field changes, audit events, and sync metadata"),
     ("sync-timeline", "Sync timeline", "Live sync state and per-account sync timestamps"),
     ("replay-discovery", "Replay field discovery", "Run discovery synchronously with step-by-step output"),
+    ("pipeline-runs", "Pipeline runs", "Recent provider pipeline runs and stage traces"),
 ]
 
 
@@ -76,7 +77,17 @@ table{width:100%;border-collapse:collapse;font-size:12px}
 th,td{padding:8px 10px;border-bottom:1px solid #1f2937;text-align:left}
 th{color:#9ca3af;background:#0b0d12}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700}
-.badge-ok{background:#064e3b;color:#6ee7b7}.badge-warn{background:#78350f;color:#fcd34d}.badge-err{background:#7f1d1d;color:#fca5a5}
+.badge-ok{background:#064e3b;color:#6ee7b7}.badge-warn{background:#78350f;color:#fcd34d}.badge-err{background:#7f1d1d;color:#fca5a5}.badge-muted{background:#1f2937;color:#6b7280}
+.stage-card{background:#111827;border:1px solid #1f2937;border-radius:10px;padding:14px;margin-bottom:10px}
+.stage-card.stage-skipped{opacity:.45;border-color:#1f2937;background:#0b0d12}
+.stage-card.stage-failed{border-color:#dc2626;background:#1c0a0a;box-shadow:0 0 0 1px #7f1d1d}
+.stage-card.stage-success{border-color:#065f46}
+.stage-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.stage-header h4{margin:0;font-size:13px;color:#f3f4f6;text-transform:capitalize}
+.run-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:20px}
+.run-meta .stat .label{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.04em}
+.run-meta .stat .val{font-size:13px;color:#f3f4f6;word-break:break-all}
+.run-id{font-family:ui-monospace,monospace;font-size:11px}
 .btn{padding:8px 12px;border-radius:8px;border:1px solid #374151;background:#1f2937;color:#f3f4f6;font-size:12px;cursor:pointer;text-decoration:none}
 .grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
 .stat{background:#0b0d12;border:1px solid #1f2937;border-radius:8px;padding:12px}
@@ -228,3 +239,120 @@ document.getElementById('run-replay')?.addEventListener('click', async (ev) => {
 });
 </script>"""
     return _admin_shell("replay-discovery", "Replay Field Discovery", picker + btn + script)
+
+
+def _run_status_badge(status: str | None) -> str:
+    if status == "complete":
+        return '<span class="badge badge-ok">complete</span>'
+    if status == "failed":
+        return '<span class="badge badge-err">failed</span>'
+    if status == "aborted":
+        return '<span class="badge badge-warn">aborted</span>'
+    if status == "running":
+        return '<span class="badge badge-warn">running</span>'
+    return f'<span class="badge badge-muted">{_he(status or "—")}</span>'
+
+
+def _stage_status_badge(status: str | None) -> str:
+    if status == "success":
+        return '<span class="badge badge-ok">success</span>'
+    if status == "failed":
+        return '<span class="badge badge-err">failed</span>'
+    if status == "skipped":
+        return '<span class="badge badge-muted">skipped</span>'
+    if status == "running":
+        return '<span class="badge badge-warn">running</span>'
+    return f'<span class="badge badge-muted">{_he(status or "—")}</span>'
+
+
+def _stage_card_class(status: str | None) -> str:
+    if status == "failed":
+        return "stage-card stage-failed"
+    if status == "skipped":
+        return "stage-card stage-skipped"
+    if status == "success":
+        return "stage-card stage-success"
+    return "stage-card"
+
+
+def render_pipeline_runs_page(runs: list[dict[str, Any]]) -> str:
+    rows = "".join(
+        f"<tr>"
+        f'<td class="run-id"><a href="/admin/pipeline-runs/{_he(r.get("run_id",""))}">{_he((r.get("run_id") or "")[:8])}…</a></td>'
+        f'<td>{_he(r.get("source",""))}</td>'
+        f'<td>{_he(r.get("initiator",""))}</td>'
+        f'<td>{_he(r.get("data_source") or "—")}</td>'
+        f"<td>{_run_status_badge(r.get('run_status'))}</td>"
+        f'<td>{_he(r.get("terminal_stage") or "—")}</td>'
+        f'<td class="muted">{_he(r.get("terminal_reason") or "—")}</td>'
+        f'<td>{_fmt_iso(r.get("created_at"))}</td>'
+        f'<td>{_fmt_iso(r.get("finished_at"))}</td>'
+        f"</tr>"
+        for r in runs
+    ) or '<tr><td colspan="9" class="muted">No pipeline runs yet</td></tr>'
+    body = '<p class="lede">Most recent pipeline runs, newest first.</p>'
+    body += (
+        '<div class="card"><table><thead><tr>'
+        "<th>Run</th><th>Source</th><th>Initiator</th><th>Data source</th>"
+        "<th>Status</th><th>Terminal stage</th><th>Terminal reason</th>"
+        "<th>Created</th><th>Finished</th>"
+        f"</tr></thead><tbody>{rows}</tbody></table></div>"
+    )
+    return _admin_shell("pipeline-runs", "Pipeline Runs", body)
+
+
+def render_pipeline_run_detail_page(run: dict[str, Any], stages: list[dict[str, Any]]) -> str:
+    meta_items = [
+        ("Run ID", run.get("run_id")),
+        ("Source", run.get("source")),
+        ("Initiator", run.get("initiator")),
+        ("Data source", run.get("data_source") or "—"),
+        ("Status", None),
+        ("Terminal stage", run.get("terminal_stage") or "—"),
+        ("Terminal reason", run.get("terminal_reason") or "—"),
+        ("Created", _fmt_iso(run.get("created_at"))),
+        ("Finished", _fmt_iso(run.get("finished_at"))),
+    ]
+    meta_html = ""
+    for label, val in meta_items:
+        if label == "Status":
+            display = _run_status_badge(run.get("run_status"))
+        elif label == "Run ID":
+            display = f'<span class="run-id">{_he(val)}</span>'
+        else:
+            display = _he(val)
+        meta_html += (
+            f'<div class="stat"><div class="label">{_he(label)}</div><div class="val">{display}</div></div>'
+        )
+
+    stage_cards = ""
+    for s in stages:
+        artifacts = s.get("artifacts")
+        if artifacts is None and s.get("artifacts_json"):
+            try:
+                artifacts = json.loads(s["artifacts_json"])
+            except Exception:
+                artifacts = {}
+        artifacts_html = _json_block(artifacts or {}) if artifacts else '<p class="muted">No artifacts</p>'
+        duration = s.get("duration_ms")
+        duration_display = f"{duration:.0f} ms" if duration is not None else "—"
+        stage_name = str(s.get("stage") or "").replace("_", " ")
+        card_cls = _stage_card_class(s.get("status"))
+        stage_cards += (
+            f'<div class="{card_cls}">'
+            f'<div class="stage-header"><h4>{_he(stage_name)}</h4>{_stage_status_badge(s.get("status"))}</div>'
+            f'<p class="muted">Duration: {_he(duration_display)}'
+            + (f' · Failure: <strong style="color:#fca5a5">{_he(s.get("failure_reason"))}</strong>' if s.get("failure_reason") else "")
+            + "</p>"
+            f"<div>{artifacts_html}</div>"
+            f"</div>"
+        )
+    if not stage_cards:
+        stage_cards = '<p class="muted">No stages recorded for this run.</p>'
+
+    body = (
+        f'<p><a href="/admin/pipeline-runs" class="btn">&larr; All runs</a></p>'
+        f'<div class="run-meta">{meta_html}</div>'
+        f"<h3 style=\"font-size:14px;color:#d1d5db;margin:0 0 12px\">Stages</h3>{stage_cards}"
+    )
+    return _admin_shell("pipeline-runs", "Pipeline Run Detail", body)

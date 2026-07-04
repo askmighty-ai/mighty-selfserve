@@ -20649,6 +20649,27 @@ def api_admin_replay_discovery(source):
     return jsonify(_admin_replay_discovery(session["user_id"], source))
 
 
+@app.route("/admin/pipeline-runs")
+@require_admin
+def admin_pipeline_runs_page():
+    from mighty.pipeline_inspector import list_recent_runs
+
+    runs = list_recent_runs(get_db(), limit=100)
+    return _admin_debug.render_pipeline_runs_page(runs)
+
+
+@app.route("/admin/pipeline-runs/<run_id>")
+@require_admin
+def admin_pipeline_run_detail_page(run_id):
+    from mighty.pipeline_inspector import get_run, get_run_stages
+
+    run = get_run(get_db(), run_id)
+    if not run:
+        return _admin_debug.render_pipeline_runs_page([]), 404
+    stages = get_run_stages(get_db(), run_id)
+    return _admin_debug.render_pipeline_run_detail_page(run, stages)
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
