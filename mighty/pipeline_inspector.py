@@ -975,6 +975,14 @@ def ingest_client_stages(
         )
 
 
+def list_recent_runs(db: Any, *, limit: int = 100) -> list[dict[str, Any]]:
+    rows = db.execute(
+        "SELECT * FROM pipeline_runs ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_run(db: Any, run_id: str) -> dict[str, Any] | None:
     row = db.execute("SELECT * FROM pipeline_runs WHERE run_id=?", (run_id,)).fetchone()
     return dict(row) if row else None
