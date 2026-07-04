@@ -71,6 +71,7 @@ FAIL_QUALITY_GATE = "quality_gate"
 FAIL_PAYLOAD_TOO_SMALL = "payload_too_small"
 
 # Structured extraction
+FAIL_NOT_ATTEMPTED_ON_SYNC_PATH = "not_attempted_on_sync_path"
 FAIL_CONNECTOR_MISS = "connector_miss"
 FAIL_JSON_PARSE_ERROR = "json_parse_error"
 FAIL_INVALID_NORMALIZED_VALUE = "invalid_normalized_value"
