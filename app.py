@@ -40,6 +40,13 @@ except ImportError:
     _FERNET_AVAILABLE = False
 
 try:
+    from mighty.home_state import resolve_home_state
+    from mighty.home_ui import render_home_page
+except ImportError:
+    resolve_home_state = None
+    render_home_page = None
+
+try:
     from mighty.daily_brief import build_daily_brief
 except ImportError:
     build_daily_brief = None
@@ -6088,6 +6095,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-brief-onboard-primary:hover{background:#292524;color:#fff;text-decoration:none}
 .dash-brief-onboard-secondary{font-size:13px;font-weight:500;color:#78716c;text-decoration:none;transition:color 0.12s}
 .dash-brief-onboard-secondary:hover{color:#1c1917;text-decoration:none}
+.dash-brief-featured-body{font-size:14px;color:#57534e;line-height:1.55;margin:0 0 16px;max-width:52ch}
+.dash-brief-featured-cta--disabled{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;color:#a8a29e;background:#f5f5f4;border-radius:10px;cursor:default}
+.dash-home-priority-summary{font-size:14px;color:#78716c;margin:8px 0 0;line-height:1.4}
+.dash-home-health{margin-top:20px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06)}
+.dash-home-freshness{font-size:12px;font-weight:500;color:#a8a29e;margin-left:4px}
+.dash-home-waiting-rows{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.dash-home-waiting-row{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:6px 0;border-bottom:0.5px solid rgba(0,0,0,0.05)}
+.dash-home-waiting-name{color:#1c1917;font-weight:500}
+.dash-home-waiting-status{color:#78716c;text-align:right}
+.dash-home-activity-link{margin:16px 0 0;font-size:13px}
+.dash-home-activity-link a{color:#78716c;text-decoration:none}
+.dash-home-activity-link a:hover{text-decoration:underline;color:#57534e}
+.dash-home-footer{margin-top:24px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06);font-size:12px;color:#a8a29e}
 /* Demo mode banner */
 .demo-mode-banner{background:linear-gradient(90deg,rgba(124,58,237,0.08),rgba(99,102,241,0.06));border-bottom:0.5px solid rgba(124,58,237,0.18);flex-shrink:0}
 .demo-mode-banner-inner{max-width:1600px;margin:0 auto;padding:10px 32px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -6341,48 +6361,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </script>
     </div><!-- /insight-panel -->
 
-    <!-- Recommendations -->
-    {recommendations_section_html}
-
-    <!-- Connected accounts -->
-    <div class="cards-panel">
-      <div class="cards-panel-inner">
-      {insights_html}
-      {relevant_now_html}
-      {progress_section_html}
-      <div class="cards-panel-header">
-        <span style="font-size:13px;font-weight:600;color:#1c1917">Connected accounts</span>
-        <div style="display:flex;align-items:center;gap:8px">
-          <a href="/email-scan" class="btn-connect" style="text-decoration:none;display:inline-flex;align-items:center">Find accounts</a>
-        </div>
-      </div>
-
-      <div id="expiring-banner" style="display:{expiring_display};align-items:center;gap:10px;background:#fffbeb;border:0.5px solid rgba(217,119,6,0.3);border-radius:10px;padding:10px 16px;margin-bottom:16px;cursor:pointer" data-base-display="{expiring_display}" onclick="toggleExpiringFilter(this)">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        <span style="font-size:13px;font-weight:600;color:#92400e"><span id="expiring-count">{expiring_count}</span> account{expiring_plural} with expiring benefits or upcoming due dates</span>
-        <span style="font-size:11px;color:#b45309;margin-left:auto" id="expiring-filter-label">Click to highlight</span>
-      </div>
-
-      {account_data_html}
-
-      <div id="fview-activity" style="display:none">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-        <input type="text" class="feed-search" id="feed-search" placeholder="Filter actions…" oninput="filterFeed(this.value)" style="flex:1;min-width:160px;margin-bottom:0">
-        <div style="display:flex;gap:6px;flex-shrink:0" id="status-filters">
-          <button class="status-chip active" onclick="setStatusFilter('all',this)">All</button>
-          <button class="status-chip" onclick="setStatusFilter('pending',this)">Pending</button>
-          <button class="status-chip" onclick="setStatusFilter('approved',this)">Approved</button>
-          <button class="status-chip" onclick="setStatusFilter('denied',this)">Denied</button>
-          <button class="status-chip" onclick="setStatusFilter('timed_out',this)">Timed out</button>
-        </div>
-      </div>
-      <div id="feed">
-        {feed_html}
-        <div id="feed-no-results" style="display:none;padding:40px 0;text-align:center;color:#b8b2ac;font-size:13px">No matching actions</div>
-      </div>
-      </div><!-- /fview-activity -->
-      </div><!-- /cards-panel-inner -->
-    </div><!-- /cards-panel -->
   </div><!-- /page-body -->
 </div><!-- /main-content -->
 </div><!-- /app-shell -->
@@ -8713,28 +8691,6 @@ def dashboard():
     welcome_state = ''
     agent_status_indicator = ''
     feed_col_hidden = ''
-    if len(acts) == 0:
-        feed_col_hidden = 'style="display:none"'
-        welcome_state = (
-            '<div style="display:flex;flex-direction:column;align-items:center;'
-            'justify-content:center;padding:60px 24px;min-height:60vh">'
-            '<div style="width:100%;max-width:360px;text-align:center">'
-            '<div style="width:52px;height:52px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.2);border-radius:14px;'
-            'display:flex;align-items:center;justify-content:center;margin:0 auto 20px">'
-            '<svg width="22" height="22" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-            '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg></div>'
-            '<div style="font-size:22px;font-weight:700;color:#1c1917;margin-bottom:10px">'
-            'Find your accounts</div>'
-            '<div style="font-size:14px;color:#6b7280;line-height:1.6;margin-bottom:28px">'
-            'Scan your Gmail to discover loyalty programs and subscriptions, then connect them — the worker handles the rest automatically.</div>'
-            '<a href="/email-scan" style="display:block;padding:13px 20px;'
-            'background:#6366f1;color:#fff;border-radius:8px;font-size:14px;font-weight:600;'
-            'text-decoration:none">Scan Gmail &#8594;</a>'
-            '</div>'
-            '</div>'
-        )
-    else:
-        feed_col_hidden = ''
 
     # ── Account data tab ──────────────────────────────────────────────────────
     # _fmt_sync is defined at module level (line ~762) — no local redefinition needed
@@ -8943,12 +8899,13 @@ def dashboard():
             "SELECT site_key FROM email_suggestions WHERE user_id=? AND dismissed=0", (uid,),
         ).fetchall()
     }
-    _render_lap = _LoadAccountsProfiler("/dashboard render_cards")
+    _render_lap = _LoadAccountsProfiler("/dashboard account_status")
     _render_decrypt_ms = 0.0
 
-    cards_html = ""
     total_expiring = 0
     login_required_accounts = []
+    _home_account_statuses = []
+    _home_provider_urls: dict[str, str] = {}
 
     _user_sync = get_db().execute(
         "SELECT sync_running, sync_started_at, sync_current_source FROM users WHERE id=?",
@@ -8959,7 +8916,6 @@ def dashboard():
     _sync_started_at = _user_sync["sync_started_at"] if _user_sync else None
 
     for cat in _cat_order:
-        grid_cards = ""
         for src, display_name, icon, color in _cat_map[cat]:
             row   = synced_map.get(src)
             _t1 = time.perf_counter()
@@ -9032,610 +8988,21 @@ def dashboard():
                 login_url=_provider_login_url(src),
                 connect_url=f"/credentials?connect={src}",
             )
-            if _lc.state != LC_SYNCED:
-                status_color = _lc.color
-
-            # Use pre-fetched data (avoids N+1 — two bulk queries run before the loop)
-            obs_map: dict = _obs_by_source.get(src, {})
-            cand_count: int = _cand_counts_by_source.get(src, 0)
-            if cand_count > 0:
-                plural = "s" if cand_count > 1 else ""
-                _cand_url = f"/candidates/{src}"
-                cand_notice = (
-                    f'<div style="margin:8px 0 4px;padding:6px 10px;background:#eff6ff;'
-                    f'border-radius:6px;font-size:12px;color:#1d4ed8;cursor:pointer" '
-                    f'onclick="window.location=&apos;{_cand_url}&apos;">'
-                    f'&#10024; Mighty found {cand_count} possible new benefit{plural} &#8594; Review</div>'
-                )
-            else:
-                cand_notice = ""
-            status_color = "#30d158"
-            # Override dot color based on sync_status — independent of whether
-            # we have old hero data to display. This prevents stale ok-data from
-            # masking a login_required or no_data state with a green dot.
-            if sync_status in ("login_required", "no_data", "needs_first_visit"):
-                if not (src == AMEX_SOURCE and _connection_status in AMEX_CONNECTION_STATES):
-                    status_color = "#ef4444"
-
-            # For utility/telecom sources, promote billing fields to the front
-            _UTILITY_SOURCES_CARD = {
-                "xfinity", "comcast", "spectrum", "cox", "centurylink", "att_internet",
-                "pge", "sdge", "palo_alto_utilities", "verizon", "tmobile",
-            }
-            _UTILITY_HERO_KEYS = {
-                "amount_due", "balance_due", "current_balance", "next_payment",
-                "monthly_rate", "bill_amount", "account_balance", "auto_pay", "due_date",
-            }
-            if src in _UTILITY_SOURCES_CARD:
-                preferred = [it for it in items if it.get("key") in _UTILITY_HERO_KEYS]
-                rest = [it for it in items if it.get("key") not in _UTILITY_HERO_KEYS]
-                items = preferred + rest
-            else:
-                # Sort by benefit type: certs/credits first (action-driving), points/miles last (inventory)
-                def _card_type_priority(item):
-                    t = item.get("_type", "other")
-                    if t == "certificate":                   return 0
-                    if t in ("travel_credit", "cash_credit"): return 1
-                    if t == "elite_status":                  return 2
-                    if t == "upcoming_event":                return 3
-                    if t in ("partner_benefit", "membership"): return 4
-                    if t in ("payment_due", "renewal"):      return 5
-                    if t == "other":                         return 6
-                    if t == "points_balance":                return 7
-                    if t == "progress_toward":               return 8
-                    return 6
-                items = sorted(items, key=_card_type_priority)
-
-            # Visual weight: compact class for accounts with no high-value items
-            # (no certs, credits, or elite status — just utility data like bills/balances)
-            _has_highval = any(
-                it.get("_type") in ("certificate","travel_credit","cash_credit","elite_status")
-                for it in items
-            )
-            _compact_cls = ""  # always show secondary fields — compact mode was hiding too much data
-
-            # Status/level — show tier as a colored chip directly below the account name
-            _status_item = next((it for it in items if it.get("_type") == "elite_status"), None)
-            _status_inline_html = ""
-            if _status_item and str(_status_item.get("value","")).strip():
-                _sv = str(_status_item["value"]).strip()
-                _sv_lc = _sv.lower()
-                # Color by tier level
-                if any(k in _sv_lc for k in ["diamond","globalist","1k","executive platinum","titanium","chairman","ambassador"]):
-                    _st_color, _st_bg = "#92400e", "#fef3c7"   # amber — top
-                elif any(k in _sv_lc for k in ["platinum","gold","sapphire","silver","premier","rouge"]):
-                    _st_color, _st_bg = "#5b21b6", "#ede9fe"   # purple — mid-high
-                else:
-                    _st_color, _st_bg = "#1e40af", "#dbeafe"   # blue — base
-                _status_inline_html = (
-                    f'<div style="display:inline-block;margin-top:3px;font-size:11px;font-weight:600;'
-                    f'color:{_st_color};background:{_st_bg};border-radius:8px;'
-                    f'padding:2px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">'
-                    f'◆ {he(_sv)}</div>'
-                )
-
-            # Benefit badges — count certs and credits for card header
-            _badge_certs   = sum(1 for it in items if it.get("_type") == "certificate")
-            _badge_credits = sum(1 for it in items if it.get("_type") in ("travel_credit","cash_credit"))
-            _badges_html = ""
-            if _badge_certs:
-                _badges_html += (
-                    f'<span style="font-size:10px;font-weight:600;color:#1d4ed8;background:#dbeafe;'
-                    f'border-radius:10px;padding:2px 7px;white-space:nowrap">🎫 {_badge_certs}</span>'
-                )
-            if _badge_credits:
-                _badges_html += (
-                    f'<span style="font-size:10px;font-weight:600;color:#047857;background:#d1fae5;'
-                    f'border-radius:10px;padding:2px 7px;white-space:nowrap">💳 {_badge_credits}</span>'
-                )
-            if _badges_html:
-                _badges_html = (
-                    f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px">{_badges_html}</div>'
-                )
-
-            # Separate hero stat from secondary stats, and find alerts
-            hero_item = None
-            secondary_items = []
-            alert_item = None
-            alert_level = None
-
-            # Check if autopay is enrolled — suppresses payment due date alerts
-            _AUTOPAY_LABELS = ("auto pay", "autopay", "automatic payment", "auto-pay")
-            _AUTOPAY_ENROLLED = ("enrolled", "active", "on", "yes", "enabled", "scheduled")
-            _autopay_on = any(
-                any(ap in i.get("label", "").lower() for ap in _AUTOPAY_LABELS)
-                and any(ev in i.get("value", "").lower() for ev in _AUTOPAY_ENROLLED)
-                for i in items
-            )
-            _PAYMENT_DUE_LABELS = ("payment due", "due date", "bill due", "amount due", "minimum payment", "past due")
-
-            for i in items:
-                lbl = i.get("label", "")
-                val = i.get("value", "")
-                # Suppress payment due date alerts when autopay is confirmed enrolled
-                # (the amount still shows, just not as an amber/red alert)
-                if _autopay_on and any(p in lbl.lower() for p in _PAYMENT_DUE_LABELS):
-                    if not hero_item:
-                        hero_item = i
-                    else:
-                        secondary_items.append(i)
-                    continue
-                lvl = _classify_alert(lbl, val)
-                if lvl and not alert_item:
-                    alert_item = i
-                    alert_level = lvl
-                    total_expiring += 1
-                elif not hero_item:
-                    hero_item = i
-                else:
-                    secondary_items.append(i)
-
-            # If we have an alert but no hero, use first secondary as hero
-            if alert_item and not hero_item and secondary_items:
-                hero_item = secondary_items.pop(0)
-            # Last-resort: if still no hero but items exist, force first item
-            # (prevents "Discovering fields…" spinner on synced cards)
-            if not hero_item and items:
-                hero_item = items[0]
-                secondary_items = [i for i in items if i is not hero_item]
-
-            # Build card hero — synced accounts show extracted data; others show lifecycle
-            if _provider_acct_early.is_synced and hero_item:
-                card_hero_html = (
-                    f'<div class="acct-divider"></div>'
-                    f'<div class="acct-hero">'
-                    f'<div class="hero-val" title="{he(hero_item["value"])}">{he(hero_item["value"])}</div>'
-                    f'<div class="hero-lbl">{he(hero_item["label"])}</div>'
-                    f'</div>'
-                )
-            elif _lc.state != LC_SYNCED:
-                card_hero_html, status_color = _lifecycle_dashboard_hero(
-                    _lc, src, display_name, icon=icon, color=color,
-                )
-            elif hero_item:
-                card_hero_html = (
-                    f'<div class="acct-divider"></div>'
-                    f'<div class="acct-hero">'
-                    f'<div class="hero-val" title="{he(hero_item["value"])}">{he(hero_item["value"])}</div>'
-                    f'<div class="hero-lbl">{he(hero_item["label"])}</div>'
-                    f'</div>'
-                )
-            elif synced_at:
-                # Show "No account data" only when discovery explicitly failed or
-                # sync returned no_data — never based on age alone (age-based
-                # check was too aggressive and hid valid cards after 5 min).
-                _disc_info = discovered_by_source.get(src, {})
-                _no_data = _disc_info.get("failed", False) or sync_status == "no_data"
-                if _no_data:
-                    _fail_key   = (data.get("sync_failure_reason") or "") if row else ""
-                    _fail_label, _fail_action = SYNC_FAILURE_MESSAGES.get(_fail_key, ("No data found", "Visit your account overview page in Chrome, then click sync."))
-                    card_hero_html = (
-                        f'<div class="acct-divider"></div>'
-                        f'<div class="acct-hero">'
-                        f'<div style="color:#d97706;font-size:12px;font-weight:500">⚠ {he(_fail_label)}</div>'
-                        f'<div style="color:#9ca3af;font-size:11px;margin-top:3px">{he(_fail_action)}</div>'
-                        f'</div>'
-                    )
-                    status_color = "#f59e0b"
-                else:
-                    card_hero_html = (
-                        f'<div class="acct-divider"></div>'
-                        f'<div class="acct-hero" data-discovering="1">'
-                        f'<div style="color:#6366f1;font-size:12px;font-weight:500">'
-                        f'<span style="display:inline-block;animation:spin 1.2s linear infinite;margin-right:4px">↻</span>'
-                        f'Discovering fields…</div>'
-                        f'</div>'
-                    )
-                    status_color = "#9ca3af"
-            else:
-                card_hero_html = (
-                    f'<div class="acct-divider"></div>'
-                    f'<div class="acct-hero">'
-                    f'<div style="color:#c0bab4;font-style:italic;font-size:12px">Awaiting update…</div>'
-                    f'</div>'
-                )
-                status_color = "#9ca3af"
-
-            # Filter noise items (bare IDs / member numbers) from secondary visible slots
-            # so real benefits/balances don't get pushed behind "more fields"
-            _NOISE_KEYS = {
-                "skymiles_number","member_number","member_id","account_number",
-                "loyalty_number","ff_number","membership_number","rewards_number",
-                "member_since","card_number","policy_number",
-            }
-            _NOISE_LABELS = ("member since","member id","member number","account number",
-                             "loyalty id","loyalty number","ff number","membership number",
-                             "skymiles number","mileage plus number","rapid rewards number",
-                             "card number","policy number","honors number")
-            def _is_noise(it):
-                k = (it.get("key") or "").lower()
-                l = (it.get("label") or "").lower()
-                return k in _NOISE_KEYS or any(nl in l for nl in _NOISE_LABELS)
-
-            # Partition secondary into signal (show first) vs noise (show last)
-            _sec_signal = [i for i in secondary_items if not _is_noise(i)]
-            _sec_noise   = [i for i in secondary_items if _is_noise(i)]
-            secondary_items = _sec_signal + _sec_noise
-
-            # Build secondary stats (up to 6 visible)
-            sec_html = ""
-            if secondary_items:
-                sec_row_parts = []
-                for i in secondary_items[:6]:
-                    review_badge = (
-                        '<span style="font-size:10px;color:#f59e0b;margin-left:4px;cursor:help" '
-                        'title="Lower confidence — may need verification">⚠ review</span>'
-                        if i.get("key") in review_required_keys else ""
-                    )
-                    snip = i.get("source_snippet", "") or i.get("source_url", "") or i.get("url", "")
-                    _fkey = i.get("key", "")
-                    _fconf = i.get("confidence", None)
-                    _obs = obs_map.get(_fkey)
-                    _first_seen_str = _fmt_sync(_obs["first_seen"]) if _obs and _obs["first_seen"] else None
-                    _last_seen_str  = _fmt_sync(_obs["last_seen"])  if _obs and _obs["last_seen"]  else (_fmt_sync(synced_at) if synced_at else None)
-                    _src_url = i.get("source_url") or i.get("url") or (src.replace("_", ".") if src else None)
-                    _conf_label = _confidence_label(float(_fconf)) if _fconf is not None else None
-                    _why_detail_rows = []
-                    if _conf_label:
-                        _why_detail_rows.append(f"<strong>Confidence:</strong> {he(_conf_label)}")
-                    if _first_seen_str:
-                        _why_detail_rows.append(f"<strong>Discovered:</strong> {he(_first_seen_str)}")
-                    if _last_seen_str:
-                        _why_detail_rows.append(f"<strong>Last verified:</strong> {he(_last_seen_str)}")
-                    if _src_url:
-                        _why_detail_rows.append(f"<strong>Source:</strong> {he(_src_url[:80])}")
-                    _why_detail_html = "<br>".join(_why_detail_rows)
-                    _why_snippet_html = (
-                        f'<div style="font-size:11px;color:#6b7280;margin-top:4px;font-style:italic">{he(snip[:200])}</div>'
-                        if snip else ""
-                    )
-                    why_html = (
-                        f'<span class="why-link" onclick="toggleSnippet(this)" '
-                        f'style="font-size:10px;color:#60a5fa;cursor:pointer;margin-left:6px;user-select:none" '
-                        f'title="Show discovery details">Why?</span>'
-                        f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#374151;'
-                        f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
-                        f'margin-top:4px;line-height:1.6">'
-                        f'{_why_detail_html}{_why_snippet_html}</div>'
-                    ) if (debug_mode and (_why_detail_rows or snip)) else ""
-                    sec_row_parts.append(
-                        f'<div class="sec-row">'
-                        f'<span class="sec-lbl">{he(i["label"])}{review_badge}</span>'
-                        f'<span class="sec-val" title="{he(i["value"])}">{he(i["value"])}{why_html}</span>'
-                        f'</div>'
-                    )
-                sec_html = f'<div class="acct-secondary">{"".join(sec_row_parts)}</div>'
-
-            # Build expanded fields (all items not already shown)
-            shown_keys = set()
-            if hero_item:
-                shown_keys.add(hero_item.get("key"))
-            if alert_item:
-                shown_keys.add(alert_item.get("key"))
-            for i in secondary_items[:6]:
-                shown_keys.add(i.get("key"))
-            extra_items = [i for i in items if i.get("key") not in shown_keys]
-            expanded_html = ""
-            if extra_items:
-                exp_row_parts = []
-                for i in extra_items:
-                    review_badge = (
-                        '<span style="font-size:10px;color:#f59e0b;margin-left:4px;cursor:help" '
-                        'title="Lower confidence — may need verification">⚠ review</span>'
-                        if i.get("key") in review_required_keys else ""
-                    )
-                    snip = i.get("source_snippet", "") or i.get("source_url", "") or i.get("url", "")
-                    _fkey = i.get("key", "")
-                    _fconf = i.get("confidence", None)
-                    _obs = obs_map.get(_fkey)
-                    _first_seen_str = _fmt_sync(_obs["first_seen"]) if _obs and _obs["first_seen"] else None
-                    _last_seen_str  = _fmt_sync(_obs["last_seen"])  if _obs and _obs["last_seen"]  else (_fmt_sync(synced_at) if synced_at else None)
-                    _src_url = i.get("source_url") or i.get("url") or (src.replace("_", ".") if src else None)
-                    _conf_label = _confidence_label(float(_fconf)) if _fconf is not None else None
-                    _why_detail_rows = []
-                    if _conf_label:
-                        _why_detail_rows.append(f"<strong>Confidence:</strong> {he(_conf_label)}")
-                    if _first_seen_str:
-                        _why_detail_rows.append(f"<strong>Discovered:</strong> {he(_first_seen_str)}")
-                    if _last_seen_str:
-                        _why_detail_rows.append(f"<strong>Last verified:</strong> {he(_last_seen_str)}")
-                    if _src_url:
-                        _why_detail_rows.append(f"<strong>Source:</strong> {he(_src_url[:80])}")
-                    _why_detail_html = "<br>".join(_why_detail_rows)
-                    _why_snippet_html = (
-                        f'<div style="font-size:11px;color:#6b7280;margin-top:4px;font-style:italic">{he(snip[:200])}</div>'
-                        if snip else ""
-                    )
-                    why_html = (
-                        f'<span class="why-link" onclick="toggleSnippet(this)" '
-                        f'style="font-size:10px;color:#60a5fa;cursor:pointer;margin-left:6px;user-select:none" '
-                        f'title="Show discovery details">Why?</span>'
-                        f'<div class="snippet-reveal" style="display:none;font-size:11px;color:#374151;'
-                        f'background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;'
-                        f'margin-top:4px;line-height:1.6">'
-                        f'{_why_detail_html}{_why_snippet_html}</div>'
-                    ) if (debug_mode and (_why_detail_rows or snip)) else ""
-                    exp_row_parts.append(
-                        f'<div class="exp-row">'
-                        f'<span class="exp-lbl" title="{he(i["label"])}">{he(i["label"])}{review_badge}</span>'
-                        f'<span class="exp-val" title="{he(i["value"])}">{he(i["value"])}{why_html}</span>'
-                        f'</div>'
-                    )
-                # Add edit button at bottom of expanded section
-                exp_row_parts.append(
-                    f'<div style="padding-top:8px;margin-top:4px;border-top:1px solid #f3f4f6">'
-                    f'<button class="acct-edit-btn" onclick="openDashFieldModal(\'{he(src)}\',\'{he(display_name)}\')">Edit fields</button>'
-                    f'</div>'
-                )
-                expanded_html = f'<div class="acct-expanded">{"".join(exp_row_parts)}</div>'
-
-            # Build alert row
-            alert_html = ""
-            if alert_item:
-                cls = "acct-alert-red" if alert_level == "red" else "acct-alert-amber"
-                alert_html = (
-                    f'<div class="acct-alert {cls}">'
-                    f'<div>'
-                    f'<div class="alert-lbl">{he(alert_item["label"])}</div>'
-                    f'<div class="alert-sub">{he(_fmt_date_value(alert_item["value"]))}</div>'
-                    f'</div>'
-                    f'</div>'
-                )
-
-            # Detect login-wall values
-            _BAD = ("log in", "sign in", "login to", "no match found")
-            bad_fields = src in discovered_by_source and any(
-                any(b in str(f.get("value","")).lower() for b in _BAD)
-                for f in discovered_by_source[src]["fields"]
-            )
-            bad_banner = (
-                f'<div style="margin:0 10px 8px;background:#fffbef;border:0.5px solid rgba(245,158,11,0.35);border-radius:7px;'
-                f'padding:7px 10px;display:flex;align-items:center;gap:7px;font-size:11px">'
-                f'<span>⚠️</span>'
-                f'<span style="flex:1;color:#b45309">Couldn\'t log in — fields may be stale.</span>'
-                f'<a href="#" onclick="resetFields(\'{he(src)}\');return false;" style="color:#6366f1;font-weight:600;text-decoration:none;white-space:nowrap">Reset →</a>'
-                f'</div>'
-            ) if bad_fields else ""
-
+            _home_account_statuses.append(_acct_canon)
+            _card_url = SITE_ENTRY_URL.get(src) or (row or {}).get("entry_url", "") or _provider_login_url(src)
+            if _card_url:
+                _home_provider_urls[src] = _card_url
             if sync_status == "login_required" and _acct_canon.status == CANON_NEEDS_LOGIN:
                 login_required_accounts.append(display_name)
+            for _item in items:
+                if _classify_alert(_item.get("label", ""), _item.get("value", "")):
+                    total_expiring += 1
+                    break
 
-            sync_label = (
-                f'{user_copy.LAST_UPDATED_PREFIX} {_fmt_sync(synced_at)}'
-                if synced_at else user_copy.NOT_YET_UPDATED
-            )
-            stale_cls = " is-stale" if not synced_at else ""
-            expiring_cls = " is-expiring" if alert_item else ""
-            _provider_acct = _provider_acct_early
-            _fw = "700" if _acct_canon.status in (CANON_NEEDS_LOGIN, "error") else "500"
-            if _acct_canon.status == CANON_UP_TO_DATE and synced_at:
-                _field_note = (
-                    f" · {_lc.extracted_field_count} field"
-                    f"{'s' if _lc.extracted_field_count != 1 else ''}"
-                    if _lc.extracted_field_count else ""
-                )
-                freshness_html = (
-                    f'<span style="font-size:11px;color:#6b7280">'
-                    f'{user_copy.LAST_UPDATED_PREFIX} {_fmt_sync(synced_at)}{_field_note}'
-                    f'</span>'
-                )
-                synced_title = f'{user_copy.LAST_UPDATED_PREFIX} {_fmt_sync(synced_at)}'
-            else:
-                _canon = _acct_canon.to_dict()
-                freshness_html = (
-                    f'<span style="font-size:11px;color:{_canon["status_color"]};font-weight:{_fw}">'
-                    f'{he(_canon["status_label"])}</span>'
-                )
-                synced_title = _canon["status_label"]
-            stale_cls = " is-stale" if not _provider_acct.is_synced else stale_cls
-            if status_color == "#30d158" and _lc.color in ("#f59e0b", "#dc2626"):
-                status_color = "#ef4444"
-
-            # Consistent footer for all cards
-            _BAD_VALUES = {"", "—", "–", "—", "no data", "none", "n/a", "-"}
-            _no_data = (not items or
-                        all(str(i.get("value","")).strip().lower() in _BAD_VALUES for i in items))
-            if extra_items:
-                expand_btn = (
-                    f'<button class="acct-expand-btn" onclick="toggleExpand(this)" '
-                    f'data-count="{len(extra_items)}">'
-                    f'<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                    f'{len(extra_items)} more field{"s" if len(extra_items)!=1 else ""}'
-                    f'</button>'
-                )
-            elif _no_data and _lc.state == LC_SYNCED:
-                expand_btn = ""
-            elif _no_data:
-                expand_btn = ""
-            else:
-                # Has data, all fields already shown — nothing extra to expand
-                expand_btn = ""
-            card_footer = (
-                f'<div class="acct-footer">'
-                f'{expand_btn}'
-                f'</div>'
-            )
-
-            # Completeness score for card header + coverage gap hints
-            cat_expected = _EXPECTED_FIELDS.get(_source_category(src), {})
-            if cat_expected:
-                gaps = _coverage_gaps(src, [it.get("key","") for it in items])
-                found_count = len(cat_expected) - len(gaps)
-                completeness_pct = int(found_count / len(cat_expected) * 100)
-                completeness_color = "#22c55e" if completeness_pct >= 80 else "#f59e0b" if completeness_pct >= 50 else "#ef4444"
-                completeness_badge = (
-                    f'<span style="font-size:10px;color:{completeness_color};font-weight:600;'
-                    f'background:{completeness_color}18;padding:1px 5px;border-radius:10px;margin-left:6px">'
-                    f'{completeness_pct}%</span>'
-                )
-                # Show top 2 coverage gaps inline (always visible, not behind sync health expand)
-                if gaps:
-                    top_gaps = gaps[:2]
-                    gap_hints = "".join(
-                        f'<span style="font-size:10px;color:#d1d5db;margin-right:8px">? {he(gdesc)}</span>'
-                        for _, gdesc in top_gaps
-                    )
-                    gaps_inline = f'<div style="margin:4px 0 2px">{gap_hints}</div>'
-                else:
-                    gaps_inline = ""
-
-                # Build coverage detail block (server-rendered, shown when health panel expands)
-                coverage_lines = []
-                found_labels = {}
-                for it in items:
-                    fk = it.get("key", "")
-                    for exp_key, exp_desc in cat_expected.items():
-                        tokens_exp = [t for t in exp_key.split("_") if len(t) > 3]
-                        tokens_fk  = [t for t in fk.split("_")  if len(t) > 3]
-                        if exp_key == fk or (len(tokens_exp) >= 2 and len(set(tokens_exp) & set(tokens_fk)) >= 2) \
-                           or (len(exp_key) > 7 and exp_key in fk):
-                            found_labels[exp_key] = it.get("label", exp_desc)
-                for exp_key, exp_desc in cat_expected.items():
-                    if exp_key in found_labels:
-                        coverage_lines.append(
-                            f'<div style="font-size:11px;color:#16a34a;padding:1px 0">'
-                            f'✓ {he(found_labels[exp_key])}</div>'
-                        )
-                    else:
-                        coverage_lines.append(
-                            f'<div style="font-size:11px;color:#d97706;padding:1px 0">'
-                            f'? {he(exp_desc)}</div>'
-                        )
-                coverage_block = (
-                    f'<div style="margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #f3f4f6">'
-                    f'<div style="font-size:10px;font-weight:600;color:#9ca3af;text-transform:uppercase;'
-                    f'letter-spacing:.05em;margin-bottom:4px">Coverage {completeness_pct}%</div>'
-                    + "".join(coverage_lines) +
-                    f'</div>'
-                )
-                # Coverage face — always visible on card face
-                cov_color = "#16a34a" if completeness_pct >= 80 else "#d97706" if completeness_pct >= 50 else "#dc2626"
-
-                # Build found/missing lists
-                found_lines = []
-                missing_lines = []
-                for exp_key, exp_desc in cat_expected.items():
-                    matched = any(
-                        exp_key == it.get("key", "") or
-                        (len([t for t in exp_key.split("_") if len(t) > 3]) >= 2 and
-                         len(set([t for t in exp_key.split("_") if len(t) > 3]) &
-                             set([t for t in it.get("key", "").split("_") if len(t) > 3])) >= 2) or
-                        (len(exp_key) > 7 and exp_key in it.get("key", ""))
-                        for it in items
-                    )
-                    if matched:
-                        found_lines.append(f'<span style="color:#16a34a">✓ {he(exp_desc)}</span>')
-                    else:
-                        missing_lines.append(f'<span style="color:#9ca3af">• {he(exp_desc)}</span>')
-
-                found_html = ""
-                if found_lines:
-                    found_html = (
-                        '<div style="font-size:10px;line-height:1.7;margin-top:4px">'
-                        + " &nbsp;".join(found_lines[:4]) +
-                        '</div>'
-                    )
-
-                searching_html = ""
-                if missing_lines:
-                    searching_html = (
-                        '<div style="font-size:10px;color:#9ca3af;margin-top:2px">'
-                        f'Not yet found: ' + " &nbsp;".join(missing_lines[:3]) +
-                        ('…' if len(missing_lines) > 3 else '') +
-                        '</div>'
-                    )
-
-                coverage_face = (
-                    f'<div style="margin-top:5px;padding-top:5px;border-top:1px solid #f3f4f6">'
-                    f'<div style="display:flex;align-items:center;gap:4px">'
-                    f'<div style="flex:1;height:2px;background:#e5e7eb;border-radius:2px">'
-                    f'<div style="height:2px;width:{completeness_pct}%;background:{cov_color};border-radius:2px"></div>'
-                    f'</div>'
-                    f'<span style="font-size:10px;color:{cov_color};font-weight:600;flex-shrink:0">{completeness_pct}%</span>'
-                    f'</div>'
-                    f'</div>'
-                )
-            else:
-                completeness_badge = ""
-                gaps_inline = ""
-                coverage_block = ""
-                completeness_pct = None
-                gaps = []
-                coverage_face = ""
-
-            # Simplified health footer — no "Sync health" label, just a subtle details expander
-            health_footer = (
-                f'<div class="card-health-footer" style="padding:4px 14px 8px">'
-                + (
-                    f'<button onclick="toggleHealth(this,\'{he(src)}\')" style="background:none;border:none;cursor:pointer;font-size:10px;color:#9ca3af;padding:0;display:flex;align-items:center;gap:2px;margin-top:2px">'
-                    f'<span class="health-chevron" style="font-size:9px">&#9656;</span> details'
-                    f'</button>'
-                    f'<div class="health-detail" style="display:none;margin-top:6px;font-size:12px;color:#6b7280" data-source="{he(src)}">{coverage_block}</div>'
-                    if coverage_block else ""
-                )
-                + f'</div>'
-            )
-
-            _fav_domain = _reg_domain(_ACCOUNT_ENTRY_URLS.get(src, ''))
-            _fav_html = (
-                f'<div class="acct-favicon-wrap">'
-                f'<img src="https://www.google.com/s2/favicons?domain={_fav_domain}&sz=64"'
-                f' class="acct-favicon" alt="" onerror="this.parentElement.style.display=\'none\'">'
-                f'</div>'
-            ) if _fav_domain else ''
-
-            grid_cards += (
-                f'<div class="acct-card{stale_cls}{expiring_cls}{_compact_cls}" data-name="{he(display_name)}" data-account-source="{he(src)}" data-account-status="{he(_acct_canon.status)}" data-sync-status="{he(sync_status)}" data-connection-status="{he(_connection_status)}">'
-                f'<div class="acct-card-header">'
-                f'{_fav_html}'
-                f'<div style="flex:1;min-width:0">'
-                f'<div class="acct-name">{he(display_name)}{completeness_badge}</div>'
-                f'{_status_inline_html}'
-                + _badges_html
-                + (f'<div class="acct-sync-time" data-synced="{he(synced_at)}">{freshness_html}</div>' if freshness_html else '')
-                + f'<div class="acct-sync-time" data-synced="{he(synced_at)}" style="display:none"></div>'
-                f'{coverage_face}'
-                f'</div>'
-                f'<div class="acct-controls">'
-                f'<div class="sync-status-dot" style="width:7px;height:7px;border-radius:50%;background:{status_color};flex-shrink:0;cursor:help" data-status-color="{status_color}" title="{synced_title}"></div>'
-                + (
-                    f'<a href="{he(_card_url)}" target="_blank" rel="noopener" title="Open {he(display_name)}" class="acct-refresh-btn" style="text-decoration:none;font-size:11px">'
-                    f'<svg width="11" height="11" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 1h4v4M11 1L5.5 6.5M5 2H2a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                    f'</a>'
-                    if (_card_url := (SITE_ENTRY_URL.get(src) or (row or {}).get("entry_url", ""))) else ""
-                )
-                + ''
-                f'</div>'
-                f'</div>'
-                f'{bad_banner}'
-                f'{card_hero_html}'
-                f'{sec_html}'
-                f'{alert_html}'
-                f'{cand_notice}'
-                f'{expanded_html}'
-                f'{health_footer}'
-                f'{card_footer}'
-                f'</div>'
-            )
-
-        if grid_cards:
-            cards_html += (
-                f'<div class="cat-group">'
-                f'<div class="cat-header">'
-                f'<span class="cat-label">{he(cat)}</span>'
-                f'<div class="cat-rule"></div>'
-                f'</div>'
-                f'<div class="card-grid">{grid_cards}</div>'
-                f'</div>'
-            )
-
-    if cards_html:
-        account_data_html = cards_html
-    else:
-        account_data_html = ""
+    account_data_html = ""
     _render_lap.record("decrypt_account", _render_decrypt_ms)
     _render_lap.finish()
-    _rt.step("render_cards")
+    _rt.step("account_status")
 
     # Compute total tracked value across all accounts
     total_value = 0.0
@@ -10205,38 +9572,53 @@ def dashboard():
     import datetime as _brief_dt
     _today_label = _brief_dt.date.today().strftime("%A, %B %-d")
 
-    def _render_daily_brief_hero(brief, first_name: str) -> str:
-        if build_executive_briefing is not None and render_executive_briefing_hero is not None:
-            exec_brief = build_executive_briefing(
-                brief,
-                account_count=_account_count,
-                benefit_count=len(_hero_candidates),
-                expiring_count=total_expiring,
-                use_demo_when_empty=not _suppress_demo_content,
+    _last_checked = ""
+    if _global_sync_label:
+        _last_checked = _global_sync_label.replace(user_copy.LAST_UPDATED_PREFIX, "").strip()
+
+    _tracked_value_label = ""
+    if total_value >= 1000:
+        _tracked_value_label = f"${total_value:,.0f}"
+    elif total_value > 0:
+        _tracked_value_label = f"${int(total_value)}"
+
+    def _render_home_hero() -> str:
+        if resolve_home_state is None or render_home_page is None:
+            return (
+                f'<div class="dash-hero">'
+                f'<div class="dash-brief-card">'
+                f'<div class="dash-brief-greeting">Hello, {he(_first_name)}</div>'
+                f'</div></div>'
             )
-            return render_executive_briefing_hero(
-                exec_brief,
-                first_name=first_name,
-                today_label=_today_label,
-                escape=he,
-            )
-        return (
-            f'<div class="dash-hero">'
-            f'<div class="dash-brief-card">'
-            f'<div class="dash-brief-greeting">Hello, {he(first_name)}</div>'
-            f'</div></div>'
+        _updating_name = None
+        if _updating_source:
+            for _ha in _home_account_statuses:
+                if _ha.source == _updating_source:
+                    _updating_name = _ha.display_name
+                    break
+        _home_result = resolve_home_state(
+            accounts=_home_account_statuses,
+            actions=_dashboard_actions if build_dashboard_actions is not None else None,
+            sync_running=_sync_running,
+            updating_source=_updating_source,
+            updating_display_name=_updating_name,
+            pending_activity_count=pending_count,
+            benefit_count=len(_hero_candidates),
+            tracked_value_label=_tracked_value_label,
+            freshness_label=_last_checked,
+            provider_open_urls=_home_provider_urls,
+        )
+        return render_home_page(
+            _home_result,
+            first_name=_first_name,
+            today_label=_today_label,
+            last_checked=_last_checked,
+            escape=he,
         )
 
-    hero_section_html = _render_daily_brief_hero(daily_brief, _first_name)
+    hero_section_html = _render_home_hero()
 
-    topbar_search_html = (
-        '<div class="topbar-search">'
-        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-        '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
-        '<input type="text" placeholder="Search accounts…" oninput="filterCards(this.value)" id="card-search">'
-        '</div>'
-        if _account_count > 0 else ''
-    )
+    topbar_search_html = ''
 
     # ── INSIGHTS: Benefits available now — horizontal 3-card row ─────────────────
     import json as _json_ins
@@ -11291,10 +10673,10 @@ function dismissOnboarding() {{
         hero_section_html = _demo_mode.render_demo_daily_brief_hero(
             _demo_mode.get_demo_daily_brief(), _demo_first, _demo_today,
         )
-        recommendations_section_html = _demo_mode.render_demo_recommendations()
-        insights_html = _demo_mode.render_demo_benefits_row()
-        account_data_html = _demo_mode.render_demo_account_cards(reg_domain=_reg_domain)
-        recently_found_html = _demo_mode.render_demo_recent_discoveries()
+        recommendations_section_html = ""
+        insights_html = ""
+        account_data_html = ""
+        recently_found_html = ""
         total_expiring = _demo_mode.expiring_count()
         _global_sync_label = f"Demo · {user_copy.LAST_UPDATED_PREFIX} 2h ago"
         onboarding_banner = ""
@@ -11312,6 +10694,19 @@ function dismissOnboarding() {{
             '<div style="width:7px;height:7px;border-radius:50%;background:#7c3aed;flex-shrink:0"></div>'
             'Demo</div>'
         )
+
+    if not demo_mode_active:
+        account_data_html = ""
+        insights_html = ""
+        recommendations_section_html = ""
+        available_rail_html = ""
+        action_center_html = ""
+        recently_found_html = ""
+        relevant_now_html = ""
+        wallet_insights_html = ""
+        value_center_html = ""
+        top_benefits_html = ""
+        progress_section_html = ""
 
     import json as _json_dash_poll
     _latest_sync_baseline = _json_dash_poll.dumps(_global_last_synced or "")

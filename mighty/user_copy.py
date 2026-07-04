@@ -400,6 +400,96 @@ def connect_steps_html(*, step2_extra: str = "") -> str:
     )
 
 
+# ── Home (attention inbox) ───────────────────────────────────────────────────
+HOME_EMPTY_HEADLINE = "Your accounts, watched quietly."
+HOME_EMPTY_BODY = (
+    "Mighty finds airlines, hotels, and card programs from your Gmail and keeps them current "
+    "while you browse in Chrome. You sign in when asked — Mighty handles the rest."
+)
+HOME_EMPTY_WORKER_NOTE = (
+    "Use desktop Chrome with the Mighty worker installed. "
+    "The dashboard shows results; it never logs into provider sites for you."
+)
+HOME_EMPTY_CTA = "Connect Gmail"
+HOME_EMPTY_SECONDARY = "Add an account manually"
+
+HOME_WAITING_BODY = (
+    "Visit your account page in Chrome while logged in — that's when the worker captures "
+    "your balances and perks. Usually takes one visit; no sync button needed."
+)
+HOME_VIEW_WAITING_LABEL = "View all accounts"
+HOME_VIEW_NEEDS_LOGIN_LABEL = "View all accounts needing login"
+HOME_VIEW_ACCOUNTS_LABEL = "View accounts"
+
+HOME_UPDATE_BODY = (
+    "This usually takes a few seconds. You can leave this tab open or come back — "
+    "Home will refresh when your data is ready."
+)
+
+HOME_ALL_CLEAR_HEADLINE = "You're all set."
+
+HOME_PRIORITY_WAITING = "Getting your first update."
+HOME_PRIORITY_LOGIN = "One thing needs you."
+HOME_PRIORITY_UPDATE = "Almost there."
+HOME_PRIORITY_ALL_CLEAR = "Nothing urgent today."
+HOME_PRIORITY_RECOMMENDATION = "1 thing worth your attention."
+
+HOME_FOOTER_WORKER = "Mighty runs in Chrome"
+HOME_FOOTER_LAST_CHECKED = "Last checked {time}"
+HOME_ACTIVITY_LINK = "{count} awaiting decision"
+
+
+def home_waiting_headline(count: int, provider_name: str | None = None) -> str:
+    if count == 1 and provider_name:
+        return f"Mighty is tracking {provider_name}."
+    return f"Mighty is tracking {count} account{'s' if count != 1 else ''}."
+
+
+def home_login_headline(provider_name: str, *, plural: bool = False, count: int = 1) -> str:
+    if plural or count > 1:
+        return f"{count} accounts need login."
+    return f"{provider_name} needs login."
+
+
+def home_login_body(provider_name: str) -> str:
+    return (
+        f"Sign in to {provider_name} in Chrome — the only manual step. "
+        "After you log in, keep your account page open for a few seconds so the worker "
+        "can verify your session. Mighty never sees or stores your password."
+    )
+
+
+def home_login_cta(provider_name: str) -> str:
+    return f"Log in to {provider_name}"
+
+
+def home_open_provider_cta(provider_name: str) -> str:
+    return f"Open {provider_name}"
+
+
+def home_view_provider_cta(provider_name: str) -> str:
+    return f"View {provider_name}"
+
+
+def home_update_headline(provider_name: str) -> str:
+    return f"Updating {provider_name}…"
+
+
+def home_all_clear_body(account_count: int) -> str:
+    n = account_count
+    word = "account" if n == 1 else "accounts"
+    return (
+        f"Mighty is watching {n} {word}. No expiring perks or logins need you right now. "
+        "Check back anytime — we'll speak up when something matters."
+    )
+
+
+def home_recommendation_priority(total: int) -> str:
+    if total <= 1:
+        return HOME_PRIORITY_RECOMMENDATION
+    return f"{total} things worth your attention."
+
+
 def login_required_action_value(display_name: str) -> str:
     return NEEDS_LOGIN_ACTION_VALUE.format(name=display_name)
 
