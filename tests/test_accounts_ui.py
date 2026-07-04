@@ -15,12 +15,14 @@ from mighty.accounts_ui import (
     SECTION_ORDER,
     SECTION_UP_TO_DATE,
     SECTION_WAITING,
+    AccountsPortfolio,
     build_portfolio,
     group_rows_by_section,
     matches_filter,
     normalize_filter,
     portfolio_last_checked,
     portfolio_summary_line,
+    render_portfolio_summary,
     resolve_accounts_section,
     sort_rows,
 )
@@ -138,6 +140,45 @@ class TestAccountsPortfolio:
         assert "1 up to date" in summary
         assert "waiting" not in summary
         assert "login" not in summary
+
+    def test_portfolio_summary_login_grammar_singular(self):
+        portfolio = AccountsPortfolio(
+            total=2, needs_login=1, needs_attention=0, waiting=0,
+            up_to_date=1, last_checked_label="",
+        )
+        assert "1 needs login" in portfolio_summary_line(portfolio)
+
+    def test_portfolio_summary_login_grammar_plural(self):
+        portfolio = AccountsPortfolio(
+            total=2, needs_login=2, needs_attention=0, waiting=0,
+            up_to_date=0, last_checked_label="",
+        )
+        assert "2 need login" in portfolio_summary_line(portfolio)
+
+    def test_portfolio_summary_attention_grammar_singular(self):
+        portfolio = AccountsPortfolio(
+            total=1, needs_login=0, needs_attention=1, waiting=0,
+            up_to_date=0, last_checked_label="",
+        )
+        assert "1 needs attention" in portfolio_summary_line(portfolio)
+
+    def test_portfolio_summary_attention_grammar_plural(self):
+        portfolio = AccountsPortfolio(
+            total=2, needs_login=0, needs_attention=2, waiting=0,
+            up_to_date=0, last_checked_label="",
+        )
+        assert "2 need attention" in portfolio_summary_line(portfolio)
+
+    def test_active_filter_chip_visible_when_count_zero(self):
+        portfolio = AccountsPortfolio(
+            total=1, needs_login=0, needs_attention=0, waiting=0,
+            up_to_date=1, last_checked_label="Last checked 1 hour ago",
+        )
+        html = render_portfolio_summary(portfolio, "waiting", lambda s: s)
+        assert (
+            'href="/credentials?filter=waiting" '
+            'class="acct-portfolio-chip acct-portfolio-chip--active"'
+        ) in html
 
 
 class TestAccountsFilterNormalization:

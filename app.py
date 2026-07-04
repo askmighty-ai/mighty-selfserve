@@ -14057,10 +14057,6 @@ def _accounts_row_html(
 ) -> str:
     src = he(row.source)
     pending_cls = " acct-maint-row--pending" if row.is_pending else ""
-    view_link = (
-        f'<a href="/dashboard?account={src}" class="acct-maint-view">'
-        f'{he(user_copy.ACCOUNTS_VIEW_ACCOUNT)}</a>'
-    )
     disconnect = (
         f'<button type="button" class="acct-maint-disconnect" '
         f"onclick=\"if(confirm('Disconnect this account?'))removeCred('{src}','"
@@ -14084,7 +14080,7 @@ def _accounts_row_html(
         f'<p class="acct-maint-status">{he(row.status_label)}</p>'
         f"{subline_html}{meta_html}"
         f"</div></div>"
-        f'<div class="acct-maint-actions">{primary_cta}{view_link}{disconnect}</div>'
+        f'<div class="acct-maint-actions">{primary_cta}{disconnect}</div>'
         f"{debug_html}"
         f"</article>"
     )

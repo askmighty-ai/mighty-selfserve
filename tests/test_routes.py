@@ -232,6 +232,43 @@ def test_credentials_page_renders(client):
     assert b"Connected accounts" not in r.data
     assert b"sync-howto" not in r.data
     assert b"Never miss another credit" not in r.data
+    assert b"function openModal()" in r.data
+    assert b"onclick=\"openModal()\"" in r.data
+    assert b"/dashboard?account=" not in r.data
+    assert b"View account" not in r.data
+
+
+def test_credentials_page_filter_waiting_empty_still_shows_active_chip(client):
+    """Active filter chip stays visible even when that bucket has zero accounts."""
+    import app as mighty
+
+    with client.session_transaction() as sess:
+        uid = sess["user_id"]
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        now = mighty.iso()
+        stub = mighty.encrypt_account_data(uid, {
+            "items": [{"key": "balance", "label": "Balance", "value": "$100"}],
+            "sync_status": "ok",
+        })
+        db.execute(
+            "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (uid, "amex", "", "", "", now, now),
+        )
+        db.execute(
+            "INSERT INTO account_data "
+            "(user_id, source, display_name, icon, color, data_enc, synced_at, connection_status, sync_status) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (uid, "amex", "Amex", "💳", "#eee", stub, now, "connected", "ok"),
+        )
+        db.commit()
+    r = client.get("/credentials?filter=waiting")
+    assert r.status_code == 200
+    assert b'href="/credentials?filter=waiting"' in r.data
+    assert b"acct-portfolio-chip--active" in r.data
+    assert b"No accounts in this view." in r.data
+    assert b"/dashboard?account=" not in r.data
 
 
 def test_credentials_page_filter_waiting(client):

@@ -234,6 +234,11 @@ def filter_chip_url(filter_key: str) -> str:
     return f"/credentials?filter={filter_key}"
 
 
+def _count_phrase(count: int, verb: str) -> str:
+    """Singular count uses third-person verb: 1 needs login, 2 need login."""
+    return f"{count} {verb}{'s' if count == 1 else ''}"
+
+
 def portfolio_summary_line(portfolio: AccountsPortfolio) -> str:
     parts: list[str] = [f"{portfolio.total} account{'s' if portfolio.total != 1 else ''}"]
     if portfolio.up_to_date:
@@ -241,11 +246,9 @@ def portfolio_summary_line(portfolio: AccountsPortfolio) -> str:
     if portfolio.waiting:
         parts.append(f"{portfolio.waiting} waiting")
     if portfolio.needs_login:
-        parts.append(
-            f"{portfolio.needs_login} need{'s' if portfolio.needs_login != 1 else ''} login"
-        )
+        parts.append(f"{_count_phrase(portfolio.needs_login, 'need')} login")
     if portfolio.needs_attention:
-        parts.append(f"{portfolio.needs_attention} need attention")
+        parts.append(f"{_count_phrase(portfolio.needs_attention, 'need')} attention")
     return " · ".join(parts)
 
 
@@ -264,14 +267,15 @@ def render_portfolio_summary(
     for label, key in chips:
         active = " acct-portfolio-chip--active" if active_filter == key else ""
         hide = ""
-        if key == "needs_attention" and not (
-            portfolio.needs_login or portfolio.needs_attention
-        ):
-            hide = ' style="display:none"'
-        elif key == "waiting" and not portfolio.waiting:
-            hide = ' style="display:none"'
-        elif key == "up_to_date" and not portfolio.up_to_date:
-            hide = ' style="display:none"'
+        if active_filter != key:
+            if key == "needs_attention" and not (
+                portfolio.needs_login or portfolio.needs_attention
+            ):
+                hide = ' style="display:none"'
+            elif key == "waiting" and not portfolio.waiting:
+                hide = ' style="display:none"'
+            elif key == "up_to_date" and not portfolio.up_to_date:
+                hide = ' style="display:none"'
         chip_html += (
             f'<a href="{escape(filter_chip_url(key))}" '
             f'class="acct-portfolio-chip{active}"{hide}>{escape(label)}</a>'
