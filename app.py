@@ -6382,6 +6382,17 @@ function filterCards(q) {
     g.style.display = visible ? '' : 'none';
   });
 }
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var account = params.get('account');
+  if (!account) return;
+  var card = document.querySelector('.acct-card[data-source="' + account + '"]')
+    || document.getElementById('acct-' + account);
+  if (!card) return;
+  switchFeedTab('accounts', document.getElementById('ftab-accounts'));
+  card.classList.add('is-expanded', 'highlight-on');
+  setTimeout(function() { card.scrollIntoView({behavior: 'smooth', block: 'center'}); }, 100);
+})();
 function switchTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
@@ -13913,57 +13924,52 @@ function closeBenefitDrawer() {{
 _CREDENTIALS_PAGE_CSS = """
 .main-content{height:100vh;overflow-y:auto}
 .page{max-width:720px;margin:0;padding:32px 36px 40px}
-.page:has(.accounts-onboard){max-width:828px}
 .page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px}
 .page-header-text{flex:1;min-width:0}
 .page-header h1{font-size:20px;font-weight:700;color:#1c1917;margin:0}
 .page-subtitle{font-size:14px;color:#6b7280;line-height:1.5;margin-top:4px;max-width:48ch}
-.btn-connect-new{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;transition:background 0.12s;flex-shrink:0;margin-top:2px}
+.btn-connect-new{padding:8px 16px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:6px;transition:background 0.12s;flex-shrink:0;margin-top:2px;text-decoration:none}
 .btn-connect-new:hover{background:#4f46e5}
-.accounts-onboard{margin-top:4px}
-.accounts-onboard-card{background:#ffffff;border:1px solid rgba(0,0,0,0.06);border-radius:18px;padding:32px 36px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 16px rgba(0,0,0,0.06);text-align:center}
-.accounts-onboard-title{font-size:24px;font-weight:700;color:#1c1917;letter-spacing:-0.5px;line-height:1.25;margin:0 auto 10px;max-width:24ch}
-.accounts-onboard-desc{font-size:15px;color:#57534e;line-height:1.55;margin:0 auto 18px;max-width:46ch}
-.accounts-onboard-value{display:grid;gap:8px;margin:0 auto 22px;max-width:440px;text-align:left}
-.accounts-onboard-value-item{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:#fafaf9;border:1px solid rgba(0,0,0,0.05);border-radius:10px}
-.accounts-onboard-value-icon{width:22px;height:22px;border-radius:6px;background:rgba(99,102,241,0.1);color:#6366f1;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
-.accounts-onboard-value-text{font-size:13px;font-weight:600;color:#1c1917;line-height:1.45}
-.accounts-onboard-value-text span{display:block;font-size:12px;font-weight:400;color:#78716c;margin-top:1px}
-.accounts-onboard-cats{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-bottom:20px}
-.accounts-onboard-cat{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;border:1px solid #e8e4de;border-radius:99px;font-size:12px;font-weight:500;color:#57534e}
-.accounts-onboard-cat-icon{font-size:13px;line-height:1}
-.accounts-onboard-cta{display:inline-flex;align-items:center;justify-content:center;padding:13px 26px;background:#6366f1;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;box-shadow:0 1px 2px rgba(99,102,241,0.2);transition:background 0.12s,box-shadow 0.12s;margin-bottom:18px}
-.accounts-onboard-cta:hover{background:#4f46e5;box-shadow:0 4px 12px rgba(99,102,241,0.25)}
-.accounts-onboard-providers-label{display:block;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px}
-.accounts-onboard-chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
-.accounts-onboard-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px 5px 6px;background:#fff;border:1px solid #e8e4de;border-radius:99px;font-size:12px;font-weight:500;color:#57534e}
-.accounts-onboard-chip-icon{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;overflow:hidden}
-.accounts-onboard-chip-icon img{width:14px;height:14px;border-radius:2px;display:block}
-.page-sync-note{text-align:center;padding:16px 0 8px;font-size:12px;color:#9ca3af}
-.sync-howto{background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:16px 18px;margin-bottom:20px}
-.sync-howto-title{font-size:13px;font-weight:700;color:#0369a1;margin-bottom:10px}
-.sync-howto-list{margin:0;padding-left:18px;font-size:13px;color:#374151;line-height:1.65}
-.sync-howto-list li{margin-bottom:6px}
-.sync-howto-list li:last-child{margin-bottom:0}
-.sync-howto-tagline{margin:12px 0 0;font-size:12px;color:#0369a1;font-weight:600}
-@media(max-width:768px){.page{padding:24px 16px 32px}.page-header{flex-wrap:wrap}.btn-connect-new{width:100%;justify-content:center;margin-top:0}.accounts-onboard-card{padding:26px 20px;border-radius:16px}.accounts-onboard-title{font-size:21px;max-width:none}.accounts-onboard-desc{font-size:14px}.accounts-onboard-cta{width:100%;box-sizing:border-box}}
-/* ── Cred cards ── */
-.cred-card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:16px 18px;margin-bottom:10px;transition:border-color 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
-.cred-card:hover{border-color:#d0ccc5}
-.cred-form input{width:100%;padding:9px 12px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-top:8px;transition:border-color 0.12s;background:#ffffff;color:#1c1917}
-.cred-form input:focus{border-color:#6366f1}
-.cred-form input::placeholder{color:#c0bbb5}
-.cred-form details{margin-top:8px;border:1px solid #e8e4de;border-radius:8px;overflow:hidden}
-.cred-form details summary{font-size:12px;color:#6b7280;cursor:pointer;user-select:none;padding:8px 12px;background:#f5f2ed;list-style:none;display:flex;align-items:center;justify-content:space-between}
-.cred-form details summary::after{content:'＋';font-size:14px;color:#9ca3af}
-.cred-form details[open] summary::after{content:'－'}
-.cred-form details input{margin:0;border:none;border-top:1px solid #e8e4de;border-radius:0}
-.btn-toggle{padding:5px 12px;border-radius:7px;border:1px solid #e8e4de;background:#f5f2ed;font-size:12px;font-weight:600;color:#6366f1;cursor:pointer;font-family:inherit;transition:all 0.12s}
-.btn-toggle:hover{border-color:#6366f1;background:#eef2ff}
-.btn-remove{padding:5px 10px;border-radius:7px;border:1px solid rgba(220,38,38,0.25);background:transparent;font-size:12px;color:#dc2626;cursor:pointer;font-family:inherit;transition:all 0.12s}
-.btn-remove:hover{background:rgba(220,38,38,0.06);border-color:#dc2626}
-.btn-save{margin-top:12px;padding:9px 18px;border-radius:8px;background:#6366f1;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background 0.12s}
-.btn-save:hover{background:#4f46e5}
+.acct-portfolio{position:sticky;top:0;z-index:2;background:#f7f5f2;padding:12px 0 14px;margin-bottom:8px;border-bottom:1px solid rgba(0,0,0,0.06)}
+.acct-portfolio-counts{font-size:13px;font-weight:600;color:#1c1917;margin:0 0 8px}
+.acct-portfolio-meta{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.acct-portfolio-freshness{font-size:12px;color:#78716c}
+.acct-portfolio-filters{display:flex;flex-wrap:wrap;gap:6px}
+.acct-portfolio-chip{display:inline-block;padding:5px 10px;border-radius:99px;border:1px solid #e8e4de;background:#fff;font-size:12px;font-weight:500;color:#57534e;text-decoration:none}
+.acct-portfolio-chip:hover{border-color:#a8a29e}
+.acct-portfolio-chip--active{background:#eef2ff;border-color:#c7d2fe;color:#4338ca;font-weight:600}
+.acct-section-header{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#9ca3af;margin:20px 0 8px}
+.acct-section-header:first-child{margin-top:0}
+.acct-maint-row{background:#fff;border:1px solid #e8e4de;border-radius:12px;padding:14px 16px;margin-bottom:8px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+.acct-maint-row--pending{border-style:dashed}
+.acct-maint-main{display:flex;align-items:flex-start;gap:12px;flex:1;min-width:0}
+.acct-maint-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
+.acct-maint-body{min-width:0}
+.acct-maint-name{font-size:14px;font-weight:600;color:#1c1917;margin:0}
+.acct-maint-status{font-size:12px;font-weight:600;color:#374151;margin:3px 0 0}
+.acct-maint-sub{font-size:12px;color:#6b7280;margin:4px 0 0;line-height:1.45}
+.acct-maint-meta{font-size:10px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin:6px 0 0}
+.acct-maint-actions{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}
+.acct-maint-cta{background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe}
+.acct-maint-cta--urgent{background:#fef2f2;color:#dc2626;border-color:#fecaca}
+.acct-maint-cta--primary{background:#6366f1;color:#fff;border-color:#6366f1}
+.acct-maint-cta--secondary{background:#fff;color:#4338ca;border:1px solid #c7d2fe;cursor:pointer}
+.acct-maint-view{font-size:12px;font-weight:500;color:#6366f1;text-decoration:none}
+.acct-maint-view:hover{text-decoration:underline}
+.acct-maint-disconnect{background:none;border:none;font-size:11px;color:#9ca3af;cursor:pointer;padding:0;font-family:inherit}
+.acct-maint-disconnect:hover{color:#dc2626}
+.acct-empty{text-align:center;padding:32px 16px 24px}
+.acct-empty-headline{font-size:16px;font-weight:700;color:#1c1917;margin:0 0 8px}
+.acct-empty-body{font-size:14px;color:#6b7280;margin:0 0 20px}
+.acct-empty-actions{display:flex;flex-direction:column;gap:10px;align-items:center}
+.acct-filter-empty{text-align:center;padding:24px;color:#6b7280;font-size:14px}
+.acct-filter-empty a{color:#6366f1;font-weight:500}
+.acct-add-coverage{margin-top:28px;padding-top:20px;border-top:1px solid #e8e4de}
+.acct-add-coverage p{font-size:13px;color:#6b7280;margin:0 0 10px}
+.acct-add-coverage-actions{display:flex;flex-wrap:wrap;gap:12px}
+.acct-add-coverage-actions a,.acct-add-coverage-actions button{font-size:13px;font-weight:500;color:#4338ca;background:none;border:none;cursor:pointer;padding:0;font-family:inherit;text-decoration:none}
+.acct-add-coverage-actions a:hover,.acct-add-coverage-actions button:hover{text-decoration:underline}
+@media(max-width:768px){.page{padding:24px 16px 32px}.page-header{flex-wrap:wrap}.btn-connect-new{width:100%;justify-content:center;margin-top:0}.acct-maint-row{flex-direction:column}.acct-maint-actions{flex-direction:row;flex-wrap:wrap;align-items:center;width:100%}}
 /* ── Modal ── */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:64px;backdrop-filter:blur(2px)}
 .modal-overlay.open{display:flex}
@@ -13993,6 +13999,175 @@ _CREDENTIALS_PAGE_CSS = """
 .toast{position:fixed;bottom:24px;right:24px;background:#1c1917;color:#f5f2ed;border:1px solid #333;padding:10px 18px;border-radius:9px;font-size:13px;opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:200;box-shadow:0 4px 20px rgba(0,0,0,0.15)}
 .toast.show{opacity:1}
 """
+
+
+def _accounts_primary_cta_html(
+    lifecycle: AccountLifecycle,
+    source: str,
+    display_name: str,
+    sync_status: str = "ok",
+) -> str:
+    """Primary CTA for Accounts maintenance rows — blocked states only."""
+    btn = (
+        "display:inline-block;padding:6px 12px;border-radius:7px;font-size:12px;"
+        "font-weight:600;text-decoration:none;font-family:inherit"
+    )
+    canonical = resolve_canonical_status(
+        lifecycle,
+        sync_status or "ok",
+        source=source,
+        updating_source=None,
+    )
+    if canonical == ERROR:
+        open_url = _provider_login_url(source) or SITE_ENTRY_URL.get(source, "")
+        if not open_url:
+            return ""
+        return (
+            f'<a href="{he(open_url)}" target="_blank" rel="noopener" '
+            f'class="acct-maint-cta" style="{btn}">'
+            f'{he(user_copy.CTA_OPEN_PROVIDER)}</a>'
+        )
+    if lifecycle.state == LC_NEEDS_LOGIN or canonical == CANON_NEEDS_LOGIN:
+        login_url = _provider_login_url(source)
+        if not login_url:
+            return ""
+        label = user_copy.home_login_cta(display_name)
+        return (
+            f'<a href="{he(login_url)}" target="_blank" rel="noopener" '
+            f'class="acct-maint-cta acct-maint-cta--urgent" style="{btn}">'
+            f'{he(label)}</a>'
+        )
+    if lifecycle.state in (LC_WAITING, LC_CONNECTED, LC_ADDED):
+        open_url = _provider_login_url(source) or SITE_ENTRY_URL.get(source, "")
+        if not open_url:
+            return ""
+        return (
+            f'<a href="{he(open_url)}" target="_blank" rel="noopener" '
+            f'class="acct-maint-cta" style="{btn}">'
+            f'{he(user_copy.CTA_OPEN_PROVIDER)}</a>'
+        )
+    return ""
+
+
+def _accounts_row_html(
+    row: AccountsRow,
+    *,
+    primary_cta: str = "",
+    debug_html: str = "",
+) -> str:
+    src = he(row.source)
+    pending_cls = " acct-maint-row--pending" if row.is_pending else ""
+    disconnect = (
+        f'<button type="button" class="acct-maint-disconnect" '
+        f"onclick=\"if(confirm('Disconnect this account?'))removeCred('{src}','"
+        f"{he(row.display_name)}')\">{he(user_copy.ACCOUNTS_DISCONNECT)}</button>"
+    )
+    subline_html = (
+        f'<p class="acct-maint-sub">{he(row.subline)}</p>' if row.subline else ""
+    )
+    meta_html = (
+        f'<p class="acct-maint-meta">{he(row.source_label)}</p>'
+        if row.source_label
+        else ""
+    )
+    return (
+        f'<article class="acct-maint-row{pending_cls}" id="card-{src}" '
+        f'data-section="{he(row.section)}">'
+        f'<div class="acct-maint-main">'
+        f'<div class="acct-maint-icon" style="background:{he(row.color)}">{row.icon}</div>'
+        f'<div class="acct-maint-body">'
+        f'<h3 class="acct-maint-name">{he(row.display_name)}</h3>'
+        f'<p class="acct-maint-status">{he(row.status_label)}</p>'
+        f"{subline_html}{meta_html}"
+        f"</div></div>"
+        f'<div class="acct-maint-actions">{primary_cta}{disconnect}</div>'
+        f"{debug_html}"
+        f"</article>"
+    )
+
+
+def _accounts_collect_rows(
+    *,
+    configured: set,
+    pending_added: list,
+    lifecycle_by_source: dict,
+    synced_at_by_source: dict,
+    sync_status_by_source: dict,
+    failure_reason_by_source: dict,
+    fmt_sync: Callable[[str], str],
+) -> list[AccountsRow]:
+    rows: list[AccountsRow] = []
+    site_map = {k: (n, ic, col, cat) for k, n, ic, col, cat in SUPPORTED_SITES}
+    seen: set[str] = set()
+
+    def _append(
+        source: str,
+        display_name: str,
+        icon: str,
+        color: str,
+        lifecycle: AccountLifecycle,
+        *,
+        is_pending: bool = False,
+    ) -> None:
+        if source in seen:
+            return
+        seen.add(source)
+        sync_status = sync_status_by_source.get(source, "ok")
+        section = resolve_accounts_section(
+            lifecycle,
+            sync_status,
+            source=source,
+        )
+        synced_raw = synced_at_by_source.get(source, "")
+        synced_fmt = fmt_sync(synced_raw) if synced_raw else ""
+        failure = failure_reason_by_source.get(source, "")
+        if section == SECTION_NEEDS_ATTENTION and not failure:
+            failure = user_copy.FAILURE_HINTS.get(sync_status, sync_status or "Update error")
+        rows.append(
+            AccountsRow(
+                source=source,
+                display_name=display_name,
+                icon=icon,
+                color=color,
+                section=section,
+                status_label=row_status_label(section, lifecycle),
+                subline=row_subline(
+                    section,
+                    lifecycle,
+                    sync_status,
+                    source=source,
+                    synced_fmt=synced_fmt,
+                    failure_hint=failure,
+                ),
+                source_label=lifecycle.source_label,
+                lifecycle=lifecycle,
+                synced_fmt=synced_fmt,
+                is_pending=is_pending,
+            )
+        )
+
+    for key, name, icon, color, _cat in SUPPORTED_SITES:
+        if key not in configured:
+            continue
+        lifecycle = lifecycle_by_source.get(key) or resolve_account_lifecycle(
+            key, in_credentials=True,
+        )
+        _append(key, name, icon, color, lifecycle)
+
+    for row in pending_added:
+        sk = row["site_key"]
+        if sk in configured:
+            continue
+        info = site_map.get(sk)
+        dname = info[0] if info else row["display_name"]
+        icon = info[1] if info else "🌐"
+        color = info[2] if info else "#e5e7eb"
+        lifecycle = lifecycle_by_source.get(sk) or resolve_account_lifecycle(
+            sk, email_added=True, from_email=True,
+        )
+        _append(sk, dname, icon, color, lifecycle, is_pending=True)
+
+    return sort_rows(rows)
 
 
 def _lifecycle_badge_html(lifecycle: AccountLifecycle, synced_fmt: str = "") -> str:
@@ -14030,8 +14205,12 @@ def _build_credentials_page(
     connect_source: str = None,
     debug_by_source: dict = None,
     show_debug: bool = False,
+    filter_key: str = "all",
+    sync_status_by_source: dict = None,
+    failure_reason_by_source: dict = None,
+    last_checked_label: str = "",
 ) -> str:
-    """Generate the credentials management page HTML."""
+    """Generate the Accounts maintenance page HTML."""
     extra_by_source = extra_by_source or {}
     synced_at_by_source = synced_at_by_source or {}
     connection_status_by_source = connection_status_by_source or {}
@@ -14040,141 +14219,55 @@ def _build_credentials_page(
     pending_added = pending_added or []
     connect_source = connect_source or ""
     debug_by_source = debug_by_source or {}
+    sync_status_by_source = sync_status_by_source or {}
+    failure_reason_by_source = failure_reason_by_source or {}
+    active_filter = normalize_filter(filter_key)
     csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
     _cred_styles = BASE_CSS + _CREDENTIALS_PAGE_CSS
 
-    # ── Connected account cards (main page) ──────────────────────────────────
-    connected_cards_html = ""
+    account_rows = _accounts_collect_rows(
+        configured=configured,
+        pending_added=pending_added,
+        lifecycle_by_source=lifecycle_by_source,
+        synced_at_by_source=synced_at_by_source,
+        sync_status_by_source=sync_status_by_source,
+        failure_reason_by_source=failure_reason_by_source,
+        fmt_sync=_fmt_sync,
+    )
+    last_checked = last_checked_label or user_copy.ACCOUNTS_NOT_CHECKED_YET
+    portfolio = build_portfolio(account_rows, last_checked)
+    grouped = group_rows_by_section(account_rows, active_filter)
 
-    def _cred_action_btn(source_key: str, name: str, lifecycle: AccountLifecycle, icon: str, color: str) -> str:
-        return _lifecycle_primary_cta_html(
-            lifecycle, source_key, name, icon=icon, color=color, surface="credentials",
-        )
-
-    for key, name, icon, color, cat in SUPPORTED_SITES:
-        if key not in configured:
-            continue
-        lifecycle = lifecycle_by_source.get(key) or resolve_account_lifecycle(key, in_credentials=True)
-        remove_btn = (
-            '<button class="btn-remove" onclick="if(confirm(\'Disconnect this account? This will remove saved credentials.\'))removeCred(\''
-            + he(key) + '\',\'' + he(name) + '\')" style="cursor:pointer">Disconnect</button>'
-        )
-        _cred_synced = synced_at_by_source.get(key, "")
-        _sync_fmt = _fmt_sync(_cred_synced) if _cred_synced else ""
-        _lifecycle_html = _lifecycle_badge_html(lifecycle, _sync_fmt)
-        _primary_action = _cred_action_btn(key, name, lifecycle, icon, color)
-        _edit_login = (
-            f'<button class="btn-toggle" onclick="toggleForm(\'{he(key)}\')" id="btn-{he(key)}" '
-            f'style="color:#8892a4;font-weight:500">Edit login</button>'
-        ) if lifecycle.state == LC_SYNCED else ""
-        _debug_html = _account_debug_panel_html(debug_by_source[key]) if show_debug and key in debug_by_source else ""
-        connected_cards_html += f"""
-<div class="cred-card" id="card-{he(key)}" data-lifecycle="{he(lifecycle.state)}">
-  <div style="display:flex;align-items:center;gap:12px">
-    <div style="width:36px;height:36px;border-radius:9px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{icon}</div>
-    <div style="flex:1">
-      <div style="font-size:14px;font-weight:600;color:#1c1917">{he(name)}</div>
-      {_lifecycle_html}
-    </div>
-    {_primary_action}
-    {_edit_login}
-    {remove_btn}
-  </div>
-  {_debug_html}
-  <div class="cred-form" id="form-{he(key)}" style="display:none;margin-top:14px">
-    <input type="text" name="username" placeholder="Username or email" autocomplete="off" id="u-{he(key)}">
-    <input type="password" name="password" placeholder="Password" autocomplete="new-password" id="p-{he(key)}">
-    <details style="margin-top:8px">
-      <summary style="font-size:12px;color:#8892a4;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
-      <input type="text" name="totp" placeholder="TOTP secret key" style="margin-top:6px" id="t-{he(key)}">
-      <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
-    </details>
-    <button class="btn-save" onclick="saveCred('{he(key)}', '{he(name)}')">Save account</button>
-  </div>
-  {_field_config_html(key, configured, extra_by_source.get(key, {}))}
-</div>"""
-
-    # Added-but-not-connected accounts from email scan
-    _site_map = {k: (n, ic, col) for k, n, ic, col, _ in SUPPORTED_SITES}
-    for row in pending_added:
-        sk = row["site_key"]
-        if sk in configured:
-            continue
-        info = _site_map.get(sk)
-        dname = info[0] if info else row["display_name"]
-        icon = info[1] if info else "🌐"
-        color = info[2] if info else "#e5e7eb"
-        lifecycle = lifecycle_by_source.get(sk) or resolve_account_lifecycle(
-            sk, email_added=True, from_email=True,
-        )
-        _debug_html = _account_debug_panel_html(debug_by_source[sk]) if show_debug and sk in debug_by_source else ""
-        connected_cards_html += f"""
-<div class="cred-card" id="card-{he(sk)}" data-lifecycle="{he(lifecycle.state)}" style="border-style:dashed">
-  <div style="display:flex;align-items:center;gap:12px">
-    <div style="width:36px;height:36px;border-radius:9px;background:{he(color)};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">{icon}</div>
-    <div style="flex:1">
-      <div style="font-size:14px;font-weight:600;color:#1c1917">{he(dname)}</div>
-      {_lifecycle_badge_html(lifecycle)}
-    </div>
-    {_lifecycle_primary_cta_html(lifecycle, sk, dname, icon=icon, color=color, surface="credentials")}
-  </div>
-  {_debug_html}
-</div>"""
-
-    _sync_note_html = ""
-    if not connected_cards_html:
-        _site_map = {k: (n, ic, col) for k, n, ic, col, _ in SUPPORTED_SITES}
-        _chip_labels = {"delta": "Delta", "united": "United", "marriott": "Marriott", "amex": "Amex"}
-        _chips_html = (
-            '<span class="accounts-onboard-chip">'
-            '<span class="accounts-onboard-chip-icon" style="background:#f5f2ed">'
-            '<img src="https://www.google.com/s2/favicons?domain=google.com&amp;sz=64" alt="">'
-            '</span>Google</span>'
-        )
-        for _ck in ("delta", "united", "marriott", "amex"):
-            if _ck in _site_map:
-                _cn, _ci, _cc = _site_map[_ck]
-                _chips_html += (
-                    f'<span class="accounts-onboard-chip">'
-                    f'<span class="accounts-onboard-chip-icon" style="background:{he(_cc)}">{_ci}</span>'
-                    f'{he(_chip_labels.get(_ck, _cn.split()[0]))}</span>'
-                )
-        connected_cards_html = f"""
-<div class="accounts-onboard">
-  <div class="accounts-onboard-card">
-    <div class="accounts-onboard-title">Never miss another credit or perk.</div>
-    <p class="accounts-onboard-desc">Add an account once. Mighty watches your balances and benefits, then surfaces opportunities on your Dashboard.</p>
-    <div class="accounts-onboard-value">
-      <div class="accounts-onboard-value-item">
-        <span class="accounts-onboard-value-icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.5l2.5 2.5L10 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-        <div class="accounts-onboard-value-text">Catch expiring perks<span>Certificates, credits, and free nights before they lapse</span></div>
-      </div>
-      <div class="accounts-onboard-value-item">
-        <span class="accounts-onboard-value-icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.5l2.5 2.5L10 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-        <div class="accounts-onboard-value-text">Recover unused value<span>Points, card benefits, and offers you may have forgotten</span></div>
-      </div>
-      <div class="accounts-onboard-value-item">
-        <span class="accounts-onboard-value-icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.5l2.5 2.5L10 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-        <div class="accounts-onboard-value-text">Get personalized recommendations<span>Actionable next steps tailored to your accounts</span></div>
-      </div>
-    </div>
-    <a href="/email-scan" class="accounts-onboard-cta" style="text-decoration:none;display:inline-block">Scan Gmail to find accounts</a>
-    <div class="accounts-onboard-cats">
-      <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">✈️</span>Travel</span>
-      <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">🏦</span>Banking</span>
-      <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">🛒</span>Shopping</span>
-      <span class="accounts-onboard-cat"><span class="accounts-onboard-cat-icon">📺</span>Subscriptions</span>
-    </div>
-    <span class="accounts-onboard-providers-label">Works with</span>
-    <div class="accounts-onboard-chips">{_chips_html}</div>
-  </div>
-</div>"""
+    list_html = ""
+    if not account_rows:
+        list_html = render_empty_state(he)
+    elif not grouped:
+        list_html = render_filter_empty(he)
     else:
-        _sync_note_html = ""
+        for section, section_rows in grouped:
+            list_html += render_section_header(section, he)
+            for row in section_rows:
+                primary = ""
+                if row.section != SECTION_UP_TO_DATE:
+                    primary = _accounts_primary_cta_html(
+                        row.lifecycle,
+                        row.source,
+                        row.display_name,
+                        sync_status_by_source.get(row.source, "ok"),
+                    )
+                debug_html = ""
+                if show_debug and row.source in debug_by_source:
+                    debug_html = _account_debug_panel_html(debug_by_source[row.source])
+                list_html += _accounts_row_html(
+                    row, primary_cta=primary, debug_html=debug_html,
+                )
 
-    _sync_howto_html = _SYNC_HOWTO_HTML
+    portfolio_html = ""
+    if account_rows:
+        portfolio_html = render_portfolio_summary(portfolio, active_filter, he)
 
+    add_coverage_html = render_add_coverage_footer(he) if account_rows else ""
     # ── Modal site picker ────────────────────────────────────────────────────
     modal_categories: dict = {}
     for key, name, icon, color, cat in SUPPORTED_SITES:
@@ -14261,7 +14354,7 @@ function runAutoDiscover() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <meta name="color-scheme" content="light">
-<title>Connected Accounts — Mighty</title>
+<title>Accounts — Mighty</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -14283,14 +14376,16 @@ function runAutoDiscover() {
 <div class="page">
   <div class="page-header">
     <div class="page-header-text">
-      <h1>Connected accounts</h1>
-      <p class="page-subtitle">{user_copy.INTERACTION_TAGLINE}</p>
+      <h1>{user_copy.ACCOUNTS_PAGE_TITLE}</h1>
+      <p class="page-subtitle">{user_copy.ACCOUNTS_PAGE_SUBTITLE}</p>
     </div>
     <a href="/email-scan" class="btn-connect-new" style="text-decoration:none;display:inline-flex;align-items:center">Find accounts</a>
   </div>
-  {_sync_howto_html}
-  {connected_cards_html}
-  {_sync_note_html}
+  {portfolio_html}
+  <div class="acct-list">
+  {list_html}
+  </div>
+  {add_coverage_html}
   {_dev_discover_html}
 </div>
 
@@ -14384,17 +14479,6 @@ function runAutoDiscover() {
   </div>
 </div>
 
-<!-- Field editing modal -->
-<div id="field-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60;align-items:center;justify-content:center" onclick="fieldOverlayClick(event)">
-  <div id="field-modal-box" style="background:#fff;border-radius:16px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.18);margin:0 16px">
-    <div style="padding:20px 20px 14px;border-bottom:1px solid #f0ede8;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
-      <div style="font-size:16px;font-weight:700" id="field-modal-title">Edit fields</div>
-      <button onclick="closeFieldModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;padding:2px 6px">&#x2715;</button>
-    </div>
-    <div id="field-modal-body" style="overflow-y:auto;padding:16px 20px 20px;flex:1;min-height:0"></div>
-  </div>
-</div>
-
 <div class="toast" id="toast"></div>
 </div><!-- /main-content -->
 </div><!-- /app-shell -->
@@ -14403,11 +14487,11 @@ function runAutoDiscover() {
 <script>
 var CSRF = '{csrf}';
 var _modalKey = '';
-var _fieldModalSource = '';
 
 /* ── Modal open/close ─────────────────────────────── */
 function openModal() {{
-  window.location.href = '/email-scan';
+  document.getElementById('modal-overlay').classList.add('open');
+  showPicker();
 }}
 function closeModal() {{
   document.getElementById('modal-overlay').classList.remove('open');
@@ -14430,8 +14514,6 @@ document.addEventListener('keydown', function(e) {{
   if (e.key === 'Escape') {{
     var mo = document.getElementById('modal-overlay');
     if (mo && mo.classList.contains('open')) closeModal();
-    var fo = document.getElementById('field-modal-overlay');
-    if (fo && fo.style.display !== 'none') fo.style.display = 'none';
   }}
 }});
 function showPicker() {{
@@ -14672,171 +14754,13 @@ function filterModal(q) {{
   document.getElementById('modal-no-results').style.display = (q && !anyVisible) ? '' : 'none';
 }}
 
-/* ── Existing account actions ─────────────────────── */
-function toggleForm(key) {{
-  var f = document.getElementById('form-' + key);
-  f.style.display = f.style.display === 'none' ? 'block' : 'none';
-}}
-
+/* ── Account actions ─────────────────────────────── */
 function toast(msg, ok) {{
   var t = document.getElementById('toast');
   t.textContent = msg;
   t.style.background = ok === false ? '#dc2626' : '#1a1a1a';
   t.classList.add('show');
   setTimeout(function() {{ t.classList.remove('show'); }}, 2500);
-}}
-
-/* ── First-sync progress overlay ─────────────────────────────────── */
-function _showSyncOverlay(siteName) {{
-  if (document.getElementById('sync-overlay')) return;
-  var ol = document.createElement('div');
-  ol.id = 'sync-overlay';
-  ol.innerHTML = `
-    <div id="sync-overlay-box">
-      <div id="sync-ol-title">Connecting to <strong id="sync-ol-site"></strong></div>
-      <div id="sync-ol-steps">
-        <div class="sync-step sync-step-active" id="sync-step-connecting">
-          <span class="sync-step-icon">⟳</span>
-          <span class="sync-step-label">Logging in&hellip;</span>
-        </div>
-        <div class="sync-step sync-step-pending" id="sync-step-scraping">
-          <span class="sync-step-icon">·</span>
-          <span class="sync-step-label">Scanning your account&hellip;</span>
-        </div>
-        <div class="sync-step sync-step-pending" id="sync-step-discovering">
-          <span class="sync-step-icon">·</span>
-          <span class="sync-step-label">Finding your benefits&hellip;</span>
-        </div>
-      </div>
-      <div id="sync-ol-result" style="display:none"></div>
-      <a id="sync-ol-btn" href="/" style="display:none" class="btn-primary">View Dashboard →</a>
-    </div>`;
-  ol.querySelector('#sync-ol-site').textContent = siteName;
-  document.body.appendChild(ol);
-  /* inject styles once */
-  if (!document.getElementById('sync-overlay-css')) {{
-    var s = document.createElement('style');
-    s.id = 'sync-overlay-css';
-    s.textContent = `
-      #sync-overlay {{
-        position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;
-        display:flex;align-items:center;justify-content:center;
-      }}
-      #sync-overlay-box {{
-        background:#fff;border-radius:14px;padding:36px 40px;width:340px;
-        box-shadow:0 8px 40px rgba(0,0,0,.18);font-family:inherit;
-      }}
-      #sync-ol-title {{
-        font-size:16px;font-weight:600;color:#1a1a1a;margin-bottom:24px;
-        text-align:center;
-      }}
-      .sync-step {{
-        display:flex;align-items:center;gap:10px;padding:8px 0;
-        border-bottom:1px solid #f0f0f0;font-size:14px;color:#333;
-      }}
-      .sync-step:last-of-type {{ border-bottom:none; }}
-      .sync-step-pending {{ opacity:.35; }}
-      .sync-step-done .sync-step-icon {{ color:#22a05a;font-style:normal; }}
-      .sync-step-active .sync-step-icon {{ display:inline-block;animation:spin .8s linear infinite; }}
-      .sync-step-error .sync-step-icon {{ color:#d04040; }}
-      @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
-      #sync-ol-result {{
-        margin-top:20px;text-align:center;font-size:15px;font-weight:600;color:#1a1a1a;
-      }}
-      #sync-ol-btn {{
-        display:block;margin-top:16px;text-align:center;padding:10px 0;
-        background:#6c47ff;color:#fff;border-radius:8px;font-weight:600;
-        font-size:14px;text-decoration:none;
-      }}
-      #sync-ol-btn:hover {{ background:#5535e0; }}
-    `;
-    document.head.appendChild(s);
-  }}
-}}
-
-function _updateSyncOverlay(step, fieldsFound, error) {{
-  var stepOrder = ['connecting','scraping','discovering'];
-  var labels = {{
-    'connecting': 'Logging in…',
-    'scraping':   'Scanning your account…',
-    'discovering':'Finding your benefits…',
-  }};
-  stepOrder.forEach(function(s) {{
-    var el = document.getElementById('sync-step-' + s);
-    if (!el) return;
-    var icon = el.querySelector('.sync-step-icon');
-    var label = el.querySelector('.sync-step-label');
-    el.className = 'sync-step';
-    var stepIdx = stepOrder.indexOf(s);
-    var curIdx  = stepOrder.indexOf(step);
-    if (step === 'done' || stepIdx < curIdx) {{
-      el.classList.add('sync-step-done');
-      icon.textContent = '✓';
-    }} else if (s === step) {{
-      el.classList.add('sync-step-active');
-      icon.textContent = '⟳';
-      label.textContent = labels[s] || s;
-    }} else {{
-      el.classList.add('sync-step-pending');
-      icon.textContent = '·';
-    }}
-  }});
-  if (step === 'done') {{
-    var resultEl = document.getElementById('sync-ol-result');
-    var btn = document.getElementById('sync-ol-btn');
-    var msg = fieldsFound > 0
-      ? '🎉 Found ' + fieldsFound + ' benefit' + (fieldsFound !== 1 ? 's' : '')
-      : 'Update complete';
-    resultEl.textContent = msg;
-    resultEl.style.display = 'block';
-    btn.style.display = 'block';
-  }} else if (step === 'error') {{
-    var resultEl = document.getElementById('sync-ol-result');
-    resultEl.textContent = error || 'Update failed — try again';
-    resultEl.style.color = '#d04040';
-    resultEl.style.display = 'block';
-    var btn = document.getElementById('sync-ol-btn');
-    btn.textContent = 'Back';
-    btn.href = '#';
-    btn.style.display = 'block';
-    btn.onclick = function() {{ document.getElementById('sync-overlay').remove(); return false; }};
-  }}
-}}
-
-function saveCred(key, siteName) {{
-  siteName = siteName || key;
-  var u = document.getElementById('u-' + key).value.trim();
-  var p = document.getElementById('p-' + key).value;
-  var t = document.getElementById('t-' + key) ? document.getElementById('t-' + key).value.trim() : '';
-  if (!u || !p) {{ toast('Username and password required', false); return; }}
-  var saveBtn = document.querySelector('#form-' + key + ' .btn-save');
-  if (saveBtn) {{ saveBtn.textContent = 'Saving...'; saveBtn.disabled = true; }}
-  fetch('/credentials/save', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    body: new URLSearchParams({{_csrf: CSRF, source: key, username: u, password: p, totp_secret: t}})
-  }}).then(r => r.json()).then(d => {{
-    if (d.ok) {{
-      /* Show the progress overlay */
-      _showSyncOverlay(siteName);
-      fetch('/sync/account/' + key, {{
-        method: 'POST',
-        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-        body: new URLSearchParams({{_csrf: CSRF}})
-      }}).then(function() {{
-        var poll = setInterval(function() {{
-          fetch('/sync/status').then(r => r.json()).then(function(s) {{
-            var step = s.step || (s.running ? 'connecting' : 'done');
-            _updateSyncOverlay(step, s.fields_found || 0, s.error);
-            if (!s.running) {{ clearInterval(poll); }}
-          }});
-        }}, 2000);
-      }});
-    }} else {{
-      toast(d.error || 'Error', false);
-      if (saveBtn) {{ saveBtn.textContent = 'Save account'; saveBtn.disabled = false; }}
-    }}
-  }});
 }}
 
 function removeCred(key, name) {{
@@ -14848,153 +14772,7 @@ function removeCred(key, name) {{
   }}).then(() => location.reload());
 }}
 
-function resetFields(source) {{
-  if (!confirm('Clear all discovered fields for this account? They will be re-discovered automatically on the next sync.')) return;
-  fetch('/credentials/fields/reset/' + source, {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    body: new URLSearchParams({{_csrf: CSRF}})
-  }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
-    if (d.ok) {{ toast('Fields cleared — will re-discover on next sync'); setTimeout(function() {{ location.reload(); }}, 1200); }}
-    else toast(d.error || 'Reset failed', false);
-  }}).catch(function() {{ toast('Reset failed — try again', false); }});
-}}
-
-function saveFields(source, container) {{
-  // When called from the modal, scope to modal body to avoid reading the hidden
-  // page panel as well (duplicate IDs / double-count bug).
-  var root = container || document;
-  var boxes = root.querySelectorAll('[data-source="' + source + '"]');
-  var enabled = Array.from(boxes).filter(b => b.checked).map(b => b.dataset.key);
-  fetch('/credentials/fields', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-    body: new URLSearchParams({{_csrf: CSRF, source: source, enabled_fields: JSON.stringify(enabled)}})
-  }}).then(r => r.json()).then(d => {{
-    if (d.ok) {{
-      toast('Saved ✓');
-      closeFieldModal();
-    }}
-  }});
-}}
-
-function saveFieldsModal(source) {{
-  var modalBody = document.getElementById('field-modal-body');
-  saveFields(source, modalBody);
-}}
-
-/* ── Field edit modal ─────────────────────────────── */
-function openFieldModal(source) {{
-  _fieldModalSource = source;
-  var panel = document.getElementById('fields-panel-' + source);
-  var body = document.getElementById('field-modal-body');
-  var title = document.getElementById('field-modal-title');
-  // Find site name from card
-  var card = document.getElementById('card-' + source);
-  var nameEl = card ? card.querySelector('div[style*="font-weight:600"]') : null;
-  title.textContent = (nameEl ? nameEl.textContent : source) + ' — Edit fields';
-  if (panel) {{
-    // Strip id attributes from the copy to avoid duplicate IDs in the DOM
-    // (the original panel stays hidden with its ids intact).
-    body.innerHTML = panel.innerHTML.replace(/ id="field-[^"]*"/g, '');
-  }} else {{
-    body.innerHTML = '<p style="font-size:13px;color:#9ca3af">No fields available yet. Sync this account first.</p>';
-  }}
-  var overlay = document.getElementById('field-modal-overlay');
-  overlay.style.display = 'flex';
-}}
-
-function closeFieldModal() {{
-  document.getElementById('field-modal-overlay').style.display = 'none';
-  _fieldModalSource = '';
-}}
-
-function fieldOverlayClick(e) {{
-  if (e.target === document.getElementById('field-modal-overlay')) closeFieldModal();
-}}
-
-function clearAndRediscover(source) {{
-  if (!confirm('Clear all fields for this account and rediscover from the latest sync data?')) return;
-  fetch('/credentials/fields/reset/' + source, {{
-    method: 'POST',
-    headers: {{'X-CSRF-Token': CSRF}}
-  }}).then(r => r.json()).then(function(d) {{
-    if (!d.ok) {{ alert('Reset failed'); return; }}
-    // Trigger rediscovery from stored page text
-    fetch('/credentials/discover/' + source, {{
-      method: 'POST',
-      headers: {{'X-CSRF-Token': CSRF}}
-    }}).then(r => r.json()).then(function(d2) {{
-      if (d2.ok) {{ toast('Fields rediscovered ✓'); setTimeout(function(){{ location.reload(); }}, 800); }}
-      else {{ toast('Reset done — fields will appear after next sync'); setTimeout(function(){{ location.reload(); }}, 1200); }}
-    }});
-  }});
-}}
-
-// Auto-open field modal if navigated here via anchor (e.g. from dashboard "Modify fields")
-(function() {{
-  var hash = location.hash.slice(1);
-  if (hash.startsWith('fields-')) {{
-    var source = hash.replace('fields-', '');
-    setTimeout(function() {{ openFieldModal(source); }}, 200);
-  }}
-}})();
-
 {_dev_discover_js}
-// Live-updating relative sync timestamps
-function fmtRelative(ts) {{
-  try {{
-    var d = new Date(ts);
-    var secs = Math.floor((Date.now() - d.getTime()) / 1000);
-    if (secs < 60) return 'just now';
-    var mins = Math.floor(secs / 60);
-    if (mins < 60) return mins + ' minute' + (mins === 1 ? '' : 's') + ' ago';
-    var hrs = Math.floor(mins / 60);
-    if (hrs < 24) return hrs + ' hour' + (hrs === 1 ? '' : 's') + ' ago';
-    var days = Math.floor(hrs / 24);
-    return days + ' day' + (days === 1 ? '' : 's') + ' ago';
-  }} catch(e) {{ return ''; }}
-}}
-function updateSyncTimes() {{
-  document.querySelectorAll('[data-synced]').forEach(function(el) {{
-    var ts = el.dataset.synced;
-    if (!ts) return;
-    var card = el.closest('[data-sync-status]');
-    var syncStatus = card ? card.dataset.syncStatus : '';
-    if (syncStatus === 'login_required') {{
-      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">{user_copy.NEEDS_LOGIN_BADGE}</span>';
-      return;
-    }}
-    var rel = fmtRelative(ts);
-    if (rel) {{
-      var color = '#22c55e', icon = '✓', fw = '500';
-      var secs2 = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
-      var hrs2 = secs2 / 3600;
-      if (hrs2 >= 72) {{ color = '#dc2626'; icon = '!'; fw = '700'; }}
-      else if (hrs2 >= 48) {{ color = '#f59e0b'; icon = '~'; }}
-      else if (hrs2 >= 24) {{ color = '#f59e0b'; icon = '~'; }}
-      else if (hrs2 >= 2) {{ color = '#6b7280'; icon = '✓'; }}
-      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' {user_copy.LAST_UPDATED_PREFIX} ' + rel + '</span>';
-    }}
-  }});
-}}
-updateSyncTimes();
-setInterval(updateSyncTimes, 30000);
-
-// Pre-check saved field preferences on load
-fetch('/credentials/fields/load').then(r => r.json()).then(function(data) {{
-  if (!data.ok) return;
-  Object.entries(data.fields).forEach(function([source, enabled]) {{
-    enabled.forEach(function(key) {{
-      var box = document.getElementById('field-' + source + '-' + key);
-      if (box) box.checked = true;
-    }});
-    if (enabled.length) {{
-      var det = document.getElementById('fields-' + source);
-      if (det) det.open = true;
-    }}
-  }});
-}}).catch(function(){{}});
 
 // Auto-open connect flow when redirected from email scan
 (function() {{
@@ -15008,7 +14786,7 @@ fetch('/credentials/fields/load').then(r => r.json()).then(function(data) {{
       _startExtPoll(key);
     }}, 300);
   }} else if (key) {{
-    var fallbackName = key.replace(/_/g, ' ').replace(/\\b\\w/g, function(c) {{ return c.toUpperCase(); }});
+    var fallbackName = key.replace(/_/g, ' ').replace(/\b\w/g, function(c) {{ return c.toUpperCase(); }});
     setTimeout(function() {{
       openCredForm(key, fallbackName, '🌐', '#e5e7eb');
       _startExtPoll(key);
@@ -15059,6 +14837,9 @@ def credentials_page():
     ).fetchall()
     _lap.record("sql_account_data", (time.perf_counter() - _t0) * 1000)
     synced_at_by_source = {}
+    all_synced_at: list[str] = []
+    sync_status_by_source = {}
+    failure_reason_by_source = {}
     connection_status_by_source = {}
     extraction_status_by_source = {}
     lifecycle_by_source = {}
@@ -15078,6 +14859,12 @@ def credentials_page():
         _provider_ms += (time.perf_counter() - _t1) * 1000
         if acct and acct.is_synced and r["synced_at"]:
             synced_at_by_source[r["source"]] = r["synced_at"]
+        if r["synced_at"]:
+            all_synced_at.append(r["synced_at"])
+        sync_status = (acct.sync_status if acct else None) or r["sync_status"] or "ok"
+        sync_status_by_source[r["source"]] = sync_status
+        if r["sync_failure_reason"]:
+            failure_reason_by_source[r["source"]] = r["sync_failure_reason"]
         if r["connection_status"]:
             connection_status_by_source[r["source"]] = r["connection_status"]
         if r["extraction_status"]:
@@ -15142,6 +14929,7 @@ def credentials_page():
                 "last_error": None,
             }
     _rt.step("lifecycle")
+    last_checked_label = portfolio_last_checked(all_synced_at, _fmt_sync)
     page_html = _build_credentials_page(
         user, configured, extra_by_source, synced_at_by_source,
         connection_status_by_source, extraction_status_by_source,
@@ -15149,6 +14937,10 @@ def credentials_page():
         connect_source=request.args.get("connect", "").strip(),
         debug_by_source=debug_by_source,
         show_debug=show_debug,
+        filter_key=request.args.get("filter", "all"),
+        sync_status_by_source=sync_status_by_source,
+        failure_reason_by_source=failure_reason_by_source,
+        last_checked_label=last_checked_label,
     )
     _rt.step("build_html")
     _rt.finish()
@@ -19039,10 +18831,33 @@ from mighty.account_lifecycle import (
     resolve_account_lifecycle,
 )
 from mighty.account_status import (
+    ERROR,
     NEEDS_LOGIN as CANON_NEEDS_LOGIN,
     UPDATING as CANON_UPDATING,
     UP_TO_DATE as CANON_UP_TO_DATE,
+    WAITING_FOR_EXTENSION as CANON_WAITING,
     build_account_status,
+    resolve_canonical_status,
+)
+from mighty.accounts_ui import (
+    AccountsRow,
+    SECTION_NEEDS_ATTENTION,
+    SECTION_NEEDS_LOGIN,
+    SECTION_UP_TO_DATE,
+    SECTION_WAITING,
+    build_portfolio,
+    group_rows_by_section,
+    normalize_filter,
+    portfolio_last_checked,
+    render_add_coverage_footer,
+    render_empty_state,
+    render_filter_empty,
+    render_portfolio_summary,
+    render_section_header,
+    resolve_accounts_section,
+    row_status_label,
+    row_subline,
+    sort_rows,
 )
 
 
@@ -19174,11 +18989,8 @@ def _lifecycle_primary_cta_html(
         )
     if lifecycle.state == LC_SYNCED:
         return (
-            f'<button type="button" onclick="openDashFieldModal(\'{he(source)}\',\'{he(name)}\')" '
-            f'style="{btn_style}">{he(cta)}</button>'
-            if surface == "dashboard" else
-            f'<button type="button" class="btn-toggle" onclick="openFieldModal(\'{he(source)}\')" '
-            f'id="btn-fields-{he(source)}">{he(cta)}</button>'
+            f'<a href="/dashboard?account={he(source)}" '
+            f'style="{btn_style}">{he(cta)}</a>'
         )
     if lifecycle.state == LC_ADDED:
         if surface == "dashboard":

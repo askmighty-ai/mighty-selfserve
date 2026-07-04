@@ -1,0 +1,334 @@
+"""
+mighty.accounts_ui
+──────────────────
+Presentation layer for the Accounts maintenance page (/credentials).
+
+Maps backend lifecycle/status signals to user-facing sections without
+changing lifecycle resolution logic.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from mighty.account_lifecycle import (
+    ADDED,
+    CONNECTED,
+    AccountLifecycle,
+    NEEDS_LOGIN as LC_NEEDS_LOGIN,
+    SYNCED as LC_SYNCED,
+    WAITING_FOR_EXTENSION as LC_WAITING,
+)
+from mighty.account_status import (
+    ERROR,
+    NEEDS_LOGIN,
+    UPDATING,
+    UP_TO_DATE,
+    WAITING_FOR_EXTENSION,
+    resolve_canonical_status,
+)
+from mighty import user_copy
+
+# ── User-facing list sections (display order) ────────────────────────────────
+SECTION_NEEDS_LOGIN = "needs_login"
+SECTION_NEEDS_ATTENTION = "needs_attention"
+SECTION_WAITING = "waiting"
+SECTION_UP_TO_DATE = "up_to_date"
+
+SECTION_ORDER = (
+    SECTION_NEEDS_LOGIN,
+    SECTION_NEEDS_ATTENTION,
+    SECTION_WAITING,
+    SECTION_UP_TO_DATE,
+)
+
+SECTION_HEADERS: dict[str, str] = {
+    SECTION_NEEDS_LOGIN: "Needs login",
+    SECTION_NEEDS_ATTENTION: "Needs attention",
+    SECTION_WAITING: "Waiting",
+    SECTION_UP_TO_DATE: "Up to date",
+}
+
+STATUS_LABELS: dict[str, str] = {
+    SECTION_NEEDS_LOGIN: "Needs login",
+    SECTION_NEEDS_ATTENTION: "Needs attention",
+    SECTION_WAITING: "Waiting",
+    SECTION_UP_TO_DATE: "Up to date",
+}
+
+VALID_FILTERS = frozenset({"all", "needs_attention", "waiting", "up_to_date", "needs_login"})
+
+
+@dataclass
+class AccountsRow:
+    source: str
+    display_name: str
+    icon: str
+    color: str
+    section: str
+    status_label: str
+    subline: str
+    source_label: str
+    lifecycle: AccountLifecycle
+    synced_fmt: str
+    is_pending: bool = False
+
+
+@dataclass
+class AccountsPortfolio:
+    total: int
+    needs_login: int
+    needs_attention: int
+    waiting: int
+    up_to_date: int
+    last_checked_label: str
+
+
+def normalize_filter(filter_key: str | None) -> str:
+    key = (filter_key or "all").strip().lower()
+    return key if key in VALID_FILTERS else "all"
+
+
+def resolve_accounts_section(
+    lifecycle: AccountLifecycle,
+    sync_status: str = "ok",
+    *,
+    updating_source: str | None = None,
+    source: str = "",
+) -> str:
+    """Map lifecycle + sync signals to a maintenance list section."""
+    canonical = resolve_canonical_status(
+        lifecycle,
+        sync_status or "ok",
+        source=source,
+        updating_source=updating_source,
+    )
+    if canonical == NEEDS_LOGIN:
+        return SECTION_NEEDS_LOGIN
+    if canonical == ERROR:
+        return SECTION_NEEDS_ATTENTION
+    if canonical == UP_TO_DATE:
+        return SECTION_UP_TO_DATE
+    return SECTION_WAITING
+
+
+def waiting_subline(
+    lifecycle: AccountLifecycle,
+    sync_status: str = "ok",
+    *,
+    updating_source: str | None = None,
+    source: str = "",
+) -> str:
+    """Secondary line for Waiting rows; internal cases only."""
+    canonical = resolve_canonical_status(
+        lifecycle,
+        sync_status or "ok",
+        source=source,
+        updating_source=updating_source,
+    )
+    if canonical == UPDATING:
+        return user_copy.ACCOUNTS_SUBLINE_UPDATING
+    if lifecycle.state == CONNECTED:
+        return user_copy.ACCOUNTS_SUBLINE_CONNECTED
+    return user_copy.ACCOUNTS_SUBLINE_FIRST_VISIT
+
+
+def row_status_label(section: str, lifecycle: AccountLifecycle) -> str:
+    if section == SECTION_UP_TO_DATE:
+        return STATUS_LABELS[SECTION_UP_TO_DATE]
+    if section == SECTION_NEEDS_LOGIN:
+        return STATUS_LABELS[SECTION_NEEDS_LOGIN]
+    if section == SECTION_NEEDS_ATTENTION:
+        return STATUS_LABELS[SECTION_NEEDS_ATTENTION]
+    return STATUS_LABELS[SECTION_WAITING]
+
+
+def row_subline(
+    section: str,
+    lifecycle: AccountLifecycle,
+    sync_status: str = "ok",
+    *,
+    updating_source: str | None = None,
+    source: str = "",
+    synced_fmt: str = "",
+    failure_hint: str = "",
+) -> str:
+    if section == SECTION_UP_TO_DATE and synced_fmt:
+        return f"Updated {synced_fmt}"
+    if section == SECTION_NEEDS_ATTENTION and failure_hint:
+        return failure_hint
+    if section == SECTION_WAITING:
+        return waiting_subline(
+            lifecycle,
+            sync_status,
+            updating_source=updating_source,
+            source=source,
+        )
+    if section == SECTION_NEEDS_LOGIN:
+        return user_copy.NEEDS_LOGIN_EXPLAINER
+    return ""
+
+
+def matches_filter(section: str, filter_key: str) -> bool:
+    if filter_key in ("", "all"):
+        return True
+    if filter_key == "needs_attention":
+        return section in (SECTION_NEEDS_LOGIN, SECTION_NEEDS_ATTENTION)
+    if filter_key == "needs_login":
+        return section == SECTION_NEEDS_LOGIN
+    return section == filter_key
+
+
+def portfolio_last_checked(
+    synced_at_values: list[str],
+    fmt_relative: Callable[[str], str],
+) -> str:
+    valid = [t for t in synced_at_values if t]
+    if not valid:
+        return user_copy.ACCOUNTS_NOT_CHECKED_YET
+    latest = max(valid)
+    rel = fmt_relative(latest)
+    return user_copy.accounts_last_checked(rel)
+
+
+def build_portfolio(rows: list[AccountsRow], last_checked_label: str) -> AccountsPortfolio:
+    counts = {s: 0 for s in SECTION_ORDER}
+    for row in rows:
+        counts[row.section] = counts.get(row.section, 0) + 1
+    return AccountsPortfolio(
+        total=len(rows),
+        needs_login=counts[SECTION_NEEDS_LOGIN],
+        needs_attention=counts[SECTION_NEEDS_ATTENTION],
+        waiting=counts[SECTION_WAITING],
+        up_to_date=counts[SECTION_UP_TO_DATE],
+        last_checked_label=last_checked_label,
+    )
+
+
+def sort_rows(rows: list[AccountsRow]) -> list[AccountsRow]:
+    order_index = {s: i for i, s in enumerate(SECTION_ORDER)}
+
+    def _key(row: AccountsRow) -> tuple[int, str]:
+        return (order_index.get(row.section, 99), row.display_name.lower())
+
+    return sorted(rows, key=_key)
+
+
+def group_rows_by_section(
+    rows: list[AccountsRow],
+    filter_key: str,
+) -> list[tuple[str, list[AccountsRow]]]:
+    filtered = [r for r in rows if matches_filter(r.section, filter_key)]
+    grouped: list[tuple[str, list[AccountsRow]]] = []
+    for section in SECTION_ORDER:
+        section_rows = [r for r in filtered if r.section == section]
+        if section_rows:
+            grouped.append((section, section_rows))
+    return grouped
+
+
+def filter_chip_url(filter_key: str) -> str:
+    if filter_key in ("", "all"):
+        return "/credentials"
+    return f"/credentials?filter={filter_key}"
+
+
+def _count_phrase(count: int, verb: str) -> str:
+    """Singular count uses third-person verb: 1 needs login, 2 need login."""
+    return f"{count} {verb}{'s' if count == 1 else ''}"
+
+
+def portfolio_summary_line(portfolio: AccountsPortfolio) -> str:
+    parts: list[str] = [f"{portfolio.total} account{'s' if portfolio.total != 1 else ''}"]
+    if portfolio.up_to_date:
+        parts.append(f"{portfolio.up_to_date} up to date")
+    if portfolio.waiting:
+        parts.append(f"{portfolio.waiting} waiting")
+    if portfolio.needs_login:
+        parts.append(f"{_count_phrase(portfolio.needs_login, 'need')} login")
+    if portfolio.needs_attention:
+        parts.append(f"{_count_phrase(portfolio.needs_attention, 'need')} attention")
+    return " · ".join(parts)
+
+
+def render_portfolio_summary(
+    portfolio: AccountsPortfolio,
+    active_filter: str,
+    escape: Callable[[Any], str],
+) -> str:
+    chips = [
+        (user_copy.ACCOUNTS_FILTER_ALL, "all"),
+        (user_copy.ACCOUNTS_FILTER_NEEDS_ATTENTION, "needs_attention"),
+        (user_copy.ACCOUNTS_FILTER_WAITING, "waiting"),
+        (user_copy.ACCOUNTS_FILTER_UP_TO_DATE, "up_to_date"),
+    ]
+    chip_html = ""
+    for label, key in chips:
+        active = " acct-portfolio-chip--active" if active_filter == key else ""
+        hide = ""
+        if active_filter != key:
+            if key == "needs_attention" and not (
+                portfolio.needs_login or portfolio.needs_attention
+            ):
+                hide = ' style="display:none"'
+            elif key == "waiting" and not portfolio.waiting:
+                hide = ' style="display:none"'
+            elif key == "up_to_date" and not portfolio.up_to_date:
+                hide = ' style="display:none"'
+        chip_html += (
+            f'<a href="{escape(filter_chip_url(key))}" '
+            f'class="acct-portfolio-chip{active}"{hide}>{escape(label)}</a>'
+        )
+    summary = escape(portfolio_summary_line(portfolio))
+    freshness = escape(portfolio.last_checked_label)
+    return (
+        f'<section class="acct-portfolio" aria-label="Account portfolio">'
+        f'<p class="acct-portfolio-counts">{summary}</p>'
+        f'<div class="acct-portfolio-meta">'
+        f'<span class="acct-portfolio-freshness">{freshness}</span>'
+        f'<div class="acct-portfolio-filters">{chip_html}</div>'
+        f"</div></section>"
+    )
+
+
+def render_section_header(section: str, escape: Callable[[Any], str]) -> str:
+    return (
+        f'<h2 class="acct-section-header">{escape(SECTION_HEADERS[section])}</h2>'
+    )
+
+
+def render_empty_state(escape: Callable[[Any], str]) -> str:
+    return (
+        f'<div class="acct-empty">'
+        f'<p class="acct-empty-headline">{escape(user_copy.ACCOUNTS_EMPTY_HEADLINE)}</p>'
+        f'<p class="acct-empty-body">{escape(user_copy.ACCOUNTS_EMPTY_BODY)}</p>'
+        f'<div class="acct-empty-actions">'
+        f'<a href="/email-scan" class="acct-maint-cta acct-maint-cta--primary">'
+        f'{escape(user_copy.ACCOUNTS_EMPTY_CTA_EMAIL)}</a>'
+        f'<button type="button" class="acct-maint-cta acct-maint-cta--secondary" '
+        f'onclick="openModal()">{escape(user_copy.ACCOUNTS_EMPTY_CTA_MANUAL)}</button>'
+        f"</div></div>"
+    )
+
+
+def render_filter_empty(escape: Callable[[Any], str]) -> str:
+    return (
+        f'<div class="acct-filter-empty">'
+        f'<p>{escape(user_copy.ACCOUNTS_FILTER_EMPTY)}</p>'
+        f'<a href="/credentials">{escape(user_copy.ACCOUNTS_FILTER_CLEAR)}</a>'
+        f"</div>"
+    )
+
+
+def render_add_coverage_footer(escape: Callable[[Any], str]) -> str:
+    return (
+        f'<footer class="acct-add-coverage">'
+        f'<p>{escape(user_copy.ACCOUNTS_ADD_COVERAGE_NOTE)}</p>'
+        f'<div class="acct-add-coverage-actions">'
+        f'<a href="/email-scan">{escape(user_copy.ACCOUNTS_EMPTY_CTA_EMAIL)}</a>'
+        f'<button type="button" onclick="openModal()">'
+        f'{escape(user_copy.ACCOUNTS_EMPTY_CTA_MANUAL)}</button>'
+        f"</div></footer>"
+    )
+

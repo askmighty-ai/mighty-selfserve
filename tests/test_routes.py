@@ -227,7 +227,112 @@ def test_email_scan_has_sidebar_nav(client):
 def test_credentials_page_renders(client):
     r = client.get("/credentials")
     assert r.status_code == 200
-    assert b"Connected accounts" in r.data
+    assert b"Accounts" in r.data
+    assert b"Every account Mighty knows about." in r.data
+    assert b"Connected accounts" not in r.data
+    assert b"sync-howto" not in r.data
+    assert b"Never miss another credit" not in r.data
+    assert b"function openModal()" in r.data
+    assert b"onclick=\"openModal()\"" in r.data
+    assert b"/dashboard?account=" not in r.data
+    assert b"View account" not in r.data
+
+
+def test_credentials_page_filter_waiting_empty_still_shows_active_chip(client):
+    """Active filter chip stays visible even when that bucket has zero accounts."""
+    import app as mighty
+
+    with client.session_transaction() as sess:
+        uid = sess["user_id"]
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        now = mighty.iso()
+        stub = mighty.encrypt_account_data(uid, {
+            "items": [{"key": "balance", "label": "Balance", "value": "$100"}],
+            "sync_status": "ok",
+        })
+        db.execute(
+            "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (uid, "amex", "", "", "", now, now),
+        )
+        db.execute(
+            "INSERT INTO account_data "
+            "(user_id, source, display_name, icon, color, data_enc, synced_at, connection_status, sync_status) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (uid, "amex", "Amex", "💳", "#eee", stub, now, "connected", "ok"),
+        )
+        db.commit()
+    r = client.get("/credentials?filter=waiting")
+    assert r.status_code == 200
+    assert b'href="/credentials?filter=waiting"' in r.data
+    assert b"acct-portfolio-chip--active" in r.data
+    assert b"No accounts in this view." in r.data
+    assert b"/dashboard?account=" not in r.data
+
+
+def test_credentials_page_filter_waiting(client):
+    import app as mighty
+
+    with client.session_transaction() as sess:
+        uid = sess["user_id"]
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        now = mighty.iso()
+        stub = mighty.encrypt_account_data(uid, {"items": [], "sync_status": "needs_first_visit"})
+        db.execute(
+            "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (uid, "delta", "", "", "", now, now),
+        )
+        db.execute(
+            "INSERT INTO account_data "
+            "(user_id, source, display_name, icon, color, data_enc, synced_at, connection_status, sync_status) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (uid, "delta", "Delta", "✈️", "#e5e7eb", stub, "", "waiting_for_extension", "needs_first_visit"),
+        )
+        db.commit()
+    r = client.get("/credentials?filter=waiting")
+    assert r.status_code == 200
+    assert b"Waiting" in r.data
+    assert b"acct-portfolio-chip--active" in r.data
+
+
+def test_credentials_page_section_headers(client):
+    import app as mighty
+
+    with client.session_transaction() as sess:
+        uid = sess["user_id"]
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        now = mighty.iso()
+        synced_stub = mighty.encrypt_account_data(uid, {
+            "items": [{"key": "balance", "label": "Balance", "value": "$100"}],
+            "sync_status": "ok",
+        })
+        waiting_stub = mighty.encrypt_account_data(uid, {"items": [], "sync_status": "needs_first_visit"})
+        for src, name, stub, conn, sync_st, synced_at in (
+            ("amex", "American Express", synced_stub, "connected", "ok", now),
+            ("delta", "Delta", waiting_stub, "waiting_for_extension", "needs_first_visit", ""),
+        ):
+            db.execute(
+                "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (uid, src, "", "", "", now, now),
+            )
+            db.execute(
+                "INSERT INTO account_data "
+                "(user_id, source, display_name, icon, color, data_enc, synced_at, connection_status, sync_status) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (uid, src, name, "✈️", "#e5e7eb", stub, synced_at, conn, sync_st),
+            )
+        db.commit()
+    r = client.get("/credentials")
+    assert r.status_code == 200
+    assert b"Up to date" in r.data
+    assert b"Waiting" in r.data
+    assert b"Edit login" not in r.data
+    assert b"fields-panel" not in r.data
 
 
 def test_credentials_with_legacy_account_data_row(client):
@@ -248,7 +353,7 @@ def test_credentials_with_legacy_account_data_row(client):
         db.commit()
     r = client.get("/credentials")
     assert r.status_code == 200
-    assert b"Connected accounts" in r.data
+    assert b"Accounts" in r.data
 
 
 def test_stale_session_redirects_to_login(client):
@@ -313,7 +418,7 @@ def test_credentials_get_does_not_auto_discover(client, monkeypatch):
 
     r = client.get("/credentials")
     assert r.status_code == 200
-    assert b"Connected accounts" in r.data
+    assert b"Accounts" in r.data
     assert auto_discover_calls == []
     assert gemini_calls == []
     assert b"fetch('/credentials/auto-discover'" not in r.data
@@ -426,10 +531,12 @@ def test_dashboard_must_not_show_sync_now(client):
     assert b"Sync now" not in r.data
 
 
-def test_accounts_shows_how_updates_work(client):
+def test_accounts_maintenance_layout(client):
     r = client.get("/credentials")
     assert r.status_code == 200
-    assert b"How updates work" in r.data
+    assert b"Every account Mighty knows about." in r.data
+    assert b"How Mighty works" not in r.data
+    assert b"How updates work" not in r.data
 
 
 def test_login_required_account_shows_open_or_log_in(client):

@@ -99,5 +99,6 @@ class TestHomeUi:
             escape=_escape,
         )
         assert "1 needs attention" in rendered
+        assert 'filter=needs_attention' in rendered
         assert "need login" not in rendered.lower()
         assert "Dismiss for now" not in rendered
