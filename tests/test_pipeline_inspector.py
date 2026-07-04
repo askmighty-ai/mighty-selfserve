@@ -26,7 +26,9 @@ from mighty.pipeline_inspector import (
     start_run,
 )
 from mighty.pipeline_stages import (
+    FAIL_CONNECTOR_MISS,
     FAIL_EXCEPTION,
+    FAIL_NOT_ATTEMPTED_ON_SYNC_PATH,
     PipelineStageId,
     RunInitiator,
     RunStatus,
@@ -162,8 +164,100 @@ class TestFinalizeWithoutDiscovery:
         assert row["run_status"] == RunStatus.COMPLETE.value
         assert row["terminal_stage"] == PipelineStageId.TRUSTED_OBSERVATIONS.value
         stages = {s["stage"]: s for s in get_run_stages(pipeline_db, run_id)}
-        assert stages[PipelineStageId.STRUCTURED.value]["status"] == StageStatus.FAILED.value
+        structured = stages[PipelineStageId.STRUCTURED.value]
+        assert structured["status"] == StageStatus.SKIPPED.value
+        assert structured["failure_reason"] == FAIL_NOT_ATTEMPTED_ON_SYNC_PATH
         assert stages[PipelineStageId.TRUSTED_OBSERVATIONS.value]["status"] == StageStatus.SUCCESS.value
+
+
+class TestStructuredStageSemantics:
+    def test_sync_without_discovery_skips_structured_when_not_attempted(self, pipeline_db):
+        run_id = new_run_id()
+        start_run(
+            pipeline_db,
+            user_id="user-1",
+            source="delta",
+            initiator=RunInitiator.EXTENSION_SYNC.value,
+            data_source="extension",
+            run_id=run_id,
+        )
+        record_inferred_client_stages(
+            pipeline_db,
+            run_id,
+            sync_status="ok",
+            sync_failure_reason=None,
+            connection_status="connected",
+            raw_text="=== https://delta.com/account ===\nPoints 12,000",
+            items=[{"key": "points_balance", "label": "Points", "value": "12,000"}],
+        )
+        finalize_sync_without_discovery(
+            pipeline_db,
+            run_id,
+            items=[{"key": "points_balance", "label": "Points", "value": "12,000"}],
+            extraction_status="complete",
+            has_structured_extractor=True,
+        )
+        structured = next(
+            s for s in get_run_stages(pipeline_db, run_id)
+            if s["stage"] == PipelineStageId.STRUCTURED.value
+        )
+        assert structured["status"] == StageStatus.SKIPPED.value
+        assert structured["failure_reason"] == FAIL_NOT_ATTEMPTED_ON_SYNC_PATH
+        assert structured["status"] != StageStatus.FAILED.value
+
+    def test_sync_without_discovery_still_completes_at_trusted_observations(self, pipeline_db):
+        run_id = new_run_id()
+        start_run(
+            pipeline_db,
+            user_id="user-1",
+            source="amex",
+            initiator=RunInitiator.EXTENSION_SYNC.value,
+            data_source="extension",
+            run_id=run_id,
+        )
+        record_inferred_client_stages(
+            pipeline_db,
+            run_id,
+            sync_status="ok",
+            sync_failure_reason=None,
+            connection_status="connected",
+            raw_text="Membership Rewards 85,000",
+            items=[{"key": "points_balance", "label": "MR Points", "value": "85,000"}],
+        )
+        finalize_sync_without_discovery(
+            pipeline_db,
+            run_id,
+            items=[{"key": "points_balance", "label": "MR Points", "value": "85,000"}],
+            extraction_status="complete",
+            has_structured_extractor=True,
+        )
+        row = get_run(pipeline_db, run_id)
+        assert row["run_status"] == RunStatus.COMPLETE.value
+        assert row["terminal_stage"] == PipelineStageId.TRUSTED_OBSERVATIONS.value
+
+    def test_connector_miss_only_when_structured_extractor_attempted(self, pipeline_db):
+        run_id = new_run_id()
+        start_run(
+            pipeline_db,
+            user_id="user-1",
+            source="delta",
+            initiator=RunInitiator.INTERCEPT.value,
+            data_source="extension",
+            run_id=run_id,
+        )
+        record_structured_stage(
+            pipeline_db,
+            run_id,
+            fields=[],
+            has_extractor=True,
+            attempted=True,
+        )
+        structured = next(
+            s for s in get_run_stages(pipeline_db, run_id)
+            if s["stage"] == PipelineStageId.STRUCTURED.value
+        )
+        assert structured["status"] == StageStatus.FAILED.value
+        assert structured["failure_reason"] == FAIL_CONNECTOR_MISS
 
 
 class TestClientStageIngest:

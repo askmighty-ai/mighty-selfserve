@@ -25,6 +25,7 @@ from mighty.pipeline_stages import (
     FAIL_NAV_TIMEOUT,
     FAIL_NO_DATA,
     FAIL_NO_PAGES_VISITED,
+    FAIL_NOT_ATTEMPTED_ON_SYNC_PATH,
     FAIL_NO_TRUSTED_OBSERVATIONS,
     FAIL_PARTIAL_TRUST,
     FAIL_PAYLOAD_TOO_SMALL,
@@ -545,6 +546,7 @@ def record_structured_stage(
     fields: list[dict[str, Any]] | None,
     has_extractor: bool,
     source_label: str = "connector",
+    attempted: bool = True,
 ) -> None:
     if not run_id:
         return
@@ -563,6 +565,19 @@ def record_structured_stage(
                 "field_keys": [f.get("key") for f in field_list if f.get("key")][:20],
                 "source_label": source_label,
             },
+        )
+        return
+
+    if not attempted:
+        record_stage(
+            db,
+            run_id,
+            PipelineStageId.STRUCTURED.value,
+            started_at=now,
+            finished_at=now,
+            status=StageStatus.SKIPPED.value,
+            failure_reason=FAIL_NOT_ATTEMPTED_ON_SYNC_PATH,
+            artifacts={"reason": FAIL_NOT_ATTEMPTED_ON_SYNC_PATH},
         )
         return
 
@@ -891,6 +906,7 @@ def finalize_sync_without_discovery(
         run_id,
         fields=structured_fields or [],
         has_extractor=has_structured_extractor,
+        attempted=False,
     )
     record_intelligent_stage(db, run_id, enabled=False, raw_field_count=0)
     record_validation_stage(
