@@ -80,13 +80,25 @@ def _account_health_strip(result: HomeStateResult, escape: Callable[[Any], str])
         label = f"{health.waiting} waiting"
         chips.append(_health_chip(label, health.waiting, escape))
     if health.needs_login:
-        label = f"{health.needs_login} need login"
+        n = health.needs_login
+        label = f"{n} need{'s' if n == 1 else ''} attention"
         chips.append(_health_chip(label, health.needs_login, escape))
 
     freshness = escape(result.freshness_label or "")
     freshness_html = (
         f'<span class="dash-home-freshness">{freshness}</span>' if freshness else ""
     )
+    if (
+        result.updating_display_name
+        and result.state not in (HomeState.UPDATE,)
+    ):
+        updating_note = escape(
+            user_copy.home_update_headline(result.updating_display_name).rstrip("…")
+        )
+        freshness_html += (
+            f'<span class="dash-home-freshness dash-home-freshness--updating">'
+            f"{updating_note}…</span>"
+        )
 
     rows_html = ""
     if result.waiting_rows and result.state == HomeState.WAITING:

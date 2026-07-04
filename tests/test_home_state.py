@@ -31,9 +31,23 @@ class TestHomeStatePriority:
         assert result.show_health is False
         assert result.featured.cta_url == "/email-scan"
 
-    def test_update_overlays_login(self):
+    def test_login_wins_while_updating(self):
         accounts = [
             _acct("amex", "American Express", "needs_login"),
+        ]
+        result = resolve_home_state(
+            accounts=accounts,
+            sync_running=True,
+            updating_source="amex",
+            updating_display_name="American Express",
+        )
+        assert result.state == HomeState.LOGIN
+        assert result.featured.cta_label == "Log in to American Express"
+        assert result.updating_display_name == "American Express"
+
+    def test_update_when_no_blockers(self):
+        accounts = [
+            _acct("amex", "American Express", "up_to_date"),
         ]
         result = resolve_home_state(
             accounts=accounts,

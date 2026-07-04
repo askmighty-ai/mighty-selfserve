@@ -49,6 +49,7 @@ class TestHomeUi:
         )
         assert "Account health" in rendered
         assert "1 up to date" in rendered
+        assert "need login" not in rendered.lower()
         assert "all set" in rendered or "You&#x27;re all set." in rendered
         assert "Mighty runs in Chrome" in rendered
 
@@ -66,3 +67,37 @@ class TestHomeUi:
         rendered = render_home_page(result, first_name="Alex", today_label="Friday, July 3", escape=_escape)
         assert "dash-brief-featured-cta--disabled" in rendered
         assert "Updating…" in rendered
+
+    def test_health_strip_needs_attention_copy(self):
+        accounts = [
+            AccountStatus(
+                source="amex",
+                display_name="American Express",
+                status="needs_login",
+                last_successful_sync_at=None,
+                current_attempt_at=None,
+                last_error=None,
+                user_action_label="Log in to American Express",
+                user_action_url="https://example.com/login",
+            ),
+            AccountStatus(
+                source="delta",
+                display_name="Delta",
+                status="up_to_date",
+                last_successful_sync_at="2026-07-03T12:00:00",
+                current_attempt_at=None,
+                last_error=None,
+                user_action_label=None,
+                user_action_url=None,
+            ),
+        ]
+        result = resolve_home_state(accounts=accounts)
+        rendered = render_home_page(
+            result,
+            first_name="Alex",
+            today_label="Friday, July 3",
+            escape=_escape,
+        )
+        assert "1 needs attention" in rendered
+        assert "need login" not in rendered.lower()
+        assert "Dismiss for now" not in rendered

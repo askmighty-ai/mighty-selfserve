@@ -160,9 +160,34 @@ def _featured_from_action(action: Action) -> HomeFeatured:
         body=body,
         cta_label=cta_label or None,
         cta_url=cta_url or None,
-        secondary_label=user_copy.HOME_DISMISS_LABEL,
-        secondary_url="#",
     )
+
+
+def _resolve_updating_name(
+    accounts: Sequence[AccountStatus],
+    *,
+    sync_running: bool,
+    updating_source: str | None,
+    updating_display_name: str | None,
+) -> str | None:
+    if not sync_running and not any(a.status == UPDATING for a in accounts):
+        return None
+    name = updating_display_name
+    if not name and updating_source:
+        for acct in accounts:
+            if acct.source == updating_source:
+                name = acct.display_name
+                break
+    if not name:
+        updating_accts = [a for a in accounts if a.status == UPDATING]
+        name = updating_accts[0].display_name if updating_accts else "your account"
+    return name
+
+
+def _attach_update_context(result: HomeStateResult, updating_name: str | None) -> HomeStateResult:
+    if updating_name:
+        result.updating_display_name = updating_name
+    return result
 
 
 def resolve_home_state(
@@ -183,35 +208,12 @@ def resolve_home_state(
     actions = list(actions or [])
     health = _health_counts(accounts)
     enrolled = len(accounts)
-
-    if sync_running or any(a.status == UPDATING for a in accounts):
-        name = updating_display_name
-        if not name and updating_source:
-            for acct in accounts:
-                if acct.source == updating_source:
-                    name = acct.display_name
-                    break
-        if not name:
-            updating_accts = [a for a in accounts if a.status == UPDATING]
-            name = updating_accts[0].display_name if updating_accts else "your account"
-        headline = user_copy.home_update_headline(name)
-        body = user_copy.HOME_UPDATE_BODY
-        return HomeStateResult(
-            state=HomeState.UPDATE,
-            priority_summary=user_copy.HOME_PRIORITY_UPDATE,
-            featured=HomeFeatured(
-                headline=headline,
-                body=body,
-                disabled_cta_label=user_copy.STATUS_LABEL_UPDATING,
-                secondary_label=user_copy.HOME_VIEW_ACCOUNTS_LABEL,
-                secondary_url="/credentials",
-            ),
-            health=health,
-            show_health=True,
-            activity_pending_count=pending_activity_count,
-            freshness_label=freshness_label,
-            updating_display_name=name,
-        )
+    updating_name = _resolve_updating_name(
+        accounts,
+        sync_running=sync_running,
+        updating_source=updating_source,
+        updating_display_name=updating_display_name,
+    )
 
     login_acct = _pick_login_account(accounts)
     if login_acct:
@@ -225,21 +227,24 @@ def resolve_home_state(
         cta_label = login_acct.user_action_label or user_copy.home_login_cta(login_acct.display_name)
         cta_url = login_acct.user_action_url or "/credentials"
         secondary = user_copy.HOME_VIEW_NEEDS_LOGIN_LABEL if plural else None
-        return HomeStateResult(
-            state=HomeState.LOGIN,
-            priority_summary=user_copy.HOME_PRIORITY_LOGIN,
-            featured=HomeFeatured(
-                headline=headline,
-                body=body,
-                cta_label=cta_label,
-                cta_url=cta_url,
-                secondary_label=secondary,
-                secondary_url="/credentials" if secondary else None,
+        return _attach_update_context(
+            HomeStateResult(
+                state=HomeState.LOGIN,
+                priority_summary=user_copy.HOME_PRIORITY_LOGIN,
+                featured=HomeFeatured(
+                    headline=headline,
+                    body=body,
+                    cta_label=cta_label,
+                    cta_url=cta_url,
+                    secondary_label=secondary,
+                    secondary_url="/credentials" if secondary else None,
+                ),
+                health=health,
+                show_health=True,
+                activity_pending_count=pending_activity_count,
+                freshness_label=freshness_label,
             ),
-            health=health,
-            show_health=True,
-            activity_pending_count=pending_activity_count,
-            freshness_label=freshness_label,
+            updating_name,
         )
 
     if enrolled == 0:
@@ -288,22 +293,45 @@ def resolve_home_state(
             for a in accounts
             if a.status != UP_TO_DATE
         ][:5]
+        return _attach_update_context(
+            HomeStateResult(
+                state=HomeState.WAITING,
+                priority_summary=user_copy.HOME_PRIORITY_WAITING,
+                featured=HomeFeatured(
+                    headline=headline,
+                    body=body,
+                    cta_label=cta_label,
+                    cta_url=cta_url,
+                    secondary_label=user_copy.HOME_VIEW_WAITING_LABEL,
+                    secondary_url="/credentials",
+                ),
+                health=health,
+                waiting_rows=rows,
+                show_health=True,
+                activity_pending_count=pending_activity_count,
+                freshness_label=freshness_label,
+            ),
+            updating_name,
+        )
+
+    if updating_name:
+        headline = user_copy.home_update_headline(updating_name)
+        body = user_copy.HOME_UPDATE_BODY
         return HomeStateResult(
-            state=HomeState.WAITING,
-            priority_summary=user_copy.HOME_PRIORITY_WAITING,
+            state=HomeState.UPDATE,
+            priority_summary=user_copy.HOME_PRIORITY_UPDATE,
             featured=HomeFeatured(
                 headline=headline,
                 body=body,
-                cta_label=cta_label,
-                cta_url=cta_url,
-                secondary_label=user_copy.HOME_VIEW_WAITING_LABEL,
+                disabled_cta_label=user_copy.STATUS_LABEL_UPDATING,
+                secondary_label=user_copy.HOME_VIEW_ACCOUNTS_LABEL,
                 secondary_url="/credentials",
             ),
             health=health,
-            waiting_rows=rows,
             show_health=True,
             activity_pending_count=pending_activity_count,
             freshness_label=freshness_label,
+            updating_display_name=updating_name,
         )
 
     rec_candidates = _sort_recommendation_actions(

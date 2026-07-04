@@ -427,7 +427,6 @@ HOME_UPDATE_BODY = (
 )
 
 HOME_ALL_CLEAR_HEADLINE = "You're all set."
-HOME_DISMISS_LABEL = "Dismiss for now"
 
 HOME_PRIORITY_WAITING = "Getting your first update."
 HOME_PRIORITY_LOGIN = "One thing needs you."
