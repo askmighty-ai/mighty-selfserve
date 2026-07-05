@@ -27,11 +27,11 @@
     'pagination', 'nextpage', 'cursor', 'offset', 'pageinfo',
   ];
 
-  const SKIP_URL_RE = /\/(?:static|assets|asset|dist|bundle|bundles|chunks|chunk|analytics|telemetry|tracking|track|metrics|beacon|pixel|ads|advert|doubleclick|googletagmanager|gtm|segment|upload|uploads|multipart)(?:\/|$|\?)/i;
+  const SKIP_URL_RE = /\/(?:static|assets|asset|dist|bundle|bundles|chunks|chunk|analytics|telemetry|tracking|track|metrics|beacon|pixel|ads|advert|doubleclick|googletagmanager|gtm|segment|upload|uploads|multipart|oauth2?|token|auth\/token|login\/token|api\/auth|signin\/token|refresh|\.well-known)(?:\/|$|\?)/i;
   const SKIP_EXT_RE = /\.(?:js|css|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|map)(?:\?|$)/i;
   const AUTH_TOKEN_RE = /"(token_type|access_token|id_token|refresh_token)"/i;
   const SENSITIVE_KEY_RE = /"(access_token|refresh_token|id_token|password|secret|authorization|cookie|csrf|session_token|session_id|sessionid|set-cookie)"/i;
-  const GRAPHQL_SHAPE_RE = /^\s*\{\s*"(data|errors)"\s*:/;
+  const MAX_NETWORK_BLOCK_CHARS = 120_000;
 
   function shouldSkipUrl(url) {
     const u = String(url || '');
@@ -43,11 +43,18 @@
     return false;
   }
 
-  function isGraphqlPayload(text) {
+  function isGraphqlPayload(text, contentType) {
+    const ct = (contentType || '').toLowerCase();
+    if (ct.includes('graphql')) return true;
     if (!text) return false;
-    if (GRAPHQL_SHAPE_RE.test(text)) return true;
-    const lower = text.toLowerCase();
-    return lower.includes('"query"') && (lower.includes('"data"') || lower.includes('"errors"'));
+    try {
+      const payload = JSON.parse(text);
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+      if (Array.isArray(payload.errors)) return true;
+      return payload.data != null && typeof payload.extensions === 'object';
+    } catch (_) {
+      return false;
+    }
   }
 
   function redactSensitiveJson(text) {
@@ -71,13 +78,13 @@
     }
   }
 
-  function looksLikeAccountData(text) {
+  function looksLikeAccountData(text, contentType) {
     if (!text || text.length < 80 || text.length > 1_000_000) return false;
     try { JSON.parse(text); } catch { return false; }
     if (AUTH_TOKEN_RE.test(text)) return false;
     const lower = text.toLowerCase();
     const hits = KEYWORDS.filter(k => lower.includes(k)).length;
-    if (isGraphqlPayload(text)) return hits >= 1 || text.length >= 300;
+    if (isGraphqlPayload(text, contentType)) return hits >= 1 || text.length >= 300;
     return text.length >= 500 ? hits >= 1 : hits >= 2;
   }
 
@@ -86,7 +93,7 @@
       window.postMessage({
         type: MSG_TYPE,
         url: String(url || '').slice(0, 500),
-        data: redactSensitiveJson(text).slice(0, 120_000),
+        data: redactSensitiveJson(text).slice(0, MAX_NETWORK_BLOCK_CHARS),
         graphql: !!meta?.graphql,
         contentType: meta?.contentType || '',
       }, '*');
@@ -98,10 +105,10 @@
     const ct = (contentType || '').toLowerCase();
     const graphqlCt = ct.includes('graphql');
     const jsonCt = ct.includes('json') || graphqlCt || ct.includes('javascript');
-    if (!jsonCt && !isGraphqlPayload(responseText)) return;
-    if (!looksLikeAccountData(responseText)) return;
+    if (!jsonCt && !isGraphqlPayload(responseText, ct)) return;
+    if (!looksLikeAccountData(responseText, ct)) return;
     forward(url, responseText, {
-      graphql: graphqlCt || isGraphqlPayload(responseText),
+      graphql: graphqlCt || isGraphqlPayload(responseText, ct),
       contentType: ct,
     });
   }
@@ -150,7 +157,7 @@
         const val = window[key];
         if (!val) continue;
         const text = typeof val === 'string' ? val : JSON.stringify(val);
-        if (looksLikeAccountData(text)) {
+        if (looksLikeAccountData(text, '')) {
           forward(`embedded:${key}@${location.href}`, text, { graphql: false });
         }
       } catch (_) {}
@@ -165,7 +172,7 @@
         if (!isNextData) continue;
         try {
           const t = n.textContent || '';
-          if (looksLikeAccountData(t)) {
+          if (looksLikeAccountData(t, '')) {
             forward(`embedded:__NEXT_DATA__@${location.href}`, t, { graphql: false });
           }
         } catch (_) {}

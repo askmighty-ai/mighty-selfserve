@@ -21,21 +21,45 @@ _NETWORK_BLOCK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Size limits — keep network evidence bounded end-to-end.
+MAX_NETWORK_BLOCK_CHARS = 120_000
+MAX_SYNC_NETWORK_BUFFER_CHARS = 80_000
+MAX_RAW_TEXT_CHARS = 40_000
+
 # Sensitive JSON keys — values are redacted before storage.
+SENSITIVE_JSON_KEYS: tuple[str, ...] = (
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "password",
+    "secret",
+    "authorization",
+    "cookie",
+    "csrf",
+    "session_token",
+    "session_id",
+    "sessionid",
+    "set-cookie",
+)
 SENSITIVE_JSON_KEY_RE = re.compile(
-    r'"(access_token|refresh_token|id_token|password|secret|authorization|cookie|csrf|session_token|session_id|sessionid|set-cookie)"',
+    r'"(' + "|".join(re.escape(k) for k in SENSITIVE_JSON_KEYS) + r')"',
     re.IGNORECASE,
 )
 
-# URL path segments to skip (static assets, analytics, telemetry, uploads).
+# URL path segments to skip (static assets, analytics, telemetry, uploads, auth).
 SKIP_URL_PATH_RE = re.compile(
     r"/(?:"
     r"static|assets|asset|dist|bundle|bundles|chunks|chunk|"
     r"\.(?:js|css|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|map)(?:\?|$)|"
     r"analytics|telemetry|tracking|track|metrics|beacon|pixel|"
     r"ads|advert|doubleclick|googletagmanager|gtm|segment|"
-    r"upload|uploads|multipart"
+    r"upload|uploads|multipart|"
+    r"oauth2?|token|auth/token|login/token|api/auth|signin/token|refresh|\.well-known"
     r")(?:/|$|\?)",
+    re.IGNORECASE,
+)
+_SKIP_EXT_RE = re.compile(
+    r"\.(?:js|css|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|map)(?:\?|$)",
     re.IGNORECASE,
 )
 
@@ -75,8 +99,8 @@ ACCOUNT_KEYWORDS: tuple[str, ...] = (
     "statementbalance",
 )
 
-# GraphQL response shape hints.
-_GRAPHQL_SHAPE_RE = re.compile(r'^\s*\{\s*"(data|errors)"\s*:', re.MULTILINE)
+# GraphQL response shape hints — conservative; REST APIs also use {"data": ...}.
+_GRAPHQL_ERRORS_RE = re.compile(r'^\s*\{\s*"errors"\s*:', re.MULTILINE)
 
 
 def should_skip_network_url(url: str) -> bool:
@@ -87,6 +111,8 @@ def should_skip_network_url(url: str) -> bool:
     if lower.startswith("data:") or lower.startswith("blob:"):
         return True
     if SKIP_URL_PATH_RE.search(lower):
+        return True
+    if _SKIP_EXT_RE.search(lower):
         return True
     if re.search(r"[?&](?:format=(?:png|jpg|gif|webp|svg|css|js)|content-type=image)", lower):
         return True
@@ -122,13 +148,23 @@ def redact_sensitive_json(text: str) -> str:
     return json.dumps(_walk(payload), separators=(",", ":"))
 
 
-def is_graphql_payload(text: str) -> bool:
+def is_graphql_payload(text: str, *, content_type: str = "") -> bool:
+    ct = (content_type or "").lower()
+    if "graphql" in ct:
+        return True
     if not text:
         return False
-    if _GRAPHQL_SHAPE_RE.search(text):
+    if _GRAPHQL_ERRORS_RE.search(text):
         return True
-    lower = text.lower()
-    return '"query"' in lower and ('"data"' in lower or '"errors"' in lower)
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if isinstance(payload.get("errors"), list):
+        return True
+    return payload.get("data") is not None and isinstance(payload.get("extensions"), dict)
 
 
 def looks_like_account_json(text: str) -> bool:
@@ -163,7 +199,7 @@ def network_block_marker(url: str, *, graphql: bool = False, sync: bool = False)
 
 
 def format_network_block(url: str, json_data: str, *, graphql: bool = False, sync: bool = False) -> str:
-    safe = redact_sensitive_json(json_data)
+    safe = redact_sensitive_json(json_data)[:MAX_NETWORK_BLOCK_CHARS]
     return f"\n\n{network_block_marker(url, graphql=graphql, sync=sync)}\n{safe}\n"
 
 
@@ -184,7 +220,7 @@ def merge_network_blocks(existing_raw: str, new_raw: str) -> str:
         return new_text
     prefix = "\n\n".join(missing)
     combined = f"{prefix}\n\n{new_text}".strip()
-    return combined[:40_000]
+    return combined[:MAX_RAW_TEXT_CHARS]
 
 
 def network_marker_counts(raw_text: str) -> dict[str, int]:

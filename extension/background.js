@@ -791,6 +791,10 @@ const _INTERCEPT_COOLDOWN = 10 * 60 * 1000;
 
 // Phase 2: buffer structured network responses during account sync tab crawls.
 const _syncNetworkCapture = new Map(); // source -> { seen: Set, blocks: [] }
+const _MAX_NETWORK_BLOCK_CHARS = 120_000;
+const _MAX_SYNC_NETWORK_BUFFER_CHARS = 80_000;
+const _MAX_RAW_TEXT_CHARS = 40_000;
+const _SENSITIVE_JSON_RE = /"(access_token|refresh_token|id_token|password|secret|authorization|cookie|csrf|session_token|session_id|sessionid|set-cookie)"/i;
 
 function beginSyncNetworkCapture(source) {
   _syncNetworkCapture.set(source, { seen: new Set(), blocks: [] });
@@ -814,17 +818,17 @@ function _bufferSyncNetworkResponse(source, url, data, { graphql = false } = {})
 function flushSyncNetworkBlocks(source) {
   const buf = _syncNetworkCapture.get(source);
   if (!buf || !buf.blocks.length) return '';
-  return buf.blocks.join('').slice(0, 80_000);
+  return buf.blocks.join('').slice(0, _MAX_SYNC_NETWORK_BUFFER_CHARS);
 }
 
 function mergeSyncNetworkIntoRawText(rawText, source) {
   const networkPart = flushSyncNetworkBlocks(source);
   if (!networkPart) return rawText;
-  return (networkPart + rawText).slice(0, 40_000);
+  return (networkPart + rawText).slice(0, _MAX_RAW_TEXT_CHARS);
 }
 
 function _redactNetworkJson(text) {
-  if (!text || !_SENSITIVE_JSON_RE.test(text)) return String(text || '').slice(0, 120_000);
+  if (!text || !_SENSITIVE_JSON_RE.test(text)) return String(text || '').slice(0, _MAX_NETWORK_BLOCK_CHARS);
   try {
     const walk = (value) => {
       if (Array.isArray(value)) return value.map(walk);
@@ -837,9 +841,9 @@ function _redactNetworkJson(text) {
       }
       return value;
     };
-    return JSON.stringify(walk(JSON.parse(text))).slice(0, 120_000);
+    return JSON.stringify(walk(JSON.parse(text))).slice(0, _MAX_NETWORK_BLOCK_CHARS);
   } catch (_) {
-    return String(text || '').slice(0, 120_000);
+    return String(text || '').slice(0, _MAX_NETWORK_BLOCK_CHARS);
   }
 }
 
@@ -1309,7 +1313,6 @@ function _htmlToText(html) {
     .replace(/&#\d+;/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-const _SENSITIVE_JSON_RE = /"(access_token|refresh_token|id_token|password|secret|authorization|cookie|csrf|session_token)"/i;
 const _EVIDENCE_MAX_BLOCK = 12_000;
 const _EMBEDDED_SCRIPT_IDS = ['__NEXT_DATA__', '__NUXT__'];
 
