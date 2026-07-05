@@ -79,10 +79,14 @@ _EMBEDDED_BLOCK_RE = re.compile(r"=== EMBEDDED STATE:", re.IGNORECASE)
 _PAGE_META_BLOCK_RE = re.compile(r"=== PAGE META:", re.IGNORECASE)
 _JSON_LD_BLOCK_RE = re.compile(r"=== JSON-LD:", re.IGNORECASE)
 _HTML_SNAPSHOT_BLOCK_RE = re.compile(r"=== HTML SNAPSHOT:", re.IGNORECASE)
-_URL_SECTION_RE = re.compile(r"(?:^|\n\n)--- https?://[^\n]+ ---\n", re.MULTILINE)
+_URL_SECTION_RE = re.compile(
+    r"(?:^|\n\n)--- https?://[^\n]+ ---\n|=== https?://[^\n]+ ===\n",
+    re.MULTILINE,
+)
 _URL_MARKER_RE = re.compile(r"=== URL[^\n]*===", re.IGNORECASE)
 _VISIBLE_SECTION_RE = re.compile(
-    r"(?:^|\n\n)--- https?://[^\n]+ ---\n(.*?)(?=\n\n--- |\n\n=== |\Z)",
+    r"(?:(?:^|\n\n)--- https?://[^\n]+ ---\n|=== URL[^\n]*===\n|=== https?://[^\n]+ ===\n)"
+    r"(.*?)(?=\n\n--- |\n\n=== |\Z)",
     re.DOTALL | re.MULTILINE,
 )
 

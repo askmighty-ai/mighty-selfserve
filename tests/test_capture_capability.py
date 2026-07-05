@@ -152,7 +152,7 @@ class TestPipelineIntegration:
         assert "visible_text" not in cap.present
         assert cap.latest_successful_capture_run_id == run_id
         assert "dom_html" in cap.missing
-        assert cap.next_best_improvement == "Capture embedded framework state"
+        assert cap.next_best_improvement == "Capture visible text from account pages"
 
     def test_extension_sync_visible_text_only(self, pipeline_db):
         from mighty.capture_capability import collect_signals_from_pipeline

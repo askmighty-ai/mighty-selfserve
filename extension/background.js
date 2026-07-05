@@ -94,7 +94,7 @@ function countEvidenceMarkers(rawText) {
 function visibleTextCharCount(rawText) {
   const text = String(rawText || '');
   let total = 0;
-  const sectionRe = /(?:^|\n\n)--- https?:\/\/[^\n]+ ---\n([\s\S]*?)(?=\n\n--- |\n\n=== |\Z)/gm;
+  const sectionRe = /(?:^|\n\n)--- https?:\/\/[^\n]+ ---\n|=== URL[^\n]*===\n|=== https?:\/\/[^\n]+ ===\n([\s\S]*?)(?=\n\n--- |\n\n=== |\Z)/gm;
   let match;
   while ((match = sectionRe.exec(text)) !== null) {
     total += match[1].trim().length;
@@ -105,6 +105,7 @@ function visibleTextCharCount(rawText) {
 function summarizeEvidenceMarkers(rawText) {
   const text = String(rawText || '');
   const urlSections = (text.match(/(?:^|\n\n)--- https?:\/\/[^\n]+ ---\n/g) || []).length
+    + (text.match(/=== https?:\/\/[^\n]+ ===\n/g) || []).length
     + (text.match(/=== URL[^\n]*===/gi) || []).length;
   const apiBlocks = (text.match(/=== API RESPONSE:/gi) || []).length;
   const embeddedBlocks = (text.match(/=== EMBEDDED STATE:/gi) || []).length;
