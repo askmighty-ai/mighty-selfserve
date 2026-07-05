@@ -157,7 +157,7 @@ class TestComputeBenchmark:
             ["amex"],
             {"amex": "credit_card"},
             display_names={"amex": "American Express"},
-            trend_cutoff="2099-01-01T00:00:00+00:00",
+            recent_window_start="2020-01-01T00:00:00+00:00",
         )
         assert len(rows) == 1
         row = rows[0]
@@ -185,10 +185,29 @@ class TestComputeBenchmark:
             pipeline_db,
             ["amex"],
             {"amex": "credit_card"},
-            trend_cutoff="2026-01-01T00:00:00+00:00",
+            recent_window_start="2026-01-01T00:00:00+00:00",
         )
         assert rows[0].trend_delta is not None
         assert rows[0].trend_delta > 0
+
+    def test_scores_use_recent_window_only(self, pipeline_db):
+        _seed_trusted(
+            pipeline_db,
+            source="amex",
+            keys=["payment_due_date", "statement_balance", "points_balance", "credit_limit"],
+            created_at="2020-01-01T00:00:00+00:00",
+        )
+
+        rows = compute_all_provider_benchmarks(
+            pipeline_db,
+            ["amex"],
+            {"amex": "credit_card"},
+            recent_window_start="2026-01-01T00:00:00+00:00",
+        )
+        assert rows[0].readiness_score == 0
+        assert rows[0].observation_score == 0
+        assert rows[0].trend_delta is not None
+        assert rows[0].trend_delta < 0
 
     def test_attention_priority(self):
         healthy = compute_provider_benchmark(

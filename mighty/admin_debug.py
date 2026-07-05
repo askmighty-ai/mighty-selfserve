@@ -756,7 +756,8 @@ def render_provider_benchmark_page(rows: list[Any], *, trend_days: int = 14) -> 
         '<a href="/admin/capture-capability" style="color:#818cf8">Capture Capability</a>, '
         '<a href="/admin/coverage" style="color:#818cf8">Observation Coverage</a>, and '
         '<a href="/admin/recommendation-unlocks" style="color:#818cf8">Recommendation Unlocks</a>. '
-        f"Trend compares all-time vs runs before the last {trend_days} days.</p>"
+        f"Scores use the last {trend_days} days. Trend = recent readiness − prior readiness "
+        f"(prior = all pipeline runs before the recent window).</p>"
         f'<div class="card"><h3>Scoring formula</h3><p style="font-size:12px;margin:0">{formula}</p>'
         '<ul style="font-size:11px;color:#9ca3af;margin:8px 0 0;padding-left:18px">'
         "<li><strong>Login</strong> — connection stage success rate</li>"

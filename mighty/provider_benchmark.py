@@ -142,10 +142,10 @@ def collect_connection_stats_from_pipeline(
     return by_source
 
 
-def _trend_cutoff_iso(*, now: datetime | None = None, days: int = TREND_WINDOW_DAYS) -> str:
+def _recent_window_start_iso(*, now: datetime | None = None, days: int = TREND_WINDOW_DAYS) -> str:
+    """ISO timestamp marking the start of the recent window (last N days)."""
     ref = now or datetime.now(timezone.utc)
-    cutoff = ref - timedelta(days=days)
-    return cutoff.isoformat()
+    return (ref - timedelta(days=days)).isoformat()
 
 
 def compute_provider_benchmark(
@@ -190,24 +190,37 @@ def compute_provider_benchmark(
     )
 
 
+def _has_pipeline_data(
+    *,
+    connection: ConnectionStats,
+    signals: Any,
+    observed: set[str],
+) -> bool:
+    return connection.total > 0 or signals is not None or bool(observed)
+
+
 def compute_all_provider_benchmarks(
     db: Any,
     providers: list[str],
     provider_categories: dict[str, str],
     *,
     display_names: dict[str, str] | None = None,
-    trend_cutoff: str | None = None,
+    recent_window_start: str | None = None,
 ) -> list[ProviderBenchmark]:
-    """Compute readiness benchmarks for all providers."""
-    names = display_names or {}
-    cutoff = trend_cutoff or _trend_cutoff_iso()
+    """Compute readiness benchmarks for all providers.
 
-    connection_by_source = collect_connection_stats_from_pipeline(db)
-    prior_connection = collect_connection_stats_from_pipeline(db, run_created_before=cutoff)
-    signals_by_source = collect_signals_from_pipeline(db)
-    prior_signals = collect_signals_from_pipeline(db, run_created_before=cutoff)
-    observed_by_source = collect_observed_from_pipeline(db)
-    prior_observed = collect_observed_from_pipeline(db, run_created_before=cutoff)
+    Scores reflect the recent window (last TREND_WINDOW_DAYS by default).
+    Trend compares recent readiness vs prior readiness (all runs before recent window).
+    """
+    names = display_names or {}
+    window_start = recent_window_start or _recent_window_start_iso()
+
+    recent_connection = collect_connection_stats_from_pipeline(db, run_created_after=window_start)
+    prior_connection = collect_connection_stats_from_pipeline(db, run_created_before=window_start)
+    recent_signals = collect_signals_from_pipeline(db, run_created_after=window_start)
+    prior_signals = collect_signals_from_pipeline(db, run_created_before=window_start)
+    recent_observed = collect_observed_from_pipeline(db, run_created_after=window_start)
+    prior_observed = collect_observed_from_pipeline(db, run_created_before=window_start)
 
     results: list[ProviderBenchmark] = []
     for source in providers:
@@ -216,18 +229,18 @@ def compute_all_provider_benchmarks(
 
         cap = compute_provider_capability(
             source,
-            signals=signals_by_source.get(source),
+            signals=recent_signals.get(source),
             display_name=name,
         )
         cov = compute_provider_coverage(
             source,
             category=category,
-            observed_observations=observed_by_source.get(source, set()),
+            observed_observations=recent_observed.get(source, set()),
             display_name=name,
         )
         unlocks = compute_provider_unlocks(
             source,
-            observed_by_source.get(source, set()),
+            recent_observed.get(source, set()),
             display_name=name,
         )
 
@@ -254,21 +267,20 @@ def compute_all_provider_benchmarks(
             recommendation=recommendation_score_from_unlocks(prior_unlocks),
         )
 
-        has_prior_data = (
-            prior_connection.get(source, ConnectionStats()).total > 0
-            or prior_signals.get(source) is not None
-            or bool(prior_observed.get(source))
+        has_prior = _has_pipeline_data(
+            connection=prior_connection.get(source, ConnectionStats()),
+            signals=prior_signals.get(source),
+            observed=prior_observed.get(source, set()),
         )
-        prior_readiness = prior_overall if has_prior_data else None
 
         results.append(
             compute_provider_benchmark(
                 source,
-                connection_stats=connection_by_source.get(source, ConnectionStats()),
+                connection_stats=recent_connection.get(source, ConnectionStats()),
                 capability=cap,
                 coverage=cov,
                 unlocks=unlocks,
-                prior_readiness=prior_readiness,
+                prior_readiness=prior_overall if has_prior else None,
                 display_name=name,
             )
         )
