@@ -244,18 +244,33 @@ def _apply_timing_signals(
             signals.present_detail.setdefault("timing", f"Stage duration {duration_ms:.0f} ms")
 
 
-def collect_signals_from_pipeline(db: Any) -> dict[str, SourceCaptureSignals]:
+def collect_signals_from_pipeline(
+    db: Any,
+    *,
+    run_created_before: str | None = None,
+    run_created_after: str | None = None,
+) -> dict[str, SourceCaptureSignals]:
     """Aggregate best-ever capture signals per provider from pipeline history."""
+    clauses = ["ps.stage IN (?, ?)"]
+    params: list[Any] = [PipelineStageId.CAPTURE.value, PipelineStageId.NAVIGATION.value]
+    if run_created_before:
+        clauses.append("pr.created_at < ?")
+        params.append(run_created_before)
+    if run_created_after:
+        clauses.append("pr.created_at >= ?")
+        params.append(run_created_after)
+
+    where = " AND ".join(clauses)
     rows = db.execute(
-        """
+        f"""
         SELECT pr.source, pr.run_id, pr.initiator, pr.created_at, pr.finished_at,
                ps.stage, ps.status, ps.artifacts_json, ps.duration_ms
         FROM pipeline_runs pr
         JOIN pipeline_stages ps ON ps.run_id = pr.run_id
-        WHERE ps.stage IN (?, ?)
+        WHERE {where}
         ORDER BY pr.created_at DESC
         """,
-        (PipelineStageId.CAPTURE.value, PipelineStageId.NAVIGATION.value),
+        params,
     ).fetchall()
 
     by_source: dict[str, SourceCaptureSignals] = {}
