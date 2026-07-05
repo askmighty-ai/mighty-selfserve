@@ -43,7 +43,7 @@ from mighty.pipeline_stages import (
 )
 
 _URL_MARKER_RE = re.compile(
-    r"(?:---|===)\s*(?:API RESPONSE|EMBEDDED STATE|https?://[^\s]+)\s*(?:===|---)?",
+    r"(?:---|===)\s*(?:API RESPONSE|EMBEDDED STATE|PAGE META|JSON-LD|https?://[^\s]+)\s*(?:===|---)?",
     re.IGNORECASE,
 )
 _HTTP_URL_RE = re.compile(r"https?://[^\s>\]]+", re.IGNORECASE)
@@ -119,6 +119,11 @@ def start_run(
     run_id: str | None = None,
 ) -> str:
     run_id = run_id or new_run_id()
+    existing = db.execute(
+        "SELECT run_id FROM pipeline_runs WHERE run_id=?", (run_id,)
+    ).fetchone()
+    if existing:
+        return run_id
     now = utc_now_iso()
     db.execute(
         """
@@ -399,35 +404,112 @@ def _extract_urls(raw_text: str) -> list[str]:
     return urls
 
 
-def _meaningful_item_keys(items: list[dict[str, Any]] | None) -> list[str]:
-    keys: list[str] = []
-    for item in items or []:
-        if not isinstance(item, dict):
+_CLIENT_STAGE_IDS: frozenset[str] = frozenset(
+    stage.value
+    for stage in (
+        PipelineStageId.CONNECTION,
+        PipelineStageId.NAVIGATION,
+        PipelineStageId.CAPTURE,
+    )
+)
+
+
+def _load_stage_artifacts(db: Any, run_id: str, stage: str) -> dict[str, Any]:
+    row = db.execute(
+        "SELECT artifacts_json FROM pipeline_stages WHERE run_id=? AND stage=?",
+        (run_id, stage),
+    ).fetchone()
+    if not row or not row["artifacts_json"]:
+        return {}
+    try:
+        loaded = json.loads(row["artifacts_json"])
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _is_measured_stage(db: Any, run_id: str, stage: str) -> bool:
+    row = db.execute(
+        "SELECT artifacts_json FROM pipeline_stages WHERE run_id=? AND stage=?",
+        (run_id, stage),
+    ).fetchone()
+    if not row:
+        return False
+    artifacts = _load_stage_artifacts(db, run_id, stage)
+    return not artifacts.get("inferred")
+
+
+def _client_stage_row(db: Any, run_id: str, stage: str) -> dict[str, Any] | None:
+    row = db.execute(
+        """
+        SELECT stage, status, failure_reason, started_at, finished_at, artifacts_json
+        FROM pipeline_stages WHERE run_id=? AND stage=?
+        """,
+        (run_id, stage),
+    ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    if item.get("artifacts_json"):
+        try:
+            item["artifacts"] = json.loads(item["artifacts_json"])
+        except Exception:
+            item["artifacts"] = {}
+    else:
+        item["artifacts"] = {}
+    return item
+
+
+def _client_stage_failed(db: Any, run_id: str, stage: str) -> bool:
+    row = _client_stage_row(db, run_id, stage)
+    return bool(row and row["status"] == StageStatus.FAILED.value)
+
+
+def has_measured_client_stages(db: Any, run_id: str) -> bool:
+    """True when the extension (or another client) recorded non-inferred client stages."""
+    return any(_is_measured_stage(db, run_id, stage) for stage in _CLIENT_STAGE_IDS)
+
+
+def evaluate_client_stages(db: Any, run_id: str) -> tuple[bool, str | None]:
+    """Evaluate already-recorded measured client stages for pipeline continuation."""
+    for stage_id in (
+        PipelineStageId.CONNECTION.value,
+        PipelineStageId.NAVIGATION.value,
+        PipelineStageId.CAPTURE.value,
+    ):
+        row = db.execute(
+            """
+            SELECT status, failure_reason FROM pipeline_stages
+            WHERE run_id=? AND stage=?
+            """,
+            (run_id, stage_id),
+        ).fetchone()
+        if not row:
             continue
-        key = str(item.get("key") or "").strip()
-        value = str(item.get("value") or "").strip().lower()
-        if key and value and value not in _EMPTY_VALUES:
-            keys.append(key)
-    return keys
+        if row["status"] == StageStatus.FAILED.value:
+            reason = row["failure_reason"]
+            skip_remaining_stages(db, run_id, after_stage=stage_id, reason=reason)
+            finalize_run(
+                db,
+                run_id,
+                terminal_stage=stage_id,
+                terminal_reason=reason,
+                run_status=RunStatus.FAILED.value,
+            )
+            return False, stage_id
+    return True, None
 
 
-def record_inferred_client_stages(
+def _record_inferred_connection(
     db: Any,
     run_id: str,
     *,
     sync_status: str | None,
     sync_failure_reason: str | None,
     connection_status: str | None,
-    raw_text: str,
-    items: list[dict[str, Any]] | None,
-    json_payload_chars: int = 0,
+    now: str | None = None,
 ) -> tuple[bool, str | None]:
-    """Infer and record connection, navigation, and capture when client stages are absent.
-
-    Returns (pipeline_may_continue, terminal_stage_if_aborted).
-    """
-    now = utc_now_iso()
-
+    now = now or utc_now_iso()
     connection_reason = None
     connection_status_value = StageStatus.SUCCESS.value
     if sync_status == "login_required" or sync_failure_reason in {FAIL_LOGIN_WALL, FAIL_LOGIN_REQUIRED}:
@@ -461,7 +543,17 @@ def record_inferred_client_stages(
             run_status=RunStatus.FAILED.value,
         )
         return False, PipelineStageId.CONNECTION.value
+    return True, None
 
+
+def _record_inferred_navigation(
+    db: Any,
+    run_id: str,
+    *,
+    raw_text: str,
+    now: str | None = None,
+) -> tuple[bool, str | None]:
+    now = now or utc_now_iso()
     urls = _extract_urls(raw_text)
     navigation_status = StageStatus.SUCCESS.value
     navigation_reason = None
@@ -493,7 +585,20 @@ def record_inferred_client_stages(
             run_status=RunStatus.FAILED.value,
         )
         return False, PipelineStageId.NAVIGATION.value
+    return True, None
 
+
+def _record_inferred_capture(
+    db: Any,
+    run_id: str,
+    *,
+    sync_failure_reason: str | None,
+    raw_text: str,
+    items: list[dict[str, Any]] | None,
+    json_payload_chars: int = 0,
+    now: str | None = None,
+) -> tuple[bool, str | None]:
+    now = now or utc_now_iso()
     capture_status = StageStatus.SUCCESS.value
     capture_reason = None
     raw_len = len(raw_text or "")
@@ -541,8 +646,128 @@ def record_inferred_client_stages(
             run_status=RunStatus.FAILED.value,
         )
         return False, PipelineStageId.CAPTURE.value
-
     return True, None
+
+
+def record_client_stages_or_infer(
+    db: Any,
+    run_id: str,
+    *,
+    sync_status: str | None,
+    sync_failure_reason: str | None,
+    connection_status: str | None,
+    raw_text: str,
+    items: list[dict[str, Any]] | None,
+    json_payload_chars: int = 0,
+) -> tuple[bool, str | None]:
+    """Use measured client stages when present; infer only missing stages."""
+    if not has_measured_client_stages(db, run_id):
+        return record_inferred_client_stages(
+            db,
+            run_id,
+            sync_status=sync_status,
+            sync_failure_reason=sync_failure_reason,
+            connection_status=connection_status,
+            raw_text=raw_text,
+            items=items,
+            json_payload_chars=json_payload_chars,
+        )
+
+    now = utc_now_iso()
+    if not _is_measured_stage(db, run_id, PipelineStageId.CONNECTION.value):
+        may_continue, terminal = _record_inferred_connection(
+            db,
+            run_id,
+            sync_status=sync_status,
+            sync_failure_reason=sync_failure_reason,
+            connection_status=connection_status,
+            now=now,
+        )
+        if not may_continue:
+            return may_continue, terminal
+    elif _client_stage_failed(db, run_id, PipelineStageId.CONNECTION.value):
+        return evaluate_client_stages(db, run_id)
+
+    if not _is_measured_stage(db, run_id, PipelineStageId.NAVIGATION.value):
+        may_continue, terminal = _record_inferred_navigation(
+            db,
+            run_id,
+            raw_text=raw_text,
+            now=now,
+        )
+        if not may_continue:
+            return may_continue, terminal
+    elif _client_stage_failed(db, run_id, PipelineStageId.NAVIGATION.value):
+        return evaluate_client_stages(db, run_id)
+
+    if not _is_measured_stage(db, run_id, PipelineStageId.CAPTURE.value):
+        may_continue, terminal = _record_inferred_capture(
+            db,
+            run_id,
+            sync_failure_reason=sync_failure_reason,
+            raw_text=raw_text,
+            items=items,
+            json_payload_chars=json_payload_chars,
+            now=now,
+        )
+        if not may_continue:
+            return may_continue, terminal
+
+    return evaluate_client_stages(db, run_id)
+
+
+def _meaningful_item_keys(items: list[dict[str, Any]] | None) -> list[str]:
+    keys: list[str] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        value = str(item.get("value") or "").strip().lower()
+        if key and value and value not in _EMPTY_VALUES:
+            keys.append(key)
+    return keys
+
+
+def record_inferred_client_stages(
+    db: Any,
+    run_id: str,
+    *,
+    sync_status: str | None,
+    sync_failure_reason: str | None,
+    connection_status: str | None,
+    raw_text: str,
+    items: list[dict[str, Any]] | None,
+    json_payload_chars: int = 0,
+) -> tuple[bool, str | None]:
+    """Infer and record connection, navigation, and capture when client stages are absent.
+
+    Returns (pipeline_may_continue, terminal_stage_if_aborted).
+    """
+    now = utc_now_iso()
+    may_continue, terminal = _record_inferred_connection(
+        db,
+        run_id,
+        sync_status=sync_status,
+        sync_failure_reason=sync_failure_reason,
+        connection_status=connection_status,
+        now=now,
+    )
+    if not may_continue:
+        return may_continue, terminal
+
+    may_continue, terminal = _record_inferred_navigation(db, run_id, raw_text=raw_text, now=now)
+    if not may_continue:
+        return may_continue, terminal
+
+    return _record_inferred_capture(
+        db,
+        run_id,
+        sync_failure_reason=sync_failure_reason,
+        raw_text=raw_text,
+        items=items,
+        json_payload_chars=json_payload_chars,
+        now=now,
+    )
 
 
 def record_structured_stage(

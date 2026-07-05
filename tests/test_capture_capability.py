@@ -51,6 +51,37 @@ class TestParseMarkers:
         assert markers["url_section_count"] >= 1
         assert markers["visible_text_chars"] > 0
 
+    def test_page_meta_and_json_ld_blocks(self):
+        raw = (
+            "\n\n=== PAGE META: https://example.com/account ===\n"
+            '{"title":"My Account","canonical":"https://example.com/account"}\n\n'
+            "=== JSON-LD: https://example.com/account ===\n"
+            '{"@type":"Person","name":"Member"}\n\n'
+            "--- https://example.com/account ---\n"
+            "Gold status\n12,000 points"
+        )
+        markers = parse_raw_text_evidence_markers(raw)
+        assert markers["page_metadata_blocks"] == 1
+        assert markers["json_ld_blocks"] == 1
+        present = present_from_markers(markers)
+        assert "page_metadata" in present
+        assert "dom_html" not in present
+        assert "embedded_json" in present
+        assert "visible_text" in present
+
+    def test_visible_text_chars_excludes_evidence_blocks(self):
+        raw = (
+            "\n\n=== PAGE META: https://example.com/account ===\n"
+            '{"title":"My Account"}\n\n'
+            "=== JSON-LD: https://example.com/account ===\n"
+            '{"@type":"Person","name":"Member"}\n\n'
+            "--- https://example.com/account ---\n"
+            "Visible only"
+        )
+        markers = parse_raw_text_evidence_markers(raw)
+        assert markers["visible_text_chars"] == len("Visible only")
+        assert markers["visible_text_chars"] < len(raw.strip())
+
     def test_present_from_markers(self):
         markers = {
             "visible_text_chars": 500,
@@ -118,10 +149,10 @@ class TestPipelineIntegration:
         signals = collect_signals_from_pipeline(pipeline_db)["delta"]
         cap = compute_provider_capability("delta", signals=signals)
         assert "network_json" in cap.present
-        assert "visible_text" in cap.present
+        assert "visible_text" not in cap.present
         assert cap.latest_successful_capture_run_id == run_id
         assert "dom_html" in cap.missing
-        assert cap.next_best_improvement == "Capture embedded framework state"
+        assert cap.next_best_improvement == "Capture visible text from account pages"
 
     def test_extension_sync_visible_text_only(self, pipeline_db):
         from mighty.capture_capability import collect_signals_from_pipeline

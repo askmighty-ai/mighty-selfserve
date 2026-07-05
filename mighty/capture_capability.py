@@ -15,6 +15,7 @@ CAPABILITY_ORDER: tuple[str, ...] = (
     "visible_text",
     "network_json",
     "embedded_json",
+    "page_metadata",
     "dom_html",
     "navigation_urls",
     "extension_measured",
@@ -34,6 +35,10 @@ CAPABILITY_CATALOG: dict[str, dict[str, str]] = {
     "embedded_json": {
         "label": "Embedded JSON",
         "why_needed": "Richer state for modern SPAs (Next.js, Apollo, Redux hydration).",
+    },
+    "page_metadata": {
+        "label": "Page metadata",
+        "why_needed": "Title, canonical URL, and safe meta tags for page identity and context.",
     },
     "dom_html": {
         "label": "DOM / HTML",
@@ -61,6 +66,7 @@ IMPROVEMENT_BY_CAPABILITY: dict[str, str] = {
     "visible_text": "Capture visible text from account pages",
     "network_json": "Capture network JSON",
     "embedded_json": "Capture embedded framework state",
+    "page_metadata": "Capture page metadata blocks",
     "dom_html": "Store HTML snapshot",
     "navigation_urls": "Capture navigation URLs during sync",
     "extension_measured": "Enable extension stage reporting",
@@ -70,8 +76,24 @@ IMPROVEMENT_BY_CAPABILITY: dict[str, str] = {
 
 _API_BLOCK_RE = re.compile(r"=== API RESPONSE:", re.IGNORECASE)
 _EMBEDDED_BLOCK_RE = re.compile(r"=== EMBEDDED STATE:", re.IGNORECASE)
-_URL_SECTION_RE = re.compile(r"\n\n--- https?://[^\n]+ ---\n")
+_PAGE_META_BLOCK_RE = re.compile(r"=== PAGE META:", re.IGNORECASE)
+_JSON_LD_BLOCK_RE = re.compile(r"=== JSON-LD:", re.IGNORECASE)
+_HTML_SNAPSHOT_BLOCK_RE = re.compile(r"=== HTML SNAPSHOT:", re.IGNORECASE)
+_URL_SECTION_RE = re.compile(
+    r"(?:^|\n\n)--- https?://[^\n]+ ---\n|=== https?://[^\n]+ ===\n",
+    re.MULTILINE,
+)
 _URL_MARKER_RE = re.compile(r"=== URL[^\n]*===", re.IGNORECASE)
+_VISIBLE_SECTION_RE = re.compile(
+    r"(?:(?:^|\n\n)--- https?://[^\n]+ ---\n|=== URL[^\n]*===\n|=== https?://[^\n]+ ===\n)"
+    r"(.*?)(?=\n\n--- |\n\n=== |\Z)",
+    re.DOTALL | re.MULTILINE,
+)
+
+
+def _visible_text_char_count(text: str) -> int:
+    """Count characters in visible-text sections only, excluding evidence blocks."""
+    return sum(len(match.group(1).strip()) for match in _VISIBLE_SECTION_RE.finditer(text or ""))
 
 
 def needed_capabilities_for_provider(_source: str) -> list[str]:
@@ -90,13 +112,15 @@ def capability_why_needed(capability_id: str) -> str:
 def parse_raw_text_evidence_markers(raw_text: str) -> dict[str, Any]:
     """Parse capture marker counts from raw_text or sync payload."""
     text = raw_text or ""
-    stripped_len = len(text.strip())
     url_sections = len(_URL_SECTION_RE.findall(text)) + len(_URL_MARKER_RE.findall(text))
     return {
-        "visible_text_chars": stripped_len,
+        "visible_text_chars": _visible_text_char_count(text),
         "url_section_count": url_sections,
         "api_response_blocks": len(_API_BLOCK_RE.findall(text)),
         "embedded_state_blocks": len(_EMBEDDED_BLOCK_RE.findall(text)),
+        "page_metadata_blocks": len(_PAGE_META_BLOCK_RE.findall(text)),
+        "json_ld_blocks": len(_JSON_LD_BLOCK_RE.findall(text)),
+        "html_snapshot_blocks": len(_HTML_SNAPSHOT_BLOCK_RE.findall(text)),
         "measurement": "server_inferred",
     }
 
@@ -108,8 +132,7 @@ def present_from_markers(markers: dict[str, Any] | None, *, initiator: str = "")
         markers = {}
 
     visible_chars = int(markers.get("visible_text_chars") or 0)
-    raw_chars = int(markers.get("raw_text_chars") or 0)
-    if visible_chars > 0 or raw_chars > 0:
+    if visible_chars > 0 or int(markers.get("url_section_count") or 0) > 0:
         present.add("visible_text")
 
     api_blocks = int(markers.get("api_response_blocks") or 0)
@@ -119,6 +142,15 @@ def present_from_markers(markers: dict[str, Any] | None, *, initiator: str = "")
 
     if int(markers.get("embedded_state_blocks") or 0) > 0:
         present.add("embedded_json")
+
+    if int(markers.get("json_ld_blocks") or 0) > 0:
+        present.add("embedded_json")
+
+    if int(markers.get("page_metadata_blocks") or 0) > 0:
+        present.add("page_metadata")
+
+    if int(markers.get("html_snapshot_blocks") or 0) > 0:
+        present.add("dom_html")
 
     if int(markers.get("url_section_count") or 0) > 0:
         present.add("navigation_urls")
@@ -175,12 +207,9 @@ def _merge_markers(
     markers = dict(artifacts.get("evidence_markers") or {})
     if not markers:
         markers = {
-            "visible_text_chars": artifacts.get("raw_text_chars", 0),
             "json_payload_chars": artifacts.get("json_payload_chars", 0),
             "measurement": "server_inferred",
         }
-    elif "raw_text_chars" in artifacts and not markers.get("visible_text_chars"):
-        markers["visible_text_chars"] = artifacts["raw_text_chars"]
     if artifacts.get("json_payload_chars") and not markers.get("json_payload_chars"):
         markers["json_payload_chars"] = artifacts["json_payload_chars"]
     markers.setdefault("measurement", "server_inferred")
@@ -288,6 +317,10 @@ def collect_signals_from_pipeline(db: Any) -> dict[str, SourceCaptureSignals]:
                 detail_parts.append(f"{markers['api_response_blocks']} API block(s)")
             if markers.get("embedded_state_blocks"):
                 detail_parts.append(f"{markers['embedded_state_blocks']} embedded block(s)")
+            if markers.get("json_ld_blocks"):
+                detail_parts.append(f"{markers['json_ld_blocks']} JSON-LD block(s)")
+            if markers.get("page_metadata_blocks"):
+                detail_parts.append(f"{markers['page_metadata_blocks']} page meta block(s)")
             if markers.get("url_section_count"):
                 detail_parts.append(f"{markers['url_section_count']} URL section(s)")
             if detail_parts:
@@ -313,6 +346,16 @@ def enrich_signals_from_raw_text(signals: SourceCaptureSignals, raw_text: str) -
         signals.present_detail.setdefault(
             "embedded_json",
             f"{markers['embedded_state_blocks']} embedded block(s) in account raw_text",
+        )
+    if markers.get("json_ld_blocks"):
+        signals.present_detail.setdefault(
+            "embedded_json",
+            f"{markers['json_ld_blocks']} JSON-LD block(s) in account raw_text",
+        )
+    if markers.get("page_metadata_blocks"):
+        signals.present_detail.setdefault(
+            "page_metadata",
+            f"{markers['page_metadata_blocks']} page metadata block(s) in account raw_text",
         )
 
 

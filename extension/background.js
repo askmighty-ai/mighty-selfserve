@@ -66,13 +66,179 @@ function normalizePath(path) {
 
 /** Report a sync failure to the server so the dashboard can show an actionable message.
  *  Fire-and-forget — never throws. reason: 'no_data' | 'timeout' | 'login_wall' */
-function reportSyncFailure(apiKey, source, reason) {
+function reportSyncFailure(apiKey, source, reason, pipelineRunId = null) {
   // Returns the promise so callers can await before reloading UI
   return fetch(`${MIGHTY_URL}/api/sync/failure`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
-    body: JSON.stringify({ source, reason }),
+    body: JSON.stringify({
+      source,
+      reason,
+      ...(pipelineRunId ? { pipeline_run_id: pipelineRunId } : {}),
+    }),
   }).catch(() => {});
+}
+
+function createPipelineRunId() {
+  return crypto.randomUUID();
+}
+
+function pipelineIsoNow() {
+  return new Date().toISOString();
+}
+
+function countEvidenceMarkers(rawText) {
+  return (String(rawText || '').match(/\n\n--- /g) || []).length;
+}
+
+function visibleTextCharCount(rawText) {
+  const text = String(rawText || '');
+  let total = 0;
+  const sectionRe = /(?:^|\n\n)--- https?:\/\/[^\n]+ ---\n|=== URL[^\n]*===\n|=== https?:\/\/[^\n]+ ===\n([\s\S]*?)(?=\n\n--- |\n\n=== |\Z)/gm;
+  let match;
+  while ((match = sectionRe.exec(text)) !== null) {
+    total += match[1].trim().length;
+  }
+  return total;
+}
+
+function summarizeEvidenceMarkers(rawText) {
+  const text = String(rawText || '');
+  const urlSections = (text.match(/(?:^|\n\n)--- https?:\/\/[^\n]+ ---\n/g) || []).length
+    + (text.match(/=== https?:\/\/[^\n]+ ===\n/g) || []).length
+    + (text.match(/=== URL[^\n]*===/gi) || []).length;
+  const apiBlocks = (text.match(/=== API RESPONSE:/gi) || []).length;
+  const embeddedBlocks = (text.match(/=== EMBEDDED STATE:/gi) || []).length;
+  const pageMetaBlocks = (text.match(/=== PAGE META:/gi) || []).length;
+  const jsonLdBlocks = (text.match(/=== JSON-LD:/gi) || []).length;
+  let jsonPayloadChars = 0;
+  for (const block of text.match(/=== (?:API RESPONSE|EMBEDDED STATE|JSON-LD):[^\n]*===\n([\s\S]*?)(?=\n\n=== |\n\n--- |\Z)/g) || []) {
+    jsonPayloadChars += block.length;
+  }
+  return {
+    visible_text_chars: visibleTextCharCount(text),
+    url_section_count: urlSections,
+    api_response_blocks: apiBlocks,
+    embedded_state_blocks: embeddedBlocks,
+    page_metadata_blocks: pageMetaBlocks,
+    json_ld_blocks: jsonLdBlocks,
+    json_payload_chars: jsonPayloadChars,
+    measurement: 'extension_reported',
+  };
+}
+
+function jsonPayloadSize(rawText) {
+  return summarizeEvidenceMarkers(rawText).json_payload_chars || 0;
+}
+
+function extractTrackedUrls(rawText) {
+  const urls = [];
+  for (const match of String(rawText || '').matchAll(/\n\n--- (https?:\/\/[^\s]+) ---/g)) {
+    if (!urls.includes(match[1])) urls.push(match[1]);
+  }
+  return urls;
+}
+
+function reportPipelineStages(apiKey, { source, runId, stages }) {
+  if (!apiKey || !runId || !stages?.length) return Promise.resolve();
+  return fetch(`${MIGHTY_URL}/api/pipeline/stages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+    body: JSON.stringify({
+      source,
+      run_id: runId,
+      sync_source: 'extension',
+      stages,
+    }),
+  }).catch(e => console.warn('[Mighty] pipeline stages report failed:', e.message));
+}
+
+function createStageTracker(apiKey, source) {
+  const runId = createPipelineRunId();
+  const stages = [];
+  let connStart = null;
+  let navStart = null;
+  let capStart = null;
+  const visitedUrls = [];
+
+  const pushStage = (stage, startedAt, finishedAt, status, failureReason, artifacts) => {
+    stages.push({
+      stage,
+      started_at: startedAt,
+      finished_at: finishedAt,
+      status,
+      ...(failureReason ? { failure_reason: failureReason } : {}),
+      artifacts: artifacts || {},
+    });
+  };
+
+  return {
+    runId,
+    visitedUrls,
+    startConnection() { connStart = pipelineIsoNow(); },
+    finishConnection({
+      success = true,
+      failureReason = null,
+      sessionVerified = null,
+      loginDetectionMethod = null,
+    } = {}) {
+      const finishedAt = pipelineIsoNow();
+      pushStage(
+        'connection',
+        connStart || finishedAt,
+        finishedAt,
+        success ? 'success' : 'failed',
+        failureReason,
+        {
+          ...(sessionVerified != null ? { session_verified: sessionVerified } : {}),
+          ...(loginDetectionMethod ? { login_detection_method: loginDetectionMethod } : {}),
+        },
+      );
+    },
+    startNavigation() { navStart = pipelineIsoNow(); },
+    noteUrl(url) {
+      if (url && !visitedUrls.includes(url)) visitedUrls.push(url);
+    },
+    finishNavigation({ success = true, failureReason = null } = {}) {
+      const finishedAt = pipelineIsoNow();
+      pushStage(
+        'navigation',
+        navStart || finishedAt,
+        finishedAt,
+        success ? 'success' : 'failed',
+        failureReason,
+        {
+          pages_visited: visitedUrls.length,
+          urls: visitedUrls.slice(0, 20),
+        },
+      );
+    },
+    startCapture() { capStart = pipelineIsoNow(); },
+    finishCapture({
+      success = true,
+      failureReason = null,
+      rawTextSize = 0,
+      jsonPayloadSize = 0,
+      evidenceMarkers = null,
+    } = {}) {
+      const finishedAt = pipelineIsoNow();
+      pushStage(
+        'capture',
+        capStart || finishedAt,
+        finishedAt,
+        success ? 'success' : 'failed',
+        failureReason,
+        {
+          raw_text_chars: rawTextSize,
+          json_payload_chars: jsonPayloadSize,
+          evidence_markers: evidenceMarkers || {},
+        },
+      );
+    },
+    async flush() {
+      await reportPipelineStages(apiKey, { source, runId, stages });
+    },
+  };
 }
 
 // ── Passive login-page detection ──────────────────────────────────────────────
@@ -1079,6 +1245,68 @@ function _htmlToText(html) {
     .replace(/&#\d+;/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+const _SENSITIVE_JSON_RE = /"(access_token|refresh_token|id_token|password|secret|authorization|cookie|csrf|session_token)"/i;
+const _EVIDENCE_MAX_BLOCK = 12_000;
+const _EMBEDDED_SCRIPT_IDS = ['__NEXT_DATA__', '__NUXT__'];
+
+function _safeEvidenceJson(text) {
+  if (!text) return null;
+  const trimmed = String(text).trim();
+  if (trimmed.length < 20 || trimmed.length > _EVIDENCE_MAX_BLOCK) return null;
+  if (_SENSITIVE_JSON_RE.test(trimmed)) return null;
+  try {
+    JSON.parse(trimmed);
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
+function _formatUniversalEvidenceSections(pageUrl, visibleText, doc) {
+  const parts = [];
+  const text = String(visibleText || '').trim();
+  if (text.length >= 50) {
+    parts.push(`\n\n--- ${pageUrl} ---\n${text.slice(0, 15_000)}`);
+  }
+
+  const meta = { title: '', canonical: '', url: pageUrl };
+  if (doc) {
+    meta.title = (doc.title || '').slice(0, 300);
+    meta.canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
+    for (const el of doc.querySelectorAll('meta[name], meta[property]')) {
+      const key = el.getAttribute('name') || el.getAttribute('property') || '';
+      const val = el.getAttribute('content') || '';
+      if (!key || !val || val.length > 500) continue;
+      if (/password|token|cookie|csrf|auth|secret/i.test(key)) continue;
+      meta[key] = val.slice(0, 300);
+    }
+    for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
+      const block = _safeEvidenceJson(script.textContent || '');
+      if (block) parts.push(`\n\n=== JSON-LD: ${pageUrl} ===\n${block}`);
+    }
+    for (const id of _EMBEDDED_SCRIPT_IDS) {
+      const el = doc.getElementById(id) || doc.querySelector(`script#${id}, script[data-next-page]`);
+      const block = _safeEvidenceJson(el?.textContent || '');
+      if (block) parts.push(`\n\n=== EMBEDDED STATE: embedded:${id}@${pageUrl} ===\n${block}`);
+    }
+  }
+  if (Object.keys(meta).length > 2) {
+    parts.push(`\n\n=== PAGE META: ${pageUrl} ===\n${JSON.stringify(meta)}`);
+  }
+  return parts.join('');
+}
+
+function _extractEvidenceSectionsFromHtml(html, pageUrl) {
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const visibleText = _htmlToText(html);
+    return _formatUniversalEvidenceSections(pageUrl, visibleText, doc);
+  } catch {
+    const visibleText = _htmlToText(html);
+    return visibleText.length >= 50 ? `\n\n--- ${pageUrl} ---\n${visibleText.slice(0, 15_000)}` : '';
+  }
+}
+
 /** True if the text looks like a login/auth page redirect. */
 function _isSilentLoginPage(text) {
   const lower = text.slice(0, 3000).toLowerCase();
@@ -1163,6 +1391,7 @@ async function _silentFetchPages(source, account) {
   } catch {}
 
   const entryText = _htmlToText(entryHtml);
+  const entryEvidence = _extractEvidenceSectionsFromHtml(entryHtml, finalUrl || entry);
 
   // Too short = empty SPA shell or error page — needs tab
   if (entryText.length < 600) return null;
@@ -1171,7 +1400,7 @@ async function _silentFetchPages(source, account) {
   // Bot detection
   if (BOT_DETECTION_PHRASES.some(p => entryText.toLowerCase().includes(p))) return null;
 
-  let allText = `\n\n--- ${entry} ---\n${entryText}`;
+  let allText = entryEvidence || `\n\n--- ${entry} ---\n${entryText}`;
   const visitedNorm = new Set([_normUrl(entry)]);
 
   // Discover and silently fetch high-value subpages
@@ -1212,7 +1441,7 @@ async function _silentFetchPages(source, account) {
       if (text.length < 200) continue;
       if (BOT_DETECTION_PHRASES.some(p => text.toLowerCase().includes(p))) continue;
       if (_isSilentLoginPage(text)) continue;
-      allText += `\n\n--- ${link.href} ---\n${text}`;
+      allText += _extractEvidenceSectionsFromHtml(html, link.href) || `\n\n--- ${link.href} ---\n${text}`;
       reportPathToRegistry(source, link.href);
       console.log(`[Mighty] ${source}: silent-fetched ${link.href} (${text.length} chars)`);
     } catch {}
@@ -2837,6 +3066,9 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     return;
   }
 
+  const tracker = createStageTracker(apiKey, account.source);
+  tracker.startConnection();
+
   // ── Try silent fetch first (no tab, completely invisible) ───────────────────
   // Extension service workers can fetch cross-origin pages with user cookies via
   // credentials: 'include' + <all_urls> host_permissions. Zero UI, zero tabs.
@@ -2848,6 +3080,22 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     await _clearLoginWall(account.source);
     {
       console.log(`[Mighty] ${account.name}: silent fetch succeeded (${silentText.length} chars) — no tab needed`);
+      for (const url of extractTrackedUrls(silentText)) tracker.noteUrl(url);
+      tracker.finishConnection({
+        success: true,
+        sessionVerified: true,
+        loginDetectionMethod: 'silent_fetch',
+      });
+      tracker.startNavigation();
+      tracker.finishNavigation({ success: true });
+      tracker.startCapture();
+      tracker.finishCapture({
+        success: true,
+        rawTextSize: silentText.length,
+        jsonPayloadSize: jsonPayloadSize(silentText),
+        evidenceMarkers: summarizeEvidenceMarkers(silentText),
+      });
+      await tracker.flush();
       const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2855,6 +3103,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           api_key:     apiKey,
           source:      account.source,
           sync_source: 'extension',
+          pipeline_run_id: tracker.runId,
           data: {
             name:     account.name,
             icon:     account.icon,
@@ -2886,7 +3135,14 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       if (!authCookie) {
         console.log(`[Mighty] ${account.name}: auth cookie "${sig.name}" absent — login_required`);
         await _markLoginWall(account.source);
-        await reportSyncFailure(apiKey, account.source, 'login_wall');
+        tracker.finishConnection({
+          success: false,
+          failureReason: 'login_required',
+          sessionVerified: false,
+          loginDetectionMethod: 'cookie',
+        });
+        await tracker.flush();
+        await reportSyncFailure(apiKey, account.source, 'login_wall', tracker.runId);
         chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
         _pendingAutoLogins.add(account.source);
         throw new Error('login_required');
@@ -3016,6 +3272,19 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
   };
   chrome.tabs.onCreated.addListener(_closeRogueTab);
 
+  const _reportLoginRequired = async (loginDetectionMethod) => {
+    tracker.finishConnection({
+      success: false,
+      failureReason: 'login_required',
+      sessionVerified: false,
+      loginDetectionMethod,
+    });
+    await tracker.flush();
+    await _markLoginWall(account.source);
+    await reportSyncFailure(apiKey, account.source, 'login_wall', tracker.runId);
+    chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+  };
+
   try {
     // Helper: mark the sync tab in the ISOLATED world so api_relay.js skips
     // its login-detection poll — otherwise api_relay.js detects the login form
@@ -3080,7 +3349,15 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       if (tabUrl.startsWith('chrome-error://') || tabUrl.startsWith('about:neterror')) {
         console.log(`[Mighty] ${account.name}: domain unreachable (${tabUrl}) — reporting`);
         const _ak = apiKey;
-        if (_ak) await reportSyncFailure(_ak, account.source, 'domain_unreachable');
+        if (_ak) {
+          tracker.finishConnection({
+            success: false,
+            failureReason: 'domain_unreachable',
+            sessionVerified: false,
+          });
+          await tracker.flush();
+          await reportSyncFailure(_ak, account.source, 'domain_unreachable', tracker.runId);
+        }
         _urlCheckFailure = 'domain_unreachable';
       } else {
         // Detect unexpected domain redirect (e.g. utilities.cityofpaloalto.org → paloalto.gov)
@@ -3090,18 +3367,21 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           if (landedDomain && expectedDomain && landedDomain !== expectedDomain) {
             console.log(`[Mighty] ${account.name}: domain redirected ${expectedDomain} → ${landedDomain} — reporting`);
             const _ak = apiKey;
-            if (_ak) await reportSyncFailure(_ak, account.source, 'domain_moved');
+            if (_ak) {
+              tracker.finishConnection({
+                success: false,
+                failureReason: 'domain_unreachable',
+                sessionVerified: false,
+              });
+              await tracker.flush();
+              await reportSyncFailure(_ak, account.source, 'domain_moved', tracker.runId);
+            }
             _urlCheckFailure = 'domain_unreachable';
           }
         } catch (_) {}
         if (!_urlCheckFailure && tabUrl && _isLoginUrl(tabUrl)) {
           console.log(`[Mighty] ${account.name}: redirected to login URL — reporting login_required`);
-          const _ak = apiKey;
-          if (_ak) {
-            await _markLoginWall(account.source);
-            await reportSyncFailure(_ak, account.source, 'login_wall');
-            chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
-          }
+          await _reportLoginRequired('url_redirect');
           _urlCheckFailure = 'login_required';
         }
       }
@@ -3138,12 +3418,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
     if (_settledState === 'login_redirect') {
       console.log(`[Mighty] ${account.name}: login redirect detected during settle — reporting login_required`);
-      const _ak = apiKey;
-      if (_ak) {
-        await _markLoginWall(account.source);
-        await reportSyncFailure(_ak, account.source, 'login_wall');
-        chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
-      }
+      await _reportLoginRequired('url_redirect');
       throw new Error('login_required');
     }
 
@@ -3155,12 +3430,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       const settledUrl = settledTab.url || '';
       if (settledUrl && _isLoginUrl(settledUrl)) {
         console.log(`[Mighty] ${account.name}: login URL detected after settle — reporting login_required`);
-        const _ak = apiKey;
-        if (_ak) {
-          await _markLoginWall(account.source);
-          await reportSyncFailure(_ak, account.source, 'login_wall');
-          chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
-        }
+        await _reportLoginRequired('url_redirect');
         _settledUrlFailure = 'login_required';
       }
     } catch (_) {}
@@ -3198,12 +3468,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       await sleep(5_000);
       if (await _pwCheck()) {
         console.log(`[Mighty] ${account.name}: login form persists after recheck — reporting login_required`);
-        const _ak = apiKey;
-        if (_ak) {
-          await _markLoginWall(account.source);
-          await reportSyncFailure(_ak, account.source, 'login_wall');
-          chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
-        }
+        await _reportLoginRequired('password_field');
         throw new Error('login_required');
       }
       console.log(`[Mighty] ${account.name}: login form was transient (session resolved) — continuing`);
@@ -3214,42 +3479,15 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     // by the time ENTRY_SETTLE expires (e.g. United resolves the auth cookie check late).
     // If stripped text stays <100 chars, fall back to full body innerText — the content
     // may be inside a <header> or <nav> element that extractPageText strips.
+    let entryEvidence = '';
     let entryText = '';
     try {
       const [r] = await chrome.scripting.executeScript({
         target: { tabId },
-        func: async function waitForEntryContent() {
-          // Wait for content to STABILIZE, not just exceed a minimum length.
-          // SPAs (Southwest, Delta, etc.) load nav immediately but fetch account data
-          // via async API calls — the DOM keeps growing for 1-3s after 'complete'.
-          // We poll until two consecutive reads differ by ≤150 chars, indicating
-          // React/Vue has finished rendering account-specific content.
-          let lastLen = 0;
-          let stableRounds = 0;
-          for (let i = 0; i < 20; i++) {
-            if (document.body) {
-              const clone = document.body.cloneNode(true);
-              clone.querySelectorAll('script, style, noscript').forEach(el => el.remove());
-              const stripped = (clone.innerText || clone.textContent || '').trim().slice(0, 15000);
-              const len = stripped.length;
-              if (len >= 100) {
-                const delta = Math.abs(len - lastLen);
-                if (delta <= 150 && lastLen > 0) {
-                  stableRounds++;
-                  if (stableRounds >= 2) return stripped; // stable for ≥1s — content is settled
-                } else {
-                  stableRounds = 0;
-                }
-                lastLen = len;
-              }
-            }
-            await new Promise(res => setTimeout(res, 500));
-          }
-          // Fallback: return whatever is in the DOM now
-          return document.body ? (document.body.innerText || '').slice(0, 15000) : '';
-        },
+        func: waitForEntryEvidence,
       });
-      entryText = r?.result || '';
+      entryEvidence = r?.result?.evidence || '';
+      entryText = r?.result?.visibleText || '';
     } catch (_) {}
 
     if (BOT_DETECTION_PHRASES.some(p => entryText.toLowerCase().includes(p))) {
@@ -3262,18 +3500,21 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     // our URL check) and where getBoundingClientRect() returns 0 in minimized windows.
     if (entryText.length >= 100 && _isSilentLoginPage(entryText)) {
       console.log(`[Mighty] ${account.name}: login page content detected in tab — reporting login_required`);
-      const _ak = apiKey;
-      if (_ak) {
-        await _markLoginWall(account.source);
-        await reportSyncFailure(_ak, account.source, 'login_wall');
-        chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
-      }
+      await _reportLoginRequired('content_signal');
       throw new Error('login_required');
     }
 
-    if (entryText.length >= 100) {
-      allText.push(`\n\n--- ${entry} ---\n${entryText}`);
+    tracker.finishConnection({
+      success: true,
+      sessionVerified: true,
+      loginDetectionMethod: _cookieAuthConfirmed ? 'cookie' : 'tab_session',
+    });
+    tracker.startNavigation();
+
+    if (entryEvidence || entryText.length >= 100) {
+      allText.push(entryEvidence || `\n\n--- ${entry} ---\n${entryText}`);
       visitedNorm.add(_normUrl(entry));
+      tracker.noteUrl(entry);
     }
 
     // ── Discover subpages ───────────────────────────────────────────────────────
@@ -3438,17 +3679,10 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
         const [r] = await chrome.scripting.executeScript({
           target: { tabId },
-          func: async function waitForContent() {
-            // Wait up to 5s for meaningful content to appear
-            for (let i = 0; i < 10; i++) {
-              const text = document.body ? document.body.innerText : '';
-              if (text && text.trim().length > 500) return text;
-              await new Promise(res => setTimeout(res, 500));
-            }
-            return document.body ? document.body.innerText : '';
-          },
+          func: waitForSubpageEvidence,
         });
-        const text = r?.result || '';
+        const pageEvidence = r?.result?.evidence || '';
+        const text = r?.result?.visibleText || '';
 
         if (BOT_DETECTION_PHRASES.some(p => text.toLowerCase().includes(p))) {
           console.warn(`[Mighty] ${account.name} → ${link.href}: bot detected — skipping`);
@@ -3469,8 +3703,9 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         }
 
         console.log(`[Mighty] ${account.name} → ${link.href}: ${text.length} chars`);
-        allText.push(`\n\n--- ${link.href} ---\n${text}`);
+        allText.push(pageEvidence || `\n\n--- ${link.href} ---\n${text}`);
         reportPathToRegistry(account.source, link.href);
+        tracker.noteUrl(link.href);
         _subSuccesses++;
 
       } catch (e) {
@@ -3497,18 +3732,23 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       : (_subSuccesses === 0 && toVisit.length > 0);
     if (_loginWallCondition) {
       console.log(`[Mighty] ${account.name}: ${_subLoginRedirects}/${toVisit.length} subpages were login redirects — session expired`);
-      const _ak = apiKey;
-      if (_ak) {
-        await _markLoginWall(account.source);
-        await reportSyncFailure(_ak, account.source, 'login_wall');
-        chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
-      }
+      tracker.finishNavigation({ success: false, failureReason: 'login_required' });
+      tracker.startCapture();
+      tracker.finishCapture({ success: false, failureReason: 'login_wall', rawTextSize: 0 });
+      await tracker.flush();
+      await _markLoginWall(account.source);
+      await reportSyncFailure(apiKey, account.source, 'login_wall', tracker.runId);
+      chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
       _pendingAutoLogins.add(account.source);
       throw new Error('login_required');
     }
 
     // ── Push to server ──────────────────────────────────────────────────────────
     if (allText.length === 0) {
+      tracker.finishNavigation({ success: false, failureReason: 'no_pages_visited' });
+      tracker.startCapture();
+      tracker.finishCapture({ success: false, failureReason: 'no_data', rawTextSize: 0 });
+      await tracker.flush();
       throw new Error('No usable content captured (page may not have rendered)');
     }
 
@@ -3521,6 +3761,16 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     const rawText = allText.map((t, i) => i === 0 ? t.slice(0, 20_000) : t.slice(0, 10_000)).join('').slice(0, 40_000);
     console.log(`[Mighty] ${account.name}: ${rawText.length} chars across ${allText.length} page(s) — pushing`);
 
+    tracker.finishNavigation({ success: true });
+    tracker.startCapture();
+    tracker.finishCapture({
+      success: true,
+      rawTextSize: rawText.length,
+      jsonPayloadSize: jsonPayloadSize(rawText),
+      evidenceMarkers: summarizeEvidenceMarkers(rawText),
+    });
+    await tracker.flush();
+
     const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -3528,6 +3778,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         api_key:     apiKey,
         source:      account.source,
         sync_source: 'extension',
+        pipeline_run_id: tracker.runId,
         data: {
           name:     account.name,
           icon:     account.icon,
@@ -3687,6 +3938,102 @@ function extractAmexMembershipRewardsPage() {
     || sample.includes('recent activity');
   console.log(LOG, loggedIn ? 'balance not found' : 'not logged in');
   return { loggedIn, value: null };
+}
+
+// Runs inside the page context — captures universal page evidence for sync.
+function captureUniversalPageEvidence() {
+  const pageUrl = location.href;
+  const MAX_BLOCK = 12000;
+  const SENSITIVE = /"(access_token|refresh_token|id_token|password|secret|authorization|cookie|csrf|session_token)"/i;
+  const EMBEDDED_IDS = ['__NEXT_DATA__', '__NUXT__'];
+
+  function safeJson(text) {
+    if (!text) return null;
+    const trimmed = String(text).trim();
+    if (trimmed.length < 20 || trimmed.length > MAX_BLOCK) return null;
+    if (SENSITIVE.test(trimmed)) return null;
+    try {
+      JSON.parse(trimmed);
+      return trimmed;
+    } catch {
+      return null;
+    }
+  }
+
+  const clone = document.body ? document.body.cloneNode(true) : null;
+  if (clone) clone.querySelectorAll('script, style, noscript, header, footer, nav').forEach(el => el.remove());
+  const visibleText = (clone?.innerText || clone?.textContent || '').trim().slice(0, 15000);
+
+  const meta = { title: (document.title || '').slice(0, 300), canonical: '', url: pageUrl };
+  const canonical = document.querySelector('link[rel="canonical"]');
+  if (canonical) meta.canonical = canonical.href || canonical.getAttribute('href') || '';
+  for (const el of document.querySelectorAll('meta[name], meta[property]')) {
+    const key = el.getAttribute('name') || el.getAttribute('property') || '';
+    const val = el.getAttribute('content') || '';
+    if (!key || !val || val.length > 500) continue;
+    if (/password|token|cookie|csrf|auth|secret/i.test(key)) continue;
+    meta[key] = val.slice(0, 300);
+  }
+  try {
+    const storageKeys = [];
+    for (let i = 0; i < localStorage.length && storageKeys.length < 30; i++) {
+      const key = localStorage.key(i);
+      if (key && !/password|token|cookie|csrf|auth|secret/i.test(key)) storageKeys.push(key);
+    }
+    if (storageKeys.length) meta.storage_keys = storageKeys;
+  } catch {}
+
+  const parts = [];
+  if (visibleText.length >= 50) {
+    parts.push(`\n\n--- ${pageUrl} ---\n${visibleText}`);
+  }
+  if (Object.keys(meta).length > 2) {
+    parts.push(`\n\n=== PAGE META: ${pageUrl} ===\n${JSON.stringify(meta)}`);
+  }
+  for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+    const block = safeJson(script.textContent || '');
+    if (block) parts.push(`\n\n=== JSON-LD: ${pageUrl} ===\n${block}`);
+  }
+  for (const id of EMBEDDED_IDS) {
+    const el = document.getElementById(id) || document.querySelector(`script#${id}, script[data-next-page]`);
+    const block = safeJson(el?.textContent || '');
+    if (block) parts.push(`\n\n=== EMBEDDED STATE: embedded:${id}@${pageUrl} ===\n${block}`);
+  }
+  return { evidence: parts.join(''), visibleText };
+}
+
+async function waitForEntryEvidence() {
+  let lastLen = 0;
+  let stableRounds = 0;
+  for (let i = 0; i < 20; i++) {
+    if (document.body) {
+      const clone = document.body.cloneNode(true);
+      clone.querySelectorAll('script, style, noscript').forEach(el => el.remove());
+      const stripped = (clone.innerText || clone.textContent || '').trim();
+      const len = stripped.length;
+      if (len >= 100) {
+        const delta = Math.abs(len - lastLen);
+        if (delta <= 150 && lastLen > 0) {
+          stableRounds++;
+          if (stableRounds >= 2) return captureUniversalPageEvidence();
+        } else {
+          stableRounds = 0;
+        }
+        lastLen = len;
+      }
+    }
+    await new Promise(res => setTimeout(res, 500));
+  }
+  return captureUniversalPageEvidence();
+}
+
+async function waitForSubpageEvidence() {
+  for (let i = 0; i < 10; i++) {
+    const text = document.body ? document.body.innerText : '';
+    if (text && text.trim().length > 500) return captureUniversalPageEvidence();
+    await new Promise(res => setTimeout(res, 500));
+  }
+  return captureUniversalPageEvidence();
 }
 
 // Runs inside the page context — extracts visible body text

@@ -154,6 +154,47 @@ def test_pipeline_run_detail_shows_run_and_stages(client, monkeypatch):
     assert b"inferred" in r.data
 
 
+def test_pipeline_run_detail_shows_measured_timestamps(client, monkeypatch):
+    c, email = client
+    monkeypatch.setenv("ADMIN_EMAIL", email)
+    import app as mighty
+    from mighty.pipeline_inspector import ingest_client_stages, new_run_id
+
+    run_id = new_run_id()
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        ensure_pipeline_tables(db)
+        ingest_client_stages(
+            db,
+            user_id="user-1",
+            source="delta",
+            run_id=run_id,
+            initiator=RunInitiator.EXTENSION_SYNC.value,
+            data_source="extension",
+            stages=[
+                {
+                    "stage": "connection",
+                    "started_at": "2026-07-04T10:00:00+00:00",
+                    "finished_at": "2026-07-04T10:00:03+00:00",
+                    "status": "success",
+                    "artifacts": {"session_verified": True},
+                }
+            ],
+        )
+        finalize_run(
+            db,
+            run_id,
+            terminal_stage=PipelineStageId.CONNECTION.value,
+            run_status=RunStatus.COMPLETE.value,
+        )
+
+    r = c.get(f"/admin/pipeline-runs/{run_id}")
+    assert r.status_code == 200
+    assert b"2026-07-04 10:00:00" in r.data
+    assert b"2026-07-04 10:00:03" in r.data
+    assert b"measured" in r.data
+
+
 def test_list_recent_runs_orders_newest_first(pipeline_db):
     run_old = start_run(
         pipeline_db,

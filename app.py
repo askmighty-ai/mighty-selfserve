@@ -15902,7 +15902,7 @@ def api_data_sync():
     from mighty.pipeline_inspector import (
         finalize_sync_without_discovery,
         new_run_id,
-        record_inferred_client_stages,
+        record_client_stages_or_infer,
         start_run,
         sync_initiator,
     )
@@ -15915,7 +15915,7 @@ def api_data_sync():
         data_source=sync_source,
         run_id=_pipeline_run_id,
     )
-    _pipeline_may_continue, _pipeline_aborted = record_inferred_client_stages(
+    _pipeline_may_continue, _pipeline_aborted = record_client_stages_or_infer(
         db,
         _pipeline_run_id,
         sync_status=data.get("sync_status"),
@@ -17854,7 +17854,7 @@ def api_sync_failure():
     from mighty.pipeline_inspector import (
         map_sync_failure_reason,
         new_run_id,
-        record_inferred_client_stages,
+        record_client_stages_or_infer,
         start_run,
     )
     from mighty.pipeline_stages import RunInitiator
@@ -17868,7 +17868,7 @@ def api_sync_failure():
         data_source="extension",
         run_id=_failure_run_id,
     )
-    record_inferred_client_stages(
+    record_client_stages_or_infer(
         db,
         _failure_run_id,
         sync_status=payload.get("sync_status"),
