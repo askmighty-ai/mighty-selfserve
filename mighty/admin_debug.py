@@ -659,6 +659,9 @@ def render_capture_capability_detail_page(row: Any, *, admin_sample: dict[str, A
         f"</p>"
     )
 
+    present_display = present_list if row.present else '<p class="muted">None observed</p>'
+    gap_display = gap_list if row.missing else '<p class="muted">None</p>'
+
     body = (
         f'<p><a href="/admin/capture-capability" class="btn">&larr; All providers</a></p>'
         f"{meta_html}"
@@ -666,8 +669,8 @@ def render_capture_capability_detail_page(row: Any, *, admin_sample: dict[str, A
         f"{improvement_html}"
         '<div class="grid-2" style="margin-top:16px">'
         f'<div class="card"><h3>Needed evidence ({row.needed_count})</h3><ul style="margin:0;padding-left:18px;font-size:12px">{needed_list}</ul></div>'
-        f'<div class="card"><h3>Captured evidence ({row.present_count})</h3>{present_list if row.present else "<p class=\"muted\">None observed</p>"}</div>'
-        f'<div class="card"><h3>Gap ({row.missing_count})</h3>{gap_list if row.missing else "<p class=\"muted\">None</p>"}</div>'
+        f'<div class="card"><h3>Captured evidence ({row.present_count})</h3>{present_display}</div>'
+        f'<div class="card"><h3>Gap ({row.missing_count})</h3>{gap_display}</div>'
         "</div>"
         f'<div class="card" style="margin-top:16px"><h3>Capability matrix</h3>'
         '<table><thead><tr>'
