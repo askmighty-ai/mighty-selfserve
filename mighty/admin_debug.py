@@ -30,6 +30,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
         "Capture Capability",
         "Needed vs present capture evidence per provider",
     ),
+    (
+        "provider-benchmark",
+        "Provider Benchmark",
+        "Combined readiness score from login, capture, coverage, and unlocks",
+    ),
 ]
 
 
@@ -673,3 +678,106 @@ def render_capture_capability_detail_page(row: Any, *, admin_sample: dict[str, A
         f"{sample_html}{cross_links}"
     )
     return _admin_shell("capture-capability", f"Capture Capability — {row.display_name}", body)
+
+
+def _readiness_badge(score: int) -> str:
+    return _coverage_pct_badge(score)
+
+
+def _trend_badge(delta: int | None) -> str:
+    if delta is None:
+        return '<span class="badge badge-muted">new</span>'
+    if delta > 0:
+        return f'<span class="badge badge-ok">+{delta}</span>'
+    if delta < 0:
+        return f'<span class="badge badge-err">{delta}</span>'
+    return '<span class="badge badge-muted">0</span>'
+
+
+def render_provider_benchmark_page(rows: list[Any], *, trend_days: int = 14) -> str:
+    from mighty.provider_benchmark import SCORE_WEIGHTS, attention_priority
+
+    if not rows:
+        main_table = '<tr><td colspan="8" class="muted">No providers configured</td></tr>'
+    else:
+        main_table = "".join(
+            f"<tr>"
+            f"<td><strong>{_he(r.display_name)}</strong>"
+            f'<div class="muted" style="font-size:10px">{_he(r.source)}</div></td>'
+            f"<td>{_readiness_badge(r.readiness_score)}</td>"
+            f"<td>{_readiness_badge(r.login_score)}</td>"
+            f"<td>{_readiness_badge(r.capture_score)}</td>"
+            f"<td>{_readiness_badge(r.observation_score)}</td>"
+            f"<td>{_readiness_badge(r.recommendation_score)}</td>"
+            f"<td>{_trend_badge(r.trend_delta)}</td>"
+            f"</tr>"
+            for r in rows
+        )
+
+    attention_rows = sorted(rows, key=attention_priority)[:5]
+    attention_table = "".join(
+        f"<tr>"
+        f"<td><strong>{_he(r.display_name)}</strong></td>"
+        f"<td>{_readiness_badge(r.readiness_score)}</td>"
+        f"<td>{_trend_badge(r.trend_delta)}</td>"
+        f"<td class='muted'>{r.connection_success}/{r.connection_total} login · "
+        f"{r.capture_present}/{r.capture_needed} capture · "
+        f"{r.observation_observed}/{r.observation_expected} obs · "
+        f"{r.recommendations_unlocked}/{r.recommendations_total} recs</td>"
+        f"</tr>"
+        for r in attention_rows
+    ) or '<tr><td colspan="4" class="muted">No providers</td></tr>'
+
+    improved = [r for r in rows if r.trend_delta is not None and r.trend_delta > 0]
+    improved.sort(key=lambda r: -r.trend_delta)
+    declining = [r for r in rows if r.trend_delta is not None and r.trend_delta < 0]
+    declining.sort(key=lambda r: r.trend_delta)
+
+    def _mini_list(items: list[Any], empty: str) -> str:
+        if not items:
+            return f'<p class="muted">{_he(empty)}</p>'
+        lis = "".join(
+            f"<li>{_he(r.display_name)} ({_trend_badge(r.trend_delta)})</li>"
+            for r in items[:8]
+        )
+        return f'<ul style="margin:0;padding-left:18px;font-size:12px">{lis}</ul>'
+
+    formula = (
+        f"<code>readiness = "
+        f"{int(SCORE_WEIGHTS['login'] * 100)}% × login + "
+        f"{int(SCORE_WEIGHTS['capture'] * 100)}% × capture + "
+        f"{int(SCORE_WEIGHTS['observation'] * 100)}% × observation + "
+        f"{int(SCORE_WEIGHTS['recommendation'] * 100)}% × recommendation</code>"
+    )
+
+    body = (
+        '<p class="lede">Engineering readiness benchmark combining '
+        '<a href="/admin/pipeline-runs" style="color:#818cf8">Pipeline Inspector</a> (login), '
+        '<a href="/admin/capture-capability" style="color:#818cf8">Capture Capability</a>, '
+        '<a href="/admin/coverage" style="color:#818cf8">Observation Coverage</a>, and '
+        '<a href="/admin/recommendation-unlocks" style="color:#818cf8">Recommendation Unlocks</a>. '
+        f"Scores use the last {trend_days} days. Trend = recent readiness − prior readiness "
+        f"(prior = all pipeline runs before the recent window).</p>"
+        f'<div class="card"><h3>Scoring formula</h3><p style="font-size:12px;margin:0">{formula}</p>'
+        '<ul style="font-size:11px;color:#9ca3af;margin:8px 0 0;padding-left:18px">'
+        "<li><strong>Login</strong> — connection stage success rate</li>"
+        "<li><strong>Capture</strong> — present / needed capture capabilities</li>"
+        "<li><strong>Observation</strong> — expected observation coverage %</li>"
+        "<li><strong>Recommendation</strong> — unlocked / catalog recommendations</li>"
+        "</ul></div>"
+        '<div class="grid-2">'
+        f'<div class="card"><h3>Improved ({len(improved)})</h3>{_mini_list(improved, "No providers improved in trend window")}</div>'
+        f'<div class="card"><h3>Declining ({len(declining)})</h3>{_mini_list(declining, "No providers declining in trend window")}</div>'
+        "</div>"
+        f'<div class="card"><h3>Needs attention first</h3>'
+        '<p class="muted" style="font-size:11px;margin:0 0 10px">Lowest readiness, penalized for negative trend.</p>'
+        '<table><thead><tr>'
+        "<th>Provider</th><th>Readiness</th><th>Trend</th><th>Breakdown</th>"
+        f"</tr></thead><tbody>{attention_table}</tbody></table></div>"
+        '<div class="card"><h3>All providers</h3>'
+        '<table><thead><tr>'
+        "<th>Provider</th><th>Readiness</th><th>Login</th><th>Capture</th>"
+        "<th>Observation</th><th>Recommendation</th><th>Trend</th>"
+        f"</tr></thead><tbody>{main_table}</tbody></table></div>"
+    )
+    return _admin_shell("provider-benchmark", "Provider Benchmark", body)

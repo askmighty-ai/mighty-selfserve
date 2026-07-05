@@ -20829,6 +20829,20 @@ def admin_capture_capability_detail_page(source):
     return _admin_debug.render_capture_capability_detail_page(cap, admin_sample=admin_sample)
 
 
+@app.route("/admin/provider-benchmark")
+@require_admin
+def admin_provider_benchmark_page():
+    from mighty.provider_benchmark import TREND_WINDOW_DAYS, compute_all_provider_benchmarks
+
+    rows = compute_all_provider_benchmarks(
+        get_db(),
+        _all_provider_sources(),
+        _provider_category_map(),
+        display_names=_provider_display_names(),
+    )
+    return _admin_debug.render_provider_benchmark_page(rows, trend_days=TREND_WINDOW_DAYS)
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

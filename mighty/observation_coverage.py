@@ -61,16 +61,31 @@ def compute_provider_coverage(
     )
 
 
-def collect_observed_from_pipeline(db: Any) -> dict[str, set[str]]:
+def collect_observed_from_pipeline(
+    db: Any,
+    *,
+    run_created_before: str | None = None,
+    run_created_after: str | None = None,
+) -> dict[str, set[str]]:
     """Aggregate observation types observed in successful trusted_observations stages."""
+    clauses = ["ps.stage = ?", "ps.status = ?"]
+    params: list[Any] = [PipelineStageId.TRUSTED_OBSERVATIONS.value, StageStatus.SUCCESS.value]
+    if run_created_before:
+        clauses.append("pr.created_at < ?")
+        params.append(run_created_before)
+    if run_created_after:
+        clauses.append("pr.created_at >= ?")
+        params.append(run_created_after)
+
+    where = " AND ".join(clauses)
     rows = db.execute(
-        """
+        f"""
         SELECT pr.source, ps.artifacts_json
         FROM pipeline_stages ps
         JOIN pipeline_runs pr ON pr.run_id = ps.run_id
-        WHERE ps.stage = ? AND ps.status = ?
+        WHERE {where}
         """,
-        (PipelineStageId.TRUSTED_OBSERVATIONS.value, StageStatus.SUCCESS.value),
+        params,
     ).fetchall()
 
     by_source: dict[str, set[str]] = {}
