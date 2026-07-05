@@ -347,12 +347,21 @@ def render_pipeline_run_detail_page(run: dict[str, Any], stages: list[dict[str, 
         artifacts_html = _json_block(artifacts or {}) if artifacts else '<p class="muted">No artifacts</p>'
         duration = s.get("duration_ms")
         duration_display = f"{duration:.0f} ms" if duration is not None else "—"
+        started_display = _fmt_iso(s.get("started_at"))
+        finished_display = _fmt_iso(s.get("finished_at"))
+        inferred = bool((artifacts or {}).get("inferred"))
+        source_badge = (
+            '<span class="badge badge-muted">inferred</span>'
+            if inferred
+            else '<span class="badge badge-ok">measured</span>'
+        )
         stage_name = str(s.get("stage") or "").replace("_", " ")
         card_cls = _stage_card_class(s.get("status"))
         stage_cards += (
             f'<div class="{card_cls}">'
             f'<div class="stage-header"><h4>{_he(stage_name)}</h4>{_stage_status_badge(s.get("status"))}</div>'
-            f'<p class="muted">Duration: {_he(duration_display)}'
+            f'<p class="muted">Started: {_he(started_display)} · Finished: {_he(finished_display)}'
+            f" · Duration: {_he(duration_display)} · {source_badge}"
             + (f' · Failure: <strong style="color:#fca5a5">{_he(s.get("failure_reason"))}</strong>' if s.get("failure_reason") else "")
             + "</p>"
             f"<div>{artifacts_html}</div>"
