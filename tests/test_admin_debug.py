@@ -12,7 +12,7 @@ ADMIN_PAGES = [
     "/admin", "/admin/account-json", "/admin/extracted-fields", "/admin/provider-schemas",
     "/admin/discovery-cache", "/admin/ai-cache", "/admin/sync-history", "/admin/sync-timeline",
     "/admin/replay-discovery", "/admin/pipeline-runs", "/admin/coverage",
-    "/admin/recommendation-unlocks",
+    "/admin/recommendation-unlocks", "/admin/capture-capability",
 ]
 
 

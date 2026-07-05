@@ -20765,6 +20765,70 @@ def admin_recommendation_unlocks_detail_page(source):
     return _admin_debug.render_recommendation_unlocks_detail_page(row)
 
 
+@app.route("/admin/capture-capability")
+@require_admin
+def admin_capture_capability_page():
+    from mighty.capture_capability import compute_all_provider_capabilities
+
+    rows = compute_all_provider_capabilities(
+        get_db(),
+        _all_provider_sources(),
+        display_names=_provider_display_names(),
+    )
+    return _admin_debug.render_capture_capability_page(rows)
+
+
+@app.route("/admin/capture-capability/<source>")
+@require_admin
+def admin_capture_capability_detail_page(source):
+    from mighty.capture_capability import (
+        collect_signals_from_pipeline,
+        compute_provider_capability,
+        enrich_signals_from_raw_text,
+    )
+
+    providers = _all_provider_sources()
+    if source not in providers:
+        return _admin_debug.render_capture_capability_page([]), 404
+
+    uid = session["user_id"]
+    db = get_db()
+    signals_by_source = collect_signals_from_pipeline(db)
+    signals = signals_by_source.get(source)
+    if signals is None:
+        from mighty.capture_capability import SourceCaptureSignals
+        signals = SourceCaptureSignals()
+
+    admin_sample = None
+    row = db.execute(
+        "SELECT data_enc, synced_at FROM account_data WHERE user_id=? AND source=?",
+        (uid, source),
+    ).fetchone()
+    if row:
+        blob = decrypt_account_data(uid, row["data_enc"] or "")
+        raw = blob.get("raw_text") or ""
+        if raw:
+            enrich_signals_from_raw_text(signals, raw)
+            preview_lines = []
+            for line in raw.split("\n")[:20]:
+                if line.strip().startswith("===") or line.strip().startswith("---"):
+                    preview_lines.append(line.strip()[:120])
+                if len(preview_lines) >= 8:
+                    break
+            admin_sample = {
+                "synced_at": row["synced_at"],
+                "raw_text_len": len(raw),
+                "preview": "\n".join(preview_lines) or raw[:200],
+            }
+
+    cap = compute_provider_capability(
+        source,
+        signals=signals,
+        display_name=_provider_display_names().get(source),
+    )
+    return _admin_debug.render_capture_capability_detail_page(cap, admin_sample=admin_sample)
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

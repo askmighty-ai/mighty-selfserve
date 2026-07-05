@@ -25,6 +25,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
         "Recommendation unlocks",
         "Which recommendations are possible given observed extraction data",
     ),
+    (
+        "capture-capability",
+        "Capture Capability",
+        "Needed vs present capture evidence per provider",
+    ),
 ]
 
 
@@ -525,3 +530,137 @@ def render_recommendation_unlocks_detail_page(row: Any) -> str:
         f"Recommendation Unlocks — {row.display_name}",
         body,
     )
+
+
+def _capability_badge(present: bool, confidence: str) -> str:
+    if present:
+        return '<span class="badge badge-ok">present</span>'
+    if confidence == "never observed":
+        return '<span class="badge badge-muted">never observed</span>'
+    return '<span class="badge badge-err">gap</span>'
+
+
+def render_capture_capability_page(rows: list[Any]) -> str:
+    table_rows = "".join(
+        f"<tr>"
+        f'<td><a href="/admin/capture-capability/{_he(r.source)}">{_he(r.display_name)}</a>'
+        f'<div class="muted" style="font-size:10px">{_he(r.source)}</div></td>'
+        f"<td>{r.needed_count}</td>"
+        f"<td>{r.present_count}</td>"
+        f"<td>{r.missing_count}</td>"
+        f"<td>{_fmt_iso(r.last_seen)}</td>"
+        f"</tr>"
+        for r in rows
+    ) or '<tr><td colspan="5" class="muted">No providers configured</td></tr>'
+
+    body = (
+        '<p class="lede">What capture inputs does each provider need vs what we actually record? '
+        "Engineering workflow: <strong>Capture Capability</strong> → "
+        "<a href=\"/admin/pipeline-runs\" style=\"color:#818cf8\">Pipeline Inspector</a> → "
+        "<a href=\"/admin/coverage\" style=\"color:#818cf8\">Coverage</a> → "
+        "<a href=\"/admin/recommendation-unlocks\" style=\"color:#818cf8\">Recommendation Unlocks</a>.</p>"
+        '<div class="card"><table><thead><tr>'
+        "<th>Provider</th><th>Needed</th><th>Present</th><th>Missing</th><th>Last seen</th>"
+        f"</tr></thead><tbody>{table_rows}</tbody></table></div>"
+    )
+    return _admin_shell("capture-capability", "Capture Capability", body)
+
+
+def render_capture_capability_detail_page(row: Any, *, admin_sample: dict[str, Any] | None = None) -> str:
+    from mighty.capture_capability import capability_label
+
+    meta_html = (
+        f'<div class="run-meta">'
+        f'<div class="stat"><div class="label">Provider</div><div class="val">{_he(row.display_name)}</div></div>'
+        f'<div class="stat"><div class="label">Source key</div><div class="val"><code>{_he(row.source)}</code></div></div>'
+        f'<div class="stat"><div class="label">Needed</div><div class="val">{row.needed_count}</div></div>'
+        f'<div class="stat"><div class="label">Present</div><div class="val">{row.present_count}</div></div>'
+        f'<div class="stat"><div class="label">Missing</div><div class="val">{row.missing_count}</div></div>'
+        f"</div>"
+    )
+
+    pipeline_link = ""
+    if row.latest_successful_capture_run_id:
+        rid = row.latest_successful_capture_run_id
+        pipeline_link = (
+            f'<div class="card" style="border-color:#4338ca;background:#1e1b4b">'
+            f'<a href="/admin/pipeline-runs/{_he(rid)}" class="btn" '
+            f'style="background:#4338ca;border-color:#6366f1;font-weight:700">'
+            f"View latest successful capture →</a>"
+            f'<p class="muted" style="margin:8px 0 0;font-size:11px">Run '
+            f'<code class="run-id">{_he(rid[:8])}…</code> · Pipeline Inspector</p></div>'
+        )
+
+    improvement_html = (
+        f'<div class="card"><h3>Next Best Improvement</h3>'
+        f'<p style="font-size:14px;margin:0;color:#f3f4f6">{_he(row.next_best_improvement)}</p>'
+        f'<p class="muted" style="font-size:11px;margin:8px 0 0">Deterministic recommendation from capture gap.</p></div>'
+    )
+
+    matrix_rows = "".join(
+        f"<tr>"
+        f"<td><strong>{_he(cap.label)}</strong>"
+        f'<div class="muted" style="font-size:10px">{_he(cap.capability_id)}</div></td>'
+        f'<td class="muted" style="font-size:11px;max-width:220px">{_he(cap.why_needed)}</td>'
+        f"<td>{'Yes' if cap.needed else '—'}</td>"
+        f"<td>{_capability_badge(cap.present, cap.confidence)}</td>"
+        f"<td>{'Yes' if cap.gap else '—'}</td>"
+        f'<td class="muted">{_he(cap.source_detail)}</td>'
+        f"</tr>"
+        for cap in row.rows
+    )
+
+    needed_list = "".join(
+        f"<li><code>{_he(c)}</code> — {_he(capability_label(c))}</li>"
+        for c in row.needed
+    )
+    present_list = "".join(
+        f"<li><code>{_he(c)}</code> — {_he(capability_label(c))}</li>"
+        for c in row.present
+    ) or '<p class="muted">None observed in pipeline history</p>'
+    gap_list = "".join(
+        f"<li><code>{_he(c)}</code> — {_he(capability_label(c))}</li>"
+        for c in row.missing
+    ) or '<p class="muted">Full capture capability — no gaps</p>'
+
+    initiator_rows = "".join(
+        f"<tr><td>{_he(k)}</td><td>{v}</td></tr>"
+        for k, v in sorted(row.initiator_counts.items())
+    ) or '<tr><td colspan="2" class="muted">No pipeline runs</td></tr>'
+
+    sample_html = ""
+    if admin_sample:
+        sample_html = (
+            f'<div class="card"><h3>Your account sample</h3>'
+            f'<p class="muted" style="font-size:11px">Admin connected account — not fleet-wide.</p>'
+            f'<p class="muted">synced_at: {_he(admin_sample.get("synced_at") or "—")} · '
+            f'raw_text: {admin_sample.get("raw_text_len", 0)} chars</p>'
+            f'<pre class="json-block" style="max-height:120px">{_he(admin_sample.get("preview") or "")}</pre></div>'
+        )
+
+    cross_links = (
+        f'<p style="margin-top:16px">'
+        f'<a href="/admin/coverage/{_he(row.source)}" class="btn">Coverage →</a> '
+        f'<a href="/admin/recommendation-unlocks/{_he(row.source)}" class="btn">Recommendation Unlocks →</a>'
+        f"</p>"
+    )
+
+    body = (
+        f'<p><a href="/admin/capture-capability" class="btn">&larr; All providers</a></p>'
+        f"{meta_html}"
+        f"{pipeline_link}"
+        f"{improvement_html}"
+        '<div class="grid-2" style="margin-top:16px">'
+        f'<div class="card"><h3>Needed evidence ({row.needed_count})</h3><ul style="margin:0;padding-left:18px;font-size:12px">{needed_list}</ul></div>'
+        f'<div class="card"><h3>Captured evidence ({row.present_count})</h3>{present_list if row.present else "<p class=\"muted\">None observed</p>"}</div>'
+        f'<div class="card"><h3>Gap ({row.missing_count})</h3>{gap_list if row.missing else "<p class=\"muted\">None</p>"}</div>'
+        "</div>"
+        f'<div class="card" style="margin-top:16px"><h3>Capability matrix</h3>'
+        '<table><thead><tr>'
+        "<th>Capability</th><th>Why needed</th><th>Needed</th><th>Captured</th><th>Gap</th><th>Source</th>"
+        f"</tr></thead><tbody>{matrix_rows}</tbody></table></div>"
+        f'<div class="card"><h3>Initiator breakdown</h3>'
+        f'<table><tbody>{initiator_rows}</tbody></table></div>'
+        f"{sample_html}{cross_links}"
+    )
+    return _admin_shell("capture-capability", f"Capture Capability — {row.display_name}", body)

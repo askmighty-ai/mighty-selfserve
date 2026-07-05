@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
+from mighty.capture_capability import parse_raw_text_evidence_markers
 from mighty.pipeline_stages import (
     FAIL_ALL_FILTERED,
     FAIL_CONNECTOR_MISS,
@@ -510,6 +511,10 @@ def record_inferred_client_stages(
         capture_status = StageStatus.FAILED.value
         capture_reason = FAIL_PAYLOAD_TOO_SMALL
 
+    evidence_markers = parse_raw_text_evidence_markers(raw_text)
+    if json_payload_chars:
+        evidence_markers["json_payload_chars"] = json_payload_chars
+
     record_stage(
         db,
         run_id,
@@ -523,6 +528,7 @@ def record_inferred_client_stages(
             "raw_text_chars": raw_len,
             "item_count": item_count,
             "json_payload_chars": json_payload_chars,
+            "evidence_markers": evidence_markers,
         },
     )
     if capture_status == StageStatus.FAILED.value:
