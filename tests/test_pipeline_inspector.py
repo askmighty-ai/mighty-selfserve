@@ -115,6 +115,9 @@ class TestInferredClientStages:
         assert len(stages) == 3
         assert stages[-1]["stage"] == PipelineStageId.CAPTURE.value
         assert stages[-1]["status"] == StageStatus.SUCCESS.value
+        capture_artifacts = stages[-1].get("artifacts") or {}
+        markers = capture_artifacts.get("evidence_markers") or {}
+        assert markers.get("visible_text_chars", 0) > 0
 
 
 class TestTrustedObservations:
