@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mighty.pipeline_stages import PipelineStageId, StageStatus
+from mighty.network_intelligence import network_marker_counts
 
 # ── Capability catalog ────────────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ CAPABILITY_CATALOG: dict[str, dict[str, str]] = {
     },
     "network_json": {
         "label": "Network JSON",
-        "why_needed": "Primary structured extraction source from fetch and XHR responses.",
+        "why_needed": "Primary structured extraction source from fetch, XHR, GraphQL, and REST responses during sync.",
     },
     "embedded_json": {
         "label": "Embedded JSON",
@@ -113,10 +114,13 @@ def parse_raw_text_evidence_markers(raw_text: str) -> dict[str, Any]:
     """Parse capture marker counts from raw_text or sync payload."""
     text = raw_text or ""
     url_sections = len(_URL_SECTION_RE.findall(text)) + len(_URL_MARKER_RE.findall(text))
+    network_counts = network_marker_counts(text)
     return {
         "visible_text_chars": _visible_text_char_count(text),
         "url_section_count": url_sections,
-        "api_response_blocks": len(_API_BLOCK_RE.findall(text)),
+        "api_response_blocks": network_counts["api_response_blocks"],
+        "network_json_blocks": network_counts["network_json_blocks"],
+        "graphql_blocks": network_counts["graphql_blocks"],
         "embedded_state_blocks": len(_EMBEDDED_BLOCK_RE.findall(text)),
         "page_metadata_blocks": len(_PAGE_META_BLOCK_RE.findall(text)),
         "json_ld_blocks": len(_JSON_LD_BLOCK_RE.findall(text)),
@@ -136,8 +140,16 @@ def present_from_markers(markers: dict[str, Any] | None, *, initiator: str = "")
         present.add("visible_text")
 
     api_blocks = int(markers.get("api_response_blocks") or 0)
+    network_json_blocks = int(markers.get("network_json_blocks") or 0)
+    graphql_blocks = int(markers.get("graphql_blocks") or 0)
     json_chars = int(markers.get("json_payload_chars") or 0)
-    if api_blocks > 0 or json_chars > 0 or initiator == "intercept":
+    if (
+        api_blocks > 0
+        or network_json_blocks > 0
+        or graphql_blocks > 0
+        or json_chars > 0
+        or initiator == "intercept"
+    ):
         present.add("network_json")
 
     if int(markers.get("embedded_state_blocks") or 0) > 0:
@@ -330,6 +342,10 @@ def collect_signals_from_pipeline(
                 detail_parts.append(f"{markers['visible_text_chars']} visible chars")
             if markers.get("api_response_blocks"):
                 detail_parts.append(f"{markers['api_response_blocks']} API block(s)")
+            if markers.get("network_json_blocks"):
+                detail_parts.append(f"{markers['network_json_blocks']} network JSON block(s)")
+            if markers.get("graphql_blocks"):
+                detail_parts.append(f"{markers['graphql_blocks']} GraphQL block(s)")
             if markers.get("embedded_state_blocks"):
                 detail_parts.append(f"{markers['embedded_state_blocks']} embedded block(s)")
             if markers.get("json_ld_blocks"):
@@ -352,10 +368,15 @@ def enrich_signals_from_raw_text(signals: SourceCaptureSignals, raw_text: str) -
     markers = parse_raw_text_evidence_markers(raw_text)
     found = present_from_markers(markers)
     signals.present.update(found)
-    if markers.get("api_response_blocks"):
+    if markers.get("api_response_blocks") or markers.get("network_json_blocks") or markers.get("graphql_blocks"):
+        block_total = (
+            int(markers.get("api_response_blocks") or 0)
+            + int(markers.get("network_json_blocks") or 0)
+            + int(markers.get("graphql_blocks") or 0)
+        )
         signals.present_detail.setdefault(
             "network_json",
-            f"{markers['api_response_blocks']} API block(s) in account raw_text",
+            f"{block_total} structured network block(s) in account raw_text",
         )
     if markers.get("embedded_state_blocks"):
         signals.present_detail.setdefault(
