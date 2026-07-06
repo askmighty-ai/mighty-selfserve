@@ -15059,6 +15059,112 @@ def credentials_page():
     return page_html
 
 
+def _user_account_sources(uid: str, db) -> list[str]:
+    """Distinct provider keys for a user (credentials, synced data, persisted state)."""
+    sources: set[str] = set()
+    for r in db.execute(
+        "SELECT source FROM account_data WHERE user_id=?", (uid,),
+    ).fetchall():
+        sources.add(r["source"])
+    for r in db.execute(
+        "SELECT source FROM account_credentials WHERE user_id=? AND source != '_email'",
+        (uid,),
+    ).fetchall():
+        sources.add(r["source"])
+    for r in db.execute(
+        "SELECT provider FROM account_state WHERE user_id=?", (uid,),
+    ).fetchall():
+        sources.add(r["provider"])
+    return sorted(sources)
+
+
+def _load_user_account_states(uid: str, db):
+    """Load AccountState rows for the user; recompute when not yet materialized."""
+    from mighty.account_state import load_account_state, recompute_account_state
+
+    display_names = _provider_display_names()
+    category_map = _provider_category_map()
+    states = []
+    for source in _user_account_sources(uid, db):
+        state = load_account_state(db, uid, source)
+        if not state:
+            state = recompute_account_state(
+                db,
+                uid,
+                source,
+                decrypt_fn=decrypt_account_data,
+                display_names=display_names,
+                category_map=category_map,
+            )
+        states.append(state)
+    states.sort(key=lambda s: s.display_name.lower())
+    return states
+
+
+def _build_account_center_page(user, states) -> str:
+    """Account Connection Center — consumer UI driven by AccountState only."""
+    csrf = get_csrf_token()
+    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts("account-center", user["email"], csrf)
+    _styles = BASE_CSS + ACCOUNT_CENTER_CSS
+    _site_meta = {k: (icon, color) for k, _n, icon, color, _cat in SUPPORTED_SITES}
+    cards = []
+    for state in states:
+        icon, color = _site_meta.get(state.provider, ("🔗", "#f3f4f6"))
+        cards.append(
+            build_card_view(state, icon=icon, color=color, fmt_relative=_fmt_sync)
+        )
+    cards = sort_cards(cards)
+    summary = build_summary(cards)
+    body_html = render_page_body(cards, summary, he)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<title>Connections — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+{_styles}
+</style>
+</head>
+<body>
+<div class="app-shell">
+{_sidebar_desktop}
+<div class="main-content">
+<div style="display:none;align-items:center;gap:10px;padding:12px 16px;border-bottom:0.5px solid rgba(0,0,0,0.07);background:#eee9e2;position:sticky;top:0;z-index:2" id="mobile-topbar-acc">
+  <button class="nav-hamburger" onclick="openMobileDrawer()" aria-label="Open menu" style="display:none">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <span style="font-size:15px;font-weight:700;color:#1c1917">Connections</span>
+</div>
+<script>(function(){{var t=document.getElementById('mobile-topbar-acc');if(t&&window.innerWidth<=768)t.style.display='flex';}})();</script>
+<div class="page">
+{body_html}
+</div>
+</div>
+{_sidebar_mobile}
+</div>
+</body>
+</html>"""
+
+
+@app.route("/account-center")
+@require_login
+def account_center_page():
+    user = get_db().execute(
+        "SELECT * FROM users WHERE id=?", (session["user_id"],),
+    ).fetchone()
+    if not user:
+        session.clear()
+        return redirect("/login")
+    db = get_db()
+    states = _load_user_account_states(user["id"], db)
+    return _build_account_center_page(user, states)
+
+
 @app.route("/api/extension/poll/<source>")
 @require_login
 def extension_poll(source):
@@ -19227,6 +19333,13 @@ from mighty.accounts_ui import (
     row_status_label,
     row_subline,
     sort_rows,
+)
+from mighty.account_center_ui import (
+    ACCOUNT_CENTER_CSS,
+    build_card_view,
+    build_summary,
+    render_page_body,
+    sort_cards,
 )
 
 
