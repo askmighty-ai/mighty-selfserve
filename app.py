@@ -17890,6 +17890,7 @@ def api_account_status():
     updating_source = user_row["sync_current_source"] if user_row else None
 
     display_names = {key: name for key, name, *_ in SUPPORTED_SITES}
+    account_states = _load_user_account_states(uid, db)
     accounts, summary = load_all_account_statuses(
         uid,
         db,
@@ -17900,6 +17901,7 @@ def api_account_status():
         sync_running=sync_running,
         sync_started_at=sync_started_at,
         updating_source=updating_source,
+        account_states=account_states,
     )
     return jsonify({
         "ok": True,

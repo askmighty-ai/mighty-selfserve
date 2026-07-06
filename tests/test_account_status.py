@@ -93,13 +93,13 @@ def test_multiple_account_states_summary():
     ]
     summary = build_status_summary(accounts)
     assert summary.is_syncing is True
-    assert summary.headline == "Updating Palo Alto Utilities"
-    assert summary.subline == "American Express needs login"
+    assert summary.headline == "Mighty is updating your accounts"
+    assert "needs sign in" in summary.subline
     assert summary.needs_login_count == 1
     assert summary.updating_count == 1
 
 
-def test_needs_login_only_headline():
+def test_needs_sign_in_only_headline():
     accounts = [
         build_account_status(
             "amex", "American Express",
@@ -111,11 +111,11 @@ def test_needs_login_only_headline():
     ]
     summary = build_status_summary(accounts)
     assert summary.is_syncing is False
-    assert summary.headline == "American Express needs login"
+    assert summary.headline == "1 needs sign in"
     assert summary.needs_login_count == 1
 
 
-def test_multiple_needs_login_headline():
+def test_multiple_needs_sign_in_headline():
     accounts = [
         build_account_status(
             "amex", "American Express",
@@ -133,7 +133,7 @@ def test_multiple_needs_login_headline():
         ),
     ]
     summary = build_status_summary(accounts)
-    assert summary.headline == "2 accounts need login"
+    assert summary.headline == "2 need sign in"
     assert summary.is_syncing is False
 
 
@@ -247,8 +247,9 @@ def test_api_account_status_dashboard_and_extension_consistent(client):
     by_source = {a["source"]: a for a in ext_data["accounts"]}
     assert by_source["amex"]["status"] == NEEDS_LOGIN
     assert by_source["pa_utilities"]["status"] == UPDATING
-    assert ext_data["summary"]["headline"] == "Updating Palo Alto Utilities"
-    assert ext_data["summary"]["subline"] == "American Express needs login"
+    assert ext_data["summary"]["headline"] == "Mighty is updating your accounts"
+    assert "needs sign in" in ext_data["summary"]["subline"]
+    assert ext_data["summary"]["access_loop"]["needs_sign_in"] == 1
 
 
 def test_api_sync_progress_updates_updating_account(client):

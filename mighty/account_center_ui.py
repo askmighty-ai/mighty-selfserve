@@ -12,19 +12,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from mighty.account_presentation import resolve_account_presentation
+from mighty.account_presentation import (
+    build_access_loop_summary,
+    presentations_for_states,
+    resolve_account_presentation,
+)
 from mighty.account_state import (
     ACCESS_API,
     ACCESS_BROWSER_SESSION,
     ACCESS_MANUAL,
     ACCESS_MIGHTY_LOGIN,
-    ACTION_CONNECT,
-    ACTION_LOGIN,
-    ACTION_NONE,
-    ACTION_OPEN_PROVIDER,
-    ACTION_REVIEW,
-    ACTION_WAIT,
-    CONFIDENCE_LOW,
     CONN_CONNECTED,
     CONN_CONNECTING,
     CONN_NEEDS_LOGIN,
@@ -40,16 +37,19 @@ from mighty.account_state import (
 )
 
 from mighty.user_copy import (
-    ACCOUNT_STATE_CHECKING,
-    ACCOUNT_STATE_CONNECTED,
     ACCOUNT_STATE_LABELS,
     ACCOUNT_STATE_NEEDS_ATTENTION,
-    ACCOUNT_STATE_NEEDS_LOGIN,
-    ACCOUNT_STATE_NO_DATA,
-    CTA_CHECKING,
-    CTA_REFRESH,
+    ACCOUNT_STATE_NEEDS_SIGN_IN,
+    ACCOUNT_STATE_READY,
+    ACCOUNT_STATE_UPDATING,
+    CTA_FIX,
     CTA_SIGN_IN,
+    CTA_UPDATING,
     CTA_VIEW,
+    DATA_NEVER_REFRESHED,
+    DATA_REFRESHED_PREFIX,
+    SESSION_NEVER_VERIFIED,
+    SESSION_VERIFIED_PREFIX,
 )
 
 # ── Status tones (card accent colors) ───────────────────────────────────────
@@ -76,9 +76,8 @@ TONE_BG: dict[str, str] = {
 PRIMARY_CONNECT = "connect"
 PRIMARY_LOGIN = "login"
 PRIMARY_RECONNECT = "login"
-PRIMARY_REFRESH = "refresh"
+PRIMARY_FIX = "fix"
 PRIMARY_VIEW = "view"
-PRIMARY_VIEW_BENEFITS = "view"
 PRIMARY_CHECKING = "checking"
 
 LINKABLE_ACTION_KINDS = frozenset({PRIMARY_LOGIN, PRIMARY_RECONNECT, PRIMARY_CONNECT})
@@ -106,7 +105,7 @@ DATA_STATUS_LABELS: dict[str, str] = {
 CONNECTION_STATUS_LABELS: dict[str, str] = {
     CONN_CONNECTED: "Connected",
     CONN_CONNECTING: "Connecting",
-    CONN_NEEDS_LOGIN: "Needs login",
+    CONN_NEEDS_LOGIN: "Needs sign in",
     CONN_NOT_CONNECTED: "Not connected",
 }
 
@@ -114,10 +113,10 @@ CONNECTION_STATUS_LABELS: dict[str, str] = {
 @dataclass
 class AccountCenterSummary:
     total: int
-    connected: int
-    needs_login: int
+    ready: int
+    needs_sign_in: int
+    updating: int
     needs_attention: int
-    not_connected: int
 
 
 @dataclass
@@ -134,7 +133,8 @@ class AccountCenterCardView:
     session_label: str
     access_label: str
     observation_count: int
-    last_refresh_label: str
+    session_verified_label: str
+    data_refreshed_label: str
     primary_action: str
     primary_action_kind: str
     primary_action_href: str | None
@@ -146,15 +146,13 @@ class AccountCenterCardView:
 def status_tone(state: AccountState) -> str:
     presentation = resolve_account_presentation(state)
     key = presentation.key
-    if key == ACCOUNT_STATE_NEEDS_LOGIN:
+    if key == ACCOUNT_STATE_NEEDS_SIGN_IN:
         return TONE_LOGIN
-    if key == ACCOUNT_STATE_CHECKING:
-        return TONE_ATTENTION
-    if key == ACCOUNT_STATE_NO_DATA:
+    if key == ACCOUNT_STATE_UPDATING:
         return TONE_ATTENTION
     if key == ACCOUNT_STATE_NEEDS_ATTENTION:
         return TONE_ATTENTION
-    if key == ACCOUNT_STATE_CONNECTED:
+    if key == ACCOUNT_STATE_READY:
         return TONE_CONNECTED
     if state.connection_state == CONN_NOT_CONNECTED:
         return TONE_NEVER
@@ -178,39 +176,36 @@ def data_freshness_label(
     return f"{status} ({rel})"
 
 
-def last_refresh_label(
+def session_verified_label(
+    state: AccountState,
+    fmt_relative: Callable[[str], str],
+) -> str:
+    if not state.last_verified_at:
+        return SESSION_NEVER_VERIFIED
+    return f"{SESSION_VERIFIED_PREFIX} · {fmt_relative(state.last_verified_at)}"
+
+
+def data_refreshed_label(
     state: AccountState,
     fmt_relative: Callable[[str], str],
 ) -> str:
     if not state.last_data_refresh:
-        return "Never"
-    return fmt_relative(state.last_data_refresh)
+        return DATA_NEVER_REFRESHED
+    return f"{DATA_REFRESHED_PREFIX} · {fmt_relative(state.last_data_refresh)}"
 
 
 def primary_action(state: AccountState) -> tuple[str, str, bool]:
     """Return (button label, action kind, disabled) for the card CTA."""
     presentation = resolve_account_presentation(state)
-    if presentation.cta_disabled:
+    if presentation.key == ACCOUNT_STATE_NEEDS_SIGN_IN:
+        return presentation.cta_label, PRIMARY_LOGIN, False
+    if presentation.key == ACCOUNT_STATE_UPDATING:
         return presentation.cta_label, PRIMARY_CHECKING, True
-
-    label = presentation.cta_label
-    if presentation.key == ACCOUNT_STATE_NEEDS_LOGIN:
-        return label, PRIMARY_LOGIN, False
-    if presentation.key == ACCOUNT_STATE_CHECKING:
-        return label, PRIMARY_CHECKING, True
-    if presentation.key == ACCOUNT_STATE_NO_DATA:
-        return label, PRIMARY_REFRESH, False
+    if presentation.key == ACCOUNT_STATE_READY:
+        return presentation.cta_label, PRIMARY_VIEW, False
     if presentation.key == ACCOUNT_STATE_NEEDS_ATTENTION:
-        if label == CTA_SIGN_IN:
-            return label, PRIMARY_LOGIN, False
-        return label, PRIMARY_REFRESH, False
-    if label == CTA_VIEW:
-        return label, PRIMARY_VIEW, False
-    if label == CTA_REFRESH:
-        return label, PRIMARY_REFRESH, False
-    if label == CTA_CHECKING:
-        return label, PRIMARY_CHECKING, True
-    return label, PRIMARY_CONNECT, False
+        return CTA_FIX, PRIMARY_FIX, False
+    return presentation.cta_label, PRIMARY_CONNECT, False
 
 
 def resolve_primary_action_href(
@@ -250,7 +245,8 @@ def build_card_view(
         session_label=SESSION_LABELS.get(state.session_health, state.session_health.title()),
         access_label=ACCESS_LABELS.get(state.access_method, state.access_method.replace("_", " ").title()),
         observation_count=len(state.observations_available),
-        last_refresh_label=last_refresh_label(state, fmt_relative),
+        session_verified_label=session_verified_label(state, fmt_relative),
+        data_refreshed_label=data_refreshed_label(state, fmt_relative),
         primary_action=label,
         primary_action_kind=kind,
         primary_action_href=href,
@@ -261,37 +257,101 @@ def build_card_view(
 
 
 def build_summary(cards: list[AccountCenterCardView]) -> AccountCenterSummary:
-    counts = {TONE_CONNECTED: 0, TONE_LOGIN: 0, TONE_ATTENTION: 0, TONE_NEVER: 0}
+    counts = {
+        ACCOUNT_STATE_READY: 0,
+        ACCOUNT_STATE_NEEDS_SIGN_IN: 0,
+        ACCOUNT_STATE_UPDATING: 0,
+        ACCOUNT_STATE_NEEDS_ATTENTION: 0,
+    }
+    tone_to_key = {
+        TONE_CONNECTED: ACCOUNT_STATE_READY,
+        TONE_LOGIN: ACCOUNT_STATE_NEEDS_SIGN_IN,
+        TONE_ATTENTION: ACCOUNT_STATE_NEEDS_ATTENTION,
+        TONE_NEVER: ACCOUNT_STATE_NEEDS_SIGN_IN,
+    }
     for card in cards:
-        counts[card.status_tone] = counts.get(card.status_tone, 0) + 1
+        key = tone_to_key.get(card.status_tone, ACCOUNT_STATE_NEEDS_ATTENTION)
+        if card.status_label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING]:
+            key = ACCOUNT_STATE_UPDATING
+        counts[key] = counts.get(key, 0) + 1
     return AccountCenterSummary(
         total=len(cards),
-        connected=counts[TONE_CONNECTED],
-        needs_login=counts[TONE_LOGIN],
-        needs_attention=counts[TONE_ATTENTION],
-        not_connected=counts[TONE_NEVER],
+        ready=counts[ACCOUNT_STATE_READY],
+        needs_sign_in=counts[ACCOUNT_STATE_NEEDS_SIGN_IN],
+        updating=counts[ACCOUNT_STATE_UPDATING],
+        needs_attention=counts[ACCOUNT_STATE_NEEDS_ATTENTION],
     )
 
 
 def summary_headline(summary: AccountCenterSummary) -> str:
-    parts = [f"{summary.total} account{'s' if summary.total != 1 else ''}"]
-    if summary.connected:
-        parts.append(f"{summary.connected} {ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED].lower()}")
-    if summary.needs_login:
-        verb = "needs" if summary.needs_login == 1 else "need"
-        parts.append(
-            f"{summary.needs_login} {verb} "
-            f"{ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN].lower()}"
+    presentations = []
+    for _ in range(summary.needs_sign_in):
+        from mighty.account_presentation import AccountPresentation
+
+        presentations.append(
+            AccountPresentation(
+                key=ACCOUNT_STATE_NEEDS_SIGN_IN,
+                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN],
+                cta_label=CTA_SIGN_IN,
+                cta_disabled=False,
+            )
         )
-    if summary.needs_attention:
-        verb = "needs" if summary.needs_attention == 1 else "need"
-        parts.append(
-            f"{summary.needs_attention} {verb} "
-            f"{ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION].lower()}"
+    for _ in range(summary.updating):
+        from mighty.account_presentation import AccountPresentation
+
+        presentations.append(
+            AccountPresentation(
+                key=ACCOUNT_STATE_UPDATING,
+                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
+                cta_label=CTA_UPDATING,
+                cta_disabled=True,
+            )
         )
-    if summary.not_connected:
-        parts.append(f"{summary.not_connected} not connected")
-    return " · ".join(parts)
+    for _ in range(summary.ready):
+        from mighty.account_presentation import AccountPresentation
+
+        presentations.append(
+            AccountPresentation(
+                key=ACCOUNT_STATE_READY,
+                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY],
+                cta_label=CTA_VIEW,
+                cta_disabled=False,
+            )
+        )
+    for _ in range(summary.needs_attention):
+        from mighty.account_presentation import AccountPresentation
+
+        presentations.append(
+            AccountPresentation(
+                key=ACCOUNT_STATE_NEEDS_ATTENTION,
+                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],
+                cta_label=CTA_FIX,
+                cta_disabled=False,
+            )
+        )
+    loop = build_access_loop_summary(presentations)
+    if loop.is_updating:
+        if loop.detail_lines:
+            return f"{loop.headline} · {' · '.join(loop.detail_lines)}"
+        return loop.headline
+    if loop.detail_lines:
+        return " · ".join(loop.detail_lines)
+    return loop.headline
+
+
+def summary_headline_from_states(
+    states: list[AccountState],
+    *,
+    sync_running: bool = False,
+    updating_source: str | None = None,
+) -> str:
+    presentations = presentations_for_states(
+        states, sync_running=sync_running, updating_source=updating_source,
+    )
+    loop = build_access_loop_summary(presentations)
+    if loop.detail_lines and loop.headline != " · ".join(loop.detail_lines):
+        return f"{loop.headline} · {' · '.join(loop.detail_lines)}"
+    return loop.headline
 
 
 def sort_cards(cards: list[AccountCenterCardView]) -> list[AccountCenterCardView]:
@@ -358,7 +418,10 @@ def render_card(card: AccountCenterCardView, escape: Callable[[Any], str]) -> st
         f"</dl>"
         f'<p class="acc-card-subline">{escape(card.status_line)}</p>'
         f'<footer class="acc-card-footer">'
-        f'<span class="acc-card-refreshed">Last refresh · {escape(card.last_refresh_label)}</span>'
+        f'<div class="acc-card-timestamps">'
+        f'<span class="acc-card-session">{escape(card.session_verified_label)}</span>'
+        f'<span class="acc-card-refreshed">{escape(card.data_refreshed_label)}</span>'
+        f"</div>"
         f"{render_card_cta(card, escape)}"
         f"</footer></div></article>"
     )
@@ -419,7 +482,8 @@ ACCOUNT_CENTER_CSS = """
 .acc-meta-row dd{font-size:13px;font-weight:500;color:#44403c;margin:0}
 .acc-card-subline{font-size:12px;color:#78716c;line-height:1.45;margin:0}
 .acc-card-footer{margin-top:auto;display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:4px;border-top:1px solid rgba(0,0,0,0.05)}
-.acc-card-refreshed{font-size:11px;color:#a8a29e;white-space:nowrap}
+.acc-card-timestamps{display:flex;flex-direction:column;gap:2px;min-width:0}
+.acc-card-session,.acc-card-refreshed{font-size:11px;color:#a8a29e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .acc-card-cta{padding:8px 16px;border-radius:10px;font-size:13px;font-weight:600;border:none;background:#6366f1;color:#fff;cursor:pointer;transition:background 0.12s;white-space:nowrap;font-family:inherit;display:inline-block;text-decoration:none;text-align:center}
 .acc-card-cta:hover{background:#4f46e5;color:#fff;text-decoration:none}
 .acc-card-cta:disabled{opacity:0.55;cursor:not-allowed}

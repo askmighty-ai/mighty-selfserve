@@ -1,4 +1,4 @@
-"""Tests for shared account presentation vocabulary."""
+"""Tests for shared Account Access Loop presentation."""
 
 import os
 import sys
@@ -16,6 +16,7 @@ from mighty.account_center_ui import (
     status_label,
 )
 from mighty.account_presentation import (
+    build_access_loop_summary,
     is_recent_session_verification,
     resolve_account_presentation,
     resolve_presentation_from_status_signals,
@@ -23,6 +24,7 @@ from mighty.account_presentation import (
 from mighty.account_state import (
     ACCESS_BROWSER_SESSION,
     CONN_CONNECTED,
+    CONN_CONNECTING,
     CONN_NEEDS_LOGIN,
     DATA_COMPLETE,
     DATA_NONE,
@@ -37,13 +39,17 @@ from mighty.account_lifecycle import resolve_account_lifecycle
 from mighty.connection_state import CONNECTED, NEEDS_LOGIN as CONN_NEEDS_LOGIN
 from mighty.provider_account import ProviderAccount
 from mighty.user_copy import (
+    ACCOUNT_STATE_CTAS,
     ACCOUNT_STATE_LABELS,
-    ACCOUNT_STATE_CHECKING,
-    ACCOUNT_STATE_CONNECTED,
-    ACCOUNT_STATE_NEEDS_LOGIN,
-    ACCOUNT_STATE_NO_DATA,
+    ACCOUNT_STATE_NEEDS_ATTENTION,
+    ACCOUNT_STATE_NEEDS_SIGN_IN,
+    ACCOUNT_STATE_READY,
+    ACCOUNT_STATE_UPDATING,
+    CTA_FIX,
     CTA_SIGN_IN,
-    EXT_ACCOUNT_NEEDS_LOGIN_HINT,
+    CTA_UPDATING,
+    CTA_VIEW,
+    EXT_ACCOUNT_NEEDS_SIGN_IN_HINT,
 )
 
 
@@ -73,12 +79,12 @@ def _state(**kwargs) -> AccountState:
 
 class TestSharedLabels:
     def test_account_center_uses_shared_labels(self):
-        assert status_label(_state()) == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED]
+        assert status_label(_state()) == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY]
         assert status_label(_state(connection_state=CONN_NEEDS_LOGIN, last_verified_at=None)) == (
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN]
+            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN]
         )
         assert status_label(_state(data_status=DATA_NONE, last_data_refresh=None)) == (
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA]
+            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING]
         )
 
     def test_extension_projection_agrees_on_labels(self):
@@ -100,8 +106,8 @@ class TestSharedLabels:
             last_verified_at=None,
             is_updating=False,
         )
-        assert presentation.label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN]
-        assert presentation.extension_hint == EXT_ACCOUNT_NEEDS_LOGIN_HINT
+        assert presentation.label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN]
+        assert presentation.extension_hint == EXT_ACCOUNT_NEEDS_SIGN_IN_HINT
 
         connected = resolve_presentation_from_status_signals(
             provider="amex",
@@ -112,7 +118,19 @@ class TestSharedLabels:
             last_verified_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
             is_updating=False,
         )
-        assert connected.label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA]
+        assert connected.label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING]
+
+    def test_access_loop_summary_uses_same_labels(self):
+        presentations = [
+            resolve_account_presentation(_state()),
+            resolve_account_presentation(
+                _state(connection_state=CONN_NEEDS_LOGIN, last_verified_at=None),
+            ),
+        ]
+        loop = build_access_loop_summary(presentations)
+        assert loop.ready == 1
+        assert loop.needs_sign_in == 1
+        assert "needs sign in" in loop.detail_lines[0]
 
 
 class TestRecentVerificationOverridesNeedsLogin:
@@ -124,8 +142,8 @@ class TestRecentVerificationOverridesNeedsLogin:
             last_data_refresh=None,
             last_verified_at=verified_at,
         )
-        assert status_label(state) == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA]
-        assert status_label(state) != ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN]
+        assert status_label(state) == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING]
+        assert status_label(state) != ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN]
 
     def test_account_state_recompute_respects_connected_session(self, account_state_db):
         verified_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -181,7 +199,7 @@ class TestRecentVerificationOverridesNeedsLogin:
 
         state = recompute_account_state(account_state_db, "user-1", "amex")
         assert state.connection_state == CONN_CONNECTED
-        assert status_label(state) != ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN]
+        assert status_label(state) != ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN]
 
     def test_is_recent_session_verification(self):
         recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
@@ -190,7 +208,7 @@ class TestRecentVerificationOverridesNeedsLogin:
         assert is_recent_session_verification(old, provider="amex") is False
 
 
-class TestSignInCta:
+class TestCanonicalCtas:
     def test_sign_in_uses_provider_url(self):
         state = _state(
             connection_state=CONN_NEEDS_LOGIN,
@@ -209,13 +227,43 @@ class TestSignInCta:
         assert href == "https://www.americanexpress.com/en-us/account/login"
         assert external is True
 
-    def test_checking_account_cta_disabled(self):
-        state = _state(connection_state="connecting", data_status=DATA_NONE, last_verified_at=None)
+    def test_updating_cta_disabled(self):
+        state = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None)
         label, kind, disabled = primary_action(state)
-        from mighty.user_copy import CTA_CHECKING
-
-        assert label == CTA_CHECKING
+        assert label == CTA_UPDATING
         assert disabled is True
+
+    def test_ready_uses_view_cta(self):
+        label, kind, disabled = primary_action(_state())
+        assert label == CTA_VIEW
+        assert kind == "view"
+        assert disabled is False
+
+    def test_needs_attention_uses_fix_cta(self):
+        state = _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED)
+        label, kind, disabled = primary_action(state)
+        assert label == CTA_FIX
+        assert disabled is False
+
+    def test_one_cta_per_state(self):
+        for key, cta in ACCOUNT_STATE_CTAS.items():
+            if key == ACCOUNT_STATE_UPDATING:
+                presentation = resolve_account_presentation(
+                    _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None),
+                )
+            elif key == ACCOUNT_STATE_NEEDS_SIGN_IN:
+                presentation = resolve_account_presentation(
+                    _state(connection_state=CONN_NEEDS_LOGIN, last_verified_at=None),
+                )
+            elif key == ACCOUNT_STATE_READY:
+                presentation = resolve_account_presentation(_state())
+            else:
+                presentation = resolve_account_presentation(
+                    _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED),
+                )
+            assert presentation.key == key
+            assert presentation.cta_label == cta
+            assert presentation.cta_disabled is (key == ACCOUNT_STATE_UPDATING)
 
 
 @pytest.fixture()
