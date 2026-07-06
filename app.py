@@ -822,6 +822,11 @@ def init_db():
             ensure_account_state_tables(db)
         except Exception:
             pass
+        try:
+            from mighty.provider_access_probe import ensure_probe_tables
+            ensure_probe_tables(db)
+        except Exception:
+            pass
 
 init_db()
 
@@ -21135,6 +21140,59 @@ def admin_delta_evidence_audit_detail_page(run_id):
     if not audit:
         return _admin_debug.render_delta_evidence_audit_page([]), 404
     return _admin_debug.render_delta_evidence_audit_detail_page(audit)
+
+
+@app.route("/admin/provider-access-probe")
+@require_admin
+def admin_provider_access_probe_page():
+    from mighty.provider_access_probe import PROBE_PROVIDERS, merge_probe_summaries, get_latest_probe_per_provider
+
+    uid = session["user_id"]
+    latest = get_latest_probe_per_provider(get_db(), uid)
+    rows = merge_probe_summaries(latest, sorted(PROBE_PROVIDERS))
+    return _admin_debug.render_provider_access_probe_page(rows)
+
+
+@app.route("/api/admin/provider-access-probe")
+@require_admin
+def api_admin_provider_access_probe():
+    from mighty.provider_access_probe import PROBE_PROVIDERS, merge_probe_summaries, get_latest_probe_per_provider, row_to_json
+
+    uid = session["user_id"]
+    latest = get_latest_probe_per_provider(get_db(), uid)
+    rows = merge_probe_summaries(latest, sorted(PROBE_PROVIDERS))
+    return jsonify({"providers": [row_to_json(r) for r in rows]})
+
+
+@app.route("/api/extension/provider-access-probe", methods=["POST"])
+def api_extension_provider_access_probe():
+    """Extension diagnostic: record provider access probe result."""
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+
+    provider = (body.get("provider") or "").strip().lower()
+    if not provider:
+        return jsonify({"error": "provider required"}), 400
+
+    from mighty.provider_access_probe import (
+        PROBE_PROVIDERS,
+        evaluate_probe_payload,
+        record_probe_run,
+        row_to_json,
+    )
+
+    if provider not in PROBE_PROVIDERS:
+        return jsonify({"error": f"unsupported provider: {provider}"}), 400
+
+    try:
+        result = evaluate_probe_payload(provider, body)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    run_id = record_probe_run(get_db(), user["id"], result)
+    result["run_id"] = run_id
+    return jsonify(row_to_json(result))
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
