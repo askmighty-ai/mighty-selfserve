@@ -53,10 +53,14 @@ _ACCOUNT_EVIDENCE_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PROMO_VALUE_RE = re.compile(
+    r"\b(bonus|promotional|offer|after you spend|when you spend|up to|apply today)\b",
+    re.IGNORECASE,
+)
+
 _PROVIDER_REGEX: dict[str, list[tuple[str, str, str]]] = {
     "amex": [
         (r"Points Balance:\s*([\d,]+)", "points_balance", "Points Balance"),
-        (r"Membership Rewards[^0-9\n]{0,120}([\d,]+)", "points_balance", "Membership Rewards Points"),
         (r"Statement Balance:\s*\$?([\d,]+\.?\d*)", "statement_balance", "Statement Balance"),
         (r"Payment Due Date:\s*(.+)", "payment_due_date", "Payment Due Date"),
         (r"Credit Limit:\s*\$?([\d,]+)", "credit_limit", "Credit Limit"),
@@ -234,32 +238,44 @@ def extract_adapter_fields(source: str, raw_text: str) -> list[dict[str, Any]]:
     return fields
 
 
+def _validate_field_value(key: str, value: str, *, context: str = "") -> bool:
+    """Reject values that are obviously not account balances (promo copy, empty numerics)."""
+    val = (value or "").strip()
+    if not val or val.lower() in _EMPTY_VALUES:
+        return False
+    promo_scope = f"{context} {val}"
+    if _PROMO_VALUE_RE.search(promo_scope):
+        return False
+    if key == "points_balance":
+        digits = re.sub(r"[^\d]", "", val)
+        return bool(digits) and int(digits) > 0
+    if key in {"statement_balance", "minimum_payment", "credit_limit", "available_credit"}:
+        return bool(re.search(r"\d", val))
+    return True
+
+
 def _extract_amex_adapter(raw_text: str) -> list[dict[str, Any]]:
     from mighty.adapters.amex_extraction import build_amex_mr_item
 
     fields: list[dict[str, Any]] = []
-    for pattern in (
-        r"Points Balance:\s*([\d,]+)",
-        r"Membership Rewards[^0-9\n]{0,120}([\d,]+)",
-    ):
-        match = re.search(pattern, raw_text or "", re.IGNORECASE)
-        if not match:
-            continue
-        try:
-            item = build_amex_mr_item(match.group(1))
-        except ValueError:
-            continue
-        fields.append(
-            _field(
-                item["key"],
-                item["label"],
-                item["value"],
-                confidence=0.98,
-                source_tag="adapter:amex",
-                source_snippet=match.group(0)[:150],
-            )
+    # Only match explicit balance labels — broad "Membership Rewards … N" matches spend promos.
+    match = re.search(r"Points Balance:\s*([\d,]+)", raw_text or "", re.IGNORECASE)
+    if not match:
+        return fields
+    try:
+        item = build_amex_mr_item(match.group(1))
+    except ValueError:
+        return fields
+    fields.append(
+        _field(
+            item["key"],
+            item["label"],
+            item["value"],
+            confidence=0.98,
+            source_tag="adapter:amex",
+            source_snippet=match.group(0)[:150],
         )
-        break
+    )
     return fields
 
 
@@ -347,6 +363,8 @@ def extract_label_value_fields(raw_text: str) -> list[dict[str, Any]]:
             continue
         if value.lower() in _EMPTY_VALUES:
             continue
+        if not _validate_field_value(key, value):
+            continue
         seen_keys.add(key)
         fields.append(
             _field(key, label_raw, value, confidence=0.90, source_tag="label_value", source_snippet=line[:150])
@@ -367,6 +385,8 @@ def extract_regex_fields(source: str, raw_text: str) -> list[dict[str, Any]]:
             continue
         value = match.group(1).strip()
         if value.lower() in _EMPTY_VALUES:
+            continue
+        if not _validate_field_value(canonical, value, context=match.group(0)):
             continue
         seen_keys.add(canonical)
         fields.append(

@@ -87,6 +87,25 @@ class TestDeterministicExtraction:
         assert result.label_value_fields == []
         assert result.regex_fields == []
 
+    def test_promo_copy_does_not_become_points_balance(self, connector_and_filter):
+        connector_fn, post_filter_fn = connector_and_filter
+        amex_promo = (
+            "=== https://www.americanexpress.com/en-us/benefits/overview ===\n"
+            "Earn 100,000 Membership Rewards points after you spend $6,000"
+        )
+        chase_promo = (
+            "=== https://www.chase.com/education ===\n"
+            "Points Balance: 999,999 promotional bonus"
+        )
+        amex = extract_deterministic_fields(
+            "amex", amex_promo, existing_items=[], connector_fn=connector_fn, post_filter_fn=post_filter_fn,
+        )
+        chase = extract_deterministic_fields(
+            "chase", chase_promo, existing_items=[], connector_fn=connector_fn, post_filter_fn=post_filter_fn,
+        )
+        assert not any(i["key"] == "points_balance" for i in amex.items)
+        assert not any(i["key"] == "points_balance" for i in chase.items)
+
     def test_field_provenance_maps_extractor_per_key(self, connector_and_filter):
         connector_fn, post_filter_fn = connector_and_filter
         raw = _load_fixture("chase_statement")
