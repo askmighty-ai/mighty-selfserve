@@ -2086,6 +2086,101 @@ async function probeAmexConnectionState(apiKey, accounts) {
   }
 }
 
+// ── Provider Access Probe (Phase 1 reliability diagnostic) ────────────────────
+
+const PROVIDER_ACCESS_PROBE_SOURCES = new Set(['amex', 'delta']);
+const _probeReportedAt = {};
+
+async function _postProviderAccessProbe(apiKey, payload) {
+  if (!apiKey || !payload?.provider) return;
+  const cacheKey = `${payload.provider}:${payload.status}:${payload.evidence_snippet || ''}`;
+  const now = Date.now();
+  if (_probeReportedAt[cacheKey] && now - _probeReportedAt[cacheKey] < 120_000) return;
+  _probeReportedAt[cacheKey] = now;
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body: JSON.stringify({ ...payload, timestamp: new Date().toISOString() }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) {
+      console.log(`[Mighty Probe] ${payload.provider} → ${data.status || payload.status}`, data);
+    } else {
+      console.warn(`[Mighty Probe] ${payload.provider} POST failed`, resp.status, data);
+    }
+  } catch (e) {
+    console.warn(`[Mighty Probe] ${payload.provider} POST error:`, e.message);
+  }
+}
+
+async function runProviderAccessProbeInTab(tabId, provider) {
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: runProviderAccessProbeInPage,
+      args: [provider],
+    });
+    return r?.result || null;
+  } catch (e) {
+    console.warn(`[Mighty Probe] tab script failed for ${provider}:`, e.message);
+    return { provider, error: e.message, blocked: false };
+  }
+}
+
+async function runProviderAccessProbe(apiKey, provider) {
+  const entry = ACCOUNT_ENTRY[provider];
+  if (!entry) {
+    console.log(`[Mighty Probe] no entry URL for ${provider}`);
+    return;
+  }
+
+  const domainPattern = provider === 'amex' ? '*://*.americanexpress.com/*' : '*://*.delta.com/*';
+  const openTabs = await chrome.tabs.query({ url: domainPattern });
+  for (const tab of openTabs) {
+    if (!tab.id || !tab.url) continue;
+    const cfg = SITE_LOGIN_CONFIG[provider];
+    if (cfg?.loginPathRe?.test(tab.url)) continue;
+    console.log(`[Mighty Probe] trying open tab for ${provider}:`, tab.url);
+    const result = await runProviderAccessProbeInTab(tab.id, provider);
+    if (result && !result.error) {
+      await _postProviderAccessProbe(apiKey, result);
+      return;
+    }
+  }
+
+  console.log(`[Mighty Probe] opening background tab for ${provider}`);
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: entry, active: false });
+    await waitForTabLoad(tab.id, 25_000);
+    await sleep(5000);
+    const result = await runProviderAccessProbeInTab(tab.id, provider);
+    if (result) await _postProviderAccessProbe(apiKey, result);
+  } catch (e) {
+    await _postProviderAccessProbe(apiKey, {
+      provider,
+      url_visited: entry,
+      signed_in_detected: false,
+      private_data_detected: false,
+      error: e.message,
+      failure_reason: 'probe_navigation_error',
+    });
+  } finally {
+    if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+async function runProviderAccessProbes(apiKey, accounts) {
+  if (!apiKey || !Array.isArray(accounts)) return;
+  const configured = accounts
+    .map(a => a.source)
+    .filter(src => PROVIDER_ACCESS_PROBE_SOURCES.has(src));
+  for (const provider of configured) {
+    await runProviderAccessProbe(apiKey, provider);
+  }
+}
+
 async function runSync() {
   // Prevent concurrent syncs — each would spawn its own tab set.
   // _syncInProgress is in-memory only and resets on MV3 service worker restart.
@@ -2168,6 +2263,9 @@ async function runSync() {
     await runAmexExtraction(api_key, accounts);
     accounts = await _fetchExtensionAccounts(api_key);
   }
+
+  // Phase 1 reliability: diagnostic access probes (does not affect account state)
+  await runProviderAccessProbes(api_key, accounts);
 
   // Also load captured (custom) accounts from local storage
   const { captured_accounts = {} } = await chrome.storage.local.get('captured_accounts');
@@ -4014,6 +4112,131 @@ function extractAmexMembershipRewardsPage() {
     || sample.includes('recent activity');
   console.log(LOG, loggedIn ? 'balance not found' : 'not logged in');
   return { loggedIn, value: null };
+}
+
+// Runs inside provider account pages — Phase 1 access probe (Amex + Delta first)
+function runProviderAccessProbeInPage(provider) {
+  const url = location.href;
+  const path = location.pathname.toLowerCase();
+  const bodyText = (document.body?.innerText || '').slice(0, 12000);
+  const lower = bodyText.toLowerCase();
+  const ts = new Date().toISOString();
+
+  function finish(payload) {
+    return {
+      provider,
+      url_visited: url,
+      signed_in_detected: !!payload.signed_in_detected,
+      private_data_detected: !!payload.private_data_detected,
+      evidence_type: payload.evidence_type || null,
+      evidence_snippet: payload.evidence_snippet || null,
+      failure_reason: payload.failure_reason || null,
+      dom_text: bodyText.slice(0, 8000),
+      timestamp: ts,
+      blocked: !!payload.blocked,
+      error: payload.error || null,
+    };
+  }
+
+  const blockedSignals = ['access denied', 'captcha', 'verify you are human', 'bot detection', 'unusual activity'];
+  if (blockedSignals.some(s => lower.includes(s))) {
+    return finish({ blocked: true, failure_reason: 'access_blocked' });
+  }
+
+  if (provider === 'amex') {
+    const loginPath = /\/account\/log-?in/.test(path);
+    const marketingPath = /\/en-us\/(?:credit-cards|business|prepaid|gift-cards|benefits|offers)(?:\/|$)/i.test(path);
+    const accountPath = /\/en-us\/account/.test(path) || /\/en-us\/rewards/.test(path);
+    const loginHits = ['sign in to your account', 'user id', 'show password', 'forgot password']
+      .filter(s => lower.includes(s)).length;
+    const signedInSignals = [
+      'membership rewards', 'account home', 'recent activity', 'card ending',
+      'payment due', 'available credit', 'manage account', 'statement balance',
+    ];
+    let signedIn = !loginPath && !marketingPath && loginHits < 2
+      && signedInSignals.some(s => lower.includes(s))
+      && (accountPath || signedInSignals.filter(s => lower.includes(s)).length >= 2);
+
+    let privateData = false;
+    let evidenceType = 'dom_text';
+    let snippet = null;
+
+    const privatePatterns = [
+      { re: /membership rewards[^0-9\n]{0,120}([\d][\d,]*)/i, label: 'membership_rewards_balance' },
+      { re: /statement\s+balance[^$\d]{0,40}\$?([\d][\d,]*(?:\.\d{2})?)/i, label: 'statement_balance' },
+      { re: /card\s+ending\s+(?:in\s+)?[\d*]{4,}/i, label: 'card_ending' },
+      { re: /(?:points|rewards)\s*(?:balance|:)?\s*([\d][\d,]*)/i, label: 'points_balance' },
+    ];
+    for (const p of privatePatterns) {
+      const m = bodyText.match(p.re);
+      if (m) {
+        privateData = true;
+        snippet = m[0].trim().slice(0, 240);
+        break;
+      }
+    }
+
+    if (loginPath || (loginHits >= 2 && !lower.includes('membership rewards'))) {
+      return finish({ signed_in_detected: false, private_data_detected: false, failure_reason: 'login_required' });
+    }
+    if (marketingPath && !accountPath) {
+      return finish({ signed_in_detected: false, private_data_detected: false, failure_reason: 'marketing_page_only' });
+    }
+    return finish({
+      signed_in_detected: signedIn,
+      private_data_detected: privateData,
+      evidence_type: privateData ? evidenceType : null,
+      evidence_snippet: snippet,
+      failure_reason: signedIn ? (privateData ? null : 'signed_in_no_private_evidence') : 'login_required',
+    });
+  }
+
+  if (provider === 'delta') {
+    const loginPath = /\/(sign-?in|log-?in|skymiles\/login)(\/|$|\?)/i.test(path);
+    const marketingPath = /\/us\/en\/(?:flights|destinations|vacations|deals)(?:\/|$)/i.test(path);
+    const accountPath = /\/myprofile|\/myskymiles|\/my-trips|\/wallet|\/profile/i.test(path);
+    const signedInSignals = [
+      'my skymiles', 'skymiles number', 'medallion', 'miles available', 'available miles',
+      'my wallet', 'my trips', 'welcome back', 'member since', 'ecredit',
+    ];
+    let signedIn = !loginPath && !marketingPath
+      && signedInSignals.some(s => lower.includes(s))
+      && (accountPath || signedInSignals.filter(s => lower.includes(s)).length >= 2);
+
+    let privateData = false;
+    let snippet = null;
+    const privatePatterns = [
+      { re: /skymiles\s*(?:#|number|no\.?)?\s*:?\s*(\d{9,10})/i },
+      { re: /(?:available\s+miles|miles\s+(?:balance|available))[^0-9]{0,20}([\d][\d,]*)/i },
+      { re: /(?:medallion|elite)\s+(?:status|member)\s*:?\s*([^\n]{3,40})/i },
+      { re: /(?:e-?credit|ecredit)s?[^$\d]{0,30}\$?([\d][\d,]*(?:\.\d{2})?)/i },
+      { re: /(?:upcoming|next)\s+(?:trip|flight)[^\n]{0,80}/i },
+    ];
+    for (const p of privatePatterns) {
+      const m = bodyText.match(p.re);
+      if (m) {
+        privateData = true;
+        snippet = m[0].trim().slice(0, 240);
+        break;
+      }
+    }
+
+    if (loginPath) {
+      return finish({ signed_in_detected: false, private_data_detected: false, failure_reason: 'login_required' });
+    }
+    if (marketingPath && !accountPath) {
+      return finish({ signed_in_detected: false, private_data_detected: false, failure_reason: 'marketing_page_only' });
+    }
+    return finish({
+      signed_in_detected: signedIn,
+      private_data_detected: privateData,
+      evidence_type: privateData ? 'dom_text' : null,
+      evidence_snippet: snippet,
+      failure_reason: signedIn ? (privateData ? null : 'signed_in_no_private_evidence') : 'login_required',
+    });
+  }
+
+  return finish({ error: `unsupported probe provider: ${provider}`, failure_reason: 'unsupported_provider' });
 }
 
 // Runs inside the page context — captures universal page evidence for sync.
