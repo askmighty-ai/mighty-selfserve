@@ -45,6 +45,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
         "Provider Reliability Scorecard",
         "Reliability percentages, failure reasons, and engineering attention queue",
     ),
+    (
+        "account-state",
+        "Account State (shadow)",
+        "Canonical AccountState projection — internal preview only",
+    ),
 ]
 
 
@@ -1027,3 +1032,64 @@ def render_provider_reliability_scorecard_page(scorecard: Any, *, trend_days: in
         f"</tr></thead><tbody>{provider_table}</tbody></table></div>"
     )
     return _admin_shell("provider-reliability-scorecard", "Provider Reliability Scorecard", body)
+
+
+def _state_badge(value: str, *, ok_values: set[str] | None = None) -> str:
+    ok_values = ok_values or set()
+    if value in ok_values:
+        cls = "badge-ok"
+    elif value in {"needs_login", "expired", "none", "low"}:
+        cls = "badge-err"
+    elif value in {"connecting", "partial", "expiring", "medium"}:
+        cls = "badge-warn"
+    else:
+        cls = "badge-muted"
+    return f'<span class="badge {cls}">{_he(value.replace("_", " "))}</span>'
+
+
+def render_account_state_page(states: list[Any]) -> str:
+    if not states:
+        table = '<tr><td colspan="12" class="muted">No account state rows yet.</td></tr>'
+    else:
+        rows = []
+        for state in states:
+            action = state.next_recommended_action
+            action_text = "—"
+            if action and action.kind != "none":
+                action_text = f"{action.kind}: {action.label}"
+            obs = ", ".join(state.observations_available[:6])
+            if len(state.observations_available) > 6:
+                obs += f" (+{len(state.observations_available) - 6})"
+            rows.append(
+                f"<tr>"
+                f"<td><strong>{_he(state.display_name)}</strong>"
+                f'<div class="muted" style="font-size:10px">{_he(state.provider)}</div></td>'
+                f"<td>{_state_badge(state.access_method)}</td>"
+                f"<td>{_state_badge(state.connection_state, ok_values={'connected'})}</td>"
+                f"<td>{_state_badge(state.session_health, ok_values={'healthy'})}</td>"
+                f"<td class='muted'>{_he(state.last_verified_at or '—')}</td>"
+                f"<td>{_state_badge(state.data_status, ok_values={'complete'})}</td>"
+                f"<td class='muted'>{_he(state.last_data_refresh or '—')}</td>"
+                f"<td class='muted' style='max-width:220px'>{_he(obs or '—')}</td>"
+                f"<td class='muted'>{_he(action_text)}</td>"
+                f"<td>{_state_badge(state.confidence.level, ok_values={'high'})}"
+                f'<div class="muted" style="font-size:10px">{state.confidence.score}/100</div></td>'
+                f"<td class='muted'>{_he(state.status_line)}</td>"
+                f"<td class='muted' style='font-size:10px'>{_he(state.updated_at)}</td>"
+                f"</tr>"
+            )
+        table = "".join(rows)
+
+    body = (
+        '<p class="lede">Shadow-mode preview of the canonical <code>AccountState</code> model '
+        "(see <code>docs/ACCOUNT_STATE.md</code>). Does not drive Home, Accounts, or the extension yet. "
+        "Rows recompute from persisted account data + pipeline stages on each page load.</p>"
+        '<div class="card"><h3>Per-account projection</h3>'
+        '<table><thead><tr>'
+        "<th>Provider</th><th>Access</th><th>Connection</th><th>Session</th>"
+        "<th>Last verified</th><th>Data</th><th>Last refresh</th>"
+        "<th>Observations</th><th>Next action</th><th>Confidence</th>"
+        "<th>Status line</th><th>Updated</th>"
+        f"</tr></thead><tbody>{table}</tbody></table></div>"
+    )
+    return _admin_shell("account-state", "Account State (shadow)", body)

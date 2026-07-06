@@ -817,6 +817,11 @@ def init_db():
             ensure_pipeline_tables(db)
         except Exception:
             pass
+        try:
+            from mighty.account_state import ensure_account_state_tables
+            ensure_account_state_tables(db)
+        except Exception:
+            pass
 
 init_db()
 
@@ -4939,6 +4944,11 @@ def decrypt_account_data(user_id: str, stored: str) -> dict:
         return json.loads(stored)
     except Exception:
         return {}
+
+
+from mighty.account_state import configure_account_state
+
+configure_account_state(decrypt_fn=decrypt_account_data)
 
 
 def _cached_decrypt_fn(uid: str, decrypt_fn):
@@ -15973,6 +15983,10 @@ def api_data_sync():
     db.commit()
     _log_privacy_event(user["id"], "data_synced", source=source, detail=f"{len(raw_text)} chars")
 
+    from mighty.account_state import safe_recompute_account_state
+
+    safe_recompute_account_state(db, user["id"], source)
+
     # Persist action items from this sync so they survive re-renders
     try:
         populate_action_items(user["id"], source, data)
@@ -20918,6 +20932,38 @@ def admin_provider_reliability_scorecard_page():
         scorecard,
         trend_days=TREND_WINDOW_DAYS,
     )
+
+
+@app.route("/admin/account-state")
+@require_admin
+def admin_account_state_page():
+    from mighty.account_state import recompute_account_state
+
+    uid = session["user_id"]
+    db = get_db()
+    sources = sorted(set(_admin_user_sources(uid)) | {
+        r["source"]
+        for r in db.execute(
+            "SELECT source FROM account_credentials WHERE user_id=? AND source != '_email'",
+            (uid,),
+        ).fetchall()
+    })
+    display_names = _provider_display_names()
+    category_map = _provider_category_map()
+    states = []
+    for source in sources:
+        states.append(
+            recompute_account_state(
+                db,
+                uid,
+                source,
+                decrypt_fn=decrypt_account_data,
+                display_names=display_names,
+                category_map=category_map,
+            )
+        )
+    states.sort(key=lambda s: s.display_name.lower())
+    return _admin_debug.render_account_state_page(states)
 
 
 @app.route("/admin/delta-evidence-audit")
