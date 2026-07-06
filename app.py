@@ -2294,15 +2294,6 @@ SITE_CONNECTORS: dict[str, list[dict]] = {
     #   paths      — ordered list of dot-notation paths to try
     "delta": [
         {
-            "key": "elite_status", "label": "Medallion Status",
-            "paths": [
-                "data.member.medallionStatus",
-                "member.medallionStatus",
-                "loyalty.tier",
-                "account.tier",
-            ],
-        },
-        {
             "key": "points_balance", "label": "SkyMiles Balance",
             "paths": [
                 "data.member.skymiles",
@@ -2311,6 +2302,7 @@ SITE_CONNECTORS: dict[str, list[dict]] = {
                 "member.miles",
                 "loyalty.miles",
                 "account.miles",
+                "smBalance",
             ],
         },
         {
@@ -2319,6 +2311,17 @@ SITE_CONNECTORS: dict[str, list[dict]] = {
                 "data.wallet.totalEcreditValue",
                 "wallet.totalEcreditValue",
                 "ecredits.totalValue",
+            ],
+        },
+        {
+            "key": "elite_status", "label": "Medallion Status",
+            "paths": [
+                "data.member.medallionStatus",
+                "member.medallionStatus",
+                "loyalty.tier",
+                "account.tier",
+                "medallionMemberDesc",
+                "medallionStatus",
             ],
         },
     ],
@@ -15931,6 +15934,23 @@ def api_data_sync():
         items=_normalized,
     )
 
+    _deterministic = None
+    if _pipeline_may_continue and raw_text.strip():
+        from mighty.deterministic_extraction import enrich_sync_items_from_evidence
+
+        _deterministic = enrich_sync_items_from_evidence(
+            source,
+            raw_text,
+            _normalized,
+            connector_fn=try_connector_paths,
+            post_filter_fn=_post_filter_fields,
+        )
+        if _deterministic.attempted and _deterministic.items:
+            _normalized = _deterministic.items
+            data["items"] = _normalized
+            _extraction = infer_extraction_status(_normalized, sync_status=data.get("sync_status", "ok"))
+            data["extraction_status"] = _extraction
+
     data_enc   = encrypt_account_data(user["id"], data)
 
     db = get_db()
@@ -16157,6 +16177,17 @@ def api_data_sync():
                             items=_normalized,
                             extraction_status=_extraction,
                             has_structured_extractor=_sync_has_connector,
+                            structured_fields=(
+                                _deterministic.normalized_fields
+                                if _deterministic and _deterministic.attempted
+                                else None
+                            ),
+                            extraction_attempted=bool(_deterministic and _deterministic.attempted),
+                            extraction_artifacts=(
+                                _deterministic.stage_artifacts
+                                if _deterministic and _deterministic.attempted
+                                else None
+                            ),
                         )
                         return
 
@@ -16271,6 +16302,17 @@ def api_data_sync():
             items=_normalized,
             extraction_status=_extraction,
             has_structured_extractor=source in SITE_CONNECTORS,
+            structured_fields=(
+                _deterministic.normalized_fields
+                if _deterministic and _deterministic.attempted
+                else None
+            ),
+            extraction_attempted=bool(_deterministic and _deterministic.attempted),
+            extraction_artifacts=(
+                _deterministic.stage_artifacts
+                if _deterministic and _deterministic.attempted
+                else None
+            ),
         )
 
     return jsonify({"ok": True, "source": source, "pipeline_run_id": _pipeline_run_id})
