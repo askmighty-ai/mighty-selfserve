@@ -20563,6 +20563,8 @@ def api_extension_amex_needs_login():
         }), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    from mighty.account_state import safe_recompute_account_state
+    safe_recompute_account_state(db, uid, AMEX_SOURCE)
     return jsonify({
         "ok": True,
         "source": AMEX_SOURCE,
@@ -20595,6 +20597,8 @@ def api_extension_amex_connected():
         }), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    from mighty.account_state import safe_recompute_account_state
+    safe_recompute_account_state(db, uid, AMEX_SOURCE)
     info = get_amex_connection_status(db, uid, decrypt_fn=decrypt_account_data)
     return jsonify({
         "ok": True,

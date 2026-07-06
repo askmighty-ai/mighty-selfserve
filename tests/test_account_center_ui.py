@@ -4,7 +4,7 @@ from mighty.account_center_ui import (
     PRIMARY_CONNECT,
     PRIMARY_LOGIN,
     PRIMARY_REFRESH,
-    PRIMARY_VIEW_BENEFITS,
+    PRIMARY_VIEW,
     TONE_ATTENTION,
     TONE_CONNECTED,
     TONE_LOGIN,
@@ -72,24 +72,24 @@ def _fmt(ts: str) -> str:
 
 class TestStatusTone:
     def test_needs_login_is_red_tone(self):
-        s = _state(connection_state=CONN_NEEDS_LOGIN, session_health=SESSION_EXPIRED)
+        s = _state(connection_state=CONN_NEEDS_LOGIN, session_health=SESSION_EXPIRED, last_verified_at=None)
         assert status_tone(s) == TONE_LOGIN
         assert status_label(s) == "Needs login"
 
-    def test_not_connected_is_gray_tone(self):
-        s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE)
-        assert status_tone(s) == TONE_NEVER
-        assert status_label(s) == "Not connected"
+    def test_not_connected_is_needs_login_tone(self):
+        s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE, last_verified_at=None)
+        assert status_tone(s) == TONE_LOGIN
+        assert status_label(s) == "Needs login"
 
     def test_connected_healthy_is_green(self):
         s = _state()
         assert status_tone(s) == TONE_CONNECTED
         assert status_label(s) == "Connected"
 
-    def test_connecting_is_attention(self):
-        s = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE)
+    def test_connecting_is_checking_account(self):
+        s = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None)
         assert status_tone(s) == TONE_ATTENTION
-        assert status_label(s) == "Connecting"
+        assert status_label(s) == "Checking account"
 
     def test_expired_session_on_connected_is_attention(self):
         s = _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED)
@@ -97,39 +97,30 @@ class TestStatusTone:
 
 
 class TestPrimaryAction:
-    def test_login_action(self):
+    def test_sign_in_action(self):
         s = _state(
             connection_state=CONN_NEEDS_LOGIN,
+            last_verified_at=None,
             next_recommended_action=RecommendedAction(
-                kind=ACTION_LOGIN, label="Log in", url="/credentials?connect=delta",
+                kind=ACTION_LOGIN, label="Sign in", url="/credentials?connect=delta",
             ),
         )
-        assert primary_action(s) == ("Login", PRIMARY_LOGIN)
+        assert primary_action(s) == ("Sign in", PRIMARY_LOGIN, False)
 
-    def test_connect_when_not_connected(self):
-        s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE)
-        assert primary_action(s) == ("Connect", PRIMARY_CONNECT)
+    def test_sign_in_when_not_connected(self):
+        s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE, last_verified_at=None)
+        assert primary_action(s) == ("Sign in", PRIMARY_LOGIN, False)
 
-    def test_refresh_when_healthy(self):
+    def test_refresh_when_partial(self):
         s = _state(data_status=DATA_PARTIAL)
-        assert primary_action(s) == ("Refresh", PRIMARY_REFRESH)
+        assert primary_action(s) == ("Refresh", PRIMARY_REFRESH, False)
 
-    def test_view_benefits_on_review(self):
-        s = _state(
-            data_status=DATA_PARTIAL,
-            confidence=Confidence(level=CONFIDENCE_LOW, score=40, factors=ConfidenceFactors()),
-            next_recommended_action=RecommendedAction(
-                kind=ACTION_REVIEW, label="Review", url="/account/delta",
-            ),
-        )
-        assert primary_action(s) == ("View Benefits", PRIMARY_VIEW_BENEFITS)
-
-    def test_view_benefits_when_complete(self):
+    def test_view_when_complete(self):
         s = _state(
             data_status=DATA_COMPLETE,
             next_recommended_action=RecommendedAction(kind=ACTION_NONE, label=""),
         )
-        assert primary_action(s) == ("View Benefits", PRIMARY_VIEW_BENEFITS)
+        assert primary_action(s) == ("View", PRIMARY_VIEW, False)
 
 
 class TestCardView:
@@ -145,7 +136,7 @@ class TestCardView:
 
     def test_sort_prioritizes_login(self):
         login = build_card_view(
-            _state(provider="a", display_name="Amex", connection_state=CONN_NEEDS_LOGIN),
+            _state(provider="a", display_name="Amex", connection_state=CONN_NEEDS_LOGIN, last_verified_at=None),
             fmt_relative=_fmt,
         )
         ok = build_card_view(
@@ -161,7 +152,7 @@ class TestSummary:
         cards = [
             build_card_view(_state(provider="a", display_name="A"), fmt_relative=_fmt),
             build_card_view(
-                _state(provider="b", display_name="B", connection_state=CONN_NEEDS_LOGIN),
+                _state(provider="b", display_name="B", connection_state=CONN_NEEDS_LOGIN, last_verified_at=None),
                 fmt_relative=_fmt,
             ),
         ]

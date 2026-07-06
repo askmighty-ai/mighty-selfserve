@@ -177,10 +177,14 @@ def persist_provider_state(
     iso_fn: Callable | None = None,
 ) -> None:
     """Write provider account state to encrypted blob + indexed columns."""
+    clear_login_sync = False
     if connection_status is not None:
         ad_data["connection_status"] = connection_status
         if iso_fn:
             ad_data["connection_status_at"] = iso_fn()
+        if connection_status == "connected" and ad_data.get("sync_status") == "login_required":
+            ad_data["sync_status"] = "ok"
+            clear_login_sync = True
     if extraction_status is not None:
         ad_data["extraction_status"] = extraction_status
     if data_source is not None:
@@ -193,6 +197,9 @@ def persist_provider_state(
     if connection_status is not None:
         sets.append("connection_status=?")
         params.append(connection_status)
+    if clear_login_sync:
+        sets.append("sync_status=?")
+        params.append("ok")
     if extraction_status is not None:
         sets.append("extraction_status=?")
         params.append(extraction_status)

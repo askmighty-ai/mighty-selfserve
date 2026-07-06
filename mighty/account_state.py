@@ -482,6 +482,8 @@ def _login_required_signals(
     connection_status: str | None,
     connection_stage: dict[str, Any] | None,
 ) -> bool:
+    if connection_status == CONN_CONNECTED:
+        return False
     if sync_status == "login_required":
         return True
     if connection_status in {CONN_NEEDS_LOGIN, "login_required"}:
@@ -530,7 +532,7 @@ def build_recommended_action(
     if connection_state == CONN_NEEDS_LOGIN:
         return RecommendedAction(
             kind=ACTION_LOGIN,
-            label="Log in",
+            label="Sign in",
             url=f"/credentials?connect={provider}",
             urgency=URGENCY_BLOCKER,
             reason="session_expired",
@@ -577,19 +579,30 @@ def build_status_line(
     session_health: str,
     last_data_refresh: str | None,
 ) -> str:
+    from mighty.user_copy import (
+        ACCOUNT_STATE_CHECKING,
+        ACCOUNT_STATE_CONNECTED,
+        ACCOUNT_STATE_LABELS,
+        ACCOUNT_STATE_NEEDS_LOGIN,
+        ACCOUNT_STATE_NO_DATA,
+    )
+
     parts: list[str] = []
     if connection_state == CONN_NEEDS_LOGIN:
-        parts.append("Needs login")
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN])
     elif connection_state == CONN_CONNECTING:
-        parts.append("Connecting")
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING])
     elif connection_state == CONN_NOT_CONNECTED:
-        parts.append("Not connected")
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN])
     elif data_status == DATA_COMPLETE:
-        parts.append("Up to date")
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED])
     elif data_status == DATA_PARTIAL:
-        parts.append("Partial")
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED])
     elif data_status == DATA_NONE:
-        parts.append("Connected" if connection_state == CONN_CONNECTED else "Waiting for data")
+        if connection_state == CONN_CONNECTED:
+            parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA])
+        else:
+            parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING])
 
     if last_data_refresh and data_status in {DATA_COMPLETE, DATA_PARTIAL}:
         verified = _parse_iso(last_data_refresh)

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from mighty.account_presentation import resolve_account_presentation
 from mighty.account_state import (
     ACCESS_API,
     ACCESS_BROWSER_SESSION,
@@ -38,6 +39,19 @@ from mighty.account_state import (
     AccountState,
 )
 
+from mighty.user_copy import (
+    ACCOUNT_STATE_CHECKING,
+    ACCOUNT_STATE_CONNECTED,
+    ACCOUNT_STATE_LABELS,
+    ACCOUNT_STATE_NEEDS_ATTENTION,
+    ACCOUNT_STATE_NEEDS_LOGIN,
+    ACCOUNT_STATE_NO_DATA,
+    CTA_CHECKING,
+    CTA_REFRESH,
+    CTA_SIGN_IN,
+    CTA_VIEW,
+)
+
 # ── Status tones (card accent colors) ───────────────────────────────────────
 TONE_CONNECTED = "connected"
 TONE_ATTENTION = "attention"
@@ -61,8 +75,13 @@ TONE_BG: dict[str, str] = {
 # ── Primary actions (future wiring via data-action-kind) ─────────────────────
 PRIMARY_CONNECT = "connect"
 PRIMARY_LOGIN = "login"
+PRIMARY_RECONNECT = "login"
 PRIMARY_REFRESH = "refresh"
-PRIMARY_VIEW_BENEFITS = "view_benefits"
+PRIMARY_VIEW = "view"
+PRIMARY_VIEW_BENEFITS = "view"
+PRIMARY_CHECKING = "checking"
+
+LINKABLE_ACTION_KINDS = frozenset({PRIMARY_LOGIN, PRIMARY_RECONNECT, PRIMARY_CONNECT})
 
 ACCESS_LABELS: dict[str, str] = {
     ACCESS_BROWSER_SESSION: "Extension",
@@ -118,38 +137,32 @@ class AccountCenterCardView:
     last_refresh_label: str
     primary_action: str
     primary_action_kind: str
+    primary_action_href: str | None
+    primary_action_external: bool
+    primary_action_disabled: bool
     status_line: str
 
 
 def status_tone(state: AccountState) -> str:
+    presentation = resolve_account_presentation(state)
+    key = presentation.key
+    if key == ACCOUNT_STATE_NEEDS_LOGIN:
+        return TONE_LOGIN
+    if key == ACCOUNT_STATE_CHECKING:
+        return TONE_ATTENTION
+    if key == ACCOUNT_STATE_NO_DATA:
+        return TONE_ATTENTION
+    if key == ACCOUNT_STATE_NEEDS_ATTENTION:
+        return TONE_ATTENTION
+    if key == ACCOUNT_STATE_CONNECTED:
+        return TONE_CONNECTED
     if state.connection_state == CONN_NOT_CONNECTED:
         return TONE_NEVER
-    if state.connection_state == CONN_NEEDS_LOGIN:
-        return TONE_LOGIN
-    if state.connection_state == CONN_CONNECTING:
-        return TONE_ATTENTION
-    if state.session_health in (SESSION_EXPIRING, SESSION_EXPIRED):
-        return TONE_ATTENTION
-    if state.connection_state == CONN_CONNECTED and state.data_status == DATA_NONE:
-        return TONE_ATTENTION
-    if state.confidence.level == CONFIDENCE_LOW and state.data_status == DATA_PARTIAL:
-        return TONE_ATTENTION
-    if state.connection_state == CONN_CONNECTED:
-        return TONE_CONNECTED
     return TONE_ATTENTION
 
 
 def status_label(state: AccountState) -> str:
-    tone = status_tone(state)
-    if tone == TONE_LOGIN:
-        return "Needs login"
-    if tone == TONE_NEVER:
-        return "Not connected"
-    if tone == TONE_ATTENTION:
-        if state.connection_state == CONN_CONNECTING:
-            return "Connecting"
-        return "Needs attention"
-    return "Connected"
+    return resolve_account_presentation(state).label
 
 
 def data_freshness_label(
@@ -174,30 +187,44 @@ def last_refresh_label(
     return fmt_relative(state.last_data_refresh)
 
 
-def primary_action(state: AccountState) -> tuple[str, str]:
-    """Return (button label, action kind) for the card CTA."""
-    action = state.next_recommended_action
-    if action:
-        kind = action.kind
-        if kind == ACTION_LOGIN:
-            return "Login", PRIMARY_LOGIN
-        if kind == ACTION_CONNECT:
-            return "Connect", PRIMARY_CONNECT
-        if kind == ACTION_OPEN_PROVIDER:
-            return "Connect", PRIMARY_CONNECT
-        if kind == ACTION_REVIEW:
-            return "View Benefits", PRIMARY_VIEW_BENEFITS
-        if kind == ACTION_WAIT:
-            return "Connect", PRIMARY_CONNECT
-    if state.connection_state == CONN_NOT_CONNECTED:
-        return "Connect", PRIMARY_CONNECT
-    if state.connection_state == CONN_NEEDS_LOGIN:
-        return "Login", PRIMARY_LOGIN
-    if state.connection_state == CONN_CONNECTED:
-        if state.data_status == DATA_COMPLETE:
-            return "View Benefits", PRIMARY_VIEW_BENEFITS
-        return "Refresh", PRIMARY_REFRESH
-    return "Connect", PRIMARY_CONNECT
+def primary_action(state: AccountState) -> tuple[str, str, bool]:
+    """Return (button label, action kind, disabled) for the card CTA."""
+    presentation = resolve_account_presentation(state)
+    if presentation.cta_disabled:
+        return presentation.cta_label, PRIMARY_CHECKING, True
+
+    label = presentation.cta_label
+    if presentation.key == ACCOUNT_STATE_NEEDS_LOGIN:
+        return label, PRIMARY_LOGIN, False
+    if presentation.key == ACCOUNT_STATE_CHECKING:
+        return label, PRIMARY_CHECKING, True
+    if presentation.key == ACCOUNT_STATE_NO_DATA:
+        return label, PRIMARY_REFRESH, False
+    if presentation.key == ACCOUNT_STATE_NEEDS_ATTENTION:
+        if label == CTA_SIGN_IN:
+            return label, PRIMARY_LOGIN, False
+        return label, PRIMARY_REFRESH, False
+    if label == CTA_VIEW:
+        return label, PRIMARY_VIEW, False
+    if label == CTA_REFRESH:
+        return label, PRIMARY_REFRESH, False
+    if label == CTA_CHECKING:
+        return label, PRIMARY_CHECKING, True
+    return label, PRIMARY_CONNECT, False
+
+
+def resolve_primary_action_href(
+    kind: str,
+    provider: str,
+    *,
+    provider_login_url: str | None = None,
+) -> tuple[str | None, bool]:
+    """Return (href, open_in_new_tab) for linkable CTAs; (None, False) for placeholders."""
+    if kind not in LINKABLE_ACTION_KINDS:
+        return None, False
+    if provider_login_url:
+        return provider_login_url, True
+    return f"/credentials?connect={provider}", False
 
 
 def build_card_view(
@@ -206,8 +233,12 @@ def build_card_view(
     icon: str = "🔗",
     color: str = "#f3f4f6",
     fmt_relative: Callable[[str], str],
+    provider_login_url: str | None = None,
 ) -> AccountCenterCardView:
-    label, kind = primary_action(state)
+    label, kind, disabled = primary_action(state)
+    href, external = resolve_primary_action_href(
+        kind, state.provider, provider_login_url=provider_login_url,
+    )
     return AccountCenterCardView(
         provider=state.provider,
         display_name=state.display_name,
@@ -222,6 +253,9 @@ def build_card_view(
         last_refresh_label=last_refresh_label(state, fmt_relative),
         primary_action=label,
         primary_action_kind=kind,
+        primary_action_href=href,
+        primary_action_external=external,
+        primary_action_disabled=disabled,
         status_line=state.status_line,
     )
 
@@ -242,13 +276,19 @@ def build_summary(cards: list[AccountCenterCardView]) -> AccountCenterSummary:
 def summary_headline(summary: AccountCenterSummary) -> str:
     parts = [f"{summary.total} account{'s' if summary.total != 1 else ''}"]
     if summary.connected:
-        parts.append(f"{summary.connected} connected")
+        parts.append(f"{summary.connected} {ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED].lower()}")
     if summary.needs_login:
         verb = "needs" if summary.needs_login == 1 else "need"
-        parts.append(f"{summary.needs_login} {verb} login")
+        parts.append(
+            f"{summary.needs_login} {verb} "
+            f"{ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN].lower()}"
+        )
     if summary.needs_attention:
         verb = "needs" if summary.needs_attention == 1 else "need"
-        parts.append(f"{summary.needs_attention} {verb} attention")
+        parts.append(
+            f"{summary.needs_attention} {verb} "
+            f"{ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION].lower()}"
+        )
     if summary.not_connected:
         parts.append(f"{summary.not_connected} not connected")
     return " · ".join(parts)
@@ -261,6 +301,29 @@ def sort_cards(cards: list[AccountCenterCardView]) -> list[AccountCenterCardView
         return (tone_order.get(card.status_tone, 9), card.display_name.lower())
 
     return sorted(cards, key=_key)
+
+
+def render_card_cta(card: AccountCenterCardView, escape: Callable[[Any], str]) -> str:
+    disabled_attr = ' disabled aria-disabled="true"' if card.primary_action_disabled else ""
+    if card.primary_action_href and not card.primary_action_disabled:
+        external = (
+            ' target="_blank" rel="noopener noreferrer"'
+            if card.primary_action_external
+            else ""
+        )
+        return (
+            f'<a href="{escape(card.primary_action_href)}" class="acc-card-cta"'
+            f'{external} data-provider="{escape(card.provider)}" '
+            f'data-action="{escape(card.primary_action_kind)}">'
+            f"{escape(card.primary_action)}</a>"
+        )
+    return (
+        f'<button type="button" class="acc-card-cta"'
+        f'{disabled_attr} '
+        f'data-provider="{escape(card.provider)}" '
+        f'data-action="{escape(card.primary_action_kind)}">'
+        f"{escape(card.primary_action)}</button>"
+    )
 
 
 def render_card(card: AccountCenterCardView, escape: Callable[[Any], str]) -> str:
@@ -294,10 +357,7 @@ def render_card(card: AccountCenterCardView, escape: Callable[[Any], str]) -> st
         f'<p class="acc-card-subline">{escape(card.status_line)}</p>'
         f'<footer class="acc-card-footer">'
         f'<span class="acc-card-refreshed">Last refresh · {escape(card.last_refresh_label)}</span>'
-        f'<button type="button" class="acc-card-cta" '
-        f'data-provider="{escape(card.provider)}" '
-        f'data-action="{escape(card.primary_action_kind)}">'
-        f"{escape(card.primary_action)}</button>"
+        f"{render_card_cta(card, escape)}"
         f"</footer></div></article>"
     )
 
@@ -358,8 +418,9 @@ ACCOUNT_CENTER_CSS = """
 .acc-card-subline{font-size:12px;color:#78716c;line-height:1.45;margin:0}
 .acc-card-footer{margin-top:auto;display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:4px;border-top:1px solid rgba(0,0,0,0.05)}
 .acc-card-refreshed{font-size:11px;color:#a8a29e;white-space:nowrap}
-.acc-card-cta{padding:8px 16px;border-radius:10px;font-size:13px;font-weight:600;border:none;background:#6366f1;color:#fff;cursor:pointer;transition:background 0.12s;white-space:nowrap;font-family:inherit}
-.acc-card-cta:hover{background:#4f46e5}
+.acc-card-cta{padding:8px 16px;border-radius:10px;font-size:13px;font-weight:600;border:none;background:#6366f1;color:#fff;cursor:pointer;transition:background 0.12s;white-space:nowrap;font-family:inherit;display:inline-block;text-decoration:none;text-align:center}
+.acc-card-cta:hover{background:#4f46e5;color:#fff;text-decoration:none}
+.acc-card-cta:disabled{opacity:0.55;cursor:not-allowed}
 .acc-empty{text-align:center;padding:80px 24px;background:#fff;border-radius:16px;border:1px dashed rgba(0,0,0,0.08)}
 .acc-empty-title{font-size:18px;font-weight:600;color:#1c1917;margin-bottom:8px}
 .acc-empty-body{font-size:14px;color:#78716c;margin-bottom:20px}
