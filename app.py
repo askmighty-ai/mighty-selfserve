@@ -20606,12 +20606,14 @@ def api_extension_amex_connected():
     from mighty.account_state import safe_recompute_account_state
     safe_recompute_account_state(db, uid, AMEX_SOURCE)
     info = get_amex_connection_status(db, uid, decrypt_fn=decrypt_account_data)
+    extraction_status = info.get("extraction_status")
     return jsonify({
         "ok": True,
         "source": AMEX_SOURCE,
         "adapter": extension_adapter.ADAPTER_ID,
         "connection_status": status,
-        "extraction_status": info.get("extraction_status"),
+        "extraction_status": extraction_status,
+        "refresh_queued": extraction_status == "pending",
         "label": amex_state_label(status),
     })
 

@@ -30,6 +30,7 @@ def report_session_verified(
 
     if source == "amex":
         from mighty.connection_state import amex_extension_connected
+        from mighty.pipeline_inspector import record_extension_session_verification
         from mighty.provider_account import mark_extraction_pending
 
         status = amex_extension_connected(
@@ -40,6 +41,12 @@ def report_session_verified(
         mark_extraction_pending(
             db, uid, source,
             encrypt_fn=encrypt_fn, decrypt_fn=decrypt_fn, iso_fn=iso_fn,
+        )
+        record_extension_session_verification(
+            db,
+            user_id=uid,
+            source=source,
+            verified_at=iso_fn(),
         )
         return status
 

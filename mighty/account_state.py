@@ -511,10 +511,10 @@ def _connection_state_from_signals(
         return CONN_NEEDS_LOGIN
     if sync_running and updating_source == provider:
         return CONN_CONNECTING
-    if connection_status in {CONNECTING, CONN_WAITING} or sync_status == "needs_first_visit":
-        return CONN_CONNECTING
     if connection_status == CONN_CONNECTED:
         return CONN_CONNECTED
+    if connection_status in {CONNECTING, CONN_WAITING} or sync_status == "needs_first_visit":
+        return CONN_CONNECTING
     if in_credentials or has_account_row:
         if sync_status == "ok" and not login_required:
             return CONN_CONNECTED
