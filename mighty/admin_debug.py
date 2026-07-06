@@ -1048,11 +1048,15 @@ def _state_badge(value: str, *, ok_values: set[str] | None = None) -> str:
 
 
 def render_account_state_page(states: list[Any]) -> str:
+    from mighty.account_presentation import attach_presentation_debug, resolve_account_presentation_with_debug
+
     if not states:
-        table = '<tr><td colspan="12" class="muted">No account state rows yet.</td></tr>'
+        table = '<tr><td colspan="15" class="muted">No account state rows yet.</td></tr>'
     else:
         rows = []
         for state in states:
+            _presentation, debug = resolve_account_presentation_with_debug(state)
+            attach_presentation_debug(state, debug)
             action = state.next_recommended_action
             action_text = "—"
             if action and action.kind != "none":
@@ -1060,6 +1064,7 @@ def render_account_state_page(states: list[Any]) -> str:
             obs = ", ".join(state.observations_available[:6])
             if len(state.observations_available) > 6:
                 obs += f" (+{len(state.observations_available) - 6})"
+            ignored = ", ".join(state.ignored_stale_signals) if state.ignored_stale_signals else "—"
             rows.append(
                 f"<tr>"
                 f"<td><strong>{_he(state.display_name)}</strong>"
@@ -1075,6 +1080,9 @@ def render_account_state_page(states: list[Any]) -> str:
                 f"<td>{_state_badge(state.confidence.level, ok_values={'high'})}"
                 f'<div class="muted" style="font-size:10px">{state.confidence.score}/100</div></td>'
                 f"<td class='muted'>{_he(state.status_line)}</td>"
+                f"<td class='muted' style='font-size:11px'>{_he(state.why_state or '—')}</td>"
+                f"<td class='muted' style='font-size:11px'>{_he(state.winning_signal or '—')}</td>"
+                f"<td class='muted' style='font-size:11px'>{_he(ignored)}</td>"
                 f"<td class='muted' style='font-size:10px'>{_he(state.updated_at)}</td>"
                 f"</tr>"
             )
@@ -1082,14 +1090,15 @@ def render_account_state_page(states: list[Any]) -> str:
 
     body = (
         '<p class="lede">Shadow-mode preview of the canonical <code>AccountState</code> model '
-        "(see <code>docs/ACCOUNT_STATE.md</code>). Does not drive Home, Accounts, or the extension yet. "
-        "Rows recompute from persisted account data + pipeline stages on each page load.</p>"
+        "(see <code>docs/ACCOUNT_STATE.md</code>). Presentation debug columns explain "
+        "<code>resolve_account_presentation</code> decisions.</p>"
         '<div class="card"><h3>Per-account projection</h3>'
         '<table><thead><tr>'
         "<th>Provider</th><th>Access</th><th>Connection</th><th>Session</th>"
         "<th>Last verified</th><th>Data</th><th>Last refresh</th>"
         "<th>Observations</th><th>Next action</th><th>Confidence</th>"
-        "<th>Status line</th><th>Updated</th>"
+        "<th>Status line</th><th>why_state</th><th>winning_signal</th>"
+        "<th>ignored_stale_signals</th><th>Updated</th>"
         f"</tr></thead><tbody>{table}</tbody></table></div>"
     )
     return _admin_shell("account-state", "Account State (shadow)", body)

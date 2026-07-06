@@ -247,6 +247,13 @@ def test_api_account_status_dashboard_and_extension_consistent(client):
     by_source = {a["source"]: a for a in ext_data["accounts"]}
     assert by_source["amex"]["status"] == NEEDS_LOGIN
     assert by_source["pa_utilities"]["status"] == UPDATING
+    assert ext_data["summary"]["access_loop"]["needs_sign_in"] == 1
+
+    from mighty.user_copy import ACCOUNT_STATE_LABELS
+
+    for account in ext_data["accounts"]:
+        assert account["presentation_label"] in ACCOUNT_STATE_LABELS.values()
+        assert account["presentation_key"] in ACCOUNT_STATE_LABELS
     assert ext_data["summary"]["headline"] == "Mighty is updating your accounts"
     assert "needs sign in" in ext_data["summary"]["subline"]
     assert ext_data["summary"]["access_loop"]["needs_sign_in"] == 1

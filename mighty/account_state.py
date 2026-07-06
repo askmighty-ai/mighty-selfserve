@@ -138,6 +138,12 @@ class AccountState:
     is_actionable: bool
     updated_at: str
     version: int = ACCOUNT_STATE_VERSION
+    sync_status: str | None = None
+    extraction_status: str | None = None
+    # Admin-only presentation debug (not persisted to account_state table)
+    why_state: str | None = field(default=None, compare=False, repr=False)
+    winning_signal: str | None = field(default=None, compare=False, repr=False)
+    ignored_stale_signals: list[str] = field(default_factory=list, compare=False, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -255,24 +261,23 @@ def session_health_from_verified_at(
     login_required: bool,
     access_method: str,
 ) -> str:
-    if login_required:
-        return SESSION_EXPIRED
     if access_method == ACCESS_MANUAL:
         return SESSION_UNKNOWN
-    if not last_verified_at:
-        return SESSION_UNKNOWN
-    verified = _parse_iso(last_verified_at)
-    if not verified:
-        return SESSION_UNKNOWN
-    if verified.tzinfo is None:
-        verified = verified.replace(tzinfo=timezone.utc)
-    age = datetime.now(timezone.utc) - verified
-    healthy_hours, expiring_hours = _session_ttl_hours(provider)
-    if age <= timedelta(hours=healthy_hours):
-        return SESSION_HEALTHY
-    if age <= timedelta(hours=expiring_hours):
-        return SESSION_EXPIRING
-    return SESSION_EXPIRED
+    if last_verified_at:
+        verified = _parse_iso(last_verified_at)
+        if verified:
+            if verified.tzinfo is None:
+                verified = verified.replace(tzinfo=timezone.utc)
+            healthy_hours, expiring_hours = _session_ttl_hours(provider)
+            age = datetime.now(timezone.utc) - verified
+            if age <= timedelta(hours=healthy_hours):
+                return SESSION_HEALTHY
+            if age <= timedelta(hours=expiring_hours):
+                return SESSION_EXPIRING
+            return SESSION_EXPIRED
+    if login_required:
+        return SESSION_EXPIRED
+    return SESSION_UNKNOWN
 
 
 def _session_factor(session_health: str) -> int:
@@ -481,8 +486,25 @@ def _login_required_signals(
     sync_status: str,
     connection_status: str | None,
     connection_stage: dict[str, Any] | None,
+    last_verified_at: str | None = None,
+    last_data_refresh: str | None = None,
+    provider: str = "",
+    has_usable_data: bool = False,
 ) -> bool:
+    from mighty.account_presentation import (
+        is_recent_data_refresh,
+        is_recent_session_verification,
+    )
+
+    recently_verified = is_recent_session_verification(
+        last_verified_at, provider=provider,
+    )
+    recent_data = is_recent_data_refresh(last_data_refresh, provider=provider)
+    if recently_verified or (recent_data and has_usable_data):
+        return False
     if connection_status == CONN_CONNECTED:
+        return False
+    if connection_stage and connection_stage.get("status") == StageStatus.SUCCESS.value:
         return False
     if sync_status == "login_required":
         return True
@@ -506,12 +528,24 @@ def _connection_state_from_signals(
     updating_source: str | None,
     provider: str,
     has_account_row: bool,
+    last_verified_at: str | None = None,
+    last_data_refresh: str | None = None,
+    has_usable_data: bool = False,
 ) -> str:
-    if login_required:
+    from mighty.account_presentation import (
+        is_recent_data_refresh,
+        is_recent_session_verification,
+    )
+
+    recently_verified = is_recent_session_verification(
+        last_verified_at, provider=provider,
+    )
+    recent_data = is_recent_data_refresh(last_data_refresh, provider=provider)
+    if login_required and not recently_verified and not (recent_data and has_usable_data):
         return CONN_NEEDS_LOGIN
     if sync_running and updating_source == provider:
         return CONN_CONNECTING
-    if connection_status == CONN_CONNECTED:
+    if connection_status == CONN_CONNECTED or recently_verified:
         return CONN_CONNECTED
     if connection_status in {CONNECTING, CONN_WAITING} or sync_status == "needs_first_visit":
         return CONN_CONNECTING
@@ -680,35 +714,10 @@ def project_account_state(
         data_source = normalize_data_source(latest_run["data_source"]) or data_source
 
     access_method = access_method_from_data_source(data_source)
-    login_required = _login_required_signals(
-        sync_status=sync_status,
-        connection_status=connection_status,
-        connection_stage=connection_stage,
-    )
 
     last_verified_at = _latest_successful_connection_verification(db, user_id, provider)
     if connection_stage and connection_stage.get("status") == StageStatus.SUCCESS.value:
         last_verified_at = connection_stage.get("finished_at") or last_verified_at
-
-    session_health = session_health_from_verified_at(
-        provider=provider,
-        last_verified_at=last_verified_at,
-        login_required=login_required,
-        access_method=access_method,
-    )
-
-    sync_running = bool(user_row and user_row["sync_running"])
-    updating_source = user_row["sync_current_source"] if user_row else None
-    connection_state = _connection_state_from_signals(
-        in_credentials=bool(cred_row),
-        sync_status=sync_status,
-        connection_status=connection_status,
-        login_required=login_required,
-        sync_running=sync_running,
-        updating_source=updating_source,
-        provider=provider,
-        has_account_row=bool(ad_row),
-    )
 
     trusted_keys, trusted_finished_at = _latest_trusted_observations(db, user_id, provider)
     if not trusted_keys:
@@ -731,6 +740,44 @@ def project_account_state(
     last_data_refresh = ad_row["synced_at"] if ad_row and ad_row["synced_at"] else None
     if not last_data_refresh:
         last_data_refresh = trusted_finished_at
+
+    has_usable_data = bool(observations_available) or field_count > 0 or data_status in {
+        DATA_PARTIAL,
+        DATA_COMPLETE,
+    }
+
+    login_required = _login_required_signals(
+        sync_status=sync_status,
+        connection_status=connection_status,
+        connection_stage=connection_stage,
+        last_verified_at=last_verified_at,
+        last_data_refresh=last_data_refresh,
+        provider=provider,
+        has_usable_data=has_usable_data,
+    )
+
+    session_health = session_health_from_verified_at(
+        provider=provider,
+        last_verified_at=last_verified_at,
+        login_required=login_required,
+        access_method=access_method,
+    )
+
+    sync_running = bool(user_row and user_row["sync_running"])
+    updating_source = user_row["sync_current_source"] if user_row else None
+    connection_state = _connection_state_from_signals(
+        in_credentials=bool(cred_row),
+        sync_status=sync_status,
+        connection_status=connection_status,
+        login_required=login_required,
+        sync_running=sync_running,
+        updating_source=updating_source,
+        provider=provider,
+        has_account_row=bool(ad_row),
+        last_verified_at=last_verified_at,
+        last_data_refresh=last_data_refresh,
+        has_usable_data=has_usable_data,
+    )
 
     validation_pct = _latest_validation_ratio(db, user_id, provider)
     provider_prior = _provider_prior_score(db, provider)
@@ -771,6 +818,8 @@ def project_account_state(
     if not resolved_name:
         resolved_name = provider.replace("_", " ").title()
 
+    extraction_status = (ad_row["extraction_status"] if ad_row else "") or None
+
     return AccountState(
         user_id=user_id,
         provider=provider,
@@ -790,6 +839,8 @@ def project_account_state(
         is_actionable=is_actionable,
         updated_at=utc_now_iso(),
         version=ACCOUNT_STATE_VERSION,
+        sync_status=sync_status,
+        extraction_status=extraction_status or None,
     )
 
 
@@ -902,6 +953,8 @@ def load_account_state(db: Any, user_id: str, provider: str) -> AccountState | N
         is_actionable=bool(payload.get("is_actionable")),
         updated_at=payload.get("updated_at", utc_now_iso()),
         version=int(payload.get("version", ACCOUNT_STATE_VERSION)),
+        sync_status=payload.get("sync_status"),
+        extraction_status=payload.get("extraction_status"),
     )
 
 

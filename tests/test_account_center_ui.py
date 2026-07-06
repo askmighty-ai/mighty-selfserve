@@ -1,5 +1,7 @@
 """Unit tests for Account Connection Center presentation layer."""
 
+from datetime import datetime, timedelta, timezone
+
 from mighty.account_center_ui import (
     ACCOUNT_CENTER_CSS,
     PRIMARY_FIX,
@@ -31,6 +33,7 @@ from mighty.account_state import (
     DATA_PARTIAL,
     SESSION_EXPIRED,
     SESSION_HEALTHY,
+    SESSION_UNKNOWN,
     AccountState,
     Confidence,
     ConfidenceFactors,
@@ -46,6 +49,7 @@ from mighty.user_copy import (
 
 
 def _state(**kwargs) -> AccountState:
+    now = datetime.now(timezone.utc)
     defaults = dict(
         user_id="u1",
         provider="delta",
@@ -54,19 +58,73 @@ def _state(**kwargs) -> AccountState:
         access_method=ACCESS_BROWSER_SESSION,
         connection_state=CONN_CONNECTED,
         session_health=SESSION_HEALTHY,
-        last_verified_at="2026-07-01T00:00:00+00:00",
+        last_verified_at=(now - timedelta(hours=1)).isoformat(),
         data_status=DATA_COMPLETE,
-        last_data_refresh="2026-07-05T00:00:00+00:00",
+        last_data_refresh=(now - timedelta(minutes=30)).isoformat(),
         observations_available=["miles_balance", "tier_status"],
         field_count=2,
         next_recommended_action=None,
         confidence=Confidence(level="high", score=90, factors=ConfidenceFactors()),
         status_line="Up to date · Updated today",
         is_actionable=False,
-        updated_at="2026-07-06T00:00:00+00:00",
+        updated_at=(now - timedelta(minutes=5)).isoformat(),
     )
     defaults.update(kwargs)
     return AccountState(**defaults)
+
+
+def _login_state(**kwargs) -> AccountState:
+    return _state(
+        connection_state=CONN_NEEDS_LOGIN,
+        session_health=SESSION_EXPIRED,
+        last_verified_at=None,
+        last_data_refresh=None,
+        observations_available=[],
+        field_count=0,
+        data_status=DATA_NONE,
+        sync_status="login_required",
+        **kwargs,
+    )
+
+
+def _not_connected_state(**kwargs) -> AccountState:
+    return _state(
+        connection_state=CONN_NOT_CONNECTED,
+        session_health=SESSION_UNKNOWN,
+        last_verified_at=None,
+        last_data_refresh=None,
+        observations_available=[],
+        field_count=0,
+        data_status=DATA_NONE,
+        **kwargs,
+    )
+
+
+def _connecting_state(**kwargs) -> AccountState:
+    return _state(
+        connection_state=CONN_CONNECTING,
+        session_health=SESSION_UNKNOWN,
+        last_verified_at=None,
+        last_data_refresh=None,
+        observations_available=[],
+        field_count=0,
+        data_status=DATA_NONE,
+        updated_at=(datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),
+        **kwargs,
+    )
+
+
+def _attention_state(**kwargs) -> AccountState:
+    return _state(
+        session_health=SESSION_EXPIRED,
+        connection_state=CONN_CONNECTED,
+        last_verified_at=None,
+        last_data_refresh=None,
+        observations_available=[],
+        field_count=0,
+        data_status=DATA_NONE,
+        **kwargs,
+    )
 
 
 def _fmt(ts: str) -> str:
@@ -95,12 +153,22 @@ class TestStatusTone:
         assert status_label(s) == "Updating"
 
     def test_expired_session_on_connected_is_attention(self):
-        s = _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED)
+        s = _attention_state()
         assert status_tone(s) == TONE_ATTENTION
+        assert status_label(s) == "Needs attention"
 
 
 class TestPrimaryAction:
     def test_sign_in_action(self):
+        s = _login_state()
+        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
+
+    def test_sign_in_when_not_connected(self):
+        s = _not_connected_state()
+        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
+
+    def test_updating_is_disabled(self):
+        s = _connecting_state()
         s = _state(
             connection_state=CONN_NEEDS_LOGIN,
             last_verified_at=None,
@@ -159,10 +227,7 @@ class TestSummary:
     def test_summary_headline(self):
         cards = [
             build_card_view(_state(provider="a", display_name="A"), fmt_relative=_fmt),
-            build_card_view(
-                _state(provider="b", display_name="B", connection_state=CONN_NEEDS_LOGIN, last_verified_at=None),
-                fmt_relative=_fmt,
-            ),
+            build_card_view(_login_state(provider="b", display_name="B"), fmt_relative=_fmt),
         ]
         summary = build_summary(cards)
         assert summary.total == 2
