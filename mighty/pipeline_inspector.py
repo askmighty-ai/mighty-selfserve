@@ -778,11 +778,13 @@ def record_structured_stage(
     has_extractor: bool,
     source_label: str = "connector",
     attempted: bool = True,
+    artifacts_extra: dict[str, Any] | None = None,
 ) -> None:
     if not run_id:
         return
     now = utc_now_iso()
     field_list = fields or []
+    extra = artifacts_extra or {}
     if field_list:
         record_stage(
             db,
@@ -795,6 +797,7 @@ def record_structured_stage(
                 "field_count": len(field_list),
                 "field_keys": [f.get("key") for f in field_list if f.get("key")][:20],
                 "source_label": source_label,
+                **extra,
             },
         )
         return
@@ -1129,41 +1132,56 @@ def finalize_sync_without_discovery(
     extraction_status: str | None,
     has_structured_extractor: bool,
     structured_fields: list[dict[str, Any]] | None = None,
+    extraction_attempted: bool = False,
+    extraction_artifacts: dict[str, Any] | None = None,
 ) -> None:
     if not run_id:
         return
-    record_structured_stage(
-        db,
-        run_id,
-        fields=structured_fields or [],
-        has_extractor=has_structured_extractor,
-        attempted=False,
-    )
+    meaningful = _meaningful_item_keys(items)
+    if extraction_attempted:
+        record_structured_stage(
+            db,
+            run_id,
+            fields=structured_fields or [],
+            has_extractor=has_structured_extractor,
+            attempted=True,
+            source_label="deterministic",
+            artifacts_extra=extraction_artifacts,
+        )
+    else:
+        record_structured_stage(
+            db,
+            run_id,
+            fields=structured_fields or [],
+            has_extractor=has_structured_extractor,
+            attempted=False,
+        )
     record_intelligent_stage(db, run_id, enabled=False, raw_field_count=0)
+    fields_in = len(structured_fields or []) if extraction_attempted else len(items or [])
     record_validation_stage(
         db,
         run_id,
-        fields_in=len(items or []),
-        fields_out=len(_meaningful_item_keys(items)),
-        auto_enabled_count=len(_meaningful_item_keys(items)),
-        failure_reason=None if _meaningful_item_keys(items) else FAIL_NO_TRUSTED_OBSERVATIONS,
+        fields_in=fields_in,
+        fields_out=len(meaningful),
+        auto_enabled_count=len(meaningful),
+        failure_reason=None if meaningful else FAIL_NO_TRUSTED_OBSERVATIONS,
     )
     trusted_status, trusted_reason = record_trusted_observations_stage(
         db,
         run_id,
         trusted_items=items,
-        discovered_field_count=0,
-        enabled_field_count=len(_meaningful_item_keys(items)),
+        discovered_field_count=len(structured_fields or []) if extraction_attempted else 0,
+        enabled_field_count=len(meaningful),
         extraction_status=extraction_status,
-        items_written=len(_meaningful_item_keys(items)),
+        items_written=len(meaningful),
     )
     finalize_pipeline_from_save(
         db,
         run_id,
         trusted_status=trusted_status,
         trusted_reason=trusted_reason,
-        validation_failed=not _meaningful_item_keys(items),
-        validation_reason=FAIL_NO_TRUSTED_OBSERVATIONS if not _meaningful_item_keys(items) else None,
+        validation_failed=not meaningful,
+        validation_reason=FAIL_NO_TRUSTED_OBSERVATIONS if not meaningful else None,
     )
 
 
