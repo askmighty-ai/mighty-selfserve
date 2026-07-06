@@ -333,6 +333,8 @@ def render_page_body(
 
 
 ACCOUNT_CENTER_CSS = """
+/* BASE_CSS pins .app-shell to 100vh + overflow:hidden; scroll main content instead. */
+.main-content{height:100vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .page{max-width:960px;margin:0 auto;padding:32px 24px 64px}
 .page-header-text h1{font-size:26px;font-weight:700;color:#1c1917;letter-spacing:-0.02em}
 .acc-hero{margin-bottom:40px}
