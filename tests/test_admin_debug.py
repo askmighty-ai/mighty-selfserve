@@ -13,7 +13,7 @@ ADMIN_PAGES = [
     "/admin/discovery-cache", "/admin/ai-cache", "/admin/sync-history", "/admin/sync-timeline",
     "/admin/replay-discovery", "/admin/pipeline-runs", "/admin/coverage",
     "/admin/recommendation-unlocks", "/admin/capture-capability",
-    "/admin/provider-benchmark",
+    "/admin/provider-benchmark", "/admin/provider-reliability-scorecard",
 ]
 
 
