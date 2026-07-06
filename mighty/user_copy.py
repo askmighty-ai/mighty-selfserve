@@ -28,6 +28,30 @@ DASHBOARD_ROLE_LINE = "The dashboard is your control center — it shows results
 MANUAL_STEP_LINE = "Login is the only thing you do manually. Everything else is automatic."
 NEEDS_LOGIN_EXPLAINER = "Needs login means: open the provider in Chrome and sign in."
 
+# ── Shared account presentation states (Account Center + extension popup) ─────
+ACCOUNT_STATE_NEEDS_LOGIN = "needs_login"
+ACCOUNT_STATE_CHECKING = "checking_account"
+ACCOUNT_STATE_CONNECTED = "connected"
+ACCOUNT_STATE_NEEDS_ATTENTION = "needs_attention"
+ACCOUNT_STATE_NO_DATA = "no_data_yet"
+
+ACCOUNT_STATE_LABELS: dict[str, str] = {
+    ACCOUNT_STATE_NEEDS_LOGIN: "Needs login",
+    ACCOUNT_STATE_CHECKING: "Checking account",
+    ACCOUNT_STATE_CONNECTED: "Connected",
+    ACCOUNT_STATE_NEEDS_ATTENTION: "Needs attention",
+    ACCOUNT_STATE_NO_DATA: "No data yet",
+}
+
+CTA_SIGN_IN = "Sign in"
+CTA_CHECKING = "Checking…"
+CTA_VIEW = "View"
+CTA_REFRESH = "Refresh"
+CTA_RETRY = "Retry"
+
+EXT_ACCOUNT_NEEDS_LOGIN_HINT = "Sign in to refresh this account"
+EXT_ACCOUNT_CHECKING_HINT = "Checking your account…"
+
 # ── Activity model (shared stages) ────────────────────────────────────────────
 ACTIVITY_WATCHING = "watching"
 ACTIVITY_UPDATING = "updating"
@@ -53,11 +77,11 @@ STATUS_LABEL_WAITING = ACTIVITY_LABELS[ACTIVITY_WAITING]
 STATUS_LABEL_ERROR = ACTIVITY_LABELS[ACTIVITY_ERROR]
 
 STATUS_LABELS: dict[str, str] = {
-    "up_to_date": STATUS_LABEL_UPDATED,
-    "updating": STATUS_LABEL_UPDATING,
-    "needs_login": STATUS_LABEL_NEEDS_LOGIN,
-    "waiting_for_extension": STATUS_LABEL_WAITING,
-    "error": STATUS_LABEL_ERROR,
+    "up_to_date": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED],
+    "updating": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
+    "needs_login": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN],
+    "waiting_for_extension": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
+    "error": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],
 }
 
 # ── Worker popup copy ─────────────────────────────────────────────────────────
@@ -78,7 +102,7 @@ WORKER_LAST_COMPLETED_PREFIX = "Last completed"
 WORKER_NEXT_UPDATE_PREFIX = "Next update in"
 WORKER_ACCOUNTS_UPDATED = "{n} account{s} updated"
 WORKER_ACCOUNTS_UPDATED_PARTIAL = "{ok} of {total} accounts updated"
-WORKER_NEEDS_LOGIN_SUBLINE = NEEDS_LOGIN_EXPLAINER
+WORKER_NEEDS_LOGIN_SUBLINE = EXT_ACCOUNT_NEEDS_LOGIN_HINT
 
 # ── Extension / worker setup ────────────────────────────────────────────────────
 EXT_PRODUCT_NAME = "Mighty Worker"
@@ -301,8 +325,8 @@ FAILURE_ACTIONS: dict[str, tuple[str, str]] = {
 }
 
 FAILURE_HINTS: dict[str, str] = {
-    "login_required": NEEDS_LOGIN_EXPLAINER,
-    "login_wall": NEEDS_LOGIN_EXPLAINER,
+    "login_required": EXT_ACCOUNT_NEEDS_LOGIN_HINT,
+    "login_wall": EXT_ACCOUNT_NEEDS_LOGIN_HINT,
     "timeout": "Site took too long — will retry on the next automatic update",
     "no_data": "Could not read account data",
     "domain_unreachable": "Site unreachable",
@@ -543,6 +567,14 @@ def api_copy_bundle() -> dict:
         },
         "activity_labels": ACTIVITY_LABELS,
         "status_labels": STATUS_LABELS,
+        "account_state_labels": ACCOUNT_STATE_LABELS,
+        "account_state_ctas": {
+            ACCOUNT_STATE_NEEDS_LOGIN: CTA_SIGN_IN,
+            ACCOUNT_STATE_CHECKING: CTA_CHECKING,
+            ACCOUNT_STATE_CONNECTED: CTA_VIEW,
+            ACCOUNT_STATE_NEEDS_ATTENTION: CTA_RETRY,
+            ACCOUNT_STATE_NO_DATA: CTA_RETRY,
+        },
         "worker": {
             "name": WORKER_NAME,
             "subtitle_running": WORKER_SUBTITLE_RUNNING,
@@ -553,6 +585,8 @@ def api_copy_bundle() -> dict:
             "open_dashboard": WORKER_OPEN_DASHBOARD,
             "not_updated_yet": WORKER_NOT_UPDATED_YET,
             "needs_login_subline": WORKER_NEEDS_LOGIN_SUBLINE,
+            "account_needs_login_hint": EXT_ACCOUNT_NEEDS_LOGIN_HINT,
+            "account_checking_hint": EXT_ACCOUNT_CHECKING_HINT,
         },
         "failure_hints": FAILURE_HINTS,
         "failure_icons": FAILURE_ICONS,

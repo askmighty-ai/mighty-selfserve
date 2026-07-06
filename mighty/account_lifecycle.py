@@ -185,8 +185,12 @@ def resolve_account_lifecycle(
     sync_status = (account.sync_status or "ok") if account else ""
 
     if in_credentials or account:
-        # 2. Needs login
-        if sync_status == "login_required" or conn == CONN_NEEDS_LOGIN:
+        # 2. Needs login — but not when extension already verified a session
+        if conn == CONN_NEEDS_LOGIN:
+            return _lifecycle(
+                NEEDS_LOGIN, src_label, synced_at, field_count,
+            )
+        if sync_status == "login_required" and conn != CONN_CONNECTED:
             return _lifecycle(
                 NEEDS_LOGIN, src_label, synced_at, field_count,
             )

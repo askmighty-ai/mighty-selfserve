@@ -23,8 +23,11 @@ from mighty.account_lifecycle import (
     AccountLifecycle,
     resolve_account_lifecycle,
 )
-from mighty.provider_account import ProviderAccount, infer_extraction_status, load_provider_account
+from mighty.account_presentation import resolve_presentation_from_status_signals
+from mighty.provider_account import ProviderAccount, infer_extraction_status, load_provider_account, has_normalized_data
 from mighty.user_copy import (
+    ACCOUNT_STATE_LABELS,
+    CTA_SIGN_IN,
     FAILURE_HINTS,
     LIFECYCLE_CTAS,
     STATUS_LABELS,
@@ -68,6 +71,8 @@ class AccountStatus:
     source: str
     display_name: str
     status: str
+    presentation_key: str
+    presentation_label: str
     last_successful_sync_at: str | None
     current_attempt_at: str | None
     last_error: str | None
@@ -79,7 +84,9 @@ class AccountStatus:
             "source": self.source,
             "display_name": self.display_name,
             "status": self.status,
-            "status_label": STATUS_LABELS.get(self.status, self.status),
+            "status_label": self.presentation_label,
+            "presentation_key": self.presentation_key,
+            "presentation_label": self.presentation_label,
             "status_color": _STATUS_COLORS.get(self.status, "#6b7280"),
             "last_successful_sync_at": self.last_successful_sync_at,
             "current_attempt_at": self.current_attempt_at,
@@ -126,12 +133,23 @@ def resolve_canonical_status(
     *,
     source: str,
     updating_source: str | None,
+    connection_status: str | None = None,
 ) -> str:
     """Map lifecycle + sync signals to a canonical status.
 
     needs_login always wins over updating for the same account so a login wall
-    is never masked by an in-progress sync queue.
+    is never masked by an in-progress sync queue — unless the extension already
+    verified an active browser session.
     """
+    conn = connection_status or ""
+    if conn == "connected":
+        if lifecycle.state == LC_SYNCED:
+            return UP_TO_DATE
+        if updating_source and updating_source == source:
+            return UPDATING
+        if sync_status == "no_data":
+            return ERROR
+        return UP_TO_DATE
     if lifecycle.state == LC_NEEDS_LOGIN or sync_status == "login_required":
         return NEEDS_LOGIN
     if updating_source and updating_source == source:
@@ -151,9 +169,10 @@ def _user_action_for_status(
     *,
     login_url: str,
     connect_url: str,
+    presentation_cta: str | None = None,
 ) -> tuple[str | None, str | None]:
-    if status == NEEDS_LOGIN:
-        return lifecycle.cta_label or LIFECYCLE_CTAS["needs_login"], login_url or None
+    if presentation_cta == CTA_SIGN_IN or status == NEEDS_LOGIN:
+        return presentation_cta or lifecycle.cta_label or CTA_SIGN_IN, login_url or None
     if status == WAITING_FOR_EXTENSION:
         return lifecycle.cta_label or LIFECYCLE_CTAS["waiting_for_extension"], connect_url
     if status == ERROR:
@@ -173,12 +192,15 @@ def build_account_status(
     login_url: str = "",
     connect_url: str = "",
     failure_reason: str | None = None,
+    connection_status: str | None = None,
+    last_verified_at: str | None = None,
 ) -> AccountStatus:
     canonical = resolve_canonical_status(
         lifecycle,
         sync_status,
         source=source,
         updating_source=updating_source,
+        connection_status=connection_status,
     )
     synced_at = account.synced_at if account else None
     last_error = None
@@ -188,20 +210,35 @@ def build_account_status(
     elif canonical == NEEDS_LOGIN:
         last_error = _FAILURE_MESSAGES.get("login_required")
 
+    has_meaningful = has_normalized_data(account.normalized_fields if account else None)
+    presentation = resolve_presentation_from_status_signals(
+        provider=source,
+        connection_status=connection_status,
+        sync_status=sync_status,
+        lifecycle_state=lifecycle.state,
+        has_meaningful_data=has_meaningful,
+        last_verified_at=last_verified_at,
+        is_updating=canonical == UPDATING,
+        sync_status_error=failure_reason,
+    )
+
     action_label, action_url = _user_action_for_status(
         canonical,
         lifecycle,
         login_url=login_url,
         connect_url=connect_url,
+        presentation_cta=presentation.cta_label,
     )
 
     return AccountStatus(
         source=source,
         display_name=display_name,
         status=canonical,
+        presentation_key=presentation.key,
+        presentation_label=presentation.label,
         last_successful_sync_at=synced_at if lifecycle.state == LC_SYNCED else None,
         current_attempt_at=sync_started_at if canonical == UPDATING else None,
-        last_error=last_error,
+        last_error=last_error or presentation.extension_hint,
         user_action_label=action_label,
         user_action_url=action_url,
     )
@@ -240,6 +277,12 @@ def build_status_summary(accounts: list[AccountStatus]) -> AccountStatusSummary:
         needs_login_accounts=[a.display_name for a in needs_login],
         updating_accounts=[a.display_name for a in updating],
     )
+
+
+def _latest_connection_verification(db, uid: str, source: str) -> str | None:
+    from mighty.account_state import _latest_successful_connection_verification
+
+    return _latest_successful_connection_verification(db, uid, source)
 
 
 def load_all_account_statuses(
@@ -341,6 +384,8 @@ def load_all_account_statuses(
                 login_url=login_url,
                 connect_url=connect_url,
                 failure_reason=failure_reason,
+                connection_status=connection_status or None,
+                last_verified_at=_latest_connection_verification(db, uid, source),
             )
         )
 
