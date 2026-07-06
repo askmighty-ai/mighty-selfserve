@@ -113,6 +113,12 @@ class TestSharedLabels:
         assert status_label(_state()) == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY]
         assert status_label(_login_state()) == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN]
         assert status_label(_connecting_state()) == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING]
+        assert status_label(_state(connection_state=CONN_NEEDS_LOGIN, last_verified_at=None)) == (
+            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN]
+        )
+        assert status_label(_state(data_status=DATA_NONE, last_data_refresh=None)) == (
+            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING]
+        )
 
     def test_extension_projection_agrees_on_labels(self):
         lifecycle = resolve_account_lifecycle(
@@ -150,7 +156,9 @@ class TestSharedLabels:
     def test_access_loop_summary_uses_same_labels(self):
         presentations = [
             resolve_account_presentation(_state()),
-            resolve_account_presentation(_login_state()),
+            resolve_account_presentation(
+                _state(connection_state=CONN_NEEDS_LOGIN, last_verified_at=None),
+            ),
         ]
         loop = build_access_loop_summary(presentations)
         assert loop.ready == 1
@@ -241,6 +249,8 @@ class TestPresentationPrecedence:
 
     def test_fresh_data_stale_login_required_is_ready(self):
         now = datetime.now(timezone.utc)
+class TestCanonicalCtas:
+    def test_sign_in_uses_provider_url(self):
         state = _state(
             connection_state=CONN_NEEDS_LOGIN,
             sync_status="login_required",
@@ -343,7 +353,7 @@ class TestCanonicalCtas:
         assert external is True
 
     def test_updating_cta_disabled(self):
-        state = _connecting_state()
+        state = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None)
         label, kind, disabled = primary_action(state)
         assert label == CTA_UPDATING
         assert disabled is True
@@ -355,15 +365,7 @@ class TestCanonicalCtas:
         assert disabled is False
 
     def test_needs_attention_uses_fix_cta(self):
-        state = _state(
-            session_health=SESSION_EXPIRED,
-            connection_state=CONN_CONNECTED,
-            last_verified_at=None,
-            last_data_refresh=None,
-            observations_available=[],
-            field_count=0,
-            data_status=DATA_NONE,
-        )
+        state = _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED)
         label, kind, disabled = primary_action(state)
         assert label == CTA_FIX
         assert disabled is False
@@ -371,22 +373,18 @@ class TestCanonicalCtas:
     def test_one_cta_per_state(self):
         for key, cta in ACCOUNT_STATE_CTAS.items():
             if key == ACCOUNT_STATE_UPDATING:
-                presentation = resolve_account_presentation(_connecting_state())
+                presentation = resolve_account_presentation(
+                    _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None),
+                )
             elif key == ACCOUNT_STATE_NEEDS_SIGN_IN:
-                presentation = resolve_account_presentation(_login_state())
+                presentation = resolve_account_presentation(
+                    _state(connection_state=CONN_NEEDS_LOGIN, last_verified_at=None),
+                )
             elif key == ACCOUNT_STATE_READY:
                 presentation = resolve_account_presentation(_state())
             else:
                 presentation = resolve_account_presentation(
-                    _state(
-                        session_health=SESSION_EXPIRED,
-                        connection_state=CONN_CONNECTED,
-                        last_verified_at=None,
-                        last_data_refresh=None,
-                        observations_available=[],
-                        field_count=0,
-                        data_status=DATA_NONE,
-                    ),
+                    _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED),
                 )
             assert presentation.key == key
             assert presentation.cta_label == cta

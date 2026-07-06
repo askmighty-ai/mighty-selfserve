@@ -133,12 +133,12 @@ def _fmt(ts: str) -> str:
 
 class TestStatusTone:
     def test_needs_sign_in_is_red_tone(self):
-        s = _login_state()
+        s = _state(connection_state=CONN_NEEDS_LOGIN, session_health=SESSION_EXPIRED, last_verified_at=None)
         assert status_tone(s) == TONE_LOGIN
         assert status_label(s) == "Needs sign in"
 
     def test_not_connected_is_needs_sign_in_tone(self):
-        s = _not_connected_state()
+        s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE, last_verified_at=None)
         assert status_tone(s) == TONE_LOGIN
         assert status_label(s) == "Needs sign in"
 
@@ -148,7 +148,7 @@ class TestStatusTone:
         assert status_label(s) == "Ready"
 
     def test_connecting_is_updating(self):
-        s = _connecting_state()
+        s = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None)
         assert status_tone(s) == TONE_ATTENTION
         assert status_label(s) == "Updating"
 
@@ -169,6 +169,20 @@ class TestPrimaryAction:
 
     def test_updating_is_disabled(self):
         s = _connecting_state()
+        s = _state(
+            connection_state=CONN_NEEDS_LOGIN,
+            last_verified_at=None,
+            data_status=DATA_NONE,
+            last_data_refresh=None,
+        )
+        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
+
+    def test_sign_in_when_not_connected(self):
+        s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE, last_verified_at=None)
+        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
+
+    def test_updating_is_disabled(self):
+        s = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None)
         assert primary_action(s) == (CTA_UPDATING, "checking", True)
 
     def test_view_when_ready(self):
@@ -176,7 +190,7 @@ class TestPrimaryAction:
         assert primary_action(s) == (CTA_VIEW, PRIMARY_VIEW, False)
 
     def test_fix_when_needs_attention(self):
-        s = _attention_state()
+        s = _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED)
         assert primary_action(s) == (CTA_FIX, PRIMARY_FIX, False)
 
 
@@ -250,13 +264,19 @@ class TestActionLinks:
         assert "<button" not in html
 
     def test_render_updating_as_disabled_button(self):
-        card = build_card_view(_connecting_state(), fmt_relative=_fmt)
+        card = build_card_view(
+            _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None),
+            fmt_relative=_fmt,
+        )
         html = render_card(card, lambda x: str(x))
         assert ">Updating…</button>" in html
         assert "disabled" in html
 
     def test_render_fix_as_button(self):
-        card = build_card_view(_attention_state(), fmt_relative=_fmt)
+        card = build_card_view(
+            _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED),
+            fmt_relative=_fmt,
+        )
         html = render_card(card, lambda x: str(x))
         assert ">Fix</button>" in html
 

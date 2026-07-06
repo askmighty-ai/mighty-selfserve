@@ -14,10 +14,22 @@ const DEFAULT_COPY = {
 
 let _copy = DEFAULT_COPY;
 
+function timeAgo(isoStr) {
+  if (!isoStr) return null;
+  const diff = Math.floor((Date.now() - new Date(isoStr).getTime()) / 1000);
+  if (isNaN(diff) || diff < 0) return 'just now';
+  if (diff < 60)    return 'just now';
+  if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
 function w() { return _copy.worker || DEFAULT_COPY.worker; }
+function accessLoopCopy() { return _copy.access_loop || DEFAULT_COPY.access_loop; }
 
 function applyStaticCopy() {
   const worker = w();
+  const loop = accessLoopCopy();
   const title = document.getElementById('header-title');
   const headerSub = document.getElementById('header-sub');
   const dashBtn = document.getElementById('dashboard-btn');
@@ -31,16 +43,23 @@ function applyStaticCopy() {
     dashBtn.textContent = ctaLabel;
     dashBtn.href = MIGHTY_URL + '/account-center';
   }
+  const ctaLabel = loop.open_account_center || worker.open_account_center || 'Open Account Center';
+  if (dashBtn) {
+    dashBtn.textContent = ctaLabel;
+    dashBtn.href = MIGHTY_URL + '/account-center';
+  }
   if (setupBox) {
     setupBox.innerHTML =
       'Visit your <a href="' + MIGHTY_URL + '/extension-setup" target="_blank">Account Center</a> to connect the worker.';
   }
 }
 
-const dot = document.getElementById('status-dot');
-const label = document.getElementById('status-label');
-const detail = document.getElementById('status-detail');
-const setupBox = document.getElementById('setup-box');
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const dot          = document.getElementById('status-dot');
+const label        = document.getElementById('status-label');
+const detail       = document.getElementById('status-detail');
+const headerSub    = document.getElementById('header-sub');
+const progressWrap = document.getElementById('progress-wrap');
 
 function showBackgroundStatus(statusLine) {
   detail.classList.add('hidden');
@@ -49,6 +68,65 @@ function showBackgroundStatus(statusLine) {
   label.textContent = statusLine || w().status_keeping_updated || 'Keeping your accounts up to date';
 }
 
+function setDot(cls) {
+  dot.className = 'status-dot ' + cls;
+}
+
+function _accessLoopSummary(data) {
+  const summary = data.account_status && data.account_status.summary;
+  if (!summary) return null;
+  return summary.access_loop || {
+    headline: summary.headline,
+    detail_lines: summary.detail_lines || (summary.subline ? summary.subline.split(' · ') : []),
+    is_updating: summary.is_syncing,
+    needs_sign_in: summary.needs_login_count,
+    updating: summary.updating_count,
+    ready: 0,
+    needs_attention: 0,
+    open_account_center_label: summary.open_account_center_label,
+  };
+}
+
+function _dotForLoop(loop) {
+  if (!loop) return 'amber';
+  if (loop.is_updating) return 'green pulse';
+  if (loop.needs_sign_in > 0) return 'red';
+  if (loop.needs_attention > 0) return 'amber';
+  if (loop.ready > 0) return 'green';
+  return 'amber';
+}
+
+function renderAccessLoop(data) {
+  const loop = _accessLoopSummary(data);
+  progressWrap.classList.add('hidden');
+
+  if (!loop || !loop.headline) {
+    setDot('amber');
+    label.textContent = w().not_updated_yet || 'Not updated yet';
+    headerSub.textContent = w().subtitle_running || 'Running in Chrome';
+    showDetail('Visit Account Center to connect accounts.');
+    return;
+  }
+
+  setDot(_dotForLoop(loop));
+  label.textContent = loop.headline;
+  headerSub.textContent = loop.is_updating
+    ? (w().access_loop_updating || w().subtitle_updating || 'Updating accounts')
+    : (w().subtitle_running || 'Running in Chrome');
+
+  const lines = (loop.detail_lines || []).filter(Boolean);
+  if (loop.is_updating && lines.length) {
+    showDetail(lines.join('<br>'));
+    return;
+  }
+  if (lines.length) {
+    showDetail(lines.join('<br>'));
+    return;
+  }
+  showDetail('&nbsp;');
+}
+
+// ── Main render ───────────────────────────────────────────────────────────────
 function render(data) {
   setupBox.classList.add('hidden');
 

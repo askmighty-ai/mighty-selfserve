@@ -254,6 +254,9 @@ def test_api_account_status_dashboard_and_extension_consistent(client):
     for account in ext_data["accounts"]:
         assert account["presentation_label"] in ACCOUNT_STATE_LABELS.values()
         assert account["presentation_key"] in ACCOUNT_STATE_LABELS
+    assert ext_data["summary"]["headline"] == "Mighty is updating your accounts"
+    assert "needs sign in" in ext_data["summary"]["subline"]
+    assert ext_data["summary"]["access_loop"]["needs_sign_in"] == 1
 
 
 def test_api_sync_progress_updates_updating_account(client):
