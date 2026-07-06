@@ -188,21 +188,23 @@ def _user_action_for_status(
     return None, None
 
 
-def build_account_status(
-    source: str,
-    display_name: str,
-    lifecycle: AccountLifecycle,
-    account: ProviderAccount | None,
-    *,
-    sync_status: str,
-    updating_source: str | None,
-    sync_started_at: str | None = None,
-    login_url: str = "",
-    connect_url: str = "",
-    failure_reason: str | None = None,
-    connection_status: str | None = None,
-    last_verified_at: str | None = None,
-) -> AccountStatus:
+def     build_account_status(
+        source: str,
+        display_name: str,
+        lifecycle: AccountLifecycle,
+        account: ProviderAccount | None,
+        *,
+        sync_status: str,
+        updating_source: str | None,
+        sync_started_at: str | None = None,
+        login_url: str = "",
+        connect_url: str = "",
+        failure_reason: str | None = None,
+        connection_status: str | None = None,
+        last_verified_at: str | None = None,
+        extraction_status: str | None = None,
+        last_data_refresh: str | None = None,
+    ) -> AccountStatus:
     canonical = resolve_canonical_status(
         lifecycle,
         sync_status,
@@ -228,6 +230,8 @@ def build_account_status(
         last_verified_at=last_verified_at,
         is_updating=canonical == UPDATING,
         sync_status_error=failure_reason,
+        extraction_status=extraction_status,
+        last_data_refresh=last_data_refresh,
     )
 
     action_label, action_url = _user_action_for_status(
@@ -431,6 +435,8 @@ def load_all_account_statuses(
                 last_verified_at=_latest_connection_verification(db, uid, source),
                 is_updating=canonical == UPDATING,
                 sync_status_error=failure_reason,
+                extraction_status=extraction_st or None,
+                last_data_refresh=ad_row["synced_at"] if ad_row else None,
             )
 
         synced_at = provider_acct.synced_at if provider_acct else None

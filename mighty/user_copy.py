@@ -107,6 +107,9 @@ WORKER_SETUP_BOX = (
 )
 WORKER_OPEN_ACCOUNT_CENTER = "Open Account Center"
 WORKER_OPEN_DASHBOARD = WORKER_OPEN_ACCOUNT_CENTER
+WORKER_SUBTITLE_BACKGROUND = "Working in the background"
+WORKER_STATUS_KEEPING_UPDATED = "Keeping your accounts up to date"
+WORKER_STATUS_OPEN_ACCOUNT_CENTER = "Open Account Center to manage connections"
 WORKER_NOT_UPDATED_YET = "Not updated yet"
 WORKER_ACCESS_LOOP_UPDATING = "Mighty is updating your accounts"
 WORKER_FIRST_UPDATE_SOON = "First update soon"
@@ -614,6 +617,9 @@ def api_copy_bundle() -> dict:
             "open_account_center": WORKER_OPEN_ACCOUNT_CENTER,
             "not_updated_yet": WORKER_NOT_UPDATED_YET,
             "access_loop_updating": WORKER_ACCESS_LOOP_UPDATING,
+            "subtitle_background": WORKER_SUBTITLE_BACKGROUND,
+            "status_keeping_updated": WORKER_STATUS_KEEPING_UPDATED,
+            "status_open_account_center": WORKER_STATUS_OPEN_ACCOUNT_CENTER,
             "account_needs_sign_in_hint": EXT_ACCOUNT_NEEDS_SIGN_IN_HINT,
             "account_updating_hint": EXT_ACCOUNT_UPDATING_HINT,
         },
