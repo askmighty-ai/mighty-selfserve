@@ -20920,6 +20920,50 @@ def admin_provider_reliability_scorecard_page():
     )
 
 
+@app.route("/admin/delta-evidence-audit")
+@require_admin
+def admin_delta_evidence_audit_page():
+    from mighty.delta_evidence_audit import list_successful_delta_runs
+    from mighty.pipeline_inspector import get_run_stages
+    from mighty.pipeline_stages import PipelineStageId
+
+    db = get_db()
+    runs = list_successful_delta_runs(db, limit=100)
+    enriched = []
+    for run in runs:
+        stages = get_run_stages(db, run["run_id"])
+        trusted_keys = []
+        for stage in stages:
+            if stage.get("stage") != PipelineStageId.TRUSTED_OBSERVATIONS.value:
+                continue
+            arts = stage.get("artifacts") or {}
+            if not arts and stage.get("artifacts_json"):
+                try:
+                    arts = json.loads(stage["artifacts_json"])
+                except Exception:
+                    arts = {}
+            trusted_keys = arts.get("trusted_keys") or []
+            break
+        enriched.append({**run, "trusted_count": len(trusted_keys)})
+    return _admin_debug.render_delta_evidence_audit_page(enriched)
+
+
+@app.route("/admin/delta-evidence-audit/<run_id>")
+@require_admin
+def admin_delta_evidence_audit_detail_page(run_id):
+    from mighty.delta_evidence_audit import audit_delta_pipeline_run
+
+    audit = audit_delta_pipeline_run(
+        get_db(),
+        run_id,
+        decrypt_account_fn=decrypt_account_data,
+        decrypt_cred_fn=decrypt_cred,
+    )
+    if not audit:
+        return _admin_debug.render_delta_evidence_audit_page([]), 404
+    return _admin_debug.render_delta_evidence_audit_detail_page(audit)
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

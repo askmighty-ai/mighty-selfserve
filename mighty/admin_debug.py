@@ -26,6 +26,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
         "Which recommendations are possible given observed extraction data",
     ),
     (
+        "delta-evidence-audit",
+        "Delta evidence audit",
+        "Compare captured Delta evidence vs extraction per pipeline run",
+    ),
+    (
         "capture-capability",
         "Capture Capability",
         "Needed vs present capture evidence per provider",
@@ -549,6 +554,139 @@ def render_recommendation_unlocks_detail_page(row: Any) -> str:
         f"Recommendation Unlocks — {row.display_name}",
         body,
     )
+
+
+def _evidence_block_list(blocks: list[Any], *, empty_msg: str) -> str:
+    if not blocks:
+        return f'<p class="muted">{_he(empty_msg)}</p>'
+    items = ""
+    for block in blocks:
+        preview = (block.body or "")[:400]
+        if len(block.body or "") > 400:
+            preview += "…"
+        items += (
+            f'<details style="margin-bottom:8px">'
+            f'<summary style="font-size:11px;cursor:pointer;color:#d1d5db">'
+            f'{_he(block.header)} <span class="muted">({block.char_count} chars)</span></summary>'
+            f'<pre class="json-block" style="max-height:240px;margin-top:6px">{_he(preview)}</pre>'
+            f"</details>"
+        )
+    return items
+
+
+def render_delta_evidence_audit_page(runs: list[dict[str, Any]]) -> str:
+    rows = "".join(
+        f"<tr>"
+        f'<td class="run-id"><a href="/admin/delta-evidence-audit/{_he(r.get("run_id",""))}">'
+        f'{_he((r.get("run_id") or "")[:8])}…</a></td>'
+        f'<td>{_fmt_iso(r.get("created_at"))}</td>'
+        f'<td>{_he(r.get("initiator") or "—")}</td>'
+        f"<td>{r.get('trusted_count', 0)}</td>"
+        f'<td class="muted"><a href="/admin/delta-evidence-audit/{_he(r.get("run_id",""))}">Open audit</a></td>'
+        f"</tr>"
+        for r in runs
+    ) or '<tr><td colspan="5" class="muted">No successful Delta pipeline runs yet</td></tr>'
+
+    body = (
+        '<p class="lede">Diagnostic for Delta full-provider support. '
+        "Compares captured evidence blocks in <code>raw_text</code> against pipeline "
+        "extraction stages — does not change extraction logic.</p>"
+        '<div class="card"><table><thead><tr>'
+        "<th>Run</th><th>Created</th><th>Initiator</th>"
+        "<th>Trusted obs</th><th>Detail</th>"
+        f"</tr></thead><tbody>{rows}</tbody></table></div>"
+    )
+    return _admin_shell("delta-evidence-audit", "Delta Evidence Audit", body)
+
+
+def render_delta_evidence_audit_detail_page(audit: Any) -> str:
+    meta_html = (
+        f'<div class="run-meta">'
+        f'<div class="stat"><div class="label">Run ID</div>'
+        f'<div class="val run-id">{_he(audit.run_id)}</div></div>'
+        f'<div class="stat"><div class="label">Status</div><div class="val">{_he(audit.run_status)}</div></div>'
+        f'<div class="stat"><div class="label">Raw text</div>'
+        f'<div class="val">{audit.raw_text_chars:,} chars</div></div>'
+        f'<div class="stat"><div class="label">Trusted observations</div>'
+        f'<div class="val">{len(audit.trusted_observations)}</div></div>'
+        f"</div>"
+    )
+    if audit.raw_text_source:
+        meta_html += f'<p class="muted" style="margin:-8px 0 16px">Evidence source: {_he(audit.raw_text_source)}</p>'
+
+    stage = audit.stage_summary or {}
+    stage_html = (
+        f'<div class="card"><h3>Pipeline stages</h3>'
+        f'<p class="muted" style="font-size:11px">structured={_he(stage.get("structured_status"))} '
+        f'({ _he(stage.get("structured_failure") or "—") }) · '
+        f'intelligent={_he(stage.get("intelligent_status"))} '
+        f'({ _he(stage.get("intelligent_failure") or "—") }) · '
+        f'validation={_he(stage.get("validation_status"))} '
+        f'({ _he(stage.get("validation_failure") or "—") })</p></div>'
+    )
+
+    evidence_grid = (
+        '<div class="grid-2">'
+        f'<div class="card"><h3>API RESPONSE ({len(audit.api_response_blocks)})</h3>'
+        f"{_evidence_block_list(audit.api_response_blocks, empty_msg='None')}</div>"
+        f'<div class="card"><h3>NETWORK JSON ({len(audit.network_json_blocks)})</h3>'
+        f"{_evidence_block_list(audit.network_json_blocks, empty_msg='None')}</div>"
+        f'<div class="card"><h3>GRAPHQL ({len(audit.graphql_blocks)})</h3>'
+        f"{_evidence_block_list(audit.graphql_blocks, empty_msg='None')}</div>"
+        f'<div class="card"><h3>EMBEDDED STATE ({len(audit.embedded_state_blocks)})</h3>'
+        f"{_evidence_block_list(audit.embedded_state_blocks, empty_msg='None')}</div>"
+        "</div>"
+    )
+    evidence_grid += (
+        f'<div class="card"><h3>Page / URL blocks ({len(audit.page_blocks)})</h3>'
+        f"{_evidence_block_list(audit.page_blocks, empty_msg='None')}</div>"
+    )
+
+    extracted_rows = "".join(
+        f"<tr><td><code>{_he(f.key)}</code></td><td>{_he(f.label)}</td>"
+        f"<td>{_he(f.value)}</td><td>{_he(f.source)}</td>"
+        f"<td>{'yes' if f.trusted else 'no'}</td></tr>"
+        for f in audit.extracted_fields
+    ) or '<tr><td colspan="5" class="muted">No extracted fields recorded</td></tr>'
+
+    comp_rows = "".join(
+        f"<tr>"
+        f"<td><strong>{_he(c.label)}</strong>"
+        f'<div class="muted" style="font-size:10px">{_he(c.observation_id)}</div></td>'
+        f"<td>{'yes' if c.in_evidence else 'no'}</td>"
+        f"<td>{'yes' if c.extracted else 'no'}</td>"
+        f"<td>{'yes' if c.trusted else 'no'}</td>"
+        f"<td>{_he(c.recommended_extractor or '—')}</td>"
+        f"<td class='muted' style='font-size:11px'>{_he(c.diagnosis)}</td>"
+        f"</tr>"
+        for c in audit.comparisons
+    )
+
+    connector_rows = "".join(
+        f"<tr><td><code>{_he(r.get('key',''))}</code></td>"
+        f"<td>{_he(r.get('label',''))}</td><td>{_he(r.get('value',''))}</td>"
+        f"<td><code>{_he(r.get('connector_path',''))}</code></td>"
+        f"<td class='muted'>{_he((r.get('evidence_header') or '')[:80])}</td></tr>"
+        for r in audit.connector_preview
+    ) or '<tr><td colspan="5" class="muted">Connector paths did not match JSON evidence</td></tr>'
+
+    body = (
+        f'<p><a href="/admin/delta-evidence-audit" class="btn">&larr; All Delta runs</a></p>'
+        f"{meta_html}{stage_html}{evidence_grid}"
+        f'<div class="card"><h3>Extracted fields ({len(audit.extracted_fields)})</h3>'
+        f'<table><thead><tr><th>Key</th><th>Label</th><th>Value</th>'
+        f"<th>Source</th><th>Trusted</th></tr></thead><tbody>{extracted_rows}</tbody></table></div>"
+        f'<div class="card"><h3>Connector preview (would extract from JSON)</h3>'
+        f'<table><thead><tr><th>Key</th><th>Label</th><th>Value</th>'
+        f"<th>Path</th><th>Evidence</th></tr></thead><tbody>{connector_rows}</tbody></table></div>"
+        f'<div class="card"><h3>Observation comparison</h3>'
+        f'<p class="muted" style="font-size:11px">For each important Delta observation: '
+        f"was it in evidence, was it extracted, and which extractor should have found it?</p>"
+        f'<table><thead><tr><th>Observation</th><th>In evidence</th><th>Extracted</th>'
+        f"<th>Trusted</th><th>Should use</th><th>Diagnosis</th></tr></thead>"
+        f"<tbody>{comp_rows}</tbody></table></div>"
+    )
+    return _admin_shell("delta-evidence-audit", "Delta Evidence Audit Detail", body)
 
 
 def _capability_badge(present: bool, confidence: str) -> str:
