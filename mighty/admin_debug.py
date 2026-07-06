@@ -35,6 +35,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
         "Provider Benchmark",
         "Combined readiness score from login, capture, coverage, and unlocks",
     ),
+    (
+        "provider-reliability-scorecard",
+        "Provider Reliability Scorecard",
+        "Reliability percentages, failure reasons, and engineering attention queue",
+    ),
 ]
 
 
@@ -784,3 +789,103 @@ def render_provider_benchmark_page(rows: list[Any], *, trend_days: int = 14) -> 
         f"</tr></thead><tbody>{main_table}</tbody></table></div>"
     )
     return _admin_shell("provider-benchmark", "Provider Benchmark", body)
+
+
+def _failure_reason_list(reasons: list[Any], *, empty_msg: str) -> str:
+    if not reasons:
+        return f'<p class="muted">{_he(empty_msg)}</p>'
+    rows = "".join(
+        f"<tr><td><code>{_he(r.reason)}</code></td>"
+        f"<td>{_he(r.label)}</td><td>{r.count}</td></tr>"
+        for r in reasons
+    )
+    return (
+        '<table><thead><tr><th>Reason</th><th>Label</th><th>Count</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def _missing_observation_list(items: list[Any], *, empty_msg: str) -> str:
+    if not items:
+        return f'<p class="muted">{_he(empty_msg)}</p>'
+    rows = "".join(
+        f"<tr><td><code>{_he(item.observation_id)}</code></td>"
+        f"<td>{_he(item.label)}</td><td>{item.provider_count}</td></tr>"
+        for item in items
+    )
+    return (
+        '<table><thead><tr><th>Observation</th><th>Label</th><th>Providers missing</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def render_provider_reliability_scorecard_page(scorecard: Any, *, trend_days: int = 14) -> str:
+    from mighty.provider_benchmark import SCORE_WEIGHTS
+
+    if not scorecard.providers:
+        provider_table = '<tr><td colspan="7" class="muted">No providers configured</td></tr>'
+    else:
+        provider_table = "".join(
+            f"<tr>"
+            f"<td><strong>{_he(r.display_name)}</strong>"
+            f'<div class="muted" style="font-size:10px">{_he(r.source)}</div></td>'
+            f"<td>{_readiness_badge(r.reliability_score)}</td>"
+            f"<td>{_readiness_badge(r.login_success_pct)}</td>"
+            f"<td>{_readiness_badge(r.capture_success_pct)}</td>"
+            f"<td>{_readiness_badge(r.observation_success_pct)}</td>"
+            f"<td>{_readiness_badge(r.recommendation_success_pct)}</td>"
+            f"</tr>"
+            for r in scorecard.providers
+        )
+
+    attention_table = "".join(
+        f"<tr>"
+        f"<td>#{r.attention_rank}</td>"
+        f"<td><strong>{_he(r.display_name)}</strong></td>"
+        f"<td>{_readiness_badge(r.reliability_score)}</td>"
+        f"<td>{_readiness_badge(r.login_success_pct)}</td>"
+        f"<td>{_readiness_badge(r.capture_success_pct)}</td>"
+        f"<td>{_readiness_badge(r.observation_success_pct)}</td>"
+        f"<td>{_readiness_badge(r.recommendation_success_pct)}</td>"
+        f"</tr>"
+        for r in scorecard.needs_attention
+    ) or '<tr><td colspan="7" class="muted">No providers</td></tr>'
+
+    formula = (
+        f"<code>reliability = "
+        f"{int(SCORE_WEIGHTS['login'] * 100)}% × login + "
+        f"{int(SCORE_WEIGHTS['capture'] * 100)}% × capture + "
+        f"{int(SCORE_WEIGHTS['observation'] * 100)}% × observation + "
+        f"{int(SCORE_WEIGHTS['recommendation'] * 100)}% × recommendation</code>"
+    )
+
+    body = (
+        '<p class="lede">Provider Reliability Scorecard combines '
+        '<a href="/admin/pipeline-runs" style="color:#818cf8">Pipeline Inspector</a>, '
+        '<a href="/admin/capture-capability" style="color:#818cf8">Capture Capability</a>, '
+        '<a href="/admin/coverage" style="color:#818cf8">Observation Coverage</a>, and '
+        '<a href="/admin/provider-benchmark" style="color:#818cf8">Provider Benchmark</a>. '
+        f"Percentages use the last {trend_days} days of pipeline runs.</p>"
+        f'<div class="card"><h3>Scoring formula</h3><p style="font-size:12px;margin:0">{formula}</p></div>'
+        f'<div class="card"><h3>Needs engineering attention (top 5)</h3>'
+        '<p class="muted" style="font-size:11px;margin:0 0 10px">Lowest reliability score, '
+        "penalized for negative trend (same ranking as Provider Benchmark).</p>"
+        '<table><thead><tr>'
+        "<th>Rank</th><th>Provider</th><th>Reliability</th><th>Login</th>"
+        "<th>Capture</th><th>Observation</th><th>Recommendation</th>"
+        f"</tr></thead><tbody>{attention_table}</tbody></table></div>"
+        '<div class="grid-2">'
+        f'<div class="card"><h3>Top login failure reasons</h3>'
+        f"{_failure_reason_list(scorecard.top_login_failure_reasons, empty_msg='No connection failures in window')}</div>"
+        f'<div class="card"><h3>Top capture failure reasons</h3>'
+        f"{_failure_reason_list(scorecard.top_capture_failure_reasons, empty_msg='No capture failures in window')}</div>"
+        "</div>"
+        f'<div class="card"><h3>Most commonly missing observations</h3>'
+        f"{_missing_observation_list(scorecard.most_missing_observations, empty_msg='No missing observations across providers')}</div>"
+        '<div class="card"><h3>All providers</h3>'
+        '<table><thead><tr>'
+        "<th>Provider</th><th>Reliability</th><th>Login success</th><th>Capture success</th>"
+        "<th>Observation success</th><th>Recommendation success</th>"
+        f"</tr></thead><tbody>{provider_table}</tbody></table></div>"
+    )
+    return _admin_shell("provider-reliability-scorecard", "Provider Reliability Scorecard", body)

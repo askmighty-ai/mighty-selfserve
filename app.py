@@ -20860,6 +20860,24 @@ def admin_provider_benchmark_page():
     return _admin_debug.render_provider_benchmark_page(rows, trend_days=TREND_WINDOW_DAYS)
 
 
+@app.route("/admin/provider-reliability-scorecard")
+@require_admin
+def admin_provider_reliability_scorecard_page():
+    from mighty.provider_benchmark import TREND_WINDOW_DAYS
+    from mighty.provider_reliability_scorecard import compute_provider_reliability_scorecard
+
+    scorecard = compute_provider_reliability_scorecard(
+        get_db(),
+        _all_provider_sources(),
+        _provider_category_map(),
+        display_names=_provider_display_names(),
+    )
+    return _admin_debug.render_provider_reliability_scorecard_page(
+        scorecard,
+        trend_days=TREND_WINDOW_DAYS,
+    )
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
