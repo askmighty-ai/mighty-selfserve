@@ -83,6 +83,8 @@ PRIMARY_CHECKING = "checking"
 
 LINKABLE_ACTION_KINDS = frozenset({PRIMARY_LOGIN, PRIMARY_RECONNECT, PRIMARY_CONNECT})
 
+LINKABLE_ACTION_KINDS = frozenset({PRIMARY_LOGIN, PRIMARY_RECONNECT, PRIMARY_CONNECT})
+
 ACCESS_LABELS: dict[str, str] = {
     ACCESS_BROWSER_SESSION: "Extension",
     ACCESS_MIGHTY_LOGIN: "Cloud",
@@ -227,6 +229,22 @@ def resolve_primary_action_href(
     return f"/credentials?connect={provider}", False
 
 
+def resolve_primary_action_href(
+    kind: str,
+    provider: str,
+    *,
+    provider_login_url: str | None = None,
+) -> tuple[str | None, bool]:
+    """Return (href, open_in_new_tab) for linkable CTAs; (None, False) for placeholders."""
+    if kind not in LINKABLE_ACTION_KINDS:
+        return None, False
+    if provider_login_url:
+        return provider_login_url, True
+    if kind == PRIMARY_CONNECT:
+        return f"/credentials?connect={provider}", False
+    return f"/credentials?connect={provider}", False
+
+
 def build_card_view(
     state: AccountState,
     *,
@@ -236,6 +254,7 @@ def build_card_view(
     provider_login_url: str | None = None,
 ) -> AccountCenterCardView:
     label, kind, disabled = primary_action(state)
+    label, kind = primary_action(state)
     href, external = resolve_primary_action_href(
         kind, state.provider, provider_login_url=provider_login_url,
     )
@@ -306,6 +325,7 @@ def sort_cards(cards: list[AccountCenterCardView]) -> list[AccountCenterCardView
 def render_card_cta(card: AccountCenterCardView, escape: Callable[[Any], str]) -> str:
     disabled_attr = ' disabled aria-disabled="true"' if card.primary_action_disabled else ""
     if card.primary_action_href and not card.primary_action_disabled:
+    if card.primary_action_href:
         external = (
             ' target="_blank" rel="noopener noreferrer"'
             if card.primary_action_external
