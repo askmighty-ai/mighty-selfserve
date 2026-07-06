@@ -1,68 +1,116 @@
 // Mighty Sync — API interceptor (runs in MAIN world at document_start)
 // Hooks fetch + XHR to capture JSON responses that contain account data,
 // then posts them to the ISOLATED world relay via window.postMessage.
-// This runs in the page's JS context so it can override fetch/XHR before
-// any page code runs.
 //
-// Acquisition tiers:
-//   Tier 1 — fetch/XHR API responses (JSON content-type)
-//   Tier 2 — embedded page state (__NEXT_DATA__, __APOLLO_STATE__, etc.)
-//   Tiers 3–4 — handled server-side (structured DOM, AI extraction)
+// Network Intelligence (Phase 2):
+//   • JSON / GraphQL / REST responses with account-relevant payloads
+//   • Skips static assets, analytics, telemetry, uploads, auth tokens
+//   • Redacts sensitive keys before forwarding
 
 (function () {
   'use strict';
 
   const MSG_TYPE = '__mighty_api__';
 
-  // Broad keyword list — program-specific names + generic account terms.
-  // A single hit on a response ≥500 chars is enough to forward.
   const KEYWORDS = [
-    // Generic account data
-    'miles', 'points', 'balance', 'status', 'tier', 'reward', 'loyalty',
-    'certificate', 'award', 'companion', 'upgrade', 'credit', 'voucher',
-    'ecredit', 'wallet', 'expir', 'medallion', 'frequent', 'elite',
-    // Program-specific tokens (camelCase and snake_case both hit on lowercase)
-    'skymiles', 'hhonors', 'bonvoy', 'mileageplus', 'rapidrewards',
-    'aadvantage', 'trueblue', 'worldofhyatt', 'ihgrewards', 'wyndhamrewards',
-    'thankyoupoints', 'ultimaterewards', 'membershiprewards',
-    // Account/billing fields
+    'balance', 'points', 'miles', 'status', 'tier', 'trip', 'reservation',
+    'account', 'payment', 'statement', 'transactions', 'rewards', 'member',
+    'reward', 'loyalty', 'certificate', 'award', 'companion', 'upgrade',
+    'credit', 'voucher', 'ecredit', 'wallet', 'expir', 'medallion', 'frequent',
+    'elite', 'membership', 'skymiles', 'hhonors', 'bonvoy', 'mileageplus',
+    'rapidrewards', 'aadvantage', 'trueblue', 'worldofhyatt', 'ihgrewards',
+    'wyndhamrewards', 'thankyoupoints', 'ultimaterewards', 'membershiprewards',
     'autopay', 'amountdue', 'minimumpayment', 'statementbalance',
     'accountsummary', 'loyaltynumber', 'membernumber', 'memberid',
-    // Embedded state keys common on loyalty sites
     'hhonorsnumber', 'loyaltytier', 'memberlevel', 'elitestatus',
     'frequentflyer', 'programaccountsummary', 'pointsbalance',
+    'pagination', 'nextpage', 'cursor', 'offset', 'pageinfo',
   ];
 
-  function looksLikeAccountData(text) {
+  const SKIP_URL_RE = /\/(?:static|assets|asset|dist|bundle|bundles|chunks|chunk|analytics|telemetry|tracking|track|metrics|beacon|pixel|ads|advert|doubleclick|googletagmanager|gtm|segment|upload|uploads|multipart|oauth2?|token|auth\/token|login\/token|api\/auth|signin\/token|refresh|\.well-known)(?:\/|$|\?)/i;
+  const SKIP_EXT_RE = /\.(?:js|css|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|map)(?:\?|$)/i;
+  const AUTH_TOKEN_RE = /"(token_type|access_token|id_token|refresh_token)"/i;
+  const SENSITIVE_KEY_RE = /"(access_token|refresh_token|id_token|password|secret|authorization|cookie|csrf|session_token|session_id|sessionid|set-cookie)"/i;
+  const MAX_NETWORK_BLOCK_CHARS = 120_000;
+
+  function shouldSkipUrl(url) {
+    const u = String(url || '');
+    if (!u || u.startsWith('embedded:')) return false;
+    const lower = u.toLowerCase();
+    if (lower.startsWith('data:') || lower.startsWith('blob:')) return true;
+    if (SKIP_URL_RE.test(lower) || SKIP_EXT_RE.test(lower)) return true;
+    if (/[?&](?:format=(?:png|jpg|gif|webp|svg|css|js)|content-type=image)/i.test(lower)) return true;
+    return false;
+  }
+
+  function isGraphqlPayload(text, contentType) {
+    const ct = (contentType || '').toLowerCase();
+    if (ct.includes('graphql')) return true;
+    if (!text) return false;
+    try {
+      const payload = JSON.parse(text);
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+      if (Array.isArray(payload.errors)) return true;
+      return payload.data != null && typeof payload.extensions === 'object';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function redactSensitiveJson(text) {
+    if (!text || !SENSITIVE_KEY_RE.test(text)) return text;
+    try {
+      const payload = JSON.parse(text);
+      const walk = (value) => {
+        if (Array.isArray(value)) return value.map(walk);
+        if (value && typeof value === 'object') {
+          const out = {};
+          for (const [key, item] of Object.entries(value)) {
+            out[key] = SENSITIVE_KEY_RE.test('"' + key + '"') ? '[REDACTED]' : walk(item);
+          }
+          return out;
+        }
+        return value;
+      };
+      return JSON.stringify(walk(payload));
+    } catch (_) {
+      return text;
+    }
+  }
+
+  function looksLikeAccountData(text, contentType) {
     if (!text || text.length < 80 || text.length > 1_000_000) return false;
-    // Must be parseable JSON
     try { JSON.parse(text); } catch { return false; }
+    if (AUTH_TOKEN_RE.test(text)) return false;
     const lower = text.toLowerCase();
-    // Skip pure auth/token responses — they're never loyalty data and JWTs
-    // can accidentally match keywords in their base64 payload
-    if (lower.includes('"token_type"') || lower.includes('"access_token"') ||
-        lower.includes('"id_token"') || lower.includes('"refresh_token"')) return false;
     const hits = KEYWORDS.filter(k => lower.includes(k)).length;
-    // 1 hit is enough for larger responses; tiny responses need 2+ to avoid noise
+    if (isGraphqlPayload(text, contentType)) return hits >= 1 || text.length >= 300;
     return text.length >= 500 ? hits >= 1 : hits >= 2;
   }
 
-  function forward(url, text) {
+  function forward(url, text, meta) {
     try {
       window.postMessage({
         type: MSG_TYPE,
-        url:  String(url || '').slice(0, 500),
-        data: text.slice(0, 120_000),
+        url: String(url || '').slice(0, 500),
+        data: redactSensitiveJson(text).slice(0, MAX_NETWORK_BLOCK_CHARS),
+        graphql: !!meta?.graphql,
+        contentType: meta?.contentType || '',
       }, '*');
     } catch (_) {}
   }
 
   function maybeForward(url, responseText, contentType) {
-    // Accept any JSON-ish content-type (application/json, application/graphql+json, text/json, etc.)
+    if (shouldSkipUrl(url)) return;
     const ct = (contentType || '').toLowerCase();
-    if (!ct.includes('json') && !ct.includes('graphql')) return;
-    if (!looksLikeAccountData(responseText)) return;
-    forward(url, responseText);
+    const graphqlCt = ct.includes('graphql');
+    const jsonCt = ct.includes('json') || graphqlCt || ct.includes('javascript');
+    if (!jsonCt && !isGraphqlPayload(responseText, ct)) return;
+    if (!looksLikeAccountData(responseText, ct)) return;
+    forward(url, responseText, {
+      graphql: graphqlCt || isGraphqlPayload(responseText, ct),
+      contentType: ct,
+    });
   }
 
   // ── Tier 1: Intercept fetch ──────────────────────────────────────────────────
@@ -70,8 +118,8 @@
   window.fetch = async function (...args) {
     const resp = await _fetch.apply(this, args);
     try {
-      const url  = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-      const ct   = resp.headers.get('content-type') || '';
+      const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+      const ct = resp.headers.get('content-type') || '';
       resp.clone().text().then(t => maybeForward(url, t, ct)).catch(() => {});
     } catch (_) {}
     return resp;
@@ -97,26 +145,10 @@
   };
 
   // ── Tier 2: Embedded page state ──────────────────────────────────────────────
-  // Many modern sites (Next.js, Apollo, Redux) serialize all data into a window
-  // global before any API call fires. Capturing this is more reliable than
-  // intercepting individual API responses because:
-  //   • The data is already structured and complete
-  //   • It captures state from all APIs in one shot
-  //   • No timing issues with hydration or lazy loading
-
-  // Known embedded state keys across major frameworks
   const EMBEDDED_KEYS = [
-    '__NEXT_DATA__',        // Next.js — serialized page props + server state
-    '__APOLLO_STATE__',     // Apollo Client — normalized GraphQL cache
-    '__APOLLO_CLIENT__',    // Apollo Client (older versions)
-    '__INITIAL_STATE__',    // Redux / generic initial state
-    '__APP_STATE__',        // Various SPA frameworks
-    '__REDUX_STATE__',      // Redux
-    '__STORE_STATE__',      // MobX / other stores
-    '__PRELOADED_STATE__',  // Redux Toolkit
-    'digitalData',          // Adobe Experience Cloud / CEDDL analytics layer
-    '__nuxt__',             // Nuxt.js
-    '__NEXT_REDUX_STORE__', // Next.js + Redux
+    '__NEXT_DATA__', '__APOLLO_STATE__', '__APOLLO_CLIENT__', '__INITIAL_STATE__',
+    '__APP_STATE__', '__REDUX_STATE__', '__STORE_STATE__', '__PRELOADED_STATE__',
+    'digitalData', '__nuxt__', '__NEXT_REDUX_STORE__',
   ];
 
   function checkWindowState() {
@@ -124,19 +156,14 @@
       try {
         const val = window[key];
         if (!val) continue;
-        // Stringify if needed (Apollo stores plain objects, not strings)
         const text = typeof val === 'string' ? val : JSON.stringify(val);
-        if (looksLikeAccountData(text)) {
-          // Prefix with "embedded:" so the server knows this is Tier 2 data
-          forward(`embedded:${key}@${location.href}`, text);
+        if (looksLikeAccountData(text, '')) {
+          forward(`embedded:${key}@${location.href}`, text, { graphql: false });
         }
       } catch (_) {}
     }
   }
 
-  // Watch for <script id="__NEXT_DATA__"> injected into the document at parse time.
-  // This script tag contains the full Next.js server-side props as inline JSON and
-  // is available before DOMContentLoaded in most cases.
   const _mo = new MutationObserver(mutations => {
     for (const m of mutations) {
       for (const n of m.addedNodes) {
@@ -145,24 +172,18 @@
         if (!isNextData) continue;
         try {
           const t = n.textContent || '';
-          if (looksLikeAccountData(t)) {
-            forward(`embedded:__NEXT_DATA__@${location.href}`, t);
+          if (looksLikeAccountData(t, '')) {
+            forward(`embedded:__NEXT_DATA__@${location.href}`, t, { graphql: false });
           }
         } catch (_) {}
-        // Once found, no need to keep observing for Next.js script tag
         _mo.disconnect();
       }
     }
   });
   _mo.observe(document.documentElement, { childList: true, subtree: true });
 
-  // Check at DOMContentLoaded (Apollo/Redux may be set by this point)
   document.addEventListener('DOMContentLoaded', checkWindowState);
-
-  // Check after full load (catches anything set by async scripts)
   window.addEventListener('load', checkWindowState);
-
-  // Safety net: check again after 3 seconds for slow-hydrating SPAs
   setTimeout(checkWindowState, 3_000);
 
 })();

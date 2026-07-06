@@ -15899,6 +15899,12 @@ def api_data_sync():
     _extraction = infer_extraction_status(_normalized, sync_status=data.get("sync_status", "ok"))
     data["extraction_status"] = _extraction
 
+    if sync_source == "extension" and data.get("sync_status") == "ok" and ex_data.get("raw_text"):
+        from mighty.network_intelligence import merge_network_blocks
+
+        raw_text = merge_network_blocks(ex_data.get("raw_text", ""), raw_text)
+        data["raw_text"] = raw_text[:40_000]
+
     from mighty.pipeline_inspector import (
         finalize_sync_without_discovery,
         new_run_id,
@@ -16316,12 +16322,23 @@ def api_extension_intercept():
         _log_privacy_event(uid, "domain_rejected", source=source, domain=real_url[:80])
         print(f"[Intercept] Domain mismatch for {source}: {real_url[:80]} — truncated", flush=True)
 
+    from mighty.network_intelligence import format_network_block, is_graphql_payload, redact_sensitive_json
+
+    json_data = redact_sensitive_json(json_data)
+
     ad      = decrypt_account_data(uid, existing["data_enc"] or "")
     old_raw = ad.get("raw_text", "")
 
     # Prepend the intercepted data so it leads the raw_text window.
-    # Tier 2 (embedded) gets a distinct label so Gemini knows it's pre-hydration state.
-    intercept_block = f"\n\n=== {tier_label}: {url} ===\n{json_data}\n"
+    if is_embedded:
+        intercept_block = f"\n\n=== {tier_label}: {url} ===\n{json_data}\n"
+    else:
+        intercept_block = format_network_block(
+            url,
+            json_data,
+            graphql=is_graphql_payload(json_data),
+            sync=False,
+        )
     combined = (intercept_block + old_raw)[:40_000]
     ad["raw_text"] = combined
 

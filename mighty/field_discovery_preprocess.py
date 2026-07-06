@@ -51,7 +51,7 @@ _SNIPPET_VALUE_RE = re.compile(
 )
 
 _STRUCTURED_BLOCK_RE = re.compile(
-    r"(=== (?:URL|EMBEDDED STATE|API RESPONSE|PAGE META|JSON-LD)[^\n]*===[\s\S]*?)(?=\n=== |\Z)",
+    r"(=== (?:URL|EMBEDDED STATE|API RESPONSE|NETWORK JSON|GRAPHQL|PAGE META|JSON-LD)[^\n]*===[\s\S]*?)(?=\n=== |\Z)",
     re.MULTILINE,
 )
 

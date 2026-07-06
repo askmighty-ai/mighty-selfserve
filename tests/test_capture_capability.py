@@ -193,3 +193,43 @@ class TestPipelineIntegration:
         assert "navigation_urls" in cap.present
         assert "network_json" in cap.missing
         assert cap.next_best_improvement == "Capture network JSON"
+
+    def test_extension_sync_with_network_json(self, pipeline_db):
+        from mighty.capture_capability import collect_signals_from_pipeline
+
+        run_id = start_run(
+            pipeline_db,
+            user_id="u1",
+            source="hilton",
+            initiator=RunInitiator.EXTENSION_SYNC.value,
+            data_source="extension",
+        )
+        raw = (
+            "\n\n=== NETWORK JSON: https://api.hilton.com/member ===\n"
+            '{"pointsBalance":143996,"tier":"Gold"}\n\n'
+            "--- https://www.hilton.com/account ---\n"
+            "Gold Member\n143996 points"
+        )
+        record_inferred_client_stages(
+            pipeline_db,
+            run_id,
+            sync_status="ok",
+            sync_failure_reason=None,
+            connection_status="connected",
+            raw_text=raw,
+            items=[],
+            json_payload_chars=120,
+        )
+        finalize_run(
+            pipeline_db,
+            run_id,
+            terminal_stage=PipelineStageId.CAPTURE.value,
+            run_status=RunStatus.COMPLETE.value,
+        )
+
+        cap = compute_provider_capability(
+            "hilton",
+            signals=collect_signals_from_pipeline(pipeline_db)["hilton"],
+        )
+        assert "network_json" in cap.present
+        assert "visible_text" in cap.present

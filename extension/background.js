@@ -108,17 +108,21 @@ function summarizeEvidenceMarkers(rawText) {
     + (text.match(/=== https?:\/\/[^\n]+ ===\n/g) || []).length
     + (text.match(/=== URL[^\n]*===/gi) || []).length;
   const apiBlocks = (text.match(/=== API RESPONSE:/gi) || []).length;
+  const networkJsonBlocks = (text.match(/=== NETWORK JSON:/gi) || []).length;
+  const graphqlBlocks = (text.match(/=== GRAPHQL:/gi) || []).length;
   const embeddedBlocks = (text.match(/=== EMBEDDED STATE:/gi) || []).length;
   const pageMetaBlocks = (text.match(/=== PAGE META:/gi) || []).length;
   const jsonLdBlocks = (text.match(/=== JSON-LD:/gi) || []).length;
   let jsonPayloadChars = 0;
-  for (const block of text.match(/=== (?:API RESPONSE|EMBEDDED STATE|JSON-LD):[^\n]*===\n([\s\S]*?)(?=\n\n=== |\n\n--- |\Z)/g) || []) {
+  for (const block of text.match(/=== (?:API RESPONSE|NETWORK JSON|GRAPHQL|EMBEDDED STATE|JSON-LD):[^\n]*===\n([\s\S]*?)(?=\n\n=== |\n\n--- |\Z)/g) || []) {
     jsonPayloadChars += block.length;
   }
   return {
     visible_text_chars: visibleTextCharCount(text),
     url_section_count: urlSections,
     api_response_blocks: apiBlocks,
+    network_json_blocks: networkJsonBlocks,
+    graphql_blocks: graphqlBlocks,
     embedded_state_blocks: embeddedBlocks,
     page_metadata_blocks: pageMetaBlocks,
     json_ld_blocks: jsonLdBlocks,
@@ -785,7 +789,65 @@ const INTERCEPT_DOMAIN_MAP = {
 const _interceptSeen = new Map();
 const _INTERCEPT_COOLDOWN = 10 * 60 * 1000;
 
-async function handleInterceptedApi(url, data) {
+// Phase 2: buffer structured network responses during account sync tab crawls.
+const _syncNetworkCapture = new Map(); // source -> { seen: Set, blocks: [] }
+const _MAX_NETWORK_BLOCK_CHARS = 120_000;
+const _MAX_SYNC_NETWORK_BUFFER_CHARS = 80_000;
+const _MAX_RAW_TEXT_CHARS = 40_000;
+const _SENSITIVE_JSON_RE = /"(access_token|refresh_token|id_token|password|secret|authorization|cookie|csrf|session_token|session_id|sessionid|set-cookie)"/i;
+
+function beginSyncNetworkCapture(source) {
+  _syncNetworkCapture.set(source, { seen: new Set(), blocks: [] });
+}
+
+function endSyncNetworkCapture(source) {
+  _syncNetworkCapture.delete(source);
+}
+
+function _bufferSyncNetworkResponse(source, url, data, { graphql = false } = {}) {
+  const buf = _syncNetworkCapture.get(source);
+  if (!buf || !data) return;
+  const dedupeKey = `${url}|${String(data).slice(0, 200)}`;
+  if (buf.seen.has(dedupeKey)) return;
+  buf.seen.add(dedupeKey);
+  const marker = graphql ? 'GRAPHQL' : 'NETWORK JSON';
+  const safe = _redactNetworkJson(data);
+  buf.blocks.push(`\n\n=== ${marker}: ${String(url || '').slice(0, 500)} ===\n${safe}\n`);
+}
+
+function flushSyncNetworkBlocks(source) {
+  const buf = _syncNetworkCapture.get(source);
+  if (!buf || !buf.blocks.length) return '';
+  return buf.blocks.join('').slice(0, _MAX_SYNC_NETWORK_BUFFER_CHARS);
+}
+
+function mergeSyncNetworkIntoRawText(rawText, source) {
+  const networkPart = flushSyncNetworkBlocks(source);
+  if (!networkPart) return rawText;
+  return (networkPart + rawText).slice(0, _MAX_RAW_TEXT_CHARS);
+}
+
+function _redactNetworkJson(text) {
+  if (!text || !_SENSITIVE_JSON_RE.test(text)) return String(text || '').slice(0, _MAX_NETWORK_BLOCK_CHARS);
+  try {
+    const walk = (value) => {
+      if (Array.isArray(value)) return value.map(walk);
+      if (value && typeof value === 'object') {
+        const out = {};
+        for (const [key, item] of Object.entries(value)) {
+          out[key] = _SENSITIVE_JSON_RE.test(`"${key}"`) ? '[REDACTED]' : walk(item);
+        }
+        return out;
+      }
+      return value;
+    };
+    return JSON.stringify(walk(JSON.parse(text))).slice(0, _MAX_NETWORK_BLOCK_CHARS);
+  } catch (_) {
+    return String(text || '').slice(0, _MAX_NETWORK_BLOCK_CHARS);
+  }
+}
+
+async function handleInterceptedApi(url, data, { graphql = false } = {}) {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
 
@@ -800,6 +862,12 @@ async function handleInterceptedApi(url, data) {
     }
   } catch { return; }
   if (!source) return;
+
+  // During sync tab crawl, buffer for the sync payload instead of immediate intercept POST.
+  if (_syncNetworkCapture.has(source)) {
+    _bufferSyncNetworkResponse(source, url, data, { graphql });
+    return;
+  }
 
   // Dedup: skip if we already sent this URL recently
   const now = Date.now();
@@ -1098,7 +1166,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     return true;
   }
   if (msg.action === 'intercepted_api') {
-    handleInterceptedApi(msg.url, msg.data).catch(() => {});
+    handleInterceptedApi(msg.url, msg.data, { graphql: !!msg.graphql }).catch(() => {});
     return false; // no sendResponse needed
   }
   if (msg.action === 'login_page_detected') {
@@ -1245,7 +1313,6 @@ function _htmlToText(html) {
     .replace(/&#\d+;/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-const _SENSITIVE_JSON_RE = /"(access_token|refresh_token|id_token|password|secret|authorization|cookie|csrf|session_token)"/i;
 const _EVIDENCE_MAX_BLOCK = 12_000;
 const _EMBEDDED_SCRIPT_IDS = ['__NEXT_DATA__', '__NUXT__'];
 
@@ -3096,6 +3163,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         evidenceMarkers: summarizeEvidenceMarkers(silentText),
       });
       await tracker.flush();
+      const silentPayload = mergeSyncNetworkIntoRawText(silentText, account.source);
       const pushResp = await fetch(`${MIGHTY_URL}/api/data/sync`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3110,7 +3178,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
             color:    account.color,
             status:   'ok',
             items:    [],
-            raw_text: silentText.slice(0, 40_000),
+            raw_text: silentPayload.slice(0, 40_000),
           },
           synced_at: syncSessionTime,
         }),
@@ -3285,6 +3353,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
   };
 
+  beginSyncNetworkCapture(account.source);
   try {
     // Helper: mark the sync tab in the ISOLATED world so api_relay.js skips
     // its login-detection poll — otherwise api_relay.js detects the login form
@@ -3296,6 +3365,11 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           target: { tabId },
           world:  'ISOLATED',
           func:   () => { window.__mightySyncTab = true; },
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world:  'MAIN',
+          func:   () => { window.__mightySyncCapture = true; },
         });
       } catch (_) {}
       // Simultaneously block window.open in the MAIN world
@@ -3759,15 +3833,16 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
 
     // Truncate each page contribution before joining to avoid mid-sentence cuts
     const rawText = allText.map((t, i) => i === 0 ? t.slice(0, 20_000) : t.slice(0, 10_000)).join('').slice(0, 40_000);
-    console.log(`[Mighty] ${account.name}: ${rawText.length} chars across ${allText.length} page(s) — pushing`);
+    const syncRawText = mergeSyncNetworkIntoRawText(rawText, account.source);
+    console.log(`[Mighty] ${account.name}: ${syncRawText.length} chars across ${allText.length} page(s) — pushing`);
 
     tracker.finishNavigation({ success: true });
     tracker.startCapture();
     tracker.finishCapture({
       success: true,
-      rawTextSize: rawText.length,
-      jsonPayloadSize: jsonPayloadSize(rawText),
-      evidenceMarkers: summarizeEvidenceMarkers(rawText),
+      rawTextSize: syncRawText.length,
+      jsonPayloadSize: jsonPayloadSize(syncRawText),
+      evidenceMarkers: summarizeEvidenceMarkers(syncRawText),
     });
     await tracker.flush();
 
@@ -3785,7 +3860,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
           color:    account.color,
           status:   'ok',
           items:    [],
-          raw_text: rawText,
+          raw_text: syncRawText,
         },
         synced_at: syncSessionTime,
       }),
@@ -3801,6 +3876,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     _clearLoginWall(account.source);
 
   } finally {
+    endSyncNetworkCapture(account.source);
     chrome.tabs.onCreated.removeListener(_closeRogueTab);
     chrome.tabs.onUpdated.removeListener(_blockOpenOnLoad);
     if (!useShared) {

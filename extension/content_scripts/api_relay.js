@@ -101,9 +101,11 @@
     // context is invalidated (e.g. after a reload), before .catch() can fire.
     try {
       chrome.runtime.sendMessage({
-        action:  'intercepted_api',
+        action:      'intercepted_api',
         url,
-        data:    event.data.data,
+        data:        event.data.data,
+        graphql:     !!event.data.graphql,
+        contentType: event.data.contentType || '',
       }).catch(() => {/* background may not be ready */});
     } catch (_e) {
       // Context invalidated — content script will be replaced on next navigation.
