@@ -182,7 +182,9 @@ def persist_provider_state(
         ad_data["connection_status"] = connection_status
         if iso_fn:
             ad_data["connection_status_at"] = iso_fn()
-        if connection_status == "connected" and ad_data.get("sync_status") == "login_required":
+        if connection_status == "connected" and ad_data.get("sync_status") in {
+            "login_required", "needs_first_visit",
+        }:
             ad_data["sync_status"] = "ok"
             clear_login_sync = True
     if extraction_status is not None:

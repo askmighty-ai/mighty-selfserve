@@ -1276,6 +1276,40 @@ def map_sync_failure_reason(reason: str) -> str:
     return mapping.get(reason, FAIL_NO_DATA)
 
 
+def record_extension_session_verification(
+    db: Any,
+    *,
+    user_id: str,
+    source: str,
+    verified_at: str | None = None,
+) -> str:
+    """Record a successful browser-session verification from the extension adapter."""
+    run_id = start_run(
+        db,
+        user_id=user_id,
+        source=source,
+        initiator=RunInitiator.EXTENSION_SYNC.value,
+        data_source="extension",
+    )
+    now = verified_at or utc_now_iso()
+    record_stage(
+        db,
+        run_id,
+        PipelineStageId.CONNECTION.value,
+        started_at=now,
+        finished_at=now,
+        status=StageStatus.SUCCESS.value,
+        artifacts={"session_verified": True, "adapter": "extension"},
+    )
+    finalize_run(
+        db,
+        run_id,
+        terminal_stage=PipelineStageId.CONNECTION.value,
+        run_status=RunStatus.COMPLETE.value,
+    )
+    return run_id
+
+
 def record_adapter_extraction_run(
     db: Any,
     *,
