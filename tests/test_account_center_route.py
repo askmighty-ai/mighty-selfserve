@@ -32,13 +32,13 @@ def client(tmp_path, monkeypatch):
     return c
 
 
-def _seed_amex(db, uid):
+def _seed_amex(db, uid, *, sync_status="ok"):
     ensure_pipeline_tables(db)
     import app as mighty
 
     payload = {
         "items": [{"key": "statement_balance", "label": "Balance", "value": "$900"}],
-        "sync_status": "ok",
+        "sync_status": sync_status,
         "data_source": "extension",
     }
     stub = mighty.encrypt_account_data(uid, payload)
@@ -53,9 +53,9 @@ def _seed_amex(db, uid):
         """
         INSERT INTO account_data (
             user_id, source, display_name, icon, color, data_enc, synced_at, sync_status, extraction_status
-        ) VALUES (?, 'amex', 'American Express', '💳', '#e8f0fe', ?, '2026-06-01T00:00:00+00:00', 'ok', 'complete')
+        ) VALUES (?, 'amex', 'American Express', '💳', '#e8f0fe', ?, '2026-06-01T00:00:00+00:00', ?, 'complete')
         """,
-        (uid, stub),
+        (uid, stub, sync_status),
     )
     run_id = start_run(
         db,
@@ -111,8 +111,35 @@ def test_account_center_renders_cards(client):
     assert "American Express" in html
     assert "acc-card" in html
     assert "Extension" in html
+    assert "overflow-y:auto" in html
     assert "pipeline" not in html.lower()
     assert "extraction" not in html.lower()
+
+
+def test_account_center_login_button_has_provider_href(client):
+    import app as mighty
+
+    with client.session_transaction() as sess:
+        uid = sess["user_id"]
+    with mighty.app.app_context():
+        _seed_amex(mighty.get_db(), uid, sync_status="login_required")
+    r = client.get("/account-center")
+    html = r.get_data(as_text=True)
+    assert 'href="https://www.americanexpress.com/en-us/account/login"' in html
+    assert ">Reconnect</a>" in html
+    assert 'target="_blank"' in html
+
+
+def test_account_center_refresh_stays_button(client):
+    import app as mighty
+
+    with client.session_transaction() as sess:
+        uid = sess["user_id"]
+    with mighty.app.app_context():
+        _seed_amex(mighty.get_db(), uid)
+    r = client.get("/account-center")
+    html = r.get_data(as_text=True)
+    assert ">View Benefits</button>" in html or ">Refresh</button>" in html
 
 
 def test_credentials_page_still_exists(client):

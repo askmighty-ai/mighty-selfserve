@@ -61,8 +61,11 @@ TONE_BG: dict[str, str] = {
 # ── Primary actions (future wiring via data-action-kind) ─────────────────────
 PRIMARY_CONNECT = "connect"
 PRIMARY_LOGIN = "login"
+PRIMARY_RECONNECT = "reconnect"
 PRIMARY_REFRESH = "refresh"
 PRIMARY_VIEW_BENEFITS = "view_benefits"
+
+LINKABLE_ACTION_KINDS = frozenset({PRIMARY_LOGIN, PRIMARY_RECONNECT, PRIMARY_CONNECT})
 
 ACCESS_LABELS: dict[str, str] = {
     ACCESS_BROWSER_SESSION: "Extension",
@@ -118,6 +121,8 @@ class AccountCenterCardView:
     last_refresh_label: str
     primary_action: str
     primary_action_kind: str
+    primary_action_href: str | None
+    primary_action_external: bool
     status_line: str
 
 
@@ -180,6 +185,8 @@ def primary_action(state: AccountState) -> tuple[str, str]:
     if action:
         kind = action.kind
         if kind == ACTION_LOGIN:
+            if state.last_data_refresh or state.data_status in {DATA_PARTIAL, DATA_COMPLETE}:
+                return "Reconnect", PRIMARY_RECONNECT
             return "Login", PRIMARY_LOGIN
         if kind == ACTION_CONNECT:
             return "Connect", PRIMARY_CONNECT
@@ -192,6 +199,8 @@ def primary_action(state: AccountState) -> tuple[str, str]:
     if state.connection_state == CONN_NOT_CONNECTED:
         return "Connect", PRIMARY_CONNECT
     if state.connection_state == CONN_NEEDS_LOGIN:
+        if state.last_data_refresh or state.data_status in {DATA_PARTIAL, DATA_COMPLETE}:
+            return "Reconnect", PRIMARY_RECONNECT
         return "Login", PRIMARY_LOGIN
     if state.connection_state == CONN_CONNECTED:
         if state.data_status == DATA_COMPLETE:
@@ -200,14 +209,34 @@ def primary_action(state: AccountState) -> tuple[str, str]:
     return "Connect", PRIMARY_CONNECT
 
 
+def resolve_primary_action_href(
+    kind: str,
+    provider: str,
+    *,
+    provider_login_url: str | None = None,
+) -> tuple[str | None, bool]:
+    """Return (href, open_in_new_tab) for linkable CTAs; (None, False) for placeholders."""
+    if kind not in LINKABLE_ACTION_KINDS:
+        return None, False
+    if provider_login_url:
+        return provider_login_url, True
+    if kind == PRIMARY_CONNECT:
+        return f"/credentials?connect={provider}", False
+    return f"/credentials?connect={provider}", False
+
+
 def build_card_view(
     state: AccountState,
     *,
     icon: str = "🔗",
     color: str = "#f3f4f6",
     fmt_relative: Callable[[str], str],
+    provider_login_url: str | None = None,
 ) -> AccountCenterCardView:
     label, kind = primary_action(state)
+    href, external = resolve_primary_action_href(
+        kind, state.provider, provider_login_url=provider_login_url,
+    )
     return AccountCenterCardView(
         provider=state.provider,
         display_name=state.display_name,
@@ -222,6 +251,8 @@ def build_card_view(
         last_refresh_label=last_refresh_label(state, fmt_relative),
         primary_action=label,
         primary_action_kind=kind,
+        primary_action_href=href,
+        primary_action_external=external,
         status_line=state.status_line,
     )
 
@@ -263,6 +294,27 @@ def sort_cards(cards: list[AccountCenterCardView]) -> list[AccountCenterCardView
     return sorted(cards, key=_key)
 
 
+def render_card_cta(card: AccountCenterCardView, escape: Callable[[Any], str]) -> str:
+    if card.primary_action_href:
+        external = (
+            ' target="_blank" rel="noopener noreferrer"'
+            if card.primary_action_external
+            else ""
+        )
+        return (
+            f'<a href="{escape(card.primary_action_href)}" class="acc-card-cta"'
+            f'{external} data-provider="{escape(card.provider)}" '
+            f'data-action="{escape(card.primary_action_kind)}">'
+            f"{escape(card.primary_action)}</a>"
+        )
+    return (
+        f'<button type="button" class="acc-card-cta" '
+        f'data-provider="{escape(card.provider)}" '
+        f'data-action="{escape(card.primary_action_kind)}">'
+        f"{escape(card.primary_action)}</button>"
+    )
+
+
 def render_card(card: AccountCenterCardView, escape: Callable[[Any], str]) -> str:
     tone = card.status_tone
     accent = TONE_COLORS[tone]
@@ -294,10 +346,7 @@ def render_card(card: AccountCenterCardView, escape: Callable[[Any], str]) -> st
         f'<p class="acc-card-subline">{escape(card.status_line)}</p>'
         f'<footer class="acc-card-footer">'
         f'<span class="acc-card-refreshed">Last refresh · {escape(card.last_refresh_label)}</span>'
-        f'<button type="button" class="acc-card-cta" '
-        f'data-provider="{escape(card.provider)}" '
-        f'data-action="{escape(card.primary_action_kind)}">'
-        f"{escape(card.primary_action)}</button>"
+        f"{render_card_cta(card, escape)}"
         f"</footer></div></article>"
     )
 
@@ -358,8 +407,8 @@ ACCOUNT_CENTER_CSS = """
 .acc-card-subline{font-size:12px;color:#78716c;line-height:1.45;margin:0}
 .acc-card-footer{margin-top:auto;display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:4px;border-top:1px solid rgba(0,0,0,0.05)}
 .acc-card-refreshed{font-size:11px;color:#a8a29e;white-space:nowrap}
-.acc-card-cta{padding:8px 16px;border-radius:10px;font-size:13px;font-weight:600;border:none;background:#6366f1;color:#fff;cursor:pointer;transition:background 0.12s;white-space:nowrap;font-family:inherit}
-.acc-card-cta:hover{background:#4f46e5}
+.acc-card-cta{padding:8px 16px;border-radius:10px;font-size:13px;font-weight:600;border:none;background:#6366f1;color:#fff;cursor:pointer;transition:background 0.12s;white-space:nowrap;font-family:inherit;display:inline-block;text-decoration:none;text-align:center}
+.acc-card-cta:hover{background:#4f46e5;color:#fff;text-decoration:none}
 .acc-empty{text-align:center;padding:80px 24px;background:#fff;border-radius:16px;border:1px dashed rgba(0,0,0,0.08)}
 .acc-empty-title{font-size:18px;font-weight:600;color:#1c1917;margin-bottom:8px}
 .acc-empty-body{font-size:14px;color:#78716c;margin-bottom:20px}

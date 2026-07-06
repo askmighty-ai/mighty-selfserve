@@ -15111,7 +15111,13 @@ def _build_account_center_page(user, states) -> str:
     for state in states:
         icon, color = _site_meta.get(state.provider, ("🔗", "#f3f4f6"))
         cards.append(
-            build_card_view(state, icon=icon, color=color, fmt_relative=_fmt_sync)
+            build_card_view(
+                state,
+                icon=icon,
+                color=color,
+                fmt_relative=_fmt_sync,
+                provider_login_url=_provider_login_url(state.provider) or None,
+            )
         )
     cards = sort_cards(cards)
     summary = build_summary(cards)
