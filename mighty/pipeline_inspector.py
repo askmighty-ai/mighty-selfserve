@@ -204,6 +204,9 @@ def finalize_run(
             "terminal_reason": terminal_reason,
         }
     )
+    from mighty.account_state import safe_recompute_account_state_from_run
+
+    safe_recompute_account_state_from_run(db, run_id)
     return True
 
 
