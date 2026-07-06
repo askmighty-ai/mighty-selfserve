@@ -23,18 +23,18 @@ from mighty.account_lifecycle import (
     AccountLifecycle,
     resolve_account_lifecycle,
 )
-from mighty.account_presentation import resolve_presentation_from_status_signals
+from mighty.account_presentation import (
+    build_access_loop_summary,
+    resolve_account_presentation,
+    resolve_presentation_from_status_signals,
+)
 from mighty.provider_account import ProviderAccount, infer_extraction_status, load_provider_account, has_normalized_data
 from mighty.user_copy import (
-    ACCOUNT_STATE_LABELS,
+    ACCOUNT_STATE_CTAS,
     CTA_SIGN_IN,
     FAILURE_HINTS,
     LIFECYCLE_CTAS,
     STATUS_LABELS,
-    summary_needs_login,
-    summary_needs_login_plural,
-    summary_updating,
-    summary_updating_plural,
 )
 
 UP_TO_DATE = "up_to_date"
@@ -105,9 +105,10 @@ class AccountStatusSummary:
     updating_count: int
     needs_login_accounts: list[str]
     updating_accounts: list[str]
+    access_loop: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "headline": self.headline,
             "subline": self.subline,
             "is_syncing": self.is_syncing,
@@ -116,6 +117,13 @@ class AccountStatusSummary:
             "needs_login_accounts": self.needs_login_accounts,
             "updating_accounts": self.updating_accounts,
         }
+        if self.access_loop is not None:
+            payload["access_loop"] = self.access_loop
+            payload["detail_lines"] = self.access_loop.get("detail_lines", [])
+            payload["open_account_center_label"] = self.access_loop.get(
+                "open_account_center_label", "",
+            )
+        return payload
 
 
 def merge_sync_status(blob_status: str, column_status: str) -> str:
@@ -244,38 +252,60 @@ def build_account_status(
     )
 
 
-def build_status_summary(accounts: list[AccountStatus]) -> AccountStatusSummary:
+def build_status_summary(
+    accounts: list[AccountStatus],
+    *,
+    access_loop_presentations=None,
+) -> AccountStatusSummary:
     """Headline/subline for extension popup and dashboard sync header."""
-    needs_login = [a for a in accounts if a.status == NEEDS_LOGIN]
-    updating = [a for a in accounts if a.status == UPDATING]
+    from mighty.account_presentation import AccountPresentation
 
-    headline = ""
-    subline = ""
+    if access_loop_presentations is not None:
+        loop = build_access_loop_summary(access_loop_presentations)
+        needs_sign_in_accounts = [
+            a.display_name
+            for a in accounts
+            if a.presentation_key == "needs_sign_in"
+        ]
+        updating_accounts = [
+            a.display_name for a in accounts if a.presentation_key == "updating"
+        ]
+        return AccountStatusSummary(
+            headline=loop.headline,
+            subline=" · ".join(loop.detail_lines),
+            is_syncing=loop.is_updating,
+            needs_login_count=loop.needs_sign_in,
+            updating_count=loop.updating,
+            needs_login_accounts=needs_sign_in_accounts,
+            updating_accounts=updating_accounts,
+            access_loop=loop.to_dict(),
+        )
 
-    if updating:
-        headline = summary_updating(updating[0].display_name)
-        if len(updating) > 1:
-            subline = summary_updating_plural(len(updating))
-    elif needs_login:
-        if len(needs_login) == 1:
-            headline = summary_needs_login(needs_login[0].display_name)
-        else:
-            headline = summary_needs_login_plural(len(needs_login))
-
-    if updating and needs_login:
-        if len(needs_login) == 1:
-            subline = summary_needs_login(needs_login[0].display_name)
-        else:
-            subline = summary_needs_login_plural(len(needs_login))
-
+    presentations = [
+        AccountPresentation(
+            key=a.presentation_key,
+            label=a.presentation_label,
+            cta_label=ACCOUNT_STATE_CTAS.get(a.presentation_key, ""),
+            cta_disabled=a.presentation_key == "updating",
+        )
+        for a in accounts
+    ]
+    loop = build_access_loop_summary(presentations)
+    needs_sign_in_accounts = [
+        a.display_name for a in accounts if a.presentation_key == "needs_sign_in"
+    ]
+    updating_accounts = [
+        a.display_name for a in accounts if a.presentation_key == "updating"
+    ]
     return AccountStatusSummary(
-        headline=headline,
-        subline=subline,
-        is_syncing=bool(updating),
-        needs_login_count=len(needs_login),
-        updating_count=len(updating),
-        needs_login_accounts=[a.display_name for a in needs_login],
-        updating_accounts=[a.display_name for a in updating],
+        headline=loop.headline,
+        subline=" · ".join(loop.detail_lines),
+        is_syncing=loop.is_updating,
+        needs_login_count=loop.needs_sign_in,
+        updating_count=loop.updating,
+        needs_login_accounts=needs_sign_in_accounts,
+        updating_accounts=updating_accounts,
+        access_loop=loop.to_dict(),
     )
 
 
@@ -296,6 +326,7 @@ def load_all_account_statuses(
     sync_running: bool = False,
     sync_started_at: str | None = None,
     updating_source: str | None = None,
+    account_states: list | None = None,
 ) -> tuple[list[AccountStatus], AccountStatusSummary]:
     """Load canonical status for every connected account."""
     if lifecycle_signals is None:
@@ -307,6 +338,9 @@ def load_all_account_statuses(
     ).fetchall()
 
     effective_updating = updating_source if sync_running else None
+    states_by_provider = {}
+    if account_states:
+        states_by_provider = {s.provider: s for s in account_states}
 
     accounts: list[AccountStatus] = []
     for row in cred_rows:
@@ -372,25 +406,77 @@ def load_all_account_statuses(
             except (KeyError, IndexError):
                 failure_reason = data.get("sync_failure_reason")
 
-        accounts.append(
-            build_account_status(
-                source,
-                display_name,
-                lifecycle,
-                provider_acct,
-                sync_status=sync_status,
+        canonical = resolve_canonical_status(
+            lifecycle,
+            sync_status,
+            source=source,
+            updating_source=effective_updating,
+            connection_status=connection_status or None,
+        )
+
+        state = states_by_provider.get(source)
+        if state is not None:
+            presentation = resolve_account_presentation(
+                state,
+                sync_running=sync_running,
                 updating_source=effective_updating,
-                sync_started_at=sync_started_at,
-                login_url=login_url,
-                connect_url=connect_url,
-                failure_reason=failure_reason,
-                connection_status=connection_status or None,
+            )
+        else:
+            presentation = resolve_presentation_from_status_signals(
+                provider=source,
+                connection_status=connection_status,
+                sync_status=sync_status,
+                lifecycle_state=lifecycle.state,
+                has_meaningful_data=has_normalized_data(provider_acct.normalized_fields if provider_acct else None),
                 last_verified_at=_latest_connection_verification(db, uid, source),
+                is_updating=canonical == UPDATING,
+                sync_status_error=failure_reason,
+            )
+
+        synced_at = provider_acct.synced_at if provider_acct else None
+        last_error = None
+        if canonical == ERROR:
+            reason = failure_reason or sync_status
+            last_error = _FAILURE_MESSAGES.get(reason, reason or "Sync failed")
+        elif presentation.key == "needs_sign_in":
+            last_error = _FAILURE_MESSAGES.get("login_required")
+
+        action_label, action_url = _user_action_for_status(
+            canonical,
+            lifecycle,
+            login_url=login_url,
+            connect_url=connect_url,
+            presentation_cta=presentation.cta_label,
+        )
+
+        accounts.append(
+            AccountStatus(
+                source=source,
+                display_name=display_name,
+                status=canonical,
+                presentation_key=presentation.key,
+                presentation_label=presentation.label,
+                last_successful_sync_at=synced_at if lifecycle.state == LC_SYNCED else None,
+                current_attempt_at=sync_started_at if canonical == UPDATING else None,
+                last_error=last_error or presentation.extension_hint,
+                user_action_label=action_label,
+                user_action_url=action_url,
             )
         )
 
     accounts.sort(key=lambda a: a.display_name.lower())
-    return accounts, build_status_summary(accounts)
+    from mighty.account_presentation import AccountPresentation
+
+    summary_presentations = [
+        AccountPresentation(
+            key=a.presentation_key,
+            label=a.presentation_label,
+            cta_label=ACCOUNT_STATE_CTAS.get(a.presentation_key, ""),
+            cta_disabled=a.presentation_key == "updating",
+        )
+        for a in accounts
+    ]
+    return accounts, build_status_summary(accounts, access_loop_presentations=summary_presentations)
 
 
 def _load_lifecycle_signals(uid: str, db) -> dict[str, tuple[bool, bool, bool]]:

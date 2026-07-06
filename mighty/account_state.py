@@ -580,29 +580,29 @@ def build_status_line(
     last_data_refresh: str | None,
 ) -> str:
     from mighty.user_copy import (
-        ACCOUNT_STATE_CHECKING,
-        ACCOUNT_STATE_CONNECTED,
         ACCOUNT_STATE_LABELS,
-        ACCOUNT_STATE_NEEDS_LOGIN,
-        ACCOUNT_STATE_NO_DATA,
+        ACCOUNT_STATE_NEEDS_SIGN_IN,
+        ACCOUNT_STATE_NEEDS_ATTENTION,
+        ACCOUNT_STATE_READY,
+        ACCOUNT_STATE_UPDATING,
     )
 
     parts: list[str] = []
     if connection_state == CONN_NEEDS_LOGIN:
-        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN])
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN])
     elif connection_state == CONN_CONNECTING:
-        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING])
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING])
     elif connection_state == CONN_NOT_CONNECTED:
-        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN])
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN])
     elif data_status == DATA_COMPLETE:
-        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED])
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY])
     elif data_status == DATA_PARTIAL:
-        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED])
+        parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY])
     elif data_status == DATA_NONE:
         if connection_state == CONN_CONNECTED:
-            parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA])
+            parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING])
         else:
-            parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING])
+            parts.append(ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING])
 
     if last_data_refresh and data_status in {DATA_COMPLETE, DATA_PARTIAL}:
         verified = _parse_iso(last_data_refresh)

@@ -28,29 +28,40 @@ DASHBOARD_ROLE_LINE = "The dashboard is your control center — it shows results
 MANUAL_STEP_LINE = "Login is the only thing you do manually. Everything else is automatic."
 NEEDS_LOGIN_EXPLAINER = "Needs login means: open the provider in Chrome and sign in."
 
-# ── Shared account presentation states (Account Center + extension popup) ─────
-ACCOUNT_STATE_NEEDS_LOGIN = "needs_login"
-ACCOUNT_STATE_CHECKING = "checking_account"
-ACCOUNT_STATE_CONNECTED = "connected"
+# ── Account Access Loop (Account Center + extension popup) ───────────────────
+# Four user-facing states only — one label and one CTA each.
+ACCOUNT_STATE_NEEDS_SIGN_IN = "needs_sign_in"
+ACCOUNT_STATE_UPDATING = "updating"
+ACCOUNT_STATE_READY = "ready"
 ACCOUNT_STATE_NEEDS_ATTENTION = "needs_attention"
-ACCOUNT_STATE_NO_DATA = "no_data_yet"
 
 ACCOUNT_STATE_LABELS: dict[str, str] = {
-    ACCOUNT_STATE_NEEDS_LOGIN: "Needs login",
-    ACCOUNT_STATE_CHECKING: "Checking account",
-    ACCOUNT_STATE_CONNECTED: "Connected",
+    ACCOUNT_STATE_NEEDS_SIGN_IN: "Needs sign in",
+    ACCOUNT_STATE_UPDATING: "Updating",
+    ACCOUNT_STATE_READY: "Ready",
     ACCOUNT_STATE_NEEDS_ATTENTION: "Needs attention",
-    ACCOUNT_STATE_NO_DATA: "No data yet",
 }
 
-CTA_SIGN_IN = "Sign in"
-CTA_CHECKING = "Checking…"
-CTA_VIEW = "View"
-CTA_REFRESH = "Refresh"
-CTA_RETRY = "Retry"
+ACCOUNT_STATE_CTAS: dict[str, str] = {
+    ACCOUNT_STATE_NEEDS_SIGN_IN: "Sign in",
+    ACCOUNT_STATE_UPDATING: "Updating…",
+    ACCOUNT_STATE_READY: "View",
+    ACCOUNT_STATE_NEEDS_ATTENTION: "Fix",
+}
 
-EXT_ACCOUNT_NEEDS_LOGIN_HINT = "Sign in to refresh this account"
-EXT_ACCOUNT_CHECKING_HINT = "Checking your account…"
+CTA_SIGN_IN = ACCOUNT_STATE_CTAS[ACCOUNT_STATE_NEEDS_SIGN_IN]
+CTA_UPDATING = ACCOUNT_STATE_CTAS[ACCOUNT_STATE_UPDATING]
+CTA_VIEW = ACCOUNT_STATE_CTAS[ACCOUNT_STATE_READY]
+CTA_FIX = ACCOUNT_STATE_CTAS[ACCOUNT_STATE_NEEDS_ATTENTION]
+
+EXT_ACCOUNT_NEEDS_SIGN_IN_HINT = "Sign in to refresh this account"
+EXT_ACCOUNT_UPDATING_HINT = "Mighty is updating this account"
+
+# Timestamp copy — session verification vs data refresh are distinct events.
+SESSION_VERIFIED_PREFIX = "Session verified"
+DATA_REFRESHED_PREFIX = "Data refreshed"
+SESSION_NEVER_VERIFIED = "Session not verified yet"
+DATA_NEVER_REFRESHED = "No data yet"
 
 # ── Activity model (shared stages) ────────────────────────────────────────────
 ACTIVITY_WATCHING = "watching"
@@ -77,10 +88,10 @@ STATUS_LABEL_WAITING = ACTIVITY_LABELS[ACTIVITY_WAITING]
 STATUS_LABEL_ERROR = ACTIVITY_LABELS[ACTIVITY_ERROR]
 
 STATUS_LABELS: dict[str, str] = {
-    "up_to_date": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED],
-    "updating": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
-    "needs_login": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN],
-    "waiting_for_extension": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
+    "up_to_date": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY],
+    "updating": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
+    "needs_login": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN],
+    "waiting_for_extension": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
     "error": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],
 }
 
@@ -94,15 +105,16 @@ WORKER_SETUP_DETAIL = "Open your control center to connect the worker."
 WORKER_SETUP_BOX = (
     "Visit your Mighty dashboard in Chrome — the worker configures itself automatically."
 )
-WORKER_OPEN_DASHBOARD = "Open control center →"
+WORKER_OPEN_ACCOUNT_CENTER = "Open Account Center"
+WORKER_OPEN_DASHBOARD = WORKER_OPEN_ACCOUNT_CENTER
 WORKER_NOT_UPDATED_YET = "Not updated yet"
+WORKER_ACCESS_LOOP_UPDATING = "Mighty is updating your accounts"
 WORKER_FIRST_UPDATE_SOON = "First update soon"
 WORKER_WAITING_FIRST_UPDATE = "Waiting for first update…"
 WORKER_LAST_COMPLETED_PREFIX = "Last completed"
 WORKER_NEXT_UPDATE_PREFIX = "Next update in"
 WORKER_ACCOUNTS_UPDATED = "{n} account{s} updated"
 WORKER_ACCOUNTS_UPDATED_PARTIAL = "{ok} of {total} accounts updated"
-WORKER_NEEDS_LOGIN_SUBLINE = EXT_ACCOUNT_NEEDS_LOGIN_HINT
 
 # ── Extension / worker setup ────────────────────────────────────────────────────
 EXT_PRODUCT_NAME = "Mighty Worker"
@@ -271,12 +283,28 @@ def summary_updating_plural(count: int) -> str:
     return f"{count} accounts updating"
 
 
-def summary_needs_login(name: str) -> str:
-    return f"{name} needs login"
+def access_loop_count_needs_sign_in(count: int) -> str:
+    if count == 1:
+        return "1 needs sign in"
+    return f"{count} need sign in"
 
 
-def summary_needs_login_plural(count: int) -> str:
-    return f"{count} accounts need login"
+def access_loop_count_updating(count: int) -> str:
+    if count == 1:
+        return "1 updating"
+    return f"{count} updating"
+
+
+def access_loop_count_ready(count: int) -> str:
+    if count == 1:
+        return "1 ready"
+    return f"{count} ready"
+
+
+def access_loop_count_needs_attention(count: int) -> str:
+    if count == 1:
+        return "1 needs attention"
+    return f"{count} need attention"
 
 
 # ── Timestamps & freshness ────────────────────────────────────────────────────
@@ -325,8 +353,8 @@ FAILURE_ACTIONS: dict[str, tuple[str, str]] = {
 }
 
 FAILURE_HINTS: dict[str, str] = {
-    "login_required": EXT_ACCOUNT_NEEDS_LOGIN_HINT,
-    "login_wall": EXT_ACCOUNT_NEEDS_LOGIN_HINT,
+    "login_required": EXT_ACCOUNT_NEEDS_SIGN_IN_HINT,
+    "login_wall": EXT_ACCOUNT_NEEDS_SIGN_IN_HINT,
     "timeout": "Site took too long — will retry on the next automatic update",
     "no_data": "Could not read account data",
     "domain_unreachable": "Site unreachable",
@@ -568,12 +596,12 @@ def api_copy_bundle() -> dict:
         "activity_labels": ACTIVITY_LABELS,
         "status_labels": STATUS_LABELS,
         "account_state_labels": ACCOUNT_STATE_LABELS,
-        "account_state_ctas": {
-            ACCOUNT_STATE_NEEDS_LOGIN: CTA_SIGN_IN,
-            ACCOUNT_STATE_CHECKING: CTA_CHECKING,
-            ACCOUNT_STATE_CONNECTED: CTA_VIEW,
-            ACCOUNT_STATE_NEEDS_ATTENTION: CTA_RETRY,
-            ACCOUNT_STATE_NO_DATA: CTA_RETRY,
+        "account_state_ctas": ACCOUNT_STATE_CTAS,
+        "access_loop": {
+            "headline_updating": WORKER_ACCESS_LOOP_UPDATING,
+            "open_account_center": WORKER_OPEN_ACCOUNT_CENTER,
+            "session_verified_prefix": SESSION_VERIFIED_PREFIX,
+            "data_refreshed_prefix": DATA_REFRESHED_PREFIX,
         },
         "worker": {
             "name": WORKER_NAME,
@@ -583,10 +611,11 @@ def api_copy_bundle() -> dict:
             "setup_needed": WORKER_SETUP_NEEDED,
             "setup_detail": WORKER_SETUP_DETAIL,
             "open_dashboard": WORKER_OPEN_DASHBOARD,
+            "open_account_center": WORKER_OPEN_ACCOUNT_CENTER,
             "not_updated_yet": WORKER_NOT_UPDATED_YET,
-            "needs_login_subline": WORKER_NEEDS_LOGIN_SUBLINE,
-            "account_needs_login_hint": EXT_ACCOUNT_NEEDS_LOGIN_HINT,
-            "account_checking_hint": EXT_ACCOUNT_CHECKING_HINT,
+            "access_loop_updating": WORKER_ACCESS_LOOP_UPDATING,
+            "account_needs_sign_in_hint": EXT_ACCOUNT_NEEDS_SIGN_IN_HINT,
+            "account_updating_hint": EXT_ACCOUNT_UPDATING_HINT,
         },
         "failure_hints": FAILURE_HINTS,
         "failure_icons": FAILURE_ICONS,

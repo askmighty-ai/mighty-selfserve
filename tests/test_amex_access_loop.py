@@ -11,11 +11,10 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mighty.user_copy import (
-    ACCOUNT_STATE_CHECKING,
-    ACCOUNT_STATE_CONNECTED,
     ACCOUNT_STATE_LABELS,
-    ACCOUNT_STATE_NEEDS_LOGIN,
-    ACCOUNT_STATE_NO_DATA,
+    ACCOUNT_STATE_NEEDS_SIGN_IN,
+    ACCOUNT_STATE_READY,
+    ACCOUNT_STATE_UPDATING,
 )
 
 
@@ -164,12 +163,12 @@ def test_account_center_shows_checking_or_connected_after_connect(client):
             from mighty.account_state import recompute_account_state
             waiting_state = recompute_account_state(mighty.get_db(), uid, "amex")
             waiting_label = status_label(waiting_state)
-        assert waiting_label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING]
+        assert waiting_label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING]
 
     r = client.get("/account-center")
     assert r.status_code == 200
     html = r.get_data(as_text=True)
-    assert ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN] not in html
+    assert ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN] not in html
 
     r = _post_amex_connected(client, api_key)
     assert r.status_code == 200
@@ -178,21 +177,19 @@ def test_account_center_shows_checking_or_connected_after_connect(client):
         state = load_account_state(mighty.get_db(), uid, "amex")
         label = status_label(state)
         assert label in {
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED],
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA],
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
+            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY],
+            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
         }
 
     r = client.get("/account-center")
     assert r.status_code == 200
     html = r.get_data(as_text=True)
-    assert ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN] not in html
+    assert ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN] not in html
     assert any(
         text in html
         for text in (
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED],
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA],
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
+            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY],
+            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
         )
     )
 

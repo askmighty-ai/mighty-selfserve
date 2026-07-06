@@ -1,16 +1,17 @@
 """
 mighty.account_presentation
 ───────────────────────────
-Shared user-facing account state vocabulary for Account Center and the extension.
+Shared Account Access Loop for Account Center and the extension.
 
-Presentation states (exact labels):
-  Needs login · Checking account · Connected · Needs attention · No data yet
+Four user-facing states (exact labels):
+  Needs sign in · Updating · Ready · Needs attention
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from mighty.account_state import (
     CONFIDENCE_LOW,
@@ -28,18 +29,22 @@ from mighty.account_state import (
 )
 from mighty.user_copy import (
     ACCOUNT_STATE_LABELS,
-    ACCOUNT_STATE_CHECKING,
-    ACCOUNT_STATE_CONNECTED,
     ACCOUNT_STATE_NEEDS_ATTENTION,
-    ACCOUNT_STATE_NEEDS_LOGIN,
-    ACCOUNT_STATE_NO_DATA,
-    CTA_CHECKING,
-    CTA_REFRESH,
-    CTA_RETRY,
+    ACCOUNT_STATE_NEEDS_SIGN_IN,
+    ACCOUNT_STATE_READY,
+    ACCOUNT_STATE_UPDATING,
+    CTA_FIX,
     CTA_SIGN_IN,
+    CTA_UPDATING,
     CTA_VIEW,
-    EXT_ACCOUNT_CHECKING_HINT,
-    EXT_ACCOUNT_NEEDS_LOGIN_HINT,
+    EXT_ACCOUNT_NEEDS_SIGN_IN_HINT,
+    EXT_ACCOUNT_UPDATING_HINT,
+    WORKER_ACCESS_LOOP_UPDATING,
+    WORKER_OPEN_ACCOUNT_CENTER,
+    access_loop_count_needs_attention,
+    access_loop_count_needs_sign_in,
+    access_loop_count_ready,
+    access_loop_count_updating,
 )
 
 SESSION_TTL_HOURS: dict[str, tuple[int, int]] = {
@@ -91,12 +96,75 @@ class AccountPresentation:
     extension_hint: str | None = None
 
 
-def _connected_data_is_fresh(state: AccountState) -> bool:
-    if state.data_status != DATA_COMPLETE:
-        return False
-    if state.session_health not in {SESSION_EXPIRED, SESSION_EXPIRING}:
+@dataclass
+class AccessLoopSummary:
+    """Aggregate Account Access Loop state for Account Center and extension."""
+
+    total: int
+    needs_sign_in: int
+    updating: int
+    ready: int
+    needs_attention: int
+    headline: str
+    detail_lines: list[str]
+    open_account_center_label: str
+    is_updating: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total": self.total,
+            "needs_sign_in": self.needs_sign_in,
+            "updating": self.updating,
+            "ready": self.ready,
+            "needs_attention": self.needs_attention,
+            "headline": self.headline,
+            "detail_lines": self.detail_lines,
+            "open_account_center_label": self.open_account_center_label,
+            "is_updating": self.is_updating,
+            # Legacy fields consumed by older extension builds.
+            "is_syncing": self.is_updating,
+            "needs_login_count": self.needs_sign_in,
+            "updating_count": self.updating,
+            "subline": " · ".join(self.detail_lines) if self.detail_lines else "",
+        }
+
+
+def _needs_sign_in(state: AccountState, *, recently_verified: bool) -> bool:
+    if state.connection_state == CONN_NOT_CONNECTED:
+        return True
+    if state.connection_state == CONN_NEEDS_LOGIN and not recently_verified:
         return True
     return False
+
+
+def _is_updating(
+    state: AccountState,
+    *,
+    recently_verified: bool,
+    sync_running: bool,
+    updating_source: str | None,
+) -> bool:
+    provider = state.provider
+    if sync_running and updating_source == provider:
+        return True
+    if state.connection_state == CONN_CONNECTING:
+        return True
+    if state.connection_state == CONN_CONNECTED and state.data_status == DATA_NONE:
+        if recently_verified or state.session_health not in {SESSION_EXPIRED}:
+            return True
+    return False
+
+
+def _is_ready(state: AccountState) -> bool:
+    if state.connection_state != CONN_CONNECTED:
+        return False
+    if state.data_status not in {DATA_COMPLETE, DATA_PARTIAL}:
+        return False
+    if state.session_health in (SESSION_EXPIRING, SESSION_EXPIRED):
+        return False
+    if state.confidence.level == CONFIDENCE_LOW and state.data_status == DATA_PARTIAL:
+        return False
+    return True
 
 
 def resolve_account_presentation(
@@ -105,107 +173,48 @@ def resolve_account_presentation(
     sync_running: bool = False,
     updating_source: str | None = None,
 ) -> AccountPresentation:
-    """Map AccountState to the shared user-facing vocabulary."""
+    """Map AccountState to the shared Account Access Loop vocabulary."""
     provider = state.provider
     recently_verified = is_recent_session_verification(
         state.last_verified_at, provider=provider,
     )
 
-    if state.connection_state == CONN_NOT_CONNECTED:
+    if _needs_sign_in(state, recently_verified=recently_verified):
         return AccountPresentation(
-            key=ACCOUNT_STATE_NEEDS_LOGIN,
-            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN],
+            key=ACCOUNT_STATE_NEEDS_SIGN_IN,
+            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN],
             cta_label=CTA_SIGN_IN,
             cta_disabled=False,
-            extension_hint=EXT_ACCOUNT_NEEDS_LOGIN_HINT,
+            extension_hint=EXT_ACCOUNT_NEEDS_SIGN_IN_HINT,
         )
 
-    signed_out = state.connection_state == CONN_NEEDS_LOGIN
-    if signed_out and not recently_verified:
+    if _is_updating(
+        state,
+        recently_verified=recently_verified,
+        sync_running=sync_running,
+        updating_source=updating_source,
+    ):
         return AccountPresentation(
-            key=ACCOUNT_STATE_NEEDS_LOGIN,
-            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN],
-            cta_label=CTA_SIGN_IN,
-            cta_disabled=False,
-            extension_hint=EXT_ACCOUNT_NEEDS_LOGIN_HINT,
-        )
-
-    if sync_running and updating_source == provider:
-        return AccountPresentation(
-            key=ACCOUNT_STATE_CHECKING,
-            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
-            cta_label=CTA_CHECKING,
+            key=ACCOUNT_STATE_UPDATING,
+            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
+            cta_label=CTA_UPDATING,
             cta_disabled=True,
-            extension_hint=EXT_ACCOUNT_CHECKING_HINT,
+            extension_hint=EXT_ACCOUNT_UPDATING_HINT,
         )
 
-    if state.connection_state == CONN_CONNECTING:
+    if _is_ready(state):
         return AccountPresentation(
-            key=ACCOUNT_STATE_CHECKING,
-            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
-            cta_label=CTA_CHECKING,
-            cta_disabled=True,
-            extension_hint=EXT_ACCOUNT_CHECKING_HINT,
-        )
-
-    if state.connection_state == CONN_CONNECTED:
-        if state.data_status == DATA_NONE:
-            if recently_verified or state.session_health not in {SESSION_EXPIRED}:
-                return AccountPresentation(
-                    key=ACCOUNT_STATE_NO_DATA,
-                    label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA],
-                    cta_label=CTA_RETRY,
-                    cta_disabled=False,
-                )
-            return AccountPresentation(
-                key=ACCOUNT_STATE_CHECKING,
-                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
-                cta_label=CTA_CHECKING,
-                cta_disabled=True,
-                extension_hint=EXT_ACCOUNT_CHECKING_HINT,
-            )
-
-        if state.session_health in (SESSION_EXPIRING, SESSION_EXPIRED):
-            return AccountPresentation(
-                key=ACCOUNT_STATE_NEEDS_ATTENTION,
-                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],
-                cta_label=CTA_SIGN_IN,
-                cta_disabled=False,
-                extension_hint=EXT_ACCOUNT_NEEDS_LOGIN_HINT,
-            )
-
-        if (
-            state.confidence.level == CONFIDENCE_LOW
-            and state.data_status == DATA_PARTIAL
-        ):
-            return AccountPresentation(
-                key=ACCOUNT_STATE_NEEDS_ATTENTION,
-                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],
-                cta_label=CTA_REFRESH,
-                cta_disabled=False,
-            )
-
-        if _connected_data_is_fresh(state):
-            return AccountPresentation(
-                key=ACCOUNT_STATE_CONNECTED,
-                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED],
-                cta_label=CTA_VIEW,
-                cta_disabled=False,
-            )
-
-        return AccountPresentation(
-            key=ACCOUNT_STATE_CONNECTED,
-            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED],
-            cta_label=CTA_REFRESH,
+            key=ACCOUNT_STATE_READY,
+            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY],
+            cta_label=CTA_VIEW,
             cta_disabled=False,
         )
 
     return AccountPresentation(
         key=ACCOUNT_STATE_NEEDS_ATTENTION,
         label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],
-        cta_label=CTA_SIGN_IN,
+        cta_label=CTA_FIX,
         cta_disabled=False,
-        extension_hint=EXT_ACCOUNT_NEEDS_LOGIN_HINT,
     )
 
 
@@ -220,12 +229,17 @@ def resolve_presentation_from_status_signals(
     is_updating: bool,
     sync_status_error: str | None = None,
 ) -> AccountPresentation:
-    """Map extension/account-status signals to the shared vocabulary."""
+    """Map legacy status signals through AccountState projection when possible."""
     from mighty.account_lifecycle import (
         CONNECTED as LC_CONNECTED,
         NEEDS_LOGIN as LC_NEEDS_LOGIN,
         SYNCED as LC_SYNCED,
         WAITING_FOR_EXTENSION as LC_WAITING,
+    )
+    from mighty.account_state import (
+        ACCESS_BROWSER_SESSION,
+        Confidence,
+        ConfidenceFactors,
     )
 
     conn = connection_status or ""
@@ -233,60 +247,111 @@ def resolve_presentation_from_status_signals(
         last_verified_at, provider=provider,
     )
 
-    if lifecycle_state == LC_NEEDS_LOGIN and not recently_verified and conn != CONN_CONNECTED:
-        return AccountPresentation(
-            key=ACCOUNT_STATE_NEEDS_LOGIN,
-            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN],
-            cta_label=CTA_SIGN_IN,
-            cta_disabled=False,
-            extension_hint=EXT_ACCOUNT_NEEDS_LOGIN_HINT,
-        )
+    if conn == CONN_CONNECTED and recently_verified:
+        connection_state = CONN_CONNECTED
+    elif lifecycle_state == LC_NEEDS_LOGIN or sync_status == "login_required":
+        connection_state = CONN_NEEDS_LOGIN if not recently_verified else CONN_CONNECTED
+    elif lifecycle_state == LC_WAITING:
+        connection_state = CONN_CONNECTING
+    elif lifecycle_state in (LC_CONNECTED, LC_SYNCED) or conn == CONN_CONNECTED:
+        connection_state = CONN_CONNECTED
+    else:
+        connection_state = CONN_NOT_CONNECTED
 
-    if sync_status == "login_required" and conn != CONN_CONNECTED and not recently_verified:
-        return AccountPresentation(
-            key=ACCOUNT_STATE_NEEDS_LOGIN,
-            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_LOGIN],
-            cta_label=CTA_SIGN_IN,
-            cta_disabled=False,
-            extension_hint=EXT_ACCOUNT_NEEDS_LOGIN_HINT,
-        )
+    if has_meaningful_data or lifecycle_state == LC_SYNCED:
+        data_status = DATA_COMPLETE
+    elif sync_status in ("no_data",) or sync_status_error == "no_data":
+        data_status = DATA_NONE
+    else:
+        data_status = DATA_NONE if not has_meaningful_data else DATA_PARTIAL
 
-    if is_updating or lifecycle_state == LC_WAITING:
-        return AccountPresentation(
-            key=ACCOUNT_STATE_CHECKING,
-            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
-            cta_label=CTA_CHECKING,
-            cta_disabled=True,
-            extension_hint=EXT_ACCOUNT_CHECKING_HINT,
-        )
-
-    if lifecycle_state in (LC_CONNECTED, LC_SYNCED) or conn == CONN_CONNECTED:
-        if not has_meaningful_data and lifecycle_state != LC_SYNCED:
-            return AccountPresentation(
-                key=ACCOUNT_STATE_NO_DATA,
-                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA],
-                cta_label=CTA_RETRY,
-                cta_disabled=False,
-            )
-        if lifecycle_state == LC_SYNCED or has_meaningful_data:
-            return AccountPresentation(
-                key=ACCOUNT_STATE_CONNECTED,
-                label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CONNECTED],
-                cta_label=CTA_VIEW if lifecycle_state == LC_SYNCED else CTA_REFRESH,
-                cta_disabled=False,
-            )
-
-    if sync_status_error == "no_data" or sync_status == "no_data":
-        return AccountPresentation(
-            key=ACCOUNT_STATE_NO_DATA,
-            label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NO_DATA],
-            cta_label=CTA_RETRY,
-            cta_disabled=False,
-        )
-
-    return AccountPresentation(
-        key=ACCOUNT_STATE_NEEDS_ATTENTION,
-        label=ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],
-        cta_label=CTA_RETRY,
-        cta_disabled=False,
+    shadow = AccountState(
+        user_id="",
+        provider=provider,
+        display_name=provider,
+        category=None,
+        access_method=ACCESS_BROWSER_SESSION,
+        connection_state=connection_state,
+        session_health="healthy" if recently_verified else "unknown",
+        last_verified_at=last_verified_at,
+        data_status=data_status,
+        last_data_refresh=None,
+        observations_available=[],
+        field_count=0,
+        next_recommended_action=None,
+        confidence=Confidence(level="high", score=90, factors=ConfidenceFactors()),
+        status_line="",
+        is_actionable=False,
+        updated_at="",
     )
+    return resolve_account_presentation(
+        shadow,
+        sync_running=is_updating,
+        updating_source=provider if is_updating else None,
+    )
+
+
+def build_access_loop_summary(
+    presentations: list[AccountPresentation],
+) -> AccessLoopSummary:
+    """Build aggregate copy from per-account Access Loop presentations."""
+    counts = {
+        ACCOUNT_STATE_NEEDS_SIGN_IN: 0,
+        ACCOUNT_STATE_UPDATING: 0,
+        ACCOUNT_STATE_READY: 0,
+        ACCOUNT_STATE_NEEDS_ATTENTION: 0,
+    }
+    for presentation in presentations:
+        counts[presentation.key] = counts.get(presentation.key, 0) + 1
+
+    detail_lines: list[str] = []
+    if counts[ACCOUNT_STATE_NEEDS_SIGN_IN]:
+        detail_lines.append(access_loop_count_needs_sign_in(counts[ACCOUNT_STATE_NEEDS_SIGN_IN]))
+    if counts[ACCOUNT_STATE_UPDATING]:
+        detail_lines.append(access_loop_count_updating(counts[ACCOUNT_STATE_UPDATING]))
+    if counts[ACCOUNT_STATE_READY]:
+        detail_lines.append(access_loop_count_ready(counts[ACCOUNT_STATE_READY]))
+    if counts[ACCOUNT_STATE_NEEDS_ATTENTION]:
+        detail_lines.append(
+            access_loop_count_needs_attention(counts[ACCOUNT_STATE_NEEDS_ATTENTION])
+        )
+
+    if counts[ACCOUNT_STATE_UPDATING]:
+        headline = WORKER_ACCESS_LOOP_UPDATING
+    elif counts[ACCOUNT_STATE_NEEDS_SIGN_IN]:
+        headline = access_loop_count_needs_sign_in(counts[ACCOUNT_STATE_NEEDS_SIGN_IN])
+    elif counts[ACCOUNT_STATE_NEEDS_ATTENTION]:
+        headline = access_loop_count_needs_attention(counts[ACCOUNT_STATE_NEEDS_ATTENTION])
+    elif counts[ACCOUNT_STATE_READY]:
+        headline = access_loop_count_ready(counts[ACCOUNT_STATE_READY])
+    else:
+        headline = "No accounts yet"
+
+    return AccessLoopSummary(
+        total=len(presentations),
+        needs_sign_in=counts[ACCOUNT_STATE_NEEDS_SIGN_IN],
+        updating=counts[ACCOUNT_STATE_UPDATING],
+        ready=counts[ACCOUNT_STATE_READY],
+        needs_attention=counts[ACCOUNT_STATE_NEEDS_ATTENTION],
+        headline=headline,
+        detail_lines=detail_lines,
+        open_account_center_label=WORKER_OPEN_ACCOUNT_CENTER,
+        is_updating=counts[ACCOUNT_STATE_UPDATING] > 0,
+    )
+
+
+def presentations_for_states(
+    states: list[AccountState],
+    *,
+    sync_running: bool = False,
+    updating_source: str | None = None,
+) -> list[AccountPresentation]:
+    effective_source = updating_source if sync_running else None
+    return [
+        resolve_account_presentation(
+            state,
+            sync_running=sync_running,
+            updating_source=effective_source,
+        )
+        for state in states
+    ]

@@ -2,15 +2,12 @@
 
 from mighty.account_center_ui import (
     ACCOUNT_CENTER_CSS,
-    PRIMARY_CONNECT,
+    PRIMARY_FIX,
     PRIMARY_LOGIN,
-    PRIMARY_RECONNECT,
-    PRIMARY_REFRESH,
     PRIMARY_VIEW,
     TONE_ATTENTION,
     TONE_CONNECTED,
     TONE_LOGIN,
-    TONE_NEVER,
     build_card_view,
     build_summary,
     data_freshness_label,
@@ -25,11 +22,6 @@ from mighty.account_center_ui import (
 from mighty.account_state import (
     ACCESS_BROWSER_SESSION,
     ACCESS_MIGHTY_LOGIN,
-    ACTION_LOGIN,
-    ACTION_NONE,
-    ACTION_REVIEW,
-    CONFIDENCE_HIGH,
-    CONFIDENCE_LOW,
     CONN_CONNECTED,
     CONN_CONNECTING,
     CONN_NEEDS_LOGIN,
@@ -42,7 +34,14 @@ from mighty.account_state import (
     AccountState,
     Confidence,
     ConfidenceFactors,
-    RecommendedAction,
+)
+from mighty.user_copy import (
+    CTA_FIX,
+    CTA_SIGN_IN,
+    CTA_UPDATING,
+    CTA_VIEW,
+    DATA_REFRESHED_PREFIX,
+    SESSION_VERIFIED_PREFIX,
 )
 
 
@@ -61,7 +60,7 @@ def _state(**kwargs) -> AccountState:
         observations_available=["miles_balance", "tier_status"],
         field_count=2,
         next_recommended_action=None,
-        confidence=Confidence(level=CONFIDENCE_HIGH, score=90, factors=ConfidenceFactors()),
+        confidence=Confidence(level="high", score=90, factors=ConfidenceFactors()),
         status_line="Up to date · Updated today",
         is_actionable=False,
         updated_at="2026-07-06T00:00:00+00:00",
@@ -75,25 +74,25 @@ def _fmt(ts: str) -> str:
 
 
 class TestStatusTone:
-    def test_needs_login_is_red_tone(self):
+    def test_needs_sign_in_is_red_tone(self):
         s = _state(connection_state=CONN_NEEDS_LOGIN, session_health=SESSION_EXPIRED, last_verified_at=None)
         assert status_tone(s) == TONE_LOGIN
-        assert status_label(s) == "Needs login"
+        assert status_label(s) == "Needs sign in"
 
-    def test_not_connected_is_needs_login_tone(self):
+    def test_not_connected_is_needs_sign_in_tone(self):
         s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE, last_verified_at=None)
         assert status_tone(s) == TONE_LOGIN
-        assert status_label(s) == "Needs login"
+        assert status_label(s) == "Needs sign in"
 
-    def test_connected_healthy_is_green(self):
+    def test_ready_is_green(self):
         s = _state()
         assert status_tone(s) == TONE_CONNECTED
-        assert status_label(s) == "Connected"
+        assert status_label(s) == "Ready"
 
-    def test_connecting_is_checking_account(self):
+    def test_connecting_is_updating(self):
         s = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None)
         assert status_tone(s) == TONE_ATTENTION
-        assert status_label(s) == "Checking account"
+        assert status_label(s) == "Updating"
 
     def test_expired_session_on_connected_is_attention(self):
         s = _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED)
@@ -107,26 +106,24 @@ class TestPrimaryAction:
             last_verified_at=None,
             data_status=DATA_NONE,
             last_data_refresh=None,
-            next_recommended_action=RecommendedAction(
-                kind=ACTION_LOGIN, label="Sign in", url="/credentials?connect=delta",
-            ),
         )
-        assert primary_action(s) == ("Sign in", PRIMARY_LOGIN, False)
+        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
 
     def test_sign_in_when_not_connected(self):
         s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE, last_verified_at=None)
-        assert primary_action(s) == ("Sign in", PRIMARY_LOGIN, False)
+        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
 
-    def test_refresh_when_partial(self):
-        s = _state(data_status=DATA_PARTIAL)
-        assert primary_action(s) == ("Refresh", PRIMARY_REFRESH, False)
+    def test_updating_is_disabled(self):
+        s = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None)
+        assert primary_action(s) == (CTA_UPDATING, "checking", True)
 
-    def test_view_when_complete(self):
-        s = _state(
-            data_status=DATA_COMPLETE,
-            next_recommended_action=RecommendedAction(kind=ACTION_NONE, label=""),
-        )
-        assert primary_action(s) == ("View", PRIMARY_VIEW, False)
+    def test_view_when_ready(self):
+        s = _state(data_status=DATA_COMPLETE)
+        assert primary_action(s) == (CTA_VIEW, PRIMARY_VIEW, False)
+
+    def test_fix_when_needs_attention(self):
+        s = _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED)
+        assert primary_action(s) == (CTA_FIX, PRIMARY_FIX, False)
 
 
 class TestCardView:
@@ -140,7 +137,12 @@ class TestCardView:
         assert card.access_label == "Cloud"
         assert card.observation_count == 2
 
-    def test_sort_prioritizes_login(self):
+    def test_timestamps_are_distinct(self):
+        card = build_card_view(_state(), fmt_relative=_fmt)
+        assert card.session_verified_label.startswith(SESSION_VERIFIED_PREFIX)
+        assert card.data_refreshed_label.startswith(DATA_REFRESHED_PREFIX)
+
+    def test_sort_prioritizes_sign_in(self):
         login = build_card_view(
             _state(provider="a", display_name="Amex", connection_state=CONN_NEEDS_LOGIN, last_verified_at=None),
             fmt_relative=_fmt,
@@ -164,8 +166,8 @@ class TestSummary:
         ]
         summary = build_summary(cards)
         assert summary.total == 2
-        assert summary.needs_login == 1
-        assert "2 accounts" in summary_headline(summary)
+        assert summary.needs_sign_in == 1
+        assert "needs sign in" in summary_headline(summary)
 
 
 class TestActionLinks:
@@ -178,40 +180,14 @@ class TestActionLinks:
         assert href == "https://www.delta.com/login"
         assert external is True
 
-    def test_reconnect_falls_back_to_credentials_without_url(self):
-        href, external = resolve_primary_action_href(
-            PRIMARY_RECONNECT,
-            "unknown_provider",
-            provider_login_url=None,
-        )
-        assert href == "/credentials?connect=unknown_provider"
-        assert external is False
-
-    def test_connect_falls_back_to_credentials(self):
-        href, external = resolve_primary_action_href(
-            PRIMARY_CONNECT,
-            "amex",
-            provider_login_url=None,
-        )
-        assert href == "/credentials?connect=amex"
-        assert external is False
-
-    def test_refresh_has_no_href(self):
-        href, external = resolve_primary_action_href(
-            PRIMARY_REFRESH,
-            "amex",
-            provider_login_url="https://www.americanexpress.com/login",
-        )
-        assert href is None
-        assert external is False
-
-    def test_render_login_as_anchor(self):
+    def test_render_sign_in_as_anchor(self):
         card = build_card_view(
             _state(
                 provider="amex",
                 connection_state=CONN_NEEDS_LOGIN,
                 data_status=DATA_NONE,
                 last_data_refresh=None,
+                last_verified_at=None,
             ),
             fmt_relative=_fmt,
             provider_login_url="https://www.americanexpress.com/login",
@@ -219,24 +195,25 @@ class TestActionLinks:
         html = render_card(card, lambda x: str(x))
         assert 'href="https://www.americanexpress.com/login"' in html
         assert 'target="_blank"' in html
-        assert ">Login</a>" in html
+        assert ">Sign in</a>" in html
         assert "<button" not in html
 
-    def test_render_reconnect_as_anchor(self):
+    def test_render_updating_as_disabled_button(self):
         card = build_card_view(
-            _state(provider="delta", connection_state=CONN_NEEDS_LOGIN),
+            _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None),
             fmt_relative=_fmt,
-            provider_login_url="https://www.delta.com/login",
         )
         html = render_card(card, lambda x: str(x))
-        assert ">Reconnect</a>" in html
-        assert 'href="https://www.delta.com/login"' in html
+        assert ">Updating…</button>" in html
+        assert "disabled" in html
 
-    def test_render_refresh_as_button(self):
-        card = build_card_view(_state(data_status=DATA_PARTIAL), fmt_relative=_fmt)
+    def test_render_fix_as_button(self):
+        card = build_card_view(
+            _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED),
+            fmt_relative=_fmt,
+        )
         html = render_card(card, lambda x: str(x))
-        assert "<button" in html
-        assert ">Refresh</button>" in html
+        assert ">Fix</button>" in html
 
 
 class TestScrollContainer:
