@@ -1656,3 +1656,340 @@ def manual_probe_state_to_json(state: dict[str, Any]) -> dict[str, Any]:
         "started_at": state.get("started_at"),
         "completed_at": state.get("completed_at"),
     }
+
+
+# ── Amex bootstrap trace (Phase 1 diagnostic) ─────────────────────────────────
+
+AMEX_BOOTSTRAP_ENTRY_URLS: tuple[str, ...] = (
+    "https://www.americanexpress.com/en-us/account/",
+    "https://www.americanexpress.com/en-us/account/login",
+    "https://global.americanexpress.com/login",
+)
+
+BOOTSTRAP_KEYWORD_RE = re.compile(
+    r"bootstrap|session|login|auth|token|csrf|sso|identity|ReadUserSession|UpdateUserSession",
+    re.IGNORECASE,
+)
+
+BOOTSTRAP_NAV_EVENT_KEYS: frozenset[str] = frozenset({
+    "observed_at_ms", "url", "status", "transition_type", "source",
+})
+
+BOOTSTRAP_HISTORY_EVENT_KEYS: frozenset[str] = frozenset({
+    "observed_at_ms", "type", "href", "path", "hash", "state_type",
+})
+
+
+def _sanitize_nav_event(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in BOOTSTRAP_NAV_EVENT_KEYS:
+        if key in entry and entry.get(key) is not None:
+            if key == "url":
+                out[key] = sanitize_probe_url(str(entry[key]))
+            elif key == "observed_at_ms":
+                try:
+                    out[key] = int(entry[key])
+                except (TypeError, ValueError):
+                    pass
+            else:
+                out[key] = str(entry[key])
+    return out
+
+
+def _sanitize_history_event(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in BOOTSTRAP_HISTORY_EVENT_KEYS:
+        if key in entry and entry.get(key) is not None:
+            if key == "href":
+                out[key] = sanitize_probe_url(str(entry[key]))
+            elif key == "observed_at_ms":
+                try:
+                    out[key] = int(entry[key])
+                except (TypeError, ValueError):
+                    pass
+            else:
+                out[key] = str(entry[key])
+    return out
+
+
+def sanitize_bootstrap_trace(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize bootstrap trace payload; never persist secrets."""
+    raw = raw or {}
+    out: dict[str, Any] = {}
+
+    if raw.get("entry_url"):
+        out["entry_url"] = sanitize_probe_url(str(raw["entry_url"]))
+    if raw.get("observation_ms") is not None:
+        try:
+            out["observation_ms"] = int(raw["observation_ms"])
+        except (TypeError, ValueError):
+            pass
+
+    nav = raw.get("navigation_timeline")
+    if isinstance(nav, dict):
+        events = nav.get("events")
+        sanitized_events = [_sanitize_nav_event(e) for e in events[:100]] if isinstance(events, list) else []
+        sanitized_events.sort(key=lambda e: e.get("observed_at_ms") or 0)
+        out["navigation_timeline"] = {
+            "initial_url": sanitize_probe_url(str(nav.get("initial_url") or raw.get("entry_url") or "")),
+            "final_url": sanitize_probe_url(str(nav.get("final_url") or "")),
+            "events": sanitized_events,
+        }
+
+    loc = raw.get("location_history")
+    if isinstance(loc, dict):
+        out["location_history"] = {
+            "href_timeline": [
+                _sanitize_history_event(e)
+                for e in (loc.get("href_timeline") or [])[:100]
+                if isinstance(e, dict)
+            ],
+            "history_events": [
+                _sanitize_history_event(e)
+                for e in (loc.get("history_events") or [])[:100]
+                if isinstance(e, dict)
+            ],
+            "hash_changes": [
+                _sanitize_history_event(e)
+                for e in (loc.get("hash_changes") or [])[:50]
+                if isinstance(e, dict)
+            ],
+        }
+
+    requests = raw.get("bootstrap_requests")
+    if isinstance(requests, list):
+        sanitized_requests = [_sanitize_network_trace_entry(r) for r in requests[:100]]
+        sanitized_requests.sort(key=lambda r: r.get("start_time_ms") or r.get("observed_at_ms") or 0)
+        out["bootstrap_requests"] = sanitized_requests
+
+    if raw.get("first_401_at_ms") is not None:
+        try:
+            out["first_401_at_ms"] = int(raw["first_401_at_ms"])
+        except (TypeError, ValueError):
+            pass
+    if raw.get("first_401_url"):
+        out["first_401_url"] = sanitize_probe_url(str(raw["first_401_url"]))
+
+    for key in ("page_title", "visible_text_preview"):
+        if raw.get(key) is not None:
+            out[key] = str(raw[key])[:500]
+
+    out["diagnostic_summary"] = compute_bootstrap_diagnostic(out)
+    return out
+
+
+def _ordered_bootstrap_requests(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered = [r for r in requests if isinstance(r, dict) and r.get("url")]
+    ordered.sort(key=lambda r: (r.get("start_time_ms") or r.get("observed_at_ms") or 0))
+    return ordered
+
+
+def compute_bootstrap_diagnostic(trace: dict[str, Any]) -> str:
+    parts: list[str] = []
+    nav = trace.get("navigation_timeline") or {}
+    initial = nav.get("initial_url") or trace.get("entry_url") or ""
+    final = nav.get("final_url") or ""
+    if initial and final and initial != final:
+        parts.append(f"navigation changed from entry URL to {final}")
+    elif initial:
+        parts.append(f"final URL matches entry path: {final or initial}")
+
+    requests = _ordered_bootstrap_requests(trace.get("bootstrap_requests") or [])
+    session_calls = [
+        r for r in requests
+        if isinstance(r, dict) and (
+            "ReadUserSession" in str(r.get("url") or "")
+            or "UpdateUserSession" in str(r.get("url") or "")
+        )
+    ]
+    if session_calls:
+        statuses = [str(r.get("status_code")) for r in session_calls if r.get("status_code") is not None]
+        parts.append(f"session API sequence statuses: {', '.join(statuses) or 'unknown'}")
+
+    first_401_url = trace.get("first_401_url")
+    first_401_ms = trace.get("first_401_at_ms")
+    if first_401_url:
+        parts.append(f"first 401 at {first_401_ms}ms on {first_401_url}")
+    elif any(r.get("status_code") == 401 for r in requests):
+        parts.append("401 observed in bootstrap request sequence")
+
+    history = trace.get("location_history") or {}
+    push_events = history.get("history_events") or []
+    if push_events:
+        parts.append(f"{len(push_events)} pushState/replaceState event(s) observed")
+
+    if not parts:
+        return "bootstrap trace captured; no navigation or session API divergence detected yet"
+    return "; ".join(parts)
+
+
+def build_amex_bootstrap_trace(payload: dict[str, Any]) -> dict[str, Any]:
+    entry_url = str(payload.get("entry_url") or "")
+    if entry_url and entry_url not in AMEX_BOOTSTRAP_ENTRY_URLS:
+        raise ValueError(f"unsupported bootstrap entry URL: {entry_url!r}")
+
+    sanitized = sanitize_bootstrap_trace(payload)
+    sanitized["entry_url"] = sanitize_probe_url(entry_url)
+    sanitized["compared_at"] = payload.get("compared_at") or utc_now_iso()
+    return sanitized
+
+
+def ensure_bootstrap_trace_tables(db: Any) -> None:
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_access_probe_bootstrap_traces (
+            trace_run_id        TEXT PRIMARY KEY,
+            user_id               TEXT NOT NULL,
+            entry_url             TEXT NOT NULL,
+            lifecycle             TEXT NOT NULL,
+            payload_json          TEXT,
+            diagnostic_summary    TEXT,
+            error_message         TEXT,
+            requested_at          TEXT NOT NULL,
+            started_at            TEXT,
+            completed_at          TEXT
+        )
+        """
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_papbt_user_entry "
+        "ON provider_access_probe_bootstrap_traces(user_id, entry_url, requested_at DESC)"
+    )
+    db.commit()
+
+
+def _has_running_bootstrap_trace(db: Any, user_id: str) -> bool:
+    ensure_bootstrap_trace_tables(db)
+    row = db.execute(
+        """
+        SELECT 1 FROM provider_access_probe_bootstrap_traces
+        WHERE user_id = ? AND lifecycle = ?
+        LIMIT 1
+        """,
+        (user_id, PROBE_LIFECYCLE_RUNNING),
+    ).fetchone()
+    return row is not None
+
+
+def get_latest_bootstrap_traces_by_entry(db: Any, user_id: str) -> dict[str, dict[str, Any]]:
+    ensure_bootstrap_trace_tables(db)
+    out: dict[str, dict[str, Any]] = {}
+    for entry_url in AMEX_BOOTSTRAP_ENTRY_URLS:
+        row = db.execute(
+            """
+            SELECT trace_run_id, user_id, entry_url, lifecycle, payload_json,
+                   diagnostic_summary, error_message, requested_at, completed_at
+            FROM provider_access_probe_bootstrap_traces
+            WHERE user_id = ? AND entry_url = ?
+            ORDER BY requested_at DESC
+            LIMIT 1
+            """,
+            (user_id, entry_url),
+        ).fetchone()
+        if row:
+            data = dict(row)
+            data["trace"] = _parse_json_dict(data.get("payload_json"))
+            out[entry_url] = data
+    return out
+
+
+def get_pending_bootstrap_trace(db: Any, user_id: str) -> dict[str, Any] | None:
+    ensure_bootstrap_trace_tables(db)
+    row = db.execute(
+        """
+        SELECT trace_run_id, user_id, entry_url, lifecycle, requested_at, started_at
+        FROM provider_access_probe_bootstrap_traces
+        WHERE user_id = ? AND lifecycle = ?
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (user_id, PROBE_LIFECYCLE_RUNNING),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def start_bootstrap_trace(db: Any, user_id: str, entry_url: str) -> dict[str, Any]:
+    entry_url = entry_url.strip()
+    if entry_url not in AMEX_BOOTSTRAP_ENTRY_URLS:
+        raise ValueError(
+            f"unsupported bootstrap entry URL: {entry_url!r} "
+            f"(allowed: {', '.join(AMEX_BOOTSTRAP_ENTRY_URLS)})"
+        )
+    ensure_bootstrap_trace_tables(db)
+    ensure_manual_probe_tables(db)
+    if _has_running_manual_probe(db, user_id):
+        raise ConcurrentProbeError("a manual probe is already running")
+    if _has_running_bootstrap_trace(db, user_id):
+        raise ConcurrentProbeError("a bootstrap trace is already running")
+
+    trace_run_id = str(uuid.uuid4())
+    now = utc_now_iso()
+    db.execute(
+        """
+        INSERT INTO provider_access_probe_bootstrap_traces (
+            trace_run_id, user_id, entry_url, lifecycle, requested_at, started_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (trace_run_id, user_id, entry_url, PROBE_LIFECYCLE_RUNNING, now, now),
+    )
+    db.commit()
+    return {
+        "trace_run_id": trace_run_id,
+        "entry_url": entry_url,
+        "provider": "amex",
+        "lifecycle": PROBE_LIFECYCLE_RUNNING,
+        "requested_at": now,
+        "started_at": now,
+    }
+
+
+def complete_bootstrap_trace(
+    db: Any,
+    user_id: str,
+    trace_run_id: str,
+    *,
+    lifecycle: str,
+    trace: dict[str, Any] | None = None,
+    error_message: str | None = None,
+) -> None:
+    if lifecycle not in PROBE_LIFECYCLES:
+        raise ValueError(f"invalid bootstrap trace lifecycle: {lifecycle!r}")
+    ensure_bootstrap_trace_tables(db)
+    now = utc_now_iso()
+    db.execute(
+        """
+        UPDATE provider_access_probe_bootstrap_traces
+        SET lifecycle = ?, payload_json = ?, diagnostic_summary = ?,
+            error_message = ?, completed_at = ?
+        WHERE trace_run_id = ? AND user_id = ?
+        """,
+        (
+            lifecycle,
+            _json_diagnostics(trace),
+            (trace or {}).get("diagnostic_summary") if trace else error_message,
+            error_message,
+            now,
+            trace_run_id,
+            user_id,
+        ),
+    )
+    db.commit()
+
+
+def bootstrap_trace_state_to_json(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "trace_run_id": state.get("trace_run_id"),
+        "entry_url": state.get("entry_url"),
+        "provider": state.get("provider") or "amex",
+        "lifecycle": state.get("lifecycle") or PROBE_LIFECYCLE_IDLE,
+        "diagnostic_summary": state.get("diagnostic_summary"),
+        "error_message": state.get("error_message"),
+        "requested_at": state.get("requested_at"),
+        "started_at": state.get("started_at"),
+        "completed_at": state.get("completed_at"),
+        "trace": state.get("trace"),
+    }

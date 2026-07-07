@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.4.1-amex-auth-network-trace" in src
+    assert "1.4.3-amex-bootstrap-trace" in src
     assert "background.js loaded — version" in src
 
 
@@ -126,3 +126,12 @@ def test_prefetch_config_on_startup():
     src = _read_background_js()
     assert "prefetchAutomaticProbesConfig()" in src
     assert "server config: automatic_probes_enabled=" in src
+
+
+def test_amex_bootstrap_trace_runner_present():
+    src = _read_background_js()
+    assert "runAmexBootstrapTrace" in src
+    assert "AMEX_BOOTSTRAP_TRACE_MS = 20000" in src
+    assert "collectBootstrapTraceInPage" in src
+    assert "bootstrap-trace" in src
+    assert "_bootstrapTraceInProgress" in src
