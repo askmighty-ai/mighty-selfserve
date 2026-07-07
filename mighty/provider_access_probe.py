@@ -14,6 +14,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # ── Probe statuses ────────────────────────────────────────────────────────────
 
@@ -126,6 +127,51 @@ RESOURCE_SUMMARY_KEYS: frozenset[str] = frozenset({
 })
 
 IFRAME_METADATA_KEYS: frozenset[str] = frozenset({"index", "src", "id", "name", "sandbox"})
+
+SENSITIVE_QUERY_PARAM_RE = re.compile(
+    r"^(token|auth|session|key|secret|password|csrf|access[_-]?token|refresh[_-]?token|"
+    r"id[_-]?token|api[_-]?key|code|signature|sig)$",
+    re.IGNORECASE,
+)
+AUTH_NETWORK_KEYWORD_RE = re.compile(
+    r"session|login|auth|token|csrf|sso|identity",
+    re.IGNORECASE,
+)
+
+NETWORK_TRACE_ENTRY_KEYS: frozenset[str] = frozenset({
+    "url",
+    "method",
+    "resource_type",
+    "initiator_type",
+    "status_code",
+    "status_text",
+    "start_time_ms",
+    "duration_ms",
+    "redirect_count",
+    "redirect_urls",
+    "same_origin",
+    "credentials",
+    "mode",
+    "with_credentials",
+    "response_header_names",
+    "cors_error",
+    "network_error",
+    "blocked",
+    "auth_keyword_match",
+    "highlighted",
+})
+
+FORBIDDEN_NETWORK_TRACE_KEYS: frozenset[str] = frozenset({
+    "request_body",
+    "response_body",
+    "response_headers",
+    "request_headers",
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "body",
+    "headers",
+})
 
 EVIDENCE_DOM_TEXT = "dom_text"
 EVIDENCE_API_RESPONSE = "api_response"
@@ -583,6 +629,155 @@ def _cookie_name_only(raw: str) -> str:
     return name
 
 
+def sanitize_probe_url(raw_url: str) -> str:
+    """Strip sensitive query param values from probe URLs."""
+    url = str(raw_url or "").strip()
+    if not url:
+        return url
+    try:
+        parts = urlsplit(url)
+        if not parts.query:
+            return urlunsplit((parts.scheme, parts.netloc, parts.path, "", parts.fragment))
+        sanitized_pairs = []
+        for name, value in parse_qsl(parts.query, keep_blank_values=True):
+            if SENSITIVE_QUERY_PARAM_RE.match(name):
+                sanitized_pairs.append((name, "[REDACTED]"))
+            else:
+                sanitized_pairs.append((name, value))
+        query = urlencode(sanitized_pairs)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+    except Exception:
+        return url.split("?", 1)[0]
+
+
+def _sanitize_network_trace_entry(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in entry.items():
+        if key in FORBIDDEN_NETWORK_TRACE_KEYS:
+            continue
+        if key not in NETWORK_TRACE_ENTRY_KEYS:
+            continue
+        if key == "url":
+            out[key] = sanitize_probe_url(str(value))
+        elif key == "redirect_urls" and isinstance(value, list):
+            out[key] = [sanitize_probe_url(str(u)) for u in value[:10]]
+        elif key == "response_header_names" and isinstance(value, list):
+            out[key] = [str(h).split(":", 1)[0].strip() for h in value[:50] if str(h).strip()]
+        elif key in ("status_code", "start_time_ms", "duration_ms", "redirect_count"):
+            try:
+                out[key] = int(value)
+            except (TypeError, ValueError):
+                pass
+        elif key in ("same_origin", "with_credentials", "cors_error", "network_error", "blocked",
+                     "auth_keyword_match", "highlighted"):
+            out[key] = bool(value)
+        elif value is not None:
+            out[key] = str(value)
+    if out.get("url") and "auth_keyword_match" not in out:
+        out["auth_keyword_match"] = bool(AUTH_NETWORK_KEYWORD_RE.search(out["url"]))
+    return out
+
+
+def sanitize_auth_network_trace(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize auth network trace; never persist secrets or header values."""
+    raw = raw or {}
+    out: dict[str, Any] = {}
+
+    if raw.get("observation_ms") is not None:
+        try:
+            out["observation_ms"] = int(raw["observation_ms"])
+        except (TypeError, ValueError):
+            pass
+    if raw.get("request_count") is not None:
+        try:
+            out["request_count"] = int(raw["request_count"])
+        except (TypeError, ValueError):
+            pass
+
+    status_counts = raw.get("status_counts")
+    if isinstance(status_counts, dict):
+        out["status_counts"] = {str(k): int(v) for k, v in status_counts.items() if v is not None}
+
+    for key in (
+        "highlighted_requests",
+        "auth_session_requests",
+        "status_401_requests",
+        "status_403_requests",
+        "redirect_requests",
+        "cors_or_network_failures",
+        "requests",
+    ):
+        items = raw.get(key)
+        if isinstance(items, list):
+            out[key] = [_sanitize_network_trace_entry(i) for i in items[:100]]
+
+    out["diagnostic_summary"] = compute_auth_network_diagnostic(out, cookie_names=None)
+    return out
+
+
+def compute_auth_network_diagnostic(trace: dict[str, Any], cookie_names: list[str] | None = None) -> str:
+    """Evidence-based summary from captured network trace metadata."""
+    if not trace:
+        return "no authentication network trace captured"
+
+    highlighted = trace.get("highlighted_requests") or trace.get("status_401_requests") or []
+    read_session = [
+        r for r in highlighted
+        if isinstance(r, dict) and "ReadUserSession.v1" in str(r.get("url") or "")
+    ]
+    update_session = [
+        r for r in highlighted
+        if isinstance(r, dict) and "UpdateUserSession.v1" in str(r.get("url") or "")
+    ]
+    status_401 = trace.get("status_401_requests") or [
+        r for r in (trace.get("requests") or [])
+        if isinstance(r, dict) and r.get("status_code") == 401
+    ]
+    status_403 = trace.get("status_403_requests") or []
+    cors_failures = trace.get("cors_or_network_failures") or []
+
+    parts: list[str] = []
+
+    if read_session:
+        parts.append(f"ReadUserSession.v1 returned {read_session[0].get('status_code', '?')}")
+    if update_session:
+        parts.append(f"UpdateUserSession.v1 returned {update_session[0].get('status_code', '?')}")
+
+    if not parts and status_401:
+        parts.append(f"{len(status_401)} request(s) returned 401")
+
+    if status_403:
+        parts.append(f"{len(status_403)} request(s) returned 403")
+
+    if cors_failures:
+        parts.append(f"{len(cors_failures)} CORS/network failure(s) observed")
+
+    if cookie_names:
+        parts.append("cookies present at document level")
+    elif cookie_names is not None:
+        parts.append("no document cookies observed")
+
+    session_calls = read_session + update_session
+    if session_calls:
+        cred_flags = [
+            r.get("with_credentials") for r in session_calls if isinstance(r, dict)
+        ]
+        cred_modes = [
+            r.get("credentials") for r in session_calls if isinstance(r, dict) and r.get("credentials")
+        ]
+        if any(c is True for c in cred_flags) or any(c == "include" for c in cred_modes):
+            parts.append("session requests attempted with credentials/include")
+        else:
+            parts.append("session request credential/cookie attachment not confirmed as include")
+
+    if not parts:
+        return "network trace captured; no auth/session 401/403 or highlighted failures in summary"
+
+    return "; ".join(parts)
+
+
 def _sanitize_spa_root(entry: Any) -> dict[str, Any]:
     if not isinstance(entry, dict):
         return {}
@@ -782,6 +977,18 @@ def sanitize_deep_inspect(raw: dict[str, Any] | None) -> dict[str, Any]:
             if observation.get(key) is not None:
                 ow[key] = str(observation[key])[:500]
         out["observation_window"] = ow
+
+    auth_trace = raw.get("auth_network_trace")
+    if isinstance(auth_trace, dict):
+        sanitized_trace = sanitize_auth_network_trace(auth_trace)
+        cookie_names_for_diag = out.get("cookie_names")
+        if cookie_names_for_diag is None and raw.get("cookie_names"):
+            cookie_names_for_diag = [_cookie_name_only(c) for c in raw["cookie_names"]]
+        sanitized_trace["diagnostic_summary"] = compute_auth_network_diagnostic(
+            sanitized_trace,
+            cookie_names=cookie_names_for_diag,
+        )
+        out["auth_network_trace"] = sanitized_trace
 
     return out
 
