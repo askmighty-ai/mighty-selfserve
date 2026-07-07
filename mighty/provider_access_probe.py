@@ -117,6 +117,14 @@ DEEP_INSPECT_KEYS: tuple[str, ...] = (
     "visible_text_preview",
 )
 
+SPA_ROOT_KEYS: frozenset[str] = frozenset({
+    "key", "exists", "child_element_count", "inner_html_length", "text_length",
+})
+
+RESOURCE_SUMMARY_KEYS: frozenset[str] = frozenset({
+    "name", "duration_ms", "initiator_type", "response_status",
+})
+
 IFRAME_METADATA_KEYS: frozenset[str] = frozenset({"index", "src", "id", "name", "sandbox"})
 
 EVIDENCE_DOM_TEXT = "dom_text"
@@ -575,6 +583,42 @@ def _cookie_name_only(raw: str) -> str:
     return name
 
 
+def _sanitize_spa_root(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    out: dict[str, Any] = {"key": str(entry.get("key") or "")}
+    out["exists"] = bool(entry.get("exists"))
+    if out["exists"]:
+        for key in ("child_element_count", "inner_html_length", "text_length"):
+            if entry.get(key) is not None:
+                try:
+                    out[key] = int(entry[key])
+                except (TypeError, ValueError):
+                    pass
+    return out
+
+
+def _sanitize_resource_entry(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in RESOURCE_SUMMARY_KEYS:
+        if key in entry and entry.get(key) is not None:
+            if key == "duration_ms":
+                try:
+                    out[key] = int(entry[key])
+                except (TypeError, ValueError):
+                    pass
+            elif key == "response_status":
+                try:
+                    out[key] = int(entry[key])
+                except (TypeError, ValueError):
+                    pass
+            else:
+                out[key] = str(entry[key])
+    return out
+
+
 def _sanitize_iframe_entry(entry: Any) -> dict[str, Any]:
     if not isinstance(entry, dict):
         return {}
@@ -669,6 +713,75 @@ def sanitize_deep_inspect(raw: dict[str, Any] | None) -> dict[str, Any]:
         if raw.get(key) is not None:
             val = str(raw[key])
             out[key] = val[:500] if key == "visible_text_preview" else val
+
+    spa_roots = raw.get("spa_roots")
+    if isinstance(spa_roots, list):
+        out["spa_roots"] = [_sanitize_spa_root(r) for r in spa_roots]
+
+    mutation = raw.get("mutation_timeline")
+    if isinstance(mutation, dict):
+        mt: dict[str, Any] = {}
+        for key in (
+            "total_count", "first_mutation_ms", "last_mutation_ms",
+            "observe_duration_ms", "mutation_activity",
+        ):
+            if mutation.get(key) is not None:
+                if key == "mutation_activity":
+                    mt[key] = str(mutation[key])
+                else:
+                    try:
+                        mt[key] = int(mutation[key])
+                    except (TypeError, ValueError):
+                        pass
+        out["mutation_timeline"] = mt
+
+    console_diag = raw.get("console_diagnostics")
+    if isinstance(console_diag, list):
+        out["console_diagnostics"] = [
+            {
+                "level": str(item.get("level") or ""),
+                "message": str(item.get("message") or "")[:500],
+            }
+            for item in console_diag[:50]
+            if isinstance(item, dict) and item.get("message")
+        ]
+
+    resources = raw.get("resource_diagnostics")
+    if isinstance(resources, dict):
+        rd: dict[str, Any] = {}
+        for key in ("js_count", "css_count", "fetch_xhr_count"):
+            if resources.get(key) is not None:
+                try:
+                    rd[key] = int(resources[key])
+                except (TypeError, ValueError):
+                    pass
+        for key in ("failed_loads", "slow_loads"):
+            items = resources.get(key)
+            if isinstance(items, list):
+                rd[key] = [_sanitize_resource_entry(i) for i in items[:20]]
+        out["resource_diagnostics"] = rd
+
+    frameworks = raw.get("framework_detection")
+    if isinstance(frameworks, list):
+        out["framework_detection"] = [str(f) for f in frameworks]
+
+    observation = raw.get("observation_window")
+    if isinstance(observation, dict):
+        ow: dict[str, Any] = {}
+        for key in (
+            "observation_ms", "start_dom_size", "end_dom_size",
+            "start_visible_text_length", "end_visible_text_length",
+            "dom_size_delta", "visible_text_length_delta",
+        ):
+            if observation.get(key) is not None:
+                try:
+                    ow[key] = int(observation[key])
+                except (TypeError, ValueError):
+                    pass
+        for key in ("start_visible_text_preview", "end_visible_text_preview"):
+            if observation.get(key) is not None:
+                ow[key] = str(observation[key])[:500]
+        out["observation_window"] = ow
 
     return out
 

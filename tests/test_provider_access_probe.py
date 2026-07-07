@@ -604,6 +604,113 @@ class TestDeepInspect:
         payload = {"deep_inspect": {"script_count": 7, "script_srcs": ["https://a.js"]}}
         assert extract_deep_inspect(payload)["script_count"] == 7
 
+    def test_spa_root_inspection_sanitized(self):
+        raw = {
+            "spa_roots": [
+                {"key": "root", "exists": True, "child_element_count": 1, "inner_html_length": 40000, "text_length": 13},
+                {"key": "app", "exists": False, "innerHTML": "<secret>drop</secret>"},
+            ],
+        }
+        result = sanitize_deep_inspect(raw)
+        root = result["spa_roots"][0]
+        assert root["key"] == "root"
+        assert root["exists"] is True
+        assert root["child_element_count"] == 1
+        assert root["inner_html_length"] == 40000
+        assert root["text_length"] == 13
+        assert result["spa_roots"][1]["exists"] is False
+        assert "innerHTML" not in result["spa_roots"][1]
+
+    def test_mutation_timeline_collection(self):
+        raw = {
+            "mutation_timeline": {
+                "total_count": 42,
+                "first_mutation_ms": 120,
+                "last_mutation_ms": 9800,
+                "observe_duration_ms": 10000,
+                "mutation_activity": "continued",
+            },
+        }
+        result = sanitize_deep_inspect(raw)
+        mt = result["mutation_timeline"]
+        assert mt["total_count"] == 42
+        assert mt["first_mutation_ms"] == 120
+        assert mt["last_mutation_ms"] == 9800
+        assert mt["mutation_activity"] == "continued"
+
+    def test_console_diagnostics_message_only(self):
+        raw = {
+            "console_diagnostics": [
+                {"level": "error", "message": "Failed to bootstrap app", "stack": "secret stack"},
+                {"level": "warn", "message": "locale key missing"},
+            ],
+        }
+        result = sanitize_deep_inspect(raw)
+        assert len(result["console_diagnostics"]) == 2
+        assert result["console_diagnostics"][0]["message"] == "Failed to bootstrap app"
+        assert "stack" not in result["console_diagnostics"][0]
+
+    def test_framework_detection_preserved(self):
+        raw = {"framework_detection": ["React", "Next.js"]}
+        assert sanitize_deep_inspect(raw)["framework_detection"] == ["React", "Next.js"]
+
+    def test_resource_diagnostics_summary(self):
+        raw = {
+            "resource_diagnostics": {
+                "js_count": 42,
+                "css_count": 5,
+                "fetch_xhr_count": 8,
+                "failed_loads": [
+                    {"name": "https://amex.example/bundle.js", "response_status": 404, "body": "secret"},
+                ],
+                "slow_loads": [
+                    {"name": "https://amex.example/api/config", "duration_ms": 4500},
+                ],
+            },
+        }
+        result = sanitize_deep_inspect(raw)
+        rd = result["resource_diagnostics"]
+        assert rd["js_count"] == 42
+        assert rd["failed_loads"][0]["response_status"] == 404
+        assert "body" not in rd["failed_loads"][0]
+        assert rd["slow_loads"][0]["duration_ms"] == 4500
+
+    def test_observation_window_15_seconds(self):
+        raw = {
+            "observation_window": {
+                "observation_ms": 15000,
+                "start_dom_size": 43000,
+                "end_dom_size": 43050,
+                "start_visible_text_length": 13,
+                "end_visible_text_length": 13,
+                "dom_size_delta": 50,
+                "visible_text_length_delta": 0,
+                "start_visible_text_preview": "Give Feedback",
+                "end_visible_text_preview": "Give Feedback",
+            },
+        }
+        result = sanitize_deep_inspect(raw)
+        ow = result["observation_window"]
+        assert ow["observation_ms"] == 15000
+        assert ow["dom_size_delta"] == 50
+        assert ow["visible_text_length_delta"] == 0
+
+    def test_existing_deep_inspect_fields_regression(self):
+        raw = {
+            "outer_html_length": 43000,
+            "outer_html_preview": "<html></html>",
+            "iframe_count": 0,
+            "script_count": 42,
+            "cookie_names": ["a=1"],
+            "content_script_injection_succeeded": True,
+            "spa_roots": [{"key": "root", "exists": True, "text_length": 13}],
+            "mutation_timeline": {"total_count": 0, "mutation_activity": "none"},
+        }
+        result = sanitize_deep_inspect(raw)
+        assert result["outer_html_length"] == 43000
+        assert result["cookie_names"] == ["a"]
+        assert result["spa_roots"][0]["text_length"] == 13
+
 
 class TestStoredProbeRun:
     def test_recorded_run_includes_matched_rules_and_page_title(self, tmp_path):
