@@ -73,6 +73,7 @@ def test_probe_api_records_amex_result(client):
     assert r.status_code == 200
     body = r.get_json()
     assert body["status"] == "signed_in_data_seen"
+    assert body["auth_state"] == "private_data_visible"
     assert body["private_data_detected"] is True
     assert body["evidence_snippet"]
 
@@ -88,7 +89,28 @@ def test_probe_api_records_delta_needs_sign_in(client):
         },
     )
     assert r.status_code == 200
-    assert r.get_json()["status"] == "needs_sign_in"
+    body = r.get_json()
+    assert body["status"] == "needs_sign_in"
+    assert body["auth_state"] == "login_page"
+
+
+def test_admin_page_shows_auth_state_fields(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAIL", client.email)
+    client.post(
+        "/api/extension/provider-access-probe",
+        headers={"X-Mighty-Key": client.api_key},
+        json={
+            "provider": "amex",
+            "url_visited": "https://www.americanexpress.com/en-us/account/",
+            "dom_text": AMEX_ACCOUNT_TEXT,
+            "page_title": "Amex Account Home",
+        },
+    )
+    r = client.get("/admin/provider-access-probe")
+    assert r.status_code == 200
+    assert b"Auth state" in r.data
+    assert b"private data visible" in r.data.lower() or b"private_data_visible" in r.data
+    assert b"Amex Account Home" in r.data
 
 
 def test_admin_page_forbidden_for_non_admin(client):
@@ -118,4 +140,5 @@ def test_admin_json_endpoint(client, monkeypatch):
     assert r.status_code == 200
     providers = {p["provider"]: p for p in r.get_json()["providers"]}
     assert providers["delta"]["status"] == "signed_in_data_seen"
+    assert providers["delta"]["auth_state"] == "private_data_visible"
     assert providers["amex"]["status"] == "not_started"

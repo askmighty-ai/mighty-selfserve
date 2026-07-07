@@ -1126,23 +1126,77 @@ def _probe_status_badge(status: str) -> str:
     )
 
 
+def _auth_state_badge(auth_state: str | None) -> str:
+    colors = {
+        "private_data_visible": ("#065f46", "#d1fae5"),
+        "authenticated_no_private_data": ("#92400e", "#fef3c7"),
+        "marketing": ("#1e40af", "#dbeafe"),
+        "login_page": ("#991b1b", "#fee2e2"),
+        "login_submitted": ("#9a3412", "#ffedd5"),
+        "mfa_required": ("#7c2d12", "#fed7aa"),
+        "bot_blocked": ("#581c87", "#f3e8ff"),
+        "session_expired": ("#b45309", "#fef3c7"),
+        "error": ("#7f1d1d", "#fecaca"),
+        "unknown": ("#374151", "#f3f4f6"),
+    }
+    state = auth_state or "unknown"
+    fg, bg = colors.get(state, ("#374151", "#f3f4f6"))
+    label = state.replace("_", " ")
+    return (
+        f'<span style="display:inline-block;padding:2px 8px;border-radius:6px;'
+        f'font-size:11px;font-weight:600;color:{fg};background:{bg}">{_he(label)}</span>'
+    )
+
+
+def _probe_form_signals(row: dict[str, Any]) -> str:
+    flags = (
+        ("login", row.get("login_form_present")),
+        ("user", row.get("username_field_present")),
+        ("pass", row.get("password_field_present")),
+        ("mfa", row.get("mfa_signal_present")),
+        ("bot", row.get("bot_block_signal_present")),
+        ("expired", row.get("session_expired_signal_present")),
+    )
+    parts = [
+        f"{name}:{'yes' if val else 'no'}"
+        for name, val in flags
+    ]
+    return ", ".join(parts)
+
+
+def _probe_matched_rules(row: dict[str, Any]) -> str:
+    groups = []
+    for key, label in (
+        ("matched_login_rules", "login"),
+        ("matched_private_data_rules", "private"),
+        ("matched_blocking_rules", "block"),
+    ):
+        rules = row.get(key) or []
+        if rules:
+            groups.append(f"{label}={','.join(rules)}")
+    return "; ".join(groups) or "—"
+
+
 def render_provider_access_probe_page(rows: list[dict[str, Any]]) -> str:
     table = "".join(
         f"<tr>"
         f"<td><strong>{_he(r.get('provider', ''))}</strong></td>"
         f"<td>{_probe_status_badge(r.get('status') or 'not_started')}</td>"
-        f"<td class=\"muted\" style=\"font-size:11px;max-width:220px;word-break:break-all\">"
-        f"{_he(r.get('url_visited') or '—')}</td>"
-        f"<td>{'yes' if r.get('signed_in_detected') else 'no'}</td>"
-        f"<td>{'yes' if r.get('private_data_detected') else 'no'}</td>"
-        f"<td><code>{_he(r.get('evidence_type') or '—')}</code></td>"
-        f"<td class=\"muted\" style=\"font-size:11px;max-width:280px\">"
+        f"<td>{_auth_state_badge(r.get('auth_state'))}</td>"
+        f"<td class=\"muted\" style=\"font-size:11px;max-width:200px;word-break:break-all\">"
+        f"{_he(r.get('final_url') or r.get('url_visited') or '—')}</td>"
+        f"<td class=\"muted\" style=\"font-size:11px;max-width:160px\">"
+        f"{_he(r.get('page_title') or '—')}</td>"
+        f"<td style=\"font-size:11px\">{_he(_probe_form_signals(r))}</td>"
+        f"<td class=\"muted\" style=\"font-size:11px;max-width:220px\">"
+        f"{_he(_probe_matched_rules(r))}</td>"
+        f"<td class=\"muted\" style=\"font-size:11px;max-width:220px\">"
         f"{_he((r.get('evidence_snippet') or '—')[:120])}</td>"
         f"<td>{_fmt_iso(r.get('probed_at') or r.get('timestamp'))}</td>"
         f"<td class=\"muted\">{_he(r.get('failure_reason') or '—')}</td>"
         f"</tr>"
         for r in rows
-    ) or '<tr><td colspan="9" class="muted">No probe runs yet</td></tr>'
+    ) or '<tr><td colspan="10" class="muted">No probe runs yet</td></tr>'
 
     body = (
         '<p class="lede">Phase 1 account reliability diagnostic. Probes verify whether the '
@@ -1151,9 +1205,9 @@ def render_provider_access_probe_page(rows: list[dict[str, Any]]) -> str:
         '<p class="muted" style="font-size:11px">JSON API: '
         '<code>/api/admin/provider-access-probe</code></p>'
         '<div class="card"><table><thead><tr>'
-        "<th>Provider</th><th>Status</th><th>URL visited</th>"
-        "<th>Signed in</th><th>Private data</th><th>Evidence type</th>"
-        "<th>Snippet</th><th>Probed at</th><th>Failure reason</th>"
+        "<th>Provider</th><th>Status</th><th>Auth state</th><th>Final URL</th>"
+        "<th>Page title</th><th>Form signals</th><th>Matched rules</th>"
+        "<th>Evidence snippet</th><th>Probed at</th><th>Failure reason</th>"
         f"</tr></thead><tbody>{table}</tbody></table></div>"
     )
     return _admin_shell("provider-access-probe", "Provider Access Probe", body)
