@@ -271,6 +271,52 @@ def test_admin_page_shows_page_diagnostics_for_unknown(client, monkeypatch):
     assert "blank_or_unloaded_page" in text or "blank or unloaded" in text.lower()
 
 
+def test_admin_page_shows_deep_inspect_for_amex(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAIL", client.email)
+    client.post(
+        "/api/extension/provider-access-probe",
+        headers={"X-Mighty-Key": client.api_key},
+        json={
+            "provider": "amex",
+            "url_visited": "https://www.americanexpress.com/en-us/account/",
+            "dom_text": "",
+            "page_diagnostics": {
+                "ready_state": "complete",
+                "body_text_length": 13,
+                "visible_text_preview": "Give Feedback",
+            },
+            "deep_inspect": {
+                "outer_html_length": 45000,
+                "outer_html_preview": "<html><head><title>One App</title></head><body></body></html>",
+                "iframe_count": 2,
+                "iframes": [
+                    {"index": 0, "src": "https://www.americanexpress.com/auth", "id": "sso", "name": "", "sandbox": ""},
+                ],
+                "shadow_root_count": 3,
+                "script_count": 12,
+                "script_srcs": ["https://www.americanexpress.com/app.js"],
+                "cookie_names": ["sessionId"],
+                "local_storage_keys": ["prefs"],
+                "session_storage_keys": [],
+                "content_script_injection_succeeded": True,
+                "final_url": "https://www.americanexpress.com/en-us/account/",
+                "page_title": "One App",
+                "ready_state": "complete",
+                "visible_text_preview": "Give Feedback",
+            },
+        },
+    )
+    r = client.get("/admin/provider-access-probe")
+    assert r.status_code == 200
+    text = r.data.decode("utf-8")
+    assert "Amex deep inspect" in text
+    assert "outer_html_length" in text
+    assert "45000" in text
+    assert "One App" in text
+    assert "sessionId" in text
+    assert "names/keys only" in text
+
+
 def test_admin_page_forbidden_for_non_admin(client):
     assert client.get("/admin/provider-access-probe").status_code == 403
 

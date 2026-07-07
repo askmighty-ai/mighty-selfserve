@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.3.8-manual-probe-gate';
+const MIGHTY_EXT_VERSION = '1.3.9-deep-inspect';
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -2158,6 +2158,7 @@ async function probeAmexConnectionState(apiKey, accounts) {
 
 const PROVIDER_ACCESS_PROBE_SOURCES = new Set(['amex', 'delta']);
 const MANUAL_PROBE_PROVIDERS = ['amex', 'delta'];
+const DEEP_INSPECT_PROVIDERS = new Set(['amex']);
 const _probeReportedAt = {};
 let _automaticProbesEnabled = true;
 let _automaticProbesConfigFetchedAt = 0;
@@ -2225,23 +2226,83 @@ async function _postProviderAccessProbe(apiKey, payload, { skipDedup = false } =
   }
 }
 
+async function injectDeepInspectErrorCollector(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      injectImmediately: true,
+      func: () => {
+        if (window.__mightyProbeErrorsInstalled) return;
+        window.__mightyProbeErrorsInstalled = true;
+        window.__mightyProbeJsErrors = window.__mightyProbeJsErrors || [];
+        window.addEventListener('error', (e) => {
+          window.__mightyProbeJsErrors.push({
+            message: e.message || String(e.error || 'error'),
+            source: e.filename || '',
+            line: e.lineno ?? null,
+            col: e.colno ?? null,
+          });
+        });
+        window.addEventListener('unhandledrejection', (e) => {
+          const reason = e.reason;
+          window.__mightyProbeJsErrors.push({
+            message: 'Unhandled rejection: ' + (reason?.message || String(reason)),
+            source: '',
+            line: null,
+            col: null,
+          });
+        });
+      },
+    });
+    return true;
+  } catch (e) {
+    console.warn('[Mighty Probe] deep inspect error collector failed:', e.message);
+    return false;
+  }
+}
+
 async function runProviderAccessProbeInTab(tabId, provider, probeMeta = {}) {
   const classifierStartedAt = probeMeta.classifierStartedAt || new Date().toISOString();
+  const deepInspect = !!probeMeta.deepInspect;
+  let probeInjectionOk = false;
+  let deepInspectData = null;
   try {
     const [r] = await chrome.scripting.executeScript({
       target: { tabId },
       func: runProviderAccessProbeInPage,
       args: [provider, classifierStartedAt],
     });
+    probeInjectionOk = true;
     const result = r?.result || null;
     if (result) {
       result.classifier_started_at = result.classifier_started_at || classifierStartedAt;
       if (probeMeta.domWaitMs != null) result.dom_wait_ms = probeMeta.domWaitMs;
     }
+    if (deepInspect) {
+      try {
+        const [deepR] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: collectDeepInspectInPage,
+          args: [probeInjectionOk],
+        });
+        deepInspectData = deepR?.result || null;
+      } catch (deepErr) {
+        deepInspectData = {
+          content_script_injection_succeeded: false,
+          js_errors: [{ message: deepErr.message }],
+        };
+      }
+      if (result) {
+        result.deep_inspect = deepInspectData;
+        if (result.page_diagnostics) {
+          result.page_diagnostics.content_script_injection_succeeded = probeInjectionOk;
+        }
+      }
+    }
     return result;
   } catch (e) {
     console.warn(`[Mighty Probe] tab script failed for ${provider}:`, e.message);
-    return {
+    const failure = {
       provider,
       error: e.message,
       content_script_error: e.message,
@@ -2249,6 +2310,13 @@ async function runProviderAccessProbeInTab(tabId, provider, probeMeta = {}) {
       classifier_started_at: classifierStartedAt,
       dom_wait_ms: probeMeta.domWaitMs ?? null,
     };
+    if (deepInspect) {
+      failure.deep_inspect = {
+        content_script_injection_succeeded: false,
+        js_errors: [{ message: e.message }],
+      };
+    }
+    return failure;
   }
 }
 
@@ -2278,6 +2346,7 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
 
   _manualProbeInProgress = true;
   console.log(`[Mighty Probe] manual run for ${provider} (${manualRunId || 'no-id'})`);
+  const deepInspect = DEEP_INSPECT_PROVIDERS.has(provider);
   let tab;
   const classifierStartedAt = new Date().toISOString();
   try {
@@ -2286,12 +2355,16 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
       console.warn('[Mighty Probe] manual tab creation blocked');
       return;
     }
+    if (deepInspect) {
+      await injectDeepInspectErrorCollector(tab.id);
+    }
     const domWaitStart = Date.now();
     await waitForProbePageStability(tab.id);
     const domWaitMs = Date.now() - domWaitStart;
     const result = await runProviderAccessProbeInTab(tab.id, provider, {
       classifierStartedAt,
       domWaitMs,
+      deepInspect,
     });
     const payload = result || {
       provider,
@@ -4376,6 +4449,107 @@ function extractAmexMembershipRewardsPage() {
     || sample.includes('recent activity');
   console.log(LOG, loggedIn ? 'balance not found' : 'not logged in');
   return { loggedIn, value: null };
+}
+
+// Deep inspect diagnostics — manual Amex probes (Phase 1 account access reliability)
+function collectDeepInspectInPage(contentScriptSucceeded) {
+  const docEl = document.documentElement;
+  const outerHTML = docEl ? docEl.outerHTML : '';
+  const bodyText = document.body?.innerText || '';
+
+  const iframes = Array.from(document.querySelectorAll('iframe')).map((frame, index) => ({
+    index,
+    src: frame.src || frame.getAttribute('src') || '',
+    id: frame.id || '',
+    name: frame.name || '',
+    sandbox: frame.getAttribute('sandbox') || '',
+  }));
+
+  let shadowRootCount = 0;
+  try {
+    document.querySelectorAll('*').forEach((el) => {
+      if (el.shadowRoot) shadowRootCount += 1;
+    });
+  } catch (_) {}
+
+  const scripts = Array.from(document.querySelectorAll('script'));
+  const scriptSrcs = scripts
+    .map((s) => s.src || s.getAttribute('src') || '')
+    .filter(Boolean)
+    .slice(0, 20);
+
+  const stylesheetHrefs = Array.from(
+    document.querySelectorAll('link[rel="stylesheet"], link[rel="preload"][as="style"]'),
+  )
+    .map((link) => link.href || link.getAttribute('href') || '')
+    .filter(Boolean);
+
+  let navigationTiming = null;
+  try {
+    const nav = performance.getEntriesByType('navigation')[0];
+    if (nav) {
+      navigationTiming = {
+        dom_content_loaded_ms: Math.round(nav.domContentLoadedEventEnd),
+        load_event_ms: Math.round(nav.loadEventEnd),
+        response_start_ms: Math.round(nav.responseStart),
+        duration_ms: Math.round(nav.duration),
+      };
+    } else if (performance.timing?.navigationStart) {
+      const t = performance.timing;
+      navigationTiming = {
+        dom_content_loaded_ms: t.domContentLoadedEventEnd - t.navigationStart,
+        load_event_ms: t.loadEventEnd - t.navigationStart,
+        response_start_ms: t.responseStart - t.navigationStart,
+      };
+    }
+  } catch (_) {}
+
+  let cookieNames = [];
+  try {
+    cookieNames = document.cookie
+      .split(';')
+      .map((c) => c.split('=')[0].trim())
+      .filter(Boolean);
+  } catch (_) {
+    cookieNames = ['__access_denied__'];
+  }
+
+  let localStorageKeys = [];
+  try {
+    localStorageKeys = Object.keys(localStorage);
+  } catch (_) {
+    localStorageKeys = ['__access_denied__'];
+  }
+
+  let sessionStorageKeys = [];
+  try {
+    sessionStorageKeys = Object.keys(sessionStorage);
+  } catch (_) {
+    sessionStorageKeys = ['__access_denied__'];
+  }
+
+  const jsErrors = (window.__mightyProbeJsErrors || []).slice(0, 50);
+
+  return {
+    outer_html_length: outerHTML.length,
+    outer_html_preview: outerHTML.slice(0, 2000),
+    iframe_count: iframes.length,
+    iframes,
+    shadow_root_count: shadowRootCount,
+    script_count: scripts.length,
+    script_srcs: scriptSrcs,
+    stylesheet_hrefs: stylesheetHrefs,
+    navigation_timing: navigationTiming,
+    cookie_names: cookieNames,
+    local_storage_keys: localStorageKeys,
+    session_storage_keys: sessionStorageKeys,
+    js_errors: jsErrors,
+    content_script_injection_succeeded: !!contentScriptSucceeded,
+    final_url: location.href,
+    page_title: document.title || '',
+    ready_state: document.readyState,
+    visible_text_preview: bodyText.slice(0, 500),
+  };
 }
 
 // Runs inside provider account pages — Phase 1 access probe (Amex + Delta first)

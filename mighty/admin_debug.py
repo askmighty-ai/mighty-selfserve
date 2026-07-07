@@ -1206,6 +1206,101 @@ def _probe_page_diagnostics(row: dict[str, Any]) -> str:
     return "; ".join(parts) or "—"
 
 
+def _probe_deep_inspect_section(rows: list[dict[str, Any]]) -> str:
+    """Render deep inspect diagnostics for the latest Amex probe run."""
+    amex_row = next((r for r in rows if r.get("provider") == "amex"), None)
+    if not amex_row:
+        return ""
+    deep = amex_row.get("deep_inspect") or {}
+    if not deep:
+        return (
+            '<div class="card" style="margin-bottom:16px">'
+            "<h3>Amex deep inspect</h3>"
+            '<p class="muted" style="font-size:12px;margin:0">'
+            "No deep inspect data yet. Run <strong>Run Probe — Amex</strong> to capture DOM diagnostics.</p>"
+            "</div>"
+        )
+
+    def _fmt_list(label: str, items: list[Any] | None, limit: int = 20) -> str:
+        if not items:
+            return f"<dt>{_he(label)}</dt><dd class=\"muted\">—</dd>"
+        shown = items[:limit]
+        extra = f" (+{len(items) - limit} more)" if len(items) > limit else ""
+        return (
+            f"<dt>{_he(label)}{_he(extra)}</dt>"
+            f"<dd><code style=\"font-size:10px;word-break:break-all\">"
+            f"{_he(', '.join(str(i) for i in shown))}</code></dd>"
+        )
+
+    iframes = deep.get("iframes") or []
+    iframe_lines = []
+    for frame in iframes[:10]:
+        if not isinstance(frame, dict):
+            continue
+        iframe_lines.append(
+            f"#{frame.get('index', '?')}: src={frame.get('src') or '—'} "
+            f"id={frame.get('id') or '—'} name={frame.get('name') or '—'} "
+            f"sandbox={frame.get('sandbox') or '—'}"
+        )
+
+    nav = deep.get("navigation_timing") or {}
+    nav_parts = [
+        f"{k}={nav[k]}" for k in (
+            "response_start_ms", "dom_content_loaded_ms", "load_event_ms", "duration_ms",
+        )
+        if nav.get(k) is not None
+    ]
+
+    js_errors = deep.get("js_errors") or []
+    error_lines = []
+    for err in js_errors[:10]:
+        if isinstance(err, dict):
+            error_lines.append(err.get("message") or str(err))
+        else:
+            error_lines.append(str(err))
+
+    details = (
+        f"<dt>outer_html_length</dt><dd>{_he(deep.get('outer_html_length'))}</dd>"
+        f"<dt>outer_html_preview</dt>"
+        f"<dd><pre style=\"font-size:10px;max-height:200px;overflow:auto;"
+        f"white-space:pre-wrap;word-break:break-all;margin:0\">"
+        f"{_he(str(deep.get('outer_html_preview') or '')[:2000])}</pre></dd>"
+        f"<dt>iframe_count</dt><dd>{_he(deep.get('iframe_count'))}</dd>"
+        f"<dt>iframes</dt><dd><code style=\"font-size:10px\">"
+        f"{_he('; '.join(iframe_lines) or '—')}</code></dd>"
+        f"<dt>shadow_root_count</dt><dd>{_he(deep.get('shadow_root_count'))}</dd>"
+        f"<dt>script_count</dt><dd>{_he(deep.get('script_count'))}</dd>"
+        f"{_fmt_list('script_srcs', deep.get('script_srcs'))}"
+        f"{_fmt_list('stylesheet_hrefs', deep.get('stylesheet_hrefs'))}"
+        f"<dt>navigation_timing</dt><dd class=\"muted\">{_he('; '.join(nav_parts) or '—')}</dd>"
+        f"{_fmt_list('cookie_names', deep.get('cookie_names'))}"
+        f"{_fmt_list('local_storage_keys', deep.get('local_storage_keys'))}"
+        f"{_fmt_list('session_storage_keys', deep.get('session_storage_keys'))}"
+        f"<dt>js_errors</dt><dd><code style=\"font-size:10px\">"
+        f"{_he('; '.join(error_lines) or '—')}</code></dd>"
+        f"<dt>content_script_injection_succeeded</dt>"
+        f"<dd>{_he(deep.get('content_script_injection_succeeded'))}</dd>"
+        f"<dt>final_url</dt><dd class=\"muted\" style=\"word-break:break-all\">"
+        f"{_he(deep.get('final_url') or '—')}</dd>"
+        f"<dt>page_title</dt><dd>{_he(deep.get('page_title') or '—')}</dd>"
+        f"<dt>ready_state</dt><dd>{_he(deep.get('ready_state') or '—')}</dd>"
+        f"<dt>visible_text_preview</dt>"
+        f"<dd class=\"muted\">{_he(str(deep.get('visible_text_preview') or '')[:500])}</dd>"
+    )
+
+    probed = _fmt_iso(amex_row.get("probed_at") or amex_row.get("timestamp"))
+    return (
+        '<div class="card" style="margin-bottom:16px">'
+        "<h3>Amex deep inspect</h3>"
+        f'<p class="muted" style="font-size:12px;margin:0 0 12px">'
+        f"Latest Amex manual probe diagnostics (probed {probed}). "
+        "Cookie and storage values are never captured — names/keys only.</p>"
+        f'<dl style="display:grid;grid-template-columns:180px 1fr;gap:6px 12px;'
+        f'font-size:11px;margin:0">{details}</dl>'
+        "</div>"
+    )
+
+
 def render_provider_access_probe_page(
     rows: list[dict[str, Any]],
     *,
@@ -1357,6 +1452,7 @@ def render_provider_access_probe_page(
         '<p class="muted" style="font-size:11px">JSON API: '
         '<code>/api/admin/provider-access-probe</code></p>'
         f"{run_controls}"
+        f"{_probe_deep_inspect_section(rows)}"
         '<div class="card"><table><thead><tr>'
         "<th>Provider</th><th>Status</th><th>Auth state</th><th>Final URL</th>"
         "<th>Page title</th><th>Form signals</th><th>Matched rules</th>"

@@ -33,6 +33,8 @@ from mighty.provider_access_probe import (
     detect_signed_in_from_text,
     evaluate_probe_payload,
     extract_page_diagnostics,
+    extract_deep_inspect,
+    sanitize_deep_inspect,
     get_manual_probe_state,
     is_automatic_probe_disabled,
     is_blank_or_unloaded_page,
@@ -492,6 +494,115 @@ class TestBlankPageDetection:
                 "input_count": 2,
             },
         })
+
+
+class TestDeepInspect:
+    _OUTER_HTML = "<html><head><title>One App</title></head><body><div>Give Feedback</div></body></html>"
+
+    def test_deep_inspect_captures_outer_html_length_and_preview(self):
+        raw = {
+            "outer_html_length": len(self._OUTER_HTML),
+            "outer_html_preview": self._OUTER_HTML,
+            "iframe_count": 0,
+            "final_url": AMEX_ACCOUNT_URL,
+        }
+        result = sanitize_deep_inspect(raw)
+        assert result["outer_html_length"] == len(self._OUTER_HTML)
+        assert result["outer_html_preview"] == self._OUTER_HTML
+        assert len(result["outer_html_preview"]) <= 2000
+
+    def test_iframe_metadata_stored_without_contents(self):
+        raw = {
+            "iframes": [
+                {
+                    "index": 0,
+                    "src": "https://example.com/frame",
+                    "id": "auth-frame",
+                    "name": "login",
+                    "sandbox": "allow-scripts",
+                    "innerHTML": "<secret>must not persist</secret>",
+                    "contentDocument": "blocked",
+                },
+            ],
+        }
+        result = sanitize_deep_inspect(raw)
+        assert len(result["iframes"]) == 1
+        frame = result["iframes"][0]
+        assert frame["src"] == "https://example.com/frame"
+        assert frame["id"] == "auth-frame"
+        assert "innerHTML" not in frame
+        assert "contentDocument" not in frame
+
+    def test_cookie_and_storage_names_only_never_values(self):
+        raw = {
+            "cookie_names": ["sessionId=abc123", "tracking=xyz"],
+            "local_storage_keys": ["authToken", "prefs"],
+            "session_storage_keys": ["flowState"],
+            "cookie_values": {"sessionId": "secret"},
+            "local_storage": {"authToken": "secret"},
+        }
+        result = sanitize_deep_inspect(raw)
+        assert result["cookie_names"] == ["sessionId", "tracking"]
+        assert result["local_storage_keys"] == ["authToken", "prefs"]
+        assert result["session_storage_keys"] == ["flowState"]
+        assert "cookie_values" not in result
+        assert "local_storage" not in result
+
+    def test_evaluate_probe_payload_preserves_deep_inspect(self):
+        payload = {
+            "url_visited": AMEX_ACCOUNT_URL,
+            "dom_text": "",
+            "deep_inspect": {
+                "outer_html_length": 5000,
+                "outer_html_preview": self._OUTER_HTML,
+                "iframe_count": 1,
+                "iframes": [{"index": 0, "src": "https://amex.example/iframe"}],
+                "cookie_names": ["a=b"],
+                "local_storage_keys": ["k1"],
+                "session_storage_keys": [],
+                "content_script_injection_succeeded": True,
+                "final_url": AMEX_ACCOUNT_URL,
+                "page_title": "One App",
+                "ready_state": "complete",
+                "visible_text_preview": "Give Feedback",
+            },
+            "page_diagnostics": {
+                "ready_state": "complete",
+                "body_exists": True,
+                "body_text_length": 13,
+            },
+        }
+        result = evaluate_probe_payload("amex", payload)
+        deep = result["deep_inspect"]
+        assert deep["outer_html_length"] == 5000
+        assert deep["cookie_names"] == ["a"]
+        assert deep["content_script_injection_succeeded"] is True
+        assert result["failure_reason"] == FAILURE_BLANK_OR_UNLOADED
+
+    def test_recorded_run_includes_deep_inspect(self, tmp_path):
+        import sqlite3
+
+        db_path = str(tmp_path / "deep.db")
+        db = sqlite3.connect(db_path)
+        db.row_factory = sqlite3.Row
+        ensure_probe_tables(db)
+
+        result = evaluate_probe_payload("amex", {
+            "url_visited": AMEX_ACCOUNT_URL,
+            "dom_text": "",
+            "deep_inspect": {
+                "outer_html_length": 1234,
+                "outer_html_preview": "<html></html>",
+            },
+            "page_diagnostics": {"body_text_length": 0, "body_exists": True},
+        })
+        record_probe_run(db, "user-1", result)
+        latest = get_latest_probe_per_provider(db, "user-1")
+        assert latest["amex"]["deep_inspect"]["outer_html_length"] == 1234
+
+    def test_extract_deep_inspect_from_payload(self):
+        payload = {"deep_inspect": {"script_count": 7, "script_srcs": ["https://a.js"]}}
+        assert extract_deep_inspect(payload)["script_count"] == 7
 
 
 class TestStoredProbeRun:

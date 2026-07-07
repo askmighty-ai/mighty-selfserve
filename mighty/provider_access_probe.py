@@ -93,6 +93,32 @@ PAGE_DIAGNOSTIC_KEYS: tuple[str, ...] = (
     "content_script_error",
 )
 
+# Deep inspect — manual probe diagnostics (Phase 1, Amex first).
+DEEP_INSPECT_PROVIDERS: frozenset[str] = frozenset({"amex"})
+
+DEEP_INSPECT_KEYS: tuple[str, ...] = (
+    "outer_html_length",
+    "outer_html_preview",
+    "iframe_count",
+    "iframes",
+    "shadow_root_count",
+    "script_count",
+    "script_srcs",
+    "stylesheet_hrefs",
+    "navigation_timing",
+    "cookie_names",
+    "local_storage_keys",
+    "session_storage_keys",
+    "js_errors",
+    "content_script_injection_succeeded",
+    "final_url",
+    "page_title",
+    "ready_state",
+    "visible_text_preview",
+)
+
+IFRAME_METADATA_KEYS: frozenset[str] = frozenset({"index", "src", "id", "name", "sandbox"})
+
 EVIDENCE_DOM_TEXT = "dom_text"
 EVIDENCE_API_RESPONSE = "api_response"
 EVIDENCE_EMBEDDED_STATE = "embedded_state"
@@ -541,6 +567,121 @@ def extract_page_diagnostics(payload: dict[str, Any] | None) -> dict[str, Any]:
     return diag
 
 
+def _cookie_name_only(raw: str) -> str:
+    """Return cookie name without value."""
+    name = str(raw).strip()
+    if "=" in name:
+        name = name.split("=", 1)[0].strip()
+    return name
+
+
+def _sanitize_iframe_entry(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in IFRAME_METADATA_KEYS:
+        if key in entry and entry.get(key) is not None:
+            out[key] = entry[key]
+    return out
+
+
+def sanitize_deep_inspect(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize deep inspect payload; never persist cookie/storage values."""
+    raw = raw or {}
+    out: dict[str, Any] = {}
+
+    if raw.get("outer_html_length") is not None:
+        try:
+            out["outer_html_length"] = int(raw["outer_html_length"])
+        except (TypeError, ValueError):
+            pass
+    if raw.get("outer_html_preview") is not None:
+        out["outer_html_preview"] = str(raw["outer_html_preview"])[:2000]
+
+    if raw.get("iframe_count") is not None:
+        try:
+            out["iframe_count"] = int(raw["iframe_count"])
+        except (TypeError, ValueError):
+            pass
+
+    iframes = raw.get("iframes")
+    if isinstance(iframes, list):
+        out["iframes"] = [_sanitize_iframe_entry(f) for f in iframes]
+
+    if raw.get("shadow_root_count") is not None:
+        try:
+            out["shadow_root_count"] = int(raw["shadow_root_count"])
+        except (TypeError, ValueError):
+            pass
+    if raw.get("script_count") is not None:
+        try:
+            out["script_count"] = int(raw["script_count"])
+        except (TypeError, ValueError):
+            pass
+
+    script_srcs = raw.get("script_srcs")
+    if isinstance(script_srcs, list):
+        out["script_srcs"] = [str(s) for s in script_srcs[:20]]
+
+    stylesheet_hrefs = raw.get("stylesheet_hrefs")
+    if isinstance(stylesheet_hrefs, list):
+        out["stylesheet_hrefs"] = [str(h) for h in stylesheet_hrefs]
+
+    nav = raw.get("navigation_timing")
+    if isinstance(nav, dict):
+        out["navigation_timing"] = {
+            k: nav[k] for k in (
+                "dom_content_loaded_ms",
+                "load_event_ms",
+                "response_start_ms",
+                "duration_ms",
+            )
+            if k in nav and nav[k] is not None
+        }
+
+    cookie_names = raw.get("cookie_names")
+    if isinstance(cookie_names, list):
+        out["cookie_names"] = [_cookie_name_only(c) for c in cookie_names if str(c).strip()]
+
+    for key in ("local_storage_keys", "session_storage_keys"):
+        keys = raw.get(key)
+        if isinstance(keys, list):
+            out[key] = [str(k) for k in keys]
+
+    js_errors = raw.get("js_errors")
+    if isinstance(js_errors, list):
+        sanitized_errors: list[Any] = []
+        for err in js_errors[:50]:
+            if isinstance(err, dict):
+                sanitized_errors.append({
+                    k: err[k]
+                    for k in ("message", "source", "line", "col")
+                    if k in err and err[k] is not None
+                })
+            elif err is not None:
+                sanitized_errors.append({"message": str(err)[:500]})
+        out["js_errors"] = sanitized_errors
+
+    if raw.get("content_script_injection_succeeded") is not None:
+        out["content_script_injection_succeeded"] = bool(raw["content_script_injection_succeeded"])
+
+    for key in ("final_url", "page_title", "ready_state", "visible_text_preview"):
+        if raw.get(key) is not None:
+            val = str(raw[key])
+            out[key] = val[:500] if key == "visible_text_preview" else val
+
+    return out
+
+
+def extract_deep_inspect(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize deep inspect diagnostics from extension probe payload."""
+    payload = payload or {}
+    nested = payload.get("deep_inspect")
+    if isinstance(nested, dict):
+        return sanitize_deep_inspect(nested)
+    return {}
+
+
 def is_blank_or_unloaded_page(
     dom_text: str = "",
     *,
@@ -730,6 +871,7 @@ def evaluate_probe_payload(provider: str, payload: dict[str, Any]) -> dict[str, 
     )
 
     page_diagnostics = extract_page_diagnostics(payload)
+    deep_inspect = extract_deep_inspect(payload)
     if not page_title and page_diagnostics.get("page_title"):
         page_title = str(page_diagnostics["page_title"]).strip() or None
 
@@ -759,6 +901,7 @@ def evaluate_probe_payload(provider: str, payload: dict[str, Any]) -> dict[str, 
         "matched_blocking_rules": auth["matched_blocking_rules"],
         "failure_reason": auth["failure_reason"],
         "page_diagnostics": page_diagnostics,
+        "deep_inspect": deep_inspect,
         "probed_at": probed_at,
         "timestamp": probed_at,
     }
@@ -781,6 +924,7 @@ _PROBE_RUN_COLUMNS: tuple[tuple[str, str], ...] = (
     ("matched_private_data_rules", "TEXT"),
     ("matched_blocking_rules", "TEXT"),
     ("page_diagnostics_json", "TEXT"),
+    ("deep_inspect_json", "TEXT"),
 )
 
 
@@ -893,8 +1037,8 @@ def record_probe_run(db: Any, user_id: str, result: dict[str, Any]) -> str:
             login_form_present, password_field_present, username_field_present,
             mfa_signal_present, bot_block_signal_present, session_expired_signal_present,
             matched_login_rules, matched_private_data_rules, matched_blocking_rules,
-            page_diagnostics_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            page_diagnostics_json, deep_inspect_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -923,6 +1067,7 @@ def record_probe_run(db: Any, user_id: str, result: dict[str, Any]) -> str:
             _json_list(result.get("matched_private_data_rules")),
             _json_list(result.get("matched_blocking_rules")),
             _json_diagnostics(result.get("page_diagnostics")),
+            _json_diagnostics(result.get("deep_inspect")),
         ),
     )
     db.commit()
@@ -947,6 +1092,7 @@ def _normalize_probe_row(row: dict[str, Any]) -> dict[str, Any]:
     d["matched_private_data_rules"] = _parse_json_list(d.get("matched_private_data_rules"))
     d["matched_blocking_rules"] = _parse_json_list(d.get("matched_blocking_rules"))
     d["page_diagnostics"] = _parse_json_dict(d.get("page_diagnostics_json"))
+    d["deep_inspect"] = _parse_json_dict(d.get("deep_inspect_json"))
     if not d.get("final_url"):
         d["final_url"] = d.get("url_visited")
     return d
@@ -1021,6 +1167,7 @@ def row_to_json(row: dict[str, Any]) -> dict[str, Any]:
         "timestamp": row.get("probed_at") or row.get("timestamp"),
         "failure_reason": row.get("failure_reason"),
         "page_diagnostics": row.get("page_diagnostics") or _parse_json_dict(row.get("page_diagnostics_json")),
+        "deep_inspect": row.get("deep_inspect") or _parse_json_dict(row.get("deep_inspect_json")),
         "run_id": row.get("run_id"),
     }
 
