@@ -15,6 +15,7 @@ from mighty.provider_access_probe import (
     AUTH_MFA_REQUIRED,
     AUTH_PRIVATE_DATA_VISIBLE,
     AUTH_SESSION_EXPIRED,
+    AUTH_UNKNOWN,
     PROBE_BLOCKED,
     PROBE_ERROR,
     PROBE_NEEDS_SIGN_IN,
@@ -22,6 +23,7 @@ from mighty.provider_access_probe import (
     PROBE_SIGNED_IN_DATA,
     PROBE_SIGNED_IN_NO_DATA,
     ConcurrentProbeError,
+    FAILURE_BLANK_OR_UNLOADED,
     PROBE_LIFECYCLE_DONE,
     PROBE_LIFECYCLE_RUNNING,
     classify_auth_state,
@@ -30,8 +32,10 @@ from mighty.provider_access_probe import (
     detect_private_data,
     detect_signed_in_from_text,
     evaluate_probe_payload,
+    extract_page_diagnostics,
     get_manual_probe_state,
     is_automatic_probe_disabled,
+    is_blank_or_unloaded_page,
     is_marketing_url,
     merge_probe_summaries,
     record_probe_run,
@@ -406,6 +410,88 @@ class TestEvaluateProbePayload:
         assert result["status"] == PROBE_SIGNED_IN_DATA
         assert result["auth_state"] == AUTH_PRIVATE_DATA_VISIBLE
         assert result["private_data_detected"] is True
+
+    def test_blank_amex_page_records_blank_or_unloaded_page(self):
+        result = evaluate_probe_payload("amex", {
+            "url_visited": AMEX_ACCOUNT_URL,
+            "dom_text": "",
+            "page_diagnostics": {
+                "ready_state": "complete",
+                "body_exists": True,
+                "body_text_length": 0,
+                "visible_text_preview": "",
+                "page_title": "",
+                "iframe_count": 0,
+                "input_count": 0,
+                "button_count": 0,
+                "password_input_count": 0,
+                "final_url": AMEX_ACCOUNT_URL,
+            },
+        })
+        assert result["auth_state"] == AUTH_UNKNOWN
+        assert result["failure_reason"] == FAILURE_BLANK_OR_UNLOADED
+        assert result["status"] == PROBE_NEEDS_SIGN_IN
+
+    def test_unknown_result_includes_page_diagnostics(self):
+        payload = {
+            "url_visited": AMEX_ACCOUNT_URL,
+            "dom_text": "",
+            "page_diagnostics": {
+                "ready_state": "interactive",
+                "body_exists": True,
+                "body_text_length": 4,
+                "visible_text_preview": "    ",
+                "page_title": "",
+                "iframe_count": 2,
+                "input_count": 0,
+                "button_count": 0,
+                "password_input_count": 0,
+                "final_url": AMEX_ACCOUNT_URL,
+                "classifier_started_at": "2026-07-07T16:00:00.000Z",
+                "dom_wait_ms": 5000,
+            },
+        }
+        result = evaluate_probe_payload("amex", payload)
+        diag = result["page_diagnostics"]
+        assert diag["ready_state"] == "interactive"
+        assert diag["body_exists"] is True
+        assert diag["body_text_length"] == 4
+        assert diag["iframe_count"] == 2
+        assert diag["dom_wait_ms"] == 5000
+        assert result["failure_reason"] == FAILURE_BLANK_OR_UNLOADED
+
+    def test_delta_login_page_unchanged_with_diagnostics_present(self):
+        result = evaluate_probe_payload("delta", {
+            "url_visited": "https://www.delta.com/login",
+            "dom_text": DELTA_LOGIN_TEXT,
+            "page_diagnostics": {
+                "ready_state": "complete",
+                "body_exists": True,
+                "body_text_length": len(DELTA_LOGIN_TEXT),
+                "input_count": 2,
+                "password_input_count": 1,
+                "final_url": "https://www.delta.com/login",
+            },
+        })
+        assert result["auth_state"] == AUTH_LOGIN_PAGE
+        assert result["failure_reason"] == "login_required"
+        assert result["page_diagnostics"]["password_input_count"] == 1
+
+
+class TestBlankPageDetection:
+    def test_is_blank_or_unloaded_page_detects_empty_body(self):
+        assert is_blank_or_unloaded_page("", payload={
+            "page_diagnostics": {"body_exists": False, "body_text_length": 0},
+        })
+
+    def test_is_blank_or_unloaded_page_allows_login_content(self):
+        assert not is_blank_or_unloaded_page(DELTA_LOGIN_TEXT, payload={
+            "page_diagnostics": {
+                "body_exists": True,
+                "body_text_length": len(DELTA_LOGIN_TEXT),
+                "input_count": 2,
+            },
+        })
 
 
 class TestStoredProbeRun:

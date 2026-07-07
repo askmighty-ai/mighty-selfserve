@@ -243,6 +243,34 @@ def test_extension_manual_trigger_requires_key(client):
     assert r.status_code == 401
 
 
+def test_admin_page_shows_page_diagnostics_for_unknown(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAIL", client.email)
+    client.post(
+        "/api/extension/provider-access-probe",
+        headers={"X-Mighty-Key": client.api_key},
+        json={
+            "provider": "amex",
+            "url_visited": "https://www.americanexpress.com/en-us/account/",
+            "dom_text": "",
+            "page_diagnostics": {
+                "ready_state": "complete",
+                "body_exists": True,
+                "body_text_length": 0,
+                "visible_text_preview": "",
+                "iframe_count": 0,
+                "input_count": 0,
+                "final_url": "https://www.americanexpress.com/en-us/account/",
+            },
+        },
+    )
+    r = client.get("/admin/provider-access-probe")
+    assert r.status_code == 200
+    text = r.data.decode("utf-8")
+    assert "Page diagnostics" in text
+    assert "body_text_length=0" in text
+    assert "blank_or_unloaded_page" in text or "blank or unloaded" in text.lower()
+
+
 def test_admin_page_forbidden_for_non_admin(client):
     assert client.get("/admin/provider-access-probe").status_code == 403
 

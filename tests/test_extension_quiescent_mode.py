@@ -67,6 +67,20 @@ def test_manual_probe_exempt_from_tab_block():
     assert "if (reason === MANUAL_PROBE_TAB_REASON) return false;" in src
 
 
+def test_manual_runner_still_uses_manual_probe_reason():
+    src = _read_background_js()
+    assert "createProviderTab(entry, { active: false }, MANUAL_PROBE_TAB_REASON)" in src
+    assert "runManualProviderAccessProbe" in src
+    assert "classifierStartedAt" in src
+
+
+def test_extension_probe_page_diagnostics_in_page_script():
+    src = _read_background_js()
+    assert "collectPageDiagnostics" in src
+    assert "blank_or_unloaded_page" in src
+    assert "page_diagnostics" in src
+
+
 def test_prefetch_config_on_startup():
     src = _read_background_js()
     assert "prefetchAutomaticProbesConfig()" in src
