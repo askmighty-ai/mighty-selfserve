@@ -1656,3 +1656,398 @@ def manual_probe_state_to_json(state: dict[str, Any]) -> dict[str, Any]:
         "started_at": state.get("started_at"),
         "completed_at": state.get("completed_at"),
     }
+
+
+# ── Amex session comparison (Phase 1 diagnostic) ──────────────────────────────
+
+SESSION_SNAPSHOT_FORBIDDEN_KEYS: frozenset[str] = frozenset({
+    "request_body",
+    "response_body",
+    "request_headers",
+    "response_headers",
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "cookie_values",
+    "auth_token",
+    "token",
+    "body",
+    "headers",
+})
+
+SESSION_SNAPSHOT_STRING_KEYS: frozenset[str] = frozenset({
+    "source",
+    "final_url",
+    "page_title",
+    "visible_text_preview",
+    "referrer",
+    "auth_state",
+    "failure_reason",
+    "network_trace_limitation",
+})
+
+SESSION_SNAPSHOT_LIST_KEYS: frozenset[str] = frozenset({
+    "document_cookie_names",
+    "local_storage_keys",
+    "session_storage_keys",
+    "session_api_statuses",
+})
+
+
+def sanitize_session_snapshot(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize one tab side of an Amex session comparison."""
+    raw = raw or {}
+    out: dict[str, Any] = {"found": bool(raw.get("found", True))}
+
+    for key in SESSION_SNAPSHOT_STRING_KEYS:
+        if raw.get(key) is not None:
+            val = str(raw[key])
+            out[key] = val[:500] if key == "visible_text_preview" else val
+
+    if raw.get("final_url"):
+        out["final_url"] = sanitize_probe_url(str(raw["final_url"]))
+
+    for key in SESSION_SNAPSHOT_LIST_KEYS:
+        items = raw.get(key)
+        if isinstance(items, list):
+            if key == "session_api_statuses":
+                out[key] = [_sanitize_network_trace_entry(i) for i in items[:50]]
+            elif key == "document_cookie_names":
+                out[key] = [_cookie_name_only(c) for c in items]
+            else:
+                out[key] = [str(k) for k in items[:100]]
+
+    chrome_cookies = raw.get("chrome_cookie_names")
+    if isinstance(chrome_cookies, dict):
+        out["chrome_cookie_names"] = {
+            str(domain): [_cookie_name_only(n) for n in names[:100]]
+            for domain, names in chrome_cookies.items()
+            if isinstance(names, list)
+        }
+
+    auth_trace = raw.get("auth_network_trace")
+    if isinstance(auth_trace, dict):
+        out["auth_network_trace"] = sanitize_auth_network_trace(auth_trace)
+
+    if raw.get("network_trace_limitation"):
+        out["network_trace_limitation"] = str(raw["network_trace_limitation"])
+
+    return out
+
+
+def _session_api_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
+    apis = snapshot.get("session_api_statuses") or []
+    read_user = next(
+        (a for a in apis if isinstance(a, dict) and "ReadUserSession.v1" in str(a.get("url") or "")),
+        None,
+    )
+    update_user = next(
+        (a for a in apis if isinstance(a, dict) and "UpdateUserSession.v1" in str(a.get("url") or "")),
+        None,
+    )
+    trace = snapshot.get("auth_network_trace") or {}
+    highlighted = trace.get("highlighted_requests") or trace.get("status_401_requests") or []
+    if not read_user:
+        read_user = next(
+            (a for a in highlighted if isinstance(a, dict) and "ReadUserSession.v1" in str(a.get("url") or "")),
+            None,
+        )
+    if not update_user:
+        update_user = next(
+            (a for a in highlighted if isinstance(a, dict) and "UpdateUserSession.v1" in str(a.get("url") or "")),
+            None,
+        )
+    return {
+        "read_user_session_status": read_user.get("status_code") if read_user else None,
+        "update_user_session_status": update_user.get("status_code") if update_user else None,
+    }
+
+
+def compute_session_comparison_differences(
+    manual: dict[str, Any],
+    existing: dict[str, Any],
+) -> list[str]:
+    differences: list[str] = []
+    if not existing.get("found"):
+        differences.append("existing_tab: no open Amex tab found")
+        return differences
+
+    for key, label in (
+        ("final_url", "final_url"),
+        ("page_title", "page_title"),
+        ("auth_state", "auth_state"),
+    ):
+        m_val = manual.get(key)
+        e_val = existing.get(key)
+        if m_val != e_val:
+            differences.append(f"{label}: manual={m_val!r} existing={e_val!r}")
+
+    m_preview = (manual.get("visible_text_preview") or "").strip()
+    e_preview = (existing.get("visible_text_preview") or "").strip()
+    if m_preview != e_preview:
+        differences.append("visible_text_preview differs")
+
+    m_apis = _session_api_summary(manual)
+    e_apis = _session_api_summary(existing)
+    for api_key in ("read_user_session_status", "update_user_session_status"):
+        if m_apis.get(api_key) != e_apis.get(api_key):
+            differences.append(
+                f"{api_key}: manual={m_apis.get(api_key)!r} existing={e_apis.get(api_key)!r}"
+            )
+
+    m_cookies = set(manual.get("document_cookie_names") or [])
+    e_cookies = set(existing.get("document_cookie_names") or [])
+    if m_cookies != e_cookies:
+        only_manual = sorted(m_cookies - e_cookies)
+        only_existing = sorted(e_cookies - m_cookies)
+        if only_manual:
+            differences.append(f"document_cookie_names only on manual tab: {', '.join(only_manual[:10])}")
+        if only_existing:
+            differences.append(f"document_cookie_names only on existing tab: {', '.join(only_existing[:10])}")
+
+    m_fn = set((manual.get("chrome_cookie_names") or {}).get("functions.americanexpress.com") or [])
+    e_fn = set((existing.get("chrome_cookie_names") or {}).get("functions.americanexpress.com") or [])
+    if m_fn != e_fn:
+        differences.append("functions.americanexpress.com cookie names differ")
+
+    if existing.get("network_trace_limitation"):
+        differences.append(f"existing_tab limitation: {existing['network_trace_limitation']}")
+
+    return differences
+
+
+def compute_session_comparison_diagnostic(
+    manual: dict[str, Any],
+    existing: dict[str, Any],
+    differences: list[str] | None = None,
+) -> str:
+    differences = differences or compute_session_comparison_differences(manual, existing)
+    parts: list[str] = []
+
+    if not existing.get("found"):
+        parts.append("no existing Amex tab available for comparison")
+    else:
+        m_apis = _session_api_summary(manual)
+        e_apis = _session_api_summary(existing)
+        if m_apis.get("read_user_session_status") == 401:
+            parts.append("manual probe tab ReadUserSession.v1 returned 401")
+        if e_apis.get("read_user_session_status") not in (None, 401):
+            parts.append(f"existing tab ReadUserSession.v1 returned {e_apis['read_user_session_status']}")
+        elif e_apis.get("read_user_session_status") == 401:
+            parts.append("existing tab ReadUserSession.v1 also returned 401")
+        if m_apis.get("read_user_session_status") == 401 and e_apis.get("read_user_session_status") == 200:
+            parts.append("session API succeeds on existing tab but not manual probe tab")
+
+        if manual.get("document_cookie_names") and not existing.get("document_cookie_names"):
+            parts.append("manual tab has document cookies; existing tab has none")
+        elif manual.get("document_cookie_names") and existing.get("document_cookie_names"):
+            parts.append("cookies present at document level on both tabs")
+
+    if differences:
+        parts.append(f"{len(differences)} metadata difference(s) recorded")
+    if not parts:
+        return "session comparison captured; no major auth/session divergence detected"
+    return "; ".join(parts)
+
+
+def build_amex_session_comparison(payload: dict[str, Any]) -> dict[str, Any]:
+    """Sanitize and compare manual probe tab vs existing user tab snapshots."""
+    manual_raw = payload.get("manual_probe_tab") or {}
+    existing_raw = payload.get("existing_tab") or {}
+
+    manual = sanitize_session_snapshot(manual_raw)
+    manual["source"] = "manual_probe_tab"
+    existing = sanitize_session_snapshot(existing_raw)
+    existing["source"] = "existing_tab"
+
+    if manual_raw.get("probe_result"):
+        probe = manual_raw["probe_result"]
+        try:
+            auth = evaluate_probe_payload("amex", {
+                "url_visited": probe.get("url_visited") or probe.get("final_url") or "",
+                "final_url": probe.get("final_url") or probe.get("url_visited") or "",
+                "dom_text": probe.get("dom_text") or "",
+                "page_title": probe.get("page_title"),
+                "failure_reason": probe.get("failure_reason"),
+                "page_diagnostics": probe.get("page_diagnostics"),
+                "deep_inspect": probe.get("deep_inspect"),
+            })
+            manual["auth_state"] = auth.get("auth_state")
+            manual["failure_reason"] = auth.get("failure_reason")
+        except ValueError:
+            pass
+
+    if existing_raw.get("probe_result") and existing.get("found"):
+        probe = existing_raw["probe_result"]
+        try:
+            auth = evaluate_probe_payload("amex", {
+                "url_visited": probe.get("url_visited") or probe.get("final_url") or "",
+                "final_url": probe.get("final_url") or probe.get("url_visited") or "",
+                "dom_text": probe.get("dom_text") or "",
+                "page_title": probe.get("page_title"),
+                "failure_reason": probe.get("failure_reason"),
+                "page_diagnostics": probe.get("page_diagnostics"),
+            })
+            existing["auth_state"] = auth.get("auth_state")
+            existing["failure_reason"] = auth.get("failure_reason")
+        except ValueError:
+            pass
+
+    differences = compute_session_comparison_differences(manual, existing)
+    diagnostic = compute_session_comparison_diagnostic(manual, existing, differences)
+
+    return {
+        "provider": "amex",
+        "manual_probe_tab": manual,
+        "existing_tab": existing,
+        "differences": differences,
+        "diagnostic_summary": diagnostic,
+        "compared_at": payload.get("compared_at") or utc_now_iso(),
+    }
+
+
+def ensure_session_comparison_tables(db: Any) -> None:
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_access_probe_session_comparisons (
+            comparison_run_id   TEXT PRIMARY KEY,
+            user_id               TEXT NOT NULL,
+            lifecycle             TEXT NOT NULL,
+            payload_json          TEXT,
+            diagnostic_summary    TEXT,
+            error_message         TEXT,
+            requested_at          TEXT NOT NULL,
+            started_at            TEXT,
+            completed_at          TEXT
+        )
+        """
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_papsc_user_requested "
+        "ON provider_access_probe_session_comparisons(user_id, requested_at DESC)"
+    )
+    db.commit()
+
+
+def _has_running_session_comparison(db: Any, user_id: str) -> bool:
+    ensure_session_comparison_tables(db)
+    row = db.execute(
+        """
+        SELECT 1 FROM provider_access_probe_session_comparisons
+        WHERE user_id = ? AND lifecycle = ?
+        LIMIT 1
+        """,
+        (user_id, PROBE_LIFECYCLE_RUNNING),
+    ).fetchone()
+    return row is not None
+
+
+def get_latest_session_comparison(db: Any, user_id: str) -> dict[str, Any] | None:
+    ensure_session_comparison_tables(db)
+    row = db.execute(
+        """
+        SELECT comparison_run_id, user_id, lifecycle, payload_json, diagnostic_summary,
+               error_message, requested_at, started_at, completed_at
+        FROM provider_access_probe_session_comparisons
+        WHERE user_id = ?
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    data["comparison"] = _parse_json_dict(data.get("payload_json"))
+    return data
+
+
+def get_pending_session_comparison(db: Any, user_id: str) -> dict[str, Any] | None:
+    ensure_session_comparison_tables(db)
+    row = db.execute(
+        """
+        SELECT comparison_run_id, user_id, lifecycle, requested_at, started_at
+        FROM provider_access_probe_session_comparisons
+        WHERE user_id = ? AND lifecycle = ?
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (user_id, PROBE_LIFECYCLE_RUNNING),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def start_session_comparison(db: Any, user_id: str) -> dict[str, Any]:
+    """Queue an Amex session comparison diagnostic."""
+    ensure_session_comparison_tables(db)
+    ensure_manual_probe_tables(db)
+    if _has_running_manual_probe(db, user_id):
+        raise ConcurrentProbeError("a manual probe is already running")
+    if _has_running_session_comparison(db, user_id):
+        raise ConcurrentProbeError("a session comparison is already running")
+
+    comparison_run_id = str(uuid.uuid4())
+    now = utc_now_iso()
+    db.execute(
+        """
+        INSERT INTO provider_access_probe_session_comparisons (
+            comparison_run_id, user_id, lifecycle, requested_at, started_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (comparison_run_id, user_id, PROBE_LIFECYCLE_RUNNING, now, now),
+    )
+    db.commit()
+    return {
+        "comparison_run_id": comparison_run_id,
+        "provider": "amex",
+        "lifecycle": PROBE_LIFECYCLE_RUNNING,
+        "requested_at": now,
+        "started_at": now,
+    }
+
+
+def complete_session_comparison(
+    db: Any,
+    user_id: str,
+    comparison_run_id: str,
+    *,
+    lifecycle: str,
+    comparison: dict[str, Any] | None = None,
+    error_message: str | None = None,
+) -> None:
+    if lifecycle not in PROBE_LIFECYCLES:
+        raise ValueError(f"invalid session comparison lifecycle: {lifecycle!r}")
+    ensure_session_comparison_tables(db)
+    now = utc_now_iso()
+    db.execute(
+        """
+        UPDATE provider_access_probe_session_comparisons
+        SET lifecycle = ?, payload_json = ?, diagnostic_summary = ?,
+            error_message = ?, completed_at = ?
+        WHERE comparison_run_id = ? AND user_id = ?
+        """,
+        (
+            lifecycle,
+            _json_diagnostics(comparison),
+            (comparison or {}).get("diagnostic_summary") if comparison else error_message,
+            error_message,
+            now,
+            comparison_run_id,
+            user_id,
+        ),
+    )
+    db.commit()
+
+
+def session_comparison_state_to_json(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "comparison_run_id": state.get("comparison_run_id"),
+        "provider": state.get("provider") or "amex",
+        "lifecycle": state.get("lifecycle") or PROBE_LIFECYCLE_IDLE,
+        "diagnostic_summary": state.get("diagnostic_summary"),
+        "error_message": state.get("error_message"),
+        "requested_at": state.get("requested_at"),
+        "started_at": state.get("started_at"),
+        "completed_at": state.get("completed_at"),
+        "comparison": state.get("comparison"),
+    }

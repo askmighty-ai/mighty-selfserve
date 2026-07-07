@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.4.1-amex-auth-network-trace" in src
+    assert "1.4.2-amex-session-comparison" in src
     assert "background.js loaded — version" in src
 
 
@@ -120,6 +120,21 @@ def test_delta_manual_probe_keeps_5_second_observation():
 def test_automatic_probe_still_uses_default_wait():
     src = _read_background_js()
     assert "await waitForProbePageStability(tab.id);" in src
+
+
+def test_extension_session_comparison_wiring():
+    src = _read_background_js()
+    assert "runAmexSessionComparison" in src
+    assert "collectAmexSessionPageSnapshot" in src
+    assert "getAmexCookieNamesOnly" in src
+    assert "run_session_comparison" in src
+    assert "session-comparison" in src
+
+
+def test_manual_probe_still_blocked_when_session_comparison_in_progress():
+    src = _read_background_js()
+    assert "_sessionComparisonInProgress" in src
+    assert "if (_manualProbeInProgress || _sessionComparisonInProgress)" in src
 
 
 def test_prefetch_config_on_startup():

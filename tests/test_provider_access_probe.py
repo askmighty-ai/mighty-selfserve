@@ -38,6 +38,13 @@ from mighty.provider_access_probe import (
     sanitize_probe_url,
     sanitize_auth_network_trace,
     compute_auth_network_diagnostic,
+    sanitize_session_snapshot,
+    build_amex_session_comparison,
+    compute_session_comparison_diagnostic,
+    compute_session_comparison_differences,
+    start_session_comparison,
+    complete_session_comparison,
+    get_latest_session_comparison,
     get_manual_probe_state,
     is_automatic_probe_disabled,
     is_blank_or_unloaded_page,
@@ -847,6 +854,92 @@ class TestStoredProbeRun:
         assert row["auth_state"] == AUTH_PRIVATE_DATA_VISIBLE
         assert row["matched_private_data_rules"]
         assert row["final_url"] == AMEX_ACCOUNT_URL
+
+
+class TestSessionComparison:
+    def test_sanitize_session_snapshot_never_stores_cookie_values(self):
+        raw = {
+            "found": True,
+            "document_cookie_names": ["sessionId=secret", "tracking"],
+            "cookie": "session=secret",
+            "auth_token": "abc",
+            "request_body": "{}",
+            "response_body": "{}",
+            "final_url": "https://www.americanexpress.com/en-us/account/?token=secret",
+        }
+        result = sanitize_session_snapshot(raw)
+        assert result["document_cookie_names"] == ["sessionId", "tracking"]
+        assert "cookie" not in result
+        assert "auth_token" not in result
+        assert "secret" not in result.get("final_url", "")
+
+    def test_comparison_reports_unavailable_network_trace_for_existing_tab(self):
+        payload = {
+            "manual_probe_tab": {
+                "found": True,
+                "final_url": AMEX_ACCOUNT_URL,
+                "visible_text_preview": "Give Feedback",
+                "document_cookie_names": ["a"],
+                "session_api_statuses": [
+                    {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401},
+                ],
+                "probe_result": {"url_visited": AMEX_ACCOUNT_URL, "dom_text": ""},
+            },
+            "existing_tab": {
+                "found": True,
+                "final_url": "https://www.americanexpress.com/en-us/account/home",
+                "visible_text_preview": "Account Home",
+                "network_trace_limitation": "live_observers_not_installed_retroactive_performance_only",
+                "session_api_statuses": [
+                    {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 200},
+                ],
+                "probe_result": {
+                    "url_visited": "https://www.americanexpress.com/en-us/account/home",
+                    "dom_text": AMEX_LOGGED_IN_TEXT,
+                },
+            },
+        }
+        result = build_amex_session_comparison(payload)
+        assert result["existing_tab"]["network_trace_limitation"]
+        assert any("401" in d or "200" in d for d in result["differences"])
+        assert "200" in result["diagnostic_summary"] or "401" in result["diagnostic_summary"]
+
+    def test_comparison_highlights_401_vs_200(self):
+        manual = {
+            "found": True,
+            "session_api_statuses": [
+                {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401},
+            ],
+        }
+        existing = {
+            "found": True,
+            "session_api_statuses": [
+                {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 200},
+            ],
+        }
+        diffs = compute_session_comparison_differences(manual, existing)
+        assert any("read_user_session_status" in d for d in diffs)
+        diag = compute_session_comparison_diagnostic(manual, existing, diffs)
+        assert "401" in diag and "200" in diag
+
+    def test_session_comparison_storage(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "cmp.db"))
+        db.row_factory = sqlite3.Row
+        state = start_session_comparison(db, "user-1")
+        comparison = build_amex_session_comparison({
+            "manual_probe_tab": {"found": True, "document_cookie_names": ["a"]},
+            "existing_tab": {"found": False},
+        })
+        complete_session_comparison(
+            db, "user-1", state["comparison_run_id"],
+            lifecycle=PROBE_LIFECYCLE_DONE,
+            comparison=comparison,
+        )
+        latest = get_latest_session_comparison(db, "user-1")
+        assert latest["lifecycle"] == PROBE_LIFECYCLE_DONE
+        assert latest["comparison"]["diagnostic_summary"]
 
 
 class TestMergeProbeSummaries:

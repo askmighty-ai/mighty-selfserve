@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.1-amex-auth-network-trace';
+const MIGHTY_EXT_VERSION = '1.4.2-amex-session-comparison';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
@@ -1216,6 +1216,15 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     sendResponse({ ok: true });
     return false;
   }
+  if (msg.action === 'run_session_comparison') {
+    (async () => {
+      const { api_key } = await chrome.storage.local.get('api_key');
+      if (!api_key) return;
+      await runAmexSessionComparison(api_key, msg.comparison_run_id || null);
+    })().catch(console.error);
+    sendResponse({ ok: true });
+    return false;
+  }
   if (msg.action === 'get_status') {
     chrome.storage.local.get(['last_sync', 'sync_status', 'api_key', 'captured_accounts'], sendResponse);
     return true;
@@ -2166,6 +2175,8 @@ let _automaticProbesEnabled = true;
 let _automaticProbesConfigFetchedAt = 0;
 let _manualProbeInProgress = false;
 let _lastProcessedManualRunId = null;
+let _sessionComparisonInProgress = false;
+let _lastProcessedSessionComparisonId = null;
 let _manualProbePollTimer = null;
 
 async function fetchAutomaticProbesEnabled(apiKey) {
@@ -2591,8 +2602,182 @@ async function waitForProbePageStability(tabId, { observationMs = 5000 } = {}) {
   await sleep(observationMs);
 }
 
+async function getAmexCookieNamesOnly() {
+  const out = {
+    'www.americanexpress.com': [],
+    'functions.americanexpress.com': [],
+    'americanexpress.com': [],
+  };
+  for (const domain of Object.keys(out)) {
+    try {
+      const cookies = await chrome.cookies.getAll({ domain });
+      out[domain] = [...new Set(cookies.map((c) => c.name).filter(Boolean))];
+    } catch (_) {
+      out[domain] = [];
+    }
+  }
+  return out;
+}
+
+async function findExistingUserAmexTab() {
+  const tabs = await chrome.tabs.query({
+    url: ['*://*.americanexpress.com/*', '*://americanexpress.com/*'],
+  });
+  const candidates = tabs.filter((t) => t.id && t.url && !String(t.url).startsWith('chrome'));
+  if (!candidates.length) return null;
+  const active = candidates.filter((t) => t.active);
+  if (active.length) return active[0];
+  return candidates[0];
+}
+
+async function _postSessionComparison(apiKey, payload) {
+  if (!apiKey || !payload?.comparison_run_id) return null;
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/session-comparison`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body: JSON.stringify({ ...payload, compared_at: new Date().toISOString() }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) {
+      console.log('[Mighty Probe] Amex session comparison submitted', data);
+    } else {
+      console.warn('[Mighty Probe] session comparison POST failed', resp.status, data);
+    }
+    return { ok: resp.ok, data };
+  } catch (e) {
+    console.warn('[Mighty Probe] session comparison POST error:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+async function captureExistingAmexTabSnapshot(tabId, chromeCookieNames) {
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (cookieNamesPayload) => {
+        const ts = new Date().toISOString();
+        const probe = runProviderAccessProbeInPage('amex', ts);
+        const page = collectAmexSessionPageSnapshot('existing_tab');
+        return {
+          found: true,
+          probe_result: probe,
+          ...page,
+          chrome_cookie_names: cookieNamesPayload,
+          network_trace_limitation:
+            'live_observers_not_installed_retroactive_performance_only',
+        };
+      },
+      args: [chromeCookieNames],
+    });
+    return r?.result || { found: false, network_trace_limitation: 'script_injection_failed' };
+  } catch (e) {
+    return {
+      found: false,
+      error: e.message,
+      network_trace_limitation: 'existing_tab_inspection_failed',
+    };
+  }
+}
+
+async function captureManualProbeTabForComparison(chromeCookieNames) {
+  const entry = ACCOUNT_ENTRY.amex;
+  let tab;
+  const classifierStartedAt = new Date().toISOString();
+  try {
+    tab = await createProviderTab(entry, { active: false }, MANUAL_PROBE_TAB_REASON);
+    if (!tab?.id) {
+      return { found: false, error: 'manual_probe_tab_creation_blocked' };
+    }
+    await injectDeepInspectObservers(tab.id);
+    const domWaitStart = Date.now();
+    await waitForProbePageStability(tab.id, { observationMs: AMEX_MANUAL_PROBE_OBSERVATION_MS });
+    const domWaitMs = Date.now() - domWaitStart;
+    const probeResult = await runProviderAccessProbeInTab(tab.id, 'amex', {
+      classifierStartedAt,
+      domWaitMs,
+      deepInspect: true,
+    });
+    const deep = probeResult?.deep_inspect || {};
+    const sessionApiStatuses = [];
+    const traceRequests = deep.auth_network_trace?.requests
+      || deep.auth_network_trace?.highlighted_requests
+      || [];
+    for (const req of traceRequests) {
+      if (!req?.url) continue;
+      if (!/session|login|auth|token|csrf|sso|identity|ReadUserSession|UpdateUserSession/i.test(req.url)) continue;
+      sessionApiStatuses.push({
+        url: req.url,
+        status_code: req.status_code ?? null,
+        duration_ms: req.duration_ms ?? null,
+        initiator_type: req.initiator_type || req.resource_type || null,
+        credentials: req.credentials || null,
+        with_credentials: req.with_credentials ?? null,
+      });
+    }
+    return {
+      found: true,
+      probe_result: probeResult,
+      final_url: probeResult?.final_url || deep.final_url || entry,
+      page_title: probeResult?.page_title || deep.page_title || '',
+      visible_text_preview: deep.visible_text_preview || '',
+      document_cookie_names: deep.cookie_names || [],
+      local_storage_keys: deep.local_storage_keys || [],
+      session_storage_keys: deep.session_storage_keys || [],
+      auth_network_trace: deep.auth_network_trace || null,
+      session_api_statuses: sessionApiStatuses,
+      chrome_cookie_names: chromeCookieNames,
+      referrer: '',
+    };
+  } finally {
+    if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+async function runAmexSessionComparison(apiKey, comparisonRunId) {
+  if (_sessionComparisonInProgress || _manualProbeInProgress) {
+    console.log('[Mighty Probe] session comparison skipped — another diagnostic in progress');
+    return;
+  }
+  if (comparisonRunId && comparisonRunId === _lastProcessedSessionComparisonId) {
+    return;
+  }
+
+  _sessionComparisonInProgress = true;
+  console.log(`[Mighty Probe] Amex session comparison (${comparisonRunId || 'no-id'})`);
+  try {
+    const chromeCookieNames = await getAmexCookieNamesOnly();
+    const existingTab = await findExistingUserAmexTab();
+    let existingSnapshot = {
+      found: false,
+      network_trace_limitation: 'no_existing_amex_tab',
+    };
+    if (existingTab?.id) {
+      existingSnapshot = await captureExistingAmexTabSnapshot(existingTab.id, chromeCookieNames);
+      existingSnapshot.tab_id = existingTab.id;
+      existingSnapshot.tab_active = !!existingTab.active;
+    }
+    const manualSnapshot = await captureManualProbeTabForComparison(chromeCookieNames);
+    await _postSessionComparison(apiKey, {
+      comparison_run_id: comparisonRunId,
+      existing_tab: existingSnapshot,
+      manual_probe_tab: manualSnapshot,
+    });
+    if (comparisonRunId) _lastProcessedSessionComparisonId = comparisonRunId;
+  } catch (e) {
+    await _postSessionComparison(apiKey, {
+      comparison_run_id: comparisonRunId,
+      existing_tab: { found: false, error: e.message },
+      manual_probe_tab: { found: false, error: e.message },
+    });
+    if (comparisonRunId) _lastProcessedSessionComparisonId = comparisonRunId;
+  } finally {
+    _sessionComparisonInProgress = false;
+  }
+}
+
 async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
-  if (_manualProbeInProgress) {
+  if (_manualProbeInProgress || _sessionComparisonInProgress) {
     console.log('[Mighty Probe] manual probe already in progress — skipping');
     return;
   }
@@ -2663,18 +2848,29 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
 }
 
 async function pollManualProbeTrigger() {
-  if (_manualProbeInProgress) return;
+  if (_manualProbeInProgress || _sessionComparisonInProgress) return;
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/manual`, {
       headers: { 'X-Mighty-Key': api_key },
     });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    if (data.lifecycle !== 'running' || !data.provider || !data.manual_run_id) return;
-    if (data.manual_run_id === _lastProcessedManualRunId) return;
-    await runManualProviderAccessProbe(api_key, data.provider, data.manual_run_id);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.lifecycle === 'running' && data.provider && data.manual_run_id
+          && data.manual_run_id !== _lastProcessedManualRunId) {
+        await runManualProviderAccessProbe(api_key, data.provider, data.manual_run_id);
+        return;
+      }
+    }
+    const cmpResp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/session-comparison`, {
+      headers: { 'X-Mighty-Key': api_key },
+    });
+    if (!cmpResp.ok) return;
+    const cmpData = await cmpResp.json();
+    if (cmpData.lifecycle !== 'running' || !cmpData.comparison_run_id) return;
+    if (cmpData.comparison_run_id === _lastProcessedSessionComparisonId) return;
+    await runAmexSessionComparison(api_key, cmpData.comparison_run_id);
   } catch (e) {
     console.warn('[Mighty Probe] manual poll failed:', e.message);
   }
@@ -4717,6 +4913,69 @@ function extractAmexMembershipRewardsPage() {
     || sample.includes('recent activity');
   console.log(LOG, loggedIn ? 'balance not found' : 'not logged in');
   return { loggedIn, value: null };
+}
+
+// Amex session comparison page snapshot (existing tab — no navigation)
+function collectAmexSessionPageSnapshot(sourceLabel) {
+  const SENSITIVE_PARAM_RE = /^(token|auth|session|key|secret|password|csrf|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|code|signature|sig)$/i;
+  function sanitizeProbeUrlLocal(rawUrl) {
+    try {
+      const u = new URL(rawUrl, location.href);
+      u.searchParams.forEach((_, name) => {
+        if (SENSITIVE_PARAM_RE.test(name)) u.searchParams.set(name, '[REDACTED]');
+      });
+      return u.origin + u.pathname + (u.search ? u.search : '');
+    } catch (_) {
+      return String(rawUrl || '').split('?')[0];
+    }
+  }
+
+  const bodyText = document.body?.innerText || '';
+  let documentCookieNames = [];
+  try {
+    documentCookieNames = document.cookie
+      .split(';')
+      .map((c) => c.split('=')[0].trim())
+      .filter(Boolean);
+  } catch (_) {}
+
+  let localStorageKeys = [];
+  let sessionStorageKeys = [];
+  try {
+    localStorageKeys = Object.keys(localStorage);
+  } catch (_) {}
+  try {
+    sessionStorageKeys = Object.keys(sessionStorage);
+  } catch (_) {}
+
+  const sessionApiStatuses = [];
+  for (const entry of performance.getEntriesByType('resource') || []) {
+    const url = entry.name || '';
+    if (!/^https?:/i.test(url)) continue;
+    if (!/ReadUserSession\.v1|UpdateUserSession\.v1|session|login|auth|token|csrf|sso|identity/i.test(url)) {
+      continue;
+    }
+    sessionApiStatuses.push({
+      url: sanitizeProbeUrlLocal(url),
+      status_code: typeof entry.responseStatus === 'number' ? entry.responseStatus : null,
+      duration_ms: Math.round(entry.duration || 0),
+      initiator_type: entry.initiatorType || null,
+      redirect_count: typeof entry.redirectCount === 'number' ? entry.redirectCount : null,
+    });
+  }
+
+  return {
+    source: sourceLabel,
+    found: true,
+    final_url: location.href,
+    page_title: document.title || '',
+    visible_text_preview: bodyText.slice(0, 500),
+    referrer: document.referrer || '',
+    document_cookie_names: documentCookieNames,
+    local_storage_keys: localStorageKeys,
+    session_storage_keys: sessionStorageKeys,
+    session_api_statuses: sessionApiStatuses,
+  };
 }
 
 // Deep inspect diagnostics — manual Amex probes (Phase 1 account access reliability)
