@@ -1356,6 +1356,7 @@ def _probe_deep_inspect_section(rows: list[dict[str, Any]]) -> str:
     )
 
     probed = _fmt_iso(amex_row.get("probed_at") or amex_row.get("timestamp"))
+    auth_trace_section = _probe_auth_network_trace_section(deep)
     return (
         '<div class="card" style="margin-bottom:16px">'
         "<h3>Amex deep inspect</h3>"
@@ -1364,7 +1365,75 @@ def _probe_deep_inspect_section(rows: list[dict[str, Any]]) -> str:
         "Cookie and storage values are never captured — names/keys only.</p>"
         f'<dl style="display:grid;grid-template-columns:180px 1fr;gap:6px 12px;'
         f'font-size:11px;margin:0">{details}</dl>'
+        f"{auth_trace_section}"
         "</div>"
+    )
+
+
+def _probe_auth_network_trace_section(deep: dict[str, Any]) -> str:
+    trace = deep.get("auth_network_trace") or {}
+    if not trace:
+        return (
+            '<div style="margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb">'
+            "<h4 style=\"margin:0 0 8px;font-size:13px\">Amex authentication network trace</h4>"
+            '<p class="muted" style="font-size:11px;margin:0">'
+            "No network trace captured yet.</p></div>"
+        )
+
+    status_counts = trace.get("status_counts") or {}
+    status_line = ", ".join(f"{k}:{v}" for k, v in sorted(status_counts.items())) or "—"
+
+    def _fmt_req(req: dict[str, Any]) -> str:
+        if not isinstance(req, dict):
+            return str(req)
+        parts = [
+            f"{req.get('method') or 'GET'} {req.get('url') or '—'}",
+            f"status={req.get('status_code') or '?'}",
+        ]
+        if req.get("duration_ms") is not None:
+            parts.append(f"{req.get('duration_ms')}ms")
+        if req.get("with_credentials") is True or req.get("credentials") == "include":
+            parts.append("credentials=include")
+        if req.get("cors_error"):
+            parts.append("cors_error")
+        if req.get("network_error"):
+            parts.append("network_error")
+        header_names = req.get("response_header_names") or []
+        if header_names:
+            parts.append(f"headers=[{','.join(header_names[:8])}]")
+        return " | ".join(parts)
+
+    highlighted = trace.get("highlighted_requests") or []
+    auth_session = trace.get("auth_session_requests") or []
+    status_401 = trace.get("status_401_requests") or []
+    status_403 = trace.get("status_403_requests") or []
+    diagnostic = trace.get("diagnostic_summary") or "—"
+
+    highlighted_lines = [_fmt_req(r) for r in highlighted[:10]]
+    auth_lines = [_fmt_req(r) for r in auth_session[:10]]
+    lines_401 = [_fmt_req(r) for r in status_401[:10]]
+    lines_403 = [_fmt_req(r) for r in status_403[:10]]
+
+    return (
+        '<div style="margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb">'
+        "<h4 style=\"margin:0 0 8px;font-size:13px\">Amex authentication network trace</h4>"
+        f'<p class="muted" style="font-size:11px;margin:0 0 8px">'
+        "Safe request metadata only — no cookie values, auth tokens, or response bodies.</p>"
+        f'<p style="font-size:11px;margin:0 0 12px"><strong>Diagnostic:</strong> '
+        f"{_he(diagnostic)}</p>"
+        f'<dl style="display:grid;grid-template-columns:180px 1fr;gap:6px 12px;'
+        f'font-size:11px;margin:0">'
+        f"<dt>request_count</dt><dd>{_he(trace.get('request_count'))}</dd>"
+        f"<dt>status_counts</dt><dd class=\"muted\">{_he(status_line)}</dd>"
+        f"<dt>highlighted auth/session</dt><dd><code style=\"font-size:10px;word-break:break-all\">"
+        f"{_he('; '.join(highlighted_lines) or '—')}</code></dd>"
+        f"<dt>auth/session keyword matches</dt><dd><code style=\"font-size:10px;word-break:break-all\">"
+        f"{_he('; '.join(auth_lines) or '—')}</code></dd>"
+        f"<dt>401 failures</dt><dd><code style=\"font-size:10px;word-break:break-all\">"
+        f"{_he('; '.join(lines_401) or '—')}</code></dd>"
+        f"<dt>403 failures</dt><dd><code style=\"font-size:10px;word-break:break-all\">"
+        f"{_he('; '.join(lines_403) or '—')}</code></dd>"
+        f"</dl></div>"
     )
 
 

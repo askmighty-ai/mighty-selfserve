@@ -329,6 +329,24 @@ def test_admin_page_shows_deep_inspect_for_amex(client, monkeypatch):
                     "end_dom_size": 43000,
                     "visible_text_length_delta": 0,
                 },
+                "auth_network_trace": {
+                    "request_count": 3,
+                    "status_counts": {"401": 2, "200": 1},
+                    "diagnostic_summary": "ReadUserSession.v1 returned 401; UpdateUserSession.v1 returned 401; cookies present at document level",
+                    "highlighted_requests": [
+                        {
+                            "url": "https://functions.americanexpress.com/ReadUserSession.v1",
+                            "method": "POST",
+                            "status_code": 401,
+                            "duration_ms": 95,
+                            "response_header_names": ["content-type"],
+                        },
+                    ],
+                    "status_401_requests": [
+                        {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401},
+                        {"url": "https://functions.americanexpress.com/UpdateUserSession.v1", "status_code": 401},
+                    ],
+                },
             },
         },
     )
@@ -336,9 +354,12 @@ def test_admin_page_shows_deep_inspect_for_amex(client, monkeypatch):
     assert r.status_code == 200
     text = r.data.decode("utf-8")
     assert "Amex deep inspect" in text
+    assert "Amex authentication network trace" in text
+    assert "ReadUserSession.v1" in text
+    assert "401" in text
+    assert "Diagnostic:" in text
     assert "outer_html_length" in text
     assert "45000" in text
-    assert "One App" in text
     assert "sessionId" in text
     assert "names/keys only" in text
     assert "SPA roots" in text

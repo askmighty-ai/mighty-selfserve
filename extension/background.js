@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.0-amex-post-load-diagnostics';
+const MIGHTY_EXT_VERSION = '1.4.1-amex-auth-network-trace';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
@@ -2239,6 +2239,200 @@ async function injectDeepInspectObservers(tabId) {
         window.__mightyProbeObservationMs = observationWindowMs;
         window.__mightyProbeJsErrors = window.__mightyProbeJsErrors || [];
         window.__mightyProbeConsoleMessages = window.__mightyProbeConsoleMessages || [];
+        window.__mightyProbeNetworkTrace = window.__mightyProbeNetworkTrace || [];
+
+        const AUTH_KEYWORD_RE = /session|login|auth|token|csrf|sso|identity/i;
+        const SENSITIVE_PARAM_RE = /^(token|auth|session|key|secret|password|csrf|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|code|signature|sig)$/i;
+
+        function sanitizeProbeUrl(rawUrl) {
+          try {
+            const u = new URL(rawUrl, location.href);
+            u.searchParams.forEach((_, name) => {
+              if (SENSITIVE_PARAM_RE.test(name)) u.searchParams.set(name, '[REDACTED]');
+            });
+            return u.origin + u.pathname + (u.search ? u.search : '');
+          } catch (_) {
+            return String(rawUrl || '').split('?')[0];
+          }
+        }
+
+        function isSameOrigin(rawUrl) {
+          try {
+            return new URL(rawUrl, location.href).origin === location.origin;
+          } catch (_) {
+            return null;
+          }
+        }
+
+        function pushNetworkEntry(entry) {
+          if (window.__mightyProbeNetworkTrace.length >= 200) return;
+          const url = sanitizeProbeUrl(entry.url || '');
+          const statusCode = entry.status_code ?? null;
+          const record = {
+            url,
+            method: entry.method || null,
+            resource_type: entry.resource_type || entry.initiator_type || null,
+            initiator_type: entry.initiator_type || null,
+            status_code: statusCode,
+            status_text: entry.status_text || null,
+            start_time_ms: entry.start_time_ms ?? null,
+            duration_ms: entry.duration_ms ?? null,
+            redirect_count: entry.redirect_count ?? null,
+            redirect_urls: Array.isArray(entry.redirect_urls)
+              ? entry.redirect_urls.map(sanitizeProbeUrl).slice(0, 10)
+              : null,
+            same_origin: entry.same_origin ?? isSameOrigin(url),
+            credentials: entry.credentials || null,
+            mode: entry.mode || null,
+            with_credentials: entry.with_credentials ?? null,
+            response_header_names: Array.isArray(entry.response_header_names)
+              ? entry.response_header_names.map(String).slice(0, 50)
+              : null,
+            cors_error: !!entry.cors_error,
+            network_error: !!entry.network_error,
+            blocked: !!entry.blocked,
+            auth_keyword_match: AUTH_KEYWORD_RE.test(url),
+          };
+          record.highlighted = !!(
+            statusCode === 401
+            || statusCode === 403
+            || statusCode === 302
+            || (statusCode >= 300 && statusCode < 400)
+            || record.cors_error
+            || record.network_error
+            || /ReadUserSession\.v1/i.test(url)
+            || /UpdateUserSession\.v1/i.test(url)
+          );
+          window.__mightyProbeNetworkTrace.push(record);
+        }
+
+        if (!window.__mightyProbeNetworkPatched) {
+          window.__mightyProbeNetworkPatched = true;
+
+          const origFetch = window.fetch;
+          if (typeof origFetch === 'function') {
+            window.fetch = function fetchProbe(input, init) {
+              const start = performance.now();
+              const method = (init && init.method) || 'GET';
+              const url = typeof input === 'string' ? input : (input && input.url) || '';
+              const credentials = (init && init.credentials) || null;
+              const mode = (init && init.mode) || null;
+              return origFetch.apply(this, arguments).then((response) => {
+                let headerNames = [];
+                try {
+                  headerNames = [...response.headers.keys()];
+                } catch (_) {}
+                pushNetworkEntry({
+                  url,
+                  method,
+                  resource_type: 'fetch',
+                  initiator_type: 'fetch',
+                  status_code: response.status,
+                  status_text: response.statusText || null,
+                  start_time_ms: Math.round(start),
+                  duration_ms: Math.round(performance.now() - start),
+                  same_origin: isSameOrigin(url),
+                  credentials,
+                  mode,
+                  with_credentials: credentials === 'include',
+                  response_header_names: headerNames,
+                });
+                return response;
+              }).catch((err) => {
+                const msg = String(err?.message || err);
+                pushNetworkEntry({
+                  url,
+                  method,
+                  resource_type: 'fetch',
+                  initiator_type: 'fetch',
+                  start_time_ms: Math.round(start),
+                  duration_ms: Math.round(performance.now() - start),
+                  same_origin: isSameOrigin(url),
+                  credentials,
+                  mode,
+                  with_credentials: credentials === 'include',
+                  cors_error: /cors/i.test(msg),
+                  network_error: true,
+                });
+                throw err;
+              });
+            };
+          }
+
+          const XHR = window.XMLHttpRequest;
+          if (XHR && XHR.prototype) {
+            const origOpen = XHR.prototype.open;
+            const origSend = XHR.prototype.send;
+            XHR.prototype.open = function openProbe(method, url) {
+              this.__mightyProbeMethod = method;
+              this.__mightyProbeUrl = url;
+              this.__mightyProbeStart = performance.now();
+              return origOpen.apply(this, arguments);
+            };
+            XHR.prototype.send = function sendProbe() {
+              const xhr = this;
+              const onDone = () => {
+                if (xhr.__mightyProbeLogged) return;
+                xhr.__mightyProbeLogged = true;
+                let headerNames = [];
+                try {
+                  const raw = xhr.getAllResponseHeaders() || '';
+                  headerNames = raw.split('\n').map((line) => line.split(':')[0].trim()).filter(Boolean);
+                } catch (_) {}
+                pushNetworkEntry({
+                  url: xhr.__mightyProbeUrl,
+                  method: xhr.__mightyProbeMethod,
+                  resource_type: 'xmlhttprequest',
+                  initiator_type: 'xmlhttprequest',
+                  status_code: xhr.status || null,
+                  status_text: xhr.statusText || null,
+                  start_time_ms: Math.round(xhr.__mightyProbeStart || 0),
+                  duration_ms: Math.round(performance.now() - (xhr.__mightyProbeStart || 0)),
+                  same_origin: isSameOrigin(xhr.__mightyProbeUrl),
+                  with_credentials: !!xhr.withCredentials,
+                  response_header_names: headerNames,
+                });
+              };
+              xhr.addEventListener('load', onDone);
+              xhr.addEventListener('error', () => {
+                pushNetworkEntry({
+                  url: xhr.__mightyProbeUrl,
+                  method: xhr.__mightyProbeMethod,
+                  resource_type: 'xmlhttprequest',
+                  initiator_type: 'xmlhttprequest',
+                  start_time_ms: Math.round(xhr.__mightyProbeStart || 0),
+                  duration_ms: Math.round(performance.now() - (xhr.__mightyProbeStart || 0)),
+                  same_origin: isSameOrigin(xhr.__mightyProbeUrl),
+                  with_credentials: !!xhr.withCredentials,
+                  network_error: true,
+                });
+              });
+              return origSend.apply(this, arguments);
+            };
+          }
+
+          try {
+            const po = new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                const url = entry.name || '';
+                if (!/^https?:/i.test(url)) continue;
+                const status = typeof entry.responseStatus === 'number' ? entry.responseStatus : null;
+                pushNetworkEntry({
+                  url,
+                  method: null,
+                  resource_type: entry.initiatorType || 'resource',
+                  initiator_type: entry.initiatorType || null,
+                  status_code: status,
+                  start_time_ms: Math.round(entry.startTime || 0),
+                  duration_ms: Math.round(entry.duration || 0),
+                  redirect_count: typeof entry.redirectCount === 'number' ? entry.redirectCount : null,
+                  same_origin: isSameOrigin(url),
+                });
+              }
+            });
+            po.observe({ type: 'resource', buffered: true });
+          } catch (_) {}
+        }
 
         window.addEventListener('error', (e) => {
           window.__mightyProbeJsErrors.push({
@@ -4732,6 +4926,82 @@ function collectDeepInspectInPage(contentScriptSucceeded) {
 
   const jsErrors = (window.__mightyProbeJsErrors || []).slice(0, 50);
 
+  function buildAuthNetworkTrace() {
+    const dedupe = new Set();
+    const entries = [];
+    const pushUnique = (entry) => {
+      if (!entry || !entry.url) return;
+      const key = `${entry.url}|${entry.start_time_ms ?? ''}|${entry.status_code ?? ''}|${entry.method ?? ''}`;
+      if (dedupe.has(key)) return;
+      dedupe.add(key);
+      entries.push(entry);
+    };
+
+    for (const entry of window.__mightyProbeNetworkTrace || []) {
+      pushUnique(entry);
+    }
+
+    for (const entry of performance.getEntriesByType('resource') || []) {
+      const url = entry.name || '';
+      if (!/^https?:/i.test(url)) continue;
+      const status = typeof entry.responseStatus === 'number' ? entry.responseStatus : null;
+      pushUnique({
+        url,
+        method: null,
+        resource_type: entry.initiatorType || 'resource',
+        initiator_type: entry.initiatorType || null,
+        status_code: status,
+        start_time_ms: Math.round(entry.startTime || 0),
+        duration_ms: Math.round(entry.duration || 0),
+        redirect_count: typeof entry.redirectCount === 'number' ? entry.redirectCount : null,
+        same_origin: (() => {
+          try {
+            return new URL(url, location.href).origin === location.origin;
+          } catch (_) {
+            return null;
+          }
+        })(),
+        auth_keyword_match: /session|login|auth|token|csrf|sso|identity/i.test(url),
+        highlighted: (
+          status === 401
+          || status === 403
+          || status === 302
+          || (status >= 300 && status < 400)
+          || /ReadUserSession\.v1/i.test(url)
+          || /UpdateUserSession\.v1/i.test(url)
+        ),
+      });
+    }
+
+    entries.sort((a, b) => (a.start_time_ms || 0) - (b.start_time_ms || 0));
+
+    const status_counts = {};
+    for (const entry of entries) {
+      const key = entry.status_code != null ? String(entry.status_code) : 'unknown';
+      status_counts[key] = (status_counts[key] || 0) + 1;
+    }
+
+    const highlighted_requests = entries.filter((e) => e.highlighted).slice(0, 30);
+    const auth_session_requests = entries.filter((e) => e.auth_keyword_match).slice(0, 50);
+    const status_401 = entries.filter((e) => e.status_code === 401);
+    const status_403 = entries.filter((e) => e.status_code === 403);
+    const redirects = entries.filter((e) => e.status_code >= 300 && e.status_code < 400);
+    const cors_failures = entries.filter((e) => e.cors_error || e.network_error);
+
+    return {
+      observation_ms: window.__mightyProbeObservationMs || 15000,
+      request_count: entries.length,
+      status_counts,
+      highlighted_requests,
+      auth_session_requests,
+      status_401_requests: status_401.slice(0, 20),
+      status_403_requests: status_403.slice(0, 20),
+      redirect_requests: redirects.slice(0, 20),
+      cors_or_network_failures: cors_failures.slice(0, 20),
+      requests: entries.slice(0, 100),
+    };
+  }
+
   return {
     outer_html_length: outerHTML.length,
     outer_html_preview: outerHTML.slice(0, 2000),
@@ -4757,6 +5027,7 @@ function collectDeepInspectInPage(contentScriptSucceeded) {
     resource_diagnostics: summarizeResources(),
     framework_detection: detectFrameworks(),
     observation_window,
+    auth_network_trace: buildAuthNetworkTrace(),
   };
 }
 

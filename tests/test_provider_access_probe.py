@@ -35,6 +35,9 @@ from mighty.provider_access_probe import (
     extract_page_diagnostics,
     extract_deep_inspect,
     sanitize_deep_inspect,
+    sanitize_probe_url,
+    sanitize_auth_network_trace,
+    compute_auth_network_diagnostic,
     get_manual_probe_state,
     is_automatic_probe_disabled,
     is_blank_or_unloaded_page,
@@ -710,6 +713,116 @@ class TestDeepInspect:
         assert result["outer_html_length"] == 43000
         assert result["cookie_names"] == ["a"]
         assert result["spa_roots"][0]["text_length"] == 13
+
+
+class TestAuthNetworkTrace:
+    def test_network_trace_stores_url_status_type_duration_safely(self):
+        raw = {
+            "request_count": 2,
+            "status_counts": {"401": 1, "200": 1},
+            "requests": [
+                {
+                    "url": "https://functions.americanexpress.com/ReadUserSession.v1",
+                    "method": "POST",
+                    "resource_type": "fetch",
+                    "initiator_type": "fetch",
+                    "status_code": 401,
+                    "duration_ms": 120,
+                    "response_header_names": ["content-type", "x-request-id"],
+                },
+            ],
+        }
+        result = sanitize_auth_network_trace(raw)
+        req = result["requests"][0]
+        assert req["url"].endswith("ReadUserSession.v1")
+        assert req["status_code"] == 401
+        assert req["duration_ms"] == 120
+        assert req["response_header_names"] == ["content-type", "x-request-id"]
+
+    def test_query_params_and_tokens_are_redacted(self):
+        url = sanitize_probe_url(
+            "https://functions.americanexpress.com/Auth?token=secret&session=abc&foo=bar"
+        )
+        assert "secret" not in url
+        assert "abc" not in url
+        assert "REDACTED" in url
+        assert "foo=bar" in url
+
+    def test_response_header_values_not_stored(self):
+        raw = {
+            "requests": [{
+                "url": "https://example.com/session",
+                "response_header_names": ["set-cookie", "authorization"],
+                "response_headers": {"set-cookie": "secret=1"},
+                "authorization": "Bearer secret",
+            }],
+        }
+        result = sanitize_auth_network_trace(raw)
+        req = result["requests"][0]
+        assert "response_headers" not in req
+        assert "authorization" not in req
+        assert req["response_header_names"] == ["set-cookie", "authorization"]
+
+    def test_401_session_apis_highlighted(self):
+        raw = {
+            "highlighted_requests": [
+                {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401, "highlighted": True},
+                {"url": "https://functions.americanexpress.com/UpdateUserSession.v1", "status_code": 401, "highlighted": True},
+            ],
+            "status_401_requests": [
+                {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401},
+            ],
+        }
+        result = sanitize_auth_network_trace(raw)
+        assert len(result["highlighted_requests"]) == 2
+        assert "ReadUserSession.v1 returned 401" in result["diagnostic_summary"]
+        assert "UpdateUserSession.v1 returned 401" in result["diagnostic_summary"]
+
+    def test_never_stores_cookie_values_or_bodies(self):
+        raw = {
+            "requests": [{
+                "url": "https://example.com/session",
+                "request_body": '{"token":"secret"}',
+                "response_body": '{"session":"secret"}',
+                "cookie": "session=secret",
+            }],
+        }
+        result = sanitize_auth_network_trace(raw)
+        req = result["requests"][0]
+        assert "request_body" not in req
+        assert "response_body" not in req
+        assert "cookie" not in req
+
+    def test_compute_auth_network_diagnostic_with_cookies(self):
+        trace = {
+            "highlighted_requests": [
+                {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401},
+            ],
+            "status_401_requests": [
+                {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401},
+            ],
+        }
+        msg = compute_auth_network_diagnostic(trace, cookie_names=["s_sess"])
+        assert "ReadUserSession.v1 returned 401" in msg
+        assert "cookies present at document level" in msg
+
+    def test_deep_inspect_includes_auth_network_trace(self):
+        payload = {
+            "deep_inspect": {
+                "cookie_names": ["a"],
+                "auth_network_trace": {
+                    "request_count": 1,
+                    "status_counts": {"401": 1},
+                    "requests": [{
+                        "url": "https://functions.americanexpress.com/ReadUserSession.v1",
+                        "status_code": 401,
+                    }],
+                },
+            },
+        }
+        result = sanitize_deep_inspect(payload["deep_inspect"])
+        assert result["auth_network_trace"]["request_count"] == 1
+        assert "401" in result["auth_network_trace"]["diagnostic_summary"]
 
 
 class TestStoredProbeRun:

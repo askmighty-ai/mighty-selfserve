@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.4.0-amex-post-load-diagnostics" in src
+    assert "1.4.1-amex-auth-network-trace" in src
     assert "background.js loaded — version" in src
 
 
@@ -99,6 +99,10 @@ def test_extension_deep_inspect_for_manual_amex():
     assert "framework_detection" in src
     assert "observation_window" in src
     assert "AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000" in src
+    assert "auth_network_trace" in src
+    assert "__mightyProbeNetworkTrace" in src
+    assert "sanitizeProbeUrl" in src
+    assert "ReadUserSession\\.v1" in src
     assert "AMEX_MUTATION_OBSERVE_MS = 10000" in src
 
 
