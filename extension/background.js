@@ -1155,6 +1155,15 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     runSync().catch(console.error);
     return false;
   }
+  if (msg.action === 'run_manual_probe') {
+    (async () => {
+      const { api_key } = await chrome.storage.local.get('api_key');
+      if (!api_key || !msg.provider) return;
+      await runManualProviderAccessProbe(api_key, msg.provider, msg.manual_run_id || null);
+    })().catch(console.error);
+    sendResponse({ ok: true });
+    return false;
+  }
   if (msg.action === 'get_status') {
     chrome.storage.local.get(['last_sync', 'sync_status', 'api_key', 'captured_accounts'], sendResponse);
     return true;
@@ -2089,14 +2098,43 @@ async function probeAmexConnectionState(apiKey, accounts) {
 // ── Provider Access Probe (Phase 1 reliability diagnostic) ────────────────────
 
 const PROVIDER_ACCESS_PROBE_SOURCES = new Set(['amex', 'delta']);
+const MANUAL_PROBE_PROVIDERS = ['amex', 'delta'];
 const _probeReportedAt = {};
+let _automaticProbesEnabled = true;
+let _automaticProbesConfigFetchedAt = 0;
+let _manualProbeInProgress = false;
+let _lastProcessedManualRunId = null;
+let _manualProbePollTimer = null;
 
-async function _postProviderAccessProbe(apiKey, payload) {
-  if (!apiKey || !payload?.provider) return;
-  const cacheKey = `${payload.provider}:${payload.status}:${payload.evidence_snippet || ''}`;
+async function fetchAutomaticProbesEnabled(apiKey) {
+  if (!apiKey) return true;
   const now = Date.now();
-  if (_probeReportedAt[cacheKey] && now - _probeReportedAt[cacheKey] < 120_000) return;
-  _probeReportedAt[cacheKey] = now;
+  if (_automaticProbesConfigFetchedAt && now - _automaticProbesConfigFetchedAt < 60_000) {
+    return _automaticProbesEnabled;
+  }
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/config`, {
+      headers: { 'X-Mighty-Key': apiKey },
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      _automaticProbesEnabled = !!data.automatic_probes_enabled;
+      _automaticProbesConfigFetchedAt = now;
+    }
+  } catch (e) {
+    console.warn('[Mighty Probe] config fetch failed:', e.message);
+  }
+  return _automaticProbesEnabled;
+}
+
+async function _postProviderAccessProbe(apiKey, payload, { skipDedup = false } = {}) {
+  if (!apiKey || !payload?.provider) return null;
+  if (!skipDedup) {
+    const cacheKey = `${payload.provider}:${payload.status}:${payload.evidence_snippet || ''}`;
+    const now = Date.now();
+    if (_probeReportedAt[cacheKey] && now - _probeReportedAt[cacheKey] < 120_000) return null;
+    _probeReportedAt[cacheKey] = now;
+  }
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe`, {
       method: 'POST',
@@ -2109,8 +2147,10 @@ async function _postProviderAccessProbe(apiKey, payload) {
     } else {
       console.warn(`[Mighty Probe] ${payload.provider} POST failed`, resp.status, data);
     }
+    return { ok: resp.ok, data };
   } catch (e) {
     console.warn(`[Mighty Probe] ${payload.provider} POST error:`, e.message);
+    return { ok: false, error: e.message };
   }
 }
 
@@ -2126,6 +2166,90 @@ async function runProviderAccessProbeInTab(tabId, provider) {
     console.warn(`[Mighty Probe] tab script failed for ${provider}:`, e.message);
     return { provider, error: e.message, blocked: false };
   }
+}
+
+async function waitForProbePageStability(tabId) {
+  await waitForTabLoad(tabId, 25_000);
+  await sleep(5000);
+}
+
+async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
+  if (_manualProbeInProgress) {
+    console.log('[Mighty Probe] manual probe already in progress — skipping');
+    return;
+  }
+  if (!MANUAL_PROBE_PROVIDERS.includes(provider)) {
+    console.warn(`[Mighty Probe] unsupported manual provider: ${provider}`);
+    return;
+  }
+  if (manualRunId && manualRunId === _lastProcessedManualRunId) {
+    return;
+  }
+
+  const entry = ACCOUNT_ENTRY[provider];
+  if (!entry) {
+    console.log(`[Mighty Probe] no entry URL for manual ${provider}`);
+    return;
+  }
+
+  _manualProbeInProgress = true;
+  console.log(`[Mighty Probe] manual run for ${provider} (${manualRunId || 'no-id'})`);
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: entry, active: false });
+    await waitForProbePageStability(tab.id);
+    const result = await runProviderAccessProbeInTab(tab.id, provider);
+    const payload = result || {
+      provider,
+      url_visited: entry,
+      signed_in_detected: false,
+      private_data_detected: false,
+      error: 'probe_no_result',
+      failure_reason: 'probe_no_result',
+    };
+    if (manualRunId) payload.manual_run_id = manualRunId;
+    await _postProviderAccessProbe(apiKey, payload, { skipDedup: true });
+    if (manualRunId) _lastProcessedManualRunId = manualRunId;
+  } catch (e) {
+    await _postProviderAccessProbe(apiKey, {
+      provider,
+      url_visited: entry,
+      signed_in_detected: false,
+      private_data_detected: false,
+      error: e.message,
+      failure_reason: 'probe_navigation_error',
+      manual_run_id: manualRunId || undefined,
+    }, { skipDedup: true });
+    if (manualRunId) _lastProcessedManualRunId = manualRunId;
+  } finally {
+    if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+    _manualProbeInProgress = false;
+  }
+}
+
+async function pollManualProbeTrigger() {
+  if (_manualProbeInProgress) return;
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/manual`, {
+      headers: { 'X-Mighty-Key': api_key },
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.lifecycle !== 'running' || !data.provider || !data.manual_run_id) return;
+    if (data.manual_run_id === _lastProcessedManualRunId) return;
+    await runManualProviderAccessProbe(api_key, data.provider, data.manual_run_id);
+  } catch (e) {
+    console.warn('[Mighty Probe] manual poll failed:', e.message);
+  }
+}
+
+function ensureManualProbePolling() {
+  if (_manualProbePollTimer) return;
+  _manualProbePollTimer = setInterval(() => {
+    pollManualProbeTrigger().catch(console.error);
+  }, 5000);
 }
 
 async function runProviderAccessProbe(apiKey, provider) {
@@ -2153,8 +2277,7 @@ async function runProviderAccessProbe(apiKey, provider) {
   let tab;
   try {
     tab = await chrome.tabs.create({ url: entry, active: false });
-    await waitForTabLoad(tab.id, 25_000);
-    await sleep(5000);
+    await waitForProbePageStability(tab.id);
     const result = await runProviderAccessProbeInTab(tab.id, provider);
     if (result) await _postProviderAccessProbe(apiKey, result);
   } catch (e) {
@@ -2173,6 +2296,12 @@ async function runProviderAccessProbe(apiKey, provider) {
 
 async function runProviderAccessProbes(apiKey, accounts) {
   if (!apiKey || !Array.isArray(accounts)) return;
+  const autoEnabled = await fetchAutomaticProbesEnabled(apiKey);
+  if (!autoEnabled) {
+    console.log('[Mighty Probe] automatic probes disabled — manual only');
+    ensureManualProbePolling();
+    return;
+  }
   const configured = accounts
     .map(a => a.source)
     .filter(src => PROVIDER_ACCESS_PROBE_SOURCES.has(src));

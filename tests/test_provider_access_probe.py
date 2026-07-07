@@ -21,16 +21,23 @@ from mighty.provider_access_probe import (
     PROBE_NOT_STARTED,
     PROBE_SIGNED_IN_DATA,
     PROBE_SIGNED_IN_NO_DATA,
+    ConcurrentProbeError,
+    PROBE_LIFECYCLE_DONE,
+    PROBE_LIFECYCLE_RUNNING,
     classify_auth_state,
     classify_probe_result,
+    complete_manual_probe,
     detect_private_data,
     detect_signed_in_from_text,
     evaluate_probe_payload,
+    get_manual_probe_state,
+    is_automatic_probe_disabled,
     is_marketing_url,
     merge_probe_summaries,
     record_probe_run,
     ensure_probe_tables,
     get_latest_probe_per_provider,
+    start_manual_probe,
 )
 
 
@@ -430,3 +437,52 @@ class TestMergeProbeSummaries:
         rows = merge_probe_summaries({}, ["amex", "delta"])
         assert len(rows) == 2
         assert all(r["status"] == PROBE_NOT_STARTED for r in rows)
+
+
+class TestManualProbeRunner:
+    def test_start_manual_probe_one_provider(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "manual.db"))
+        db.row_factory = sqlite3.Row
+        state = start_manual_probe(db, "user-1", "amex")
+        assert state["provider"] == "amex"
+        assert state["lifecycle"] == PROBE_LIFECYCLE_RUNNING
+
+    def test_concurrent_manual_probe_rejected(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "manual2.db"))
+        db.row_factory = sqlite3.Row
+        start_manual_probe(db, "user-1", "amex")
+        with pytest.raises(ConcurrentProbeError):
+            start_manual_probe(db, "user-1", "delta")
+
+    def test_complete_manual_probe(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "manual3.db"))
+        db.row_factory = sqlite3.Row
+        state = start_manual_probe(db, "user-1", "delta")
+        complete_manual_probe(
+            db,
+            "user-1",
+            state["manual_run_id"],
+            lifecycle=PROBE_LIFECYCLE_DONE,
+            probe_run_id="run-123",
+        )
+        latest = get_manual_probe_state(db, "user-1")
+        assert latest["lifecycle"] == PROBE_LIFECYCLE_DONE
+        assert latest["probe_run_id"] == "run-123"
+
+
+class TestAutomaticProbeDisabled:
+    def test_disabled_in_development(self, monkeypatch):
+        monkeypatch.setenv("FLASK_ENV", "development")
+        assert is_automatic_probe_disabled() is True
+
+    def test_enabled_in_production(self, monkeypatch):
+        monkeypatch.delenv("FLASK_ENV", raising=False)
+        monkeypatch.delenv("MIGHTY_ADMIN_TEST", raising=False)
+        monkeypatch.delenv("DISABLE_AUTOMATIC_PROVIDER_PROBES", raising=False)
+        assert is_automatic_probe_disabled() is False

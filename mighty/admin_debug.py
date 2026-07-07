@@ -1177,7 +1177,128 @@ def _probe_matched_rules(row: dict[str, Any]) -> str:
     return "; ".join(groups) or "—"
 
 
-def render_provider_access_probe_page(rows: list[dict[str, Any]]) -> str:
+def render_provider_access_probe_page(
+    rows: list[dict[str, Any]],
+    *,
+    manual_state: dict[str, Any] | None = None,
+    automatic_probes_disabled: bool = False,
+) -> str:
+    manual_state = manual_state or {}
+    lifecycle = manual_state.get("lifecycle") or "idle"
+    lifecycle_colors = {
+        "idle": ("#374151", "#f3f4f6"),
+        "running": ("#92400e", "#fef3c7"),
+        "done": ("#065f46", "#d1fae5"),
+        "error": ("#991b1b", "#fee2e2"),
+    }
+    lc_fg, lc_bg = lifecycle_colors.get(lifecycle, ("#374151", "#f3f4f6"))
+    lifecycle_badge = (
+        f'<span id="probe-lifecycle-badge" style="display:inline-block;padding:4px 10px;'
+        f'border-radius:6px;font-size:12px;font-weight:600;color:{lc_fg};background:{lc_bg}">'
+        f'{_he(lifecycle)}</span>'
+    )
+    auto_note = (
+        '<p class="muted" style="font-size:11px;margin:8px 0 0">'
+        "Automatic probes are <strong>disabled</strong> in development/admin-test mode. "
+        "Use Run Probe below.</p>"
+        if automatic_probes_disabled
+        else ""
+    )
+    run_controls = (
+        '<div class="card" style="margin-bottom:16px">'
+        "<h3>Manual probe runner</h3>"
+        '<p class="muted" style="font-size:12px;margin:0 0 12px">'
+        "Run exactly one provider at a time. Opens a single background tab, waits for page "
+        "stability, classifies auth state, and records an immutable probe run.</p>"
+        f'<p style="margin:0 0 12px">Lifecycle: {lifecycle_badge}'
+        f' <span id="probe-lifecycle-provider" class="muted" style="font-size:12px;margin-left:8px">'
+        f'{_he(manual_state.get("provider") or "")}</span></p>'
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+        '<button class="btn probe-run-btn" data-provider="amex" id="run-probe-amex">'
+        "Run Probe — Amex</button>"
+        '<button class="btn probe-run-btn" data-provider="delta" id="run-probe-delta">'
+        "Run Probe — Delta</button>"
+        "</div>"
+        f"{auto_note}"
+        "</div>"
+    )
+    script = """
+<script>
+(function () {
+  const badge = document.getElementById('probe-lifecycle-badge');
+  const providerEl = document.getElementById('probe-lifecycle-provider');
+  const buttons = Array.from(document.querySelectorAll('.probe-run-btn'));
+  let pollTimer = null;
+
+  function setLifecycle(data) {
+    const lc = data.lifecycle || 'idle';
+    badge.textContent = lc;
+    providerEl.textContent = data.provider ? ('(' + data.provider + ')') : '';
+    const colors = {
+      idle: ['#374151', '#f3f4f6'],
+      running: ['#92400e', '#fef3c7'],
+      done: ['#065f46', '#d1fae5'],
+      error: ['#991b1b', '#fee2e2'],
+    };
+    const [fg, bg] = colors[lc] || colors.idle;
+    badge.style.color = fg;
+    badge.style.background = bg;
+    const busy = lc === 'running';
+    buttons.forEach(b => { b.disabled = busy; });
+    if (busy && !pollTimer) {
+      pollTimer = setInterval(refreshStatus, 2000);
+    } else if (!busy && pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      if (lc === 'done' || lc === 'error') {
+        setTimeout(() => location.reload(), 800);
+      }
+    }
+  }
+
+  async function refreshStatus() {
+    try {
+      const r = await fetch('/api/admin/provider-access-probe/run-status');
+      if (r.ok) setLifecycle(await r.json());
+    } catch (e) {}
+  }
+
+  async function runProbe(provider) {
+    buttons.forEach(b => { b.disabled = true; });
+    badge.textContent = 'running';
+    try {
+      const r = await fetch('/api/admin/provider-access-probe/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert(data.error || 'Probe run failed');
+        await refreshStatus();
+        return;
+      }
+      setLifecycle(data);
+      window.postMessage({
+        type: '__mighty_dashboard__',
+        action: 'run_manual_probe',
+        provider: provider,
+        manual_run_id: data.manual_run_id,
+      }, '*');
+      pollTimer = pollTimer || setInterval(refreshStatus, 2000);
+    } catch (e) {
+      alert('Probe run failed: ' + e.message);
+      await refreshStatus();
+    }
+  }
+
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => runProbe(btn.dataset.provider));
+  });
+  refreshStatus();
+})();
+</script>"""
+
     table = "".join(
         f"<tr>"
         f"<td><strong>{_he(r.get('provider', ''))}</strong></td>"
@@ -1204,10 +1325,12 @@ def render_provider_access_probe_page(rows: list[dict[str, Any]]) -> str:
         "of private account-specific evidence. Does not drive user-facing account status.</p>"
         '<p class="muted" style="font-size:11px">JSON API: '
         '<code>/api/admin/provider-access-probe</code></p>'
+        f"{run_controls}"
         '<div class="card"><table><thead><tr>'
         "<th>Provider</th><th>Status</th><th>Auth state</th><th>Final URL</th>"
         "<th>Page title</th><th>Form signals</th><th>Matched rules</th>"
         "<th>Evidence snippet</th><th>Probed at</th><th>Failure reason</th>"
         f"</tr></thead><tbody>{table}</tbody></table></div>"
+        f"{script}"
     )
     return _admin_shell("provider-access-probe", "Provider Access Probe", body)

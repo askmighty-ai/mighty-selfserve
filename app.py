@@ -823,8 +823,9 @@ def init_db():
         except Exception:
             pass
         try:
-            from mighty.provider_access_probe import ensure_probe_tables
+            from mighty.provider_access_probe import ensure_probe_tables, ensure_manual_probe_tables
             ensure_probe_tables(db)
+            ensure_manual_probe_tables(db)
         except Exception:
             pass
 
@@ -21145,12 +21146,23 @@ def admin_delta_evidence_audit_detail_page(run_id):
 @app.route("/admin/provider-access-probe")
 @require_admin
 def admin_provider_access_probe_page():
-    from mighty.provider_access_probe import PROBE_PROVIDERS, merge_probe_summaries, get_latest_probe_per_provider
+    from mighty.provider_access_probe import (
+        PROBE_PROVIDERS,
+        merge_probe_summaries,
+        get_latest_probe_per_provider,
+        get_manual_probe_state,
+        is_automatic_probe_disabled,
+    )
 
     uid = session["user_id"]
     latest = get_latest_probe_per_provider(get_db(), uid)
     rows = merge_probe_summaries(latest, sorted(PROBE_PROVIDERS))
-    return _admin_debug.render_provider_access_probe_page(rows)
+    manual_state = get_manual_probe_state(get_db(), uid)
+    return _admin_debug.render_provider_access_probe_page(
+        rows,
+        manual_state=manual_state,
+        automatic_probes_disabled=is_automatic_probe_disabled(),
+    )
 
 
 @app.route("/api/admin/provider-access-probe")
@@ -21162,6 +21174,64 @@ def api_admin_provider_access_probe():
     latest = get_latest_probe_per_provider(get_db(), uid)
     rows = merge_probe_summaries(latest, sorted(PROBE_PROVIDERS))
     return jsonify({"providers": [row_to_json(r) for r in rows]})
+
+
+@app.route("/api/admin/provider-access-probe/run-status")
+@require_admin
+def api_admin_provider_access_probe_run_status():
+    from mighty.provider_access_probe import get_manual_probe_state, manual_probe_state_to_json
+
+    uid = session["user_id"]
+    return jsonify(manual_probe_state_to_json(get_manual_probe_state(get_db(), uid)))
+
+
+@app.route("/api/admin/provider-access-probe/run", methods=["POST"])
+@require_admin
+def api_admin_provider_access_probe_run():
+    from mighty.provider_access_probe import (
+        ConcurrentProbeError,
+        start_manual_probe,
+        manual_probe_state_to_json,
+    )
+
+    uid = session["user_id"]
+    body = request.get_json(silent=True) or {}
+    provider = (body.get("provider") or "").strip().lower()
+    if not provider:
+        return jsonify({"error": "provider required"}), 400
+
+    try:
+        state = start_manual_probe(get_db(), uid, provider)
+    except ConcurrentProbeError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(manual_probe_state_to_json(state))
+
+
+@app.route("/api/extension/provider-access-probe/config")
+def api_extension_provider_access_probe_config():
+    from mighty.provider_access_probe import is_automatic_probe_disabled
+
+    user = api_user()[0]
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+    return jsonify({"automatic_probes_enabled": not is_automatic_probe_disabled()})
+
+
+@app.route("/api/extension/provider-access-probe/manual")
+def api_extension_provider_access_probe_manual():
+    from mighty.provider_access_probe import get_pending_manual_probe, manual_probe_state_to_json
+
+    user = api_user()[0]
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+
+    pending = get_pending_manual_probe(get_db(), user["id"])
+    if not pending:
+        return jsonify(manual_probe_state_to_json({"lifecycle": "idle"}))
+    return jsonify(manual_probe_state_to_json(pending))
 
 
 @app.route("/api/extension/provider-access-probe", methods=["POST"])
@@ -21177,21 +21247,46 @@ def api_extension_provider_access_probe():
 
     from mighty.provider_access_probe import (
         PROBE_PROVIDERS,
+        PROBE_LIFECYCLE_DONE,
+        PROBE_LIFECYCLE_ERROR,
         evaluate_probe_payload,
         record_probe_run,
+        complete_manual_probe,
         row_to_json,
     )
 
     if provider not in PROBE_PROVIDERS:
         return jsonify({"error": f"unsupported provider: {provider}"}), 400
 
+    manual_run_id = (body.get("manual_run_id") or "").strip() or None
+
     try:
         result = evaluate_probe_payload(provider, body)
     except ValueError as exc:
+        if manual_run_id:
+            complete_manual_probe(
+                get_db(),
+                user["id"],
+                manual_run_id,
+                lifecycle=PROBE_LIFECYCLE_ERROR,
+                error_message=str(exc),
+            )
         return jsonify({"error": str(exc)}), 400
 
     run_id = record_probe_run(get_db(), user["id"], result)
     result["run_id"] = run_id
+
+    if manual_run_id:
+        lifecycle = PROBE_LIFECYCLE_ERROR if result.get("status") == "error" else PROBE_LIFECYCLE_DONE
+        complete_manual_probe(
+            get_db(),
+            user["id"],
+            manual_run_id,
+            lifecycle=lifecycle,
+            probe_run_id=run_id,
+            error_message=result.get("failure_reason") if lifecycle == PROBE_LIFECYCLE_ERROR else None,
+        )
+
     return jsonify(row_to_json(result))
 
 

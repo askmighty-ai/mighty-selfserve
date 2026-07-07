@@ -8,6 +8,7 @@ state, extraction, or user-facing UI.
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -87,6 +88,34 @@ EVIDENCE_TYPES = frozenset({
 
 # Providers with probe configuration (extension runner implements amex + delta first).
 PROBE_PROVIDERS = frozenset({"amex", "delta", "hilton", "united", "marriott"})
+
+# Manual probe runner — one provider at a time (Phase 1A.5).
+MANUAL_PROBE_PROVIDERS: tuple[str, ...] = ("amex", "delta")
+
+PROBE_LIFECYCLE_IDLE = "idle"
+PROBE_LIFECYCLE_RUNNING = "running"
+PROBE_LIFECYCLE_DONE = "done"
+PROBE_LIFECYCLE_ERROR = "error"
+
+PROBE_LIFECYCLES = frozenset({
+    PROBE_LIFECYCLE_IDLE,
+    PROBE_LIFECYCLE_RUNNING,
+    PROBE_LIFECYCLE_DONE,
+    PROBE_LIFECYCLE_ERROR,
+})
+
+
+class ConcurrentProbeError(Exception):
+    """Raised when a manual probe is already running for this user."""
+
+
+def is_automatic_probe_disabled() -> bool:
+    """True in development/admin-test mode — extension must not auto-run probes."""
+    if os.environ.get("DISABLE_AUTOMATIC_PROVIDER_PROBES", "").lower() in ("1", "true", "yes"):
+        return True
+    if os.environ.get("MIGHTY_ADMIN_TEST", "").lower() in ("1", "true", "yes"):
+        return True
+    return os.environ.get("FLASK_ENV", "").lower() == "development"
 
 
 def utc_now_iso() -> str:
@@ -892,4 +921,170 @@ def row_to_json(row: dict[str, Any]) -> dict[str, Any]:
         "timestamp": row.get("probed_at") or row.get("timestamp"),
         "failure_reason": row.get("failure_reason"),
         "run_id": row.get("run_id"),
+    }
+
+
+# ── Manual probe runner (Phase 1A.5) ──────────────────────────────────────────
+
+
+def ensure_manual_probe_tables(db: Any) -> None:
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_access_probe_manual_runs (
+            manual_run_id   TEXT PRIMARY KEY,
+            user_id         TEXT NOT NULL,
+            provider        TEXT NOT NULL,
+            lifecycle       TEXT NOT NULL,
+            error_message   TEXT,
+            probe_run_id    TEXT,
+            requested_at    TEXT NOT NULL,
+            started_at      TEXT,
+            completed_at    TEXT
+        )
+        """
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_papmr_user_lifecycle "
+        "ON provider_access_probe_manual_runs(user_id, lifecycle, requested_at DESC)"
+    )
+    db.commit()
+
+
+def _normalize_manual_row(row: dict[str, Any] | None) -> dict[str, Any]:
+    if not row:
+        return {
+            "manual_run_id": None,
+            "provider": None,
+            "lifecycle": PROBE_LIFECYCLE_IDLE,
+            "error_message": None,
+            "probe_run_id": None,
+            "requested_at": None,
+            "started_at": None,
+            "completed_at": None,
+        }
+    return dict(row)
+
+
+def get_manual_probe_state(db: Any, user_id: str) -> dict[str, Any]:
+    """Latest manual probe lifecycle for admin display."""
+    ensure_manual_probe_tables(db)
+    row = db.execute(
+        """
+        SELECT manual_run_id, user_id, provider, lifecycle, error_message,
+               probe_run_id, requested_at, started_at, completed_at
+        FROM provider_access_probe_manual_runs
+        WHERE user_id = ?
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+    return _normalize_manual_row(dict(row) if row else None)
+
+
+def get_pending_manual_probe(db: Any, user_id: str) -> dict[str, Any] | None:
+    """Return the active running manual probe for the extension to execute."""
+    ensure_manual_probe_tables(db)
+    row = db.execute(
+        """
+        SELECT manual_run_id, user_id, provider, lifecycle, error_message,
+               probe_run_id, requested_at, started_at, completed_at
+        FROM provider_access_probe_manual_runs
+        WHERE user_id = ? AND lifecycle = ?
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (user_id, PROBE_LIFECYCLE_RUNNING),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _has_running_manual_probe(db: Any, user_id: str) -> bool:
+    ensure_manual_probe_tables(db)
+    row = db.execute(
+        """
+        SELECT 1 FROM provider_access_probe_manual_runs
+        WHERE user_id = ? AND lifecycle = ?
+        LIMIT 1
+        """,
+        (user_id, PROBE_LIFECYCLE_RUNNING),
+    ).fetchone()
+    return row is not None
+
+
+def start_manual_probe(db: Any, user_id: str, provider: str) -> dict[str, Any]:
+    """Queue a single-provider manual probe. Rejects concurrent runs."""
+    provider = provider.strip().lower()
+    if provider not in MANUAL_PROBE_PROVIDERS:
+        raise ValueError(
+            f"unsupported manual probe provider: {provider!r} "
+            f"(allowed: {', '.join(MANUAL_PROBE_PROVIDERS)})"
+        )
+    ensure_manual_probe_tables(db)
+    if _has_running_manual_probe(db, user_id):
+        raise ConcurrentProbeError("a manual probe is already running")
+
+    manual_run_id = str(uuid.uuid4())
+    now = utc_now_iso()
+    db.execute(
+        """
+        INSERT INTO provider_access_probe_manual_runs (
+            manual_run_id, user_id, provider, lifecycle,
+            requested_at, started_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (manual_run_id, user_id, provider, PROBE_LIFECYCLE_RUNNING, now, now),
+    )
+    db.commit()
+    return {
+        "manual_run_id": manual_run_id,
+        "provider": provider,
+        "lifecycle": PROBE_LIFECYCLE_RUNNING,
+        "requested_at": now,
+    }
+
+
+def complete_manual_probe(
+    db: Any,
+    user_id: str,
+    manual_run_id: str,
+    *,
+    lifecycle: str,
+    probe_run_id: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Mark a manual probe run finished (done or error)."""
+    if lifecycle not in (PROBE_LIFECYCLE_DONE, PROBE_LIFECYCLE_ERROR):
+        raise ValueError(f"invalid manual probe completion lifecycle: {lifecycle!r}")
+    ensure_manual_probe_tables(db)
+    now = utc_now_iso()
+    db.execute(
+        """
+        UPDATE provider_access_probe_manual_runs
+        SET lifecycle = ?, probe_run_id = ?, error_message = ?, completed_at = ?
+        WHERE manual_run_id = ? AND user_id = ? AND lifecycle = ?
+        """,
+        (
+            lifecycle,
+            probe_run_id,
+            error_message,
+            now,
+            manual_run_id,
+            user_id,
+            PROBE_LIFECYCLE_RUNNING,
+        ),
+    )
+    db.commit()
+
+
+def manual_probe_state_to_json(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "manual_run_id": state.get("manual_run_id"),
+        "provider": state.get("provider"),
+        "lifecycle": state.get("lifecycle") or PROBE_LIFECYCLE_IDLE,
+        "error_message": state.get("error_message"),
+        "probe_run_id": state.get("probe_run_id"),
+        "requested_at": state.get("requested_at"),
+        "started_at": state.get("started_at"),
+        "completed_at": state.get("completed_at"),
     }
