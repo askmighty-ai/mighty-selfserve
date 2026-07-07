@@ -1259,6 +1259,59 @@ def _probe_deep_inspect_section(rows: list[dict[str, Any]]) -> str:
         else:
             error_lines.append(str(err))
 
+    spa_lines = []
+    for root in deep.get("spa_roots") or []:
+        if not isinstance(root, dict):
+            continue
+        key = root.get("key") or "?"
+        if not root.get("exists"):
+            spa_lines.append(f"{key}: missing")
+        else:
+            spa_lines.append(
+                f"{key}: children={root.get('child_element_count')} "
+                f"innerHTML={root.get('inner_html_length')} text={root.get('text_length')}"
+            )
+
+    mutation = deep.get("mutation_timeline") or {}
+    mutation_line = (
+        f"count={mutation.get('total_count')} first={mutation.get('first_mutation_ms')}ms "
+        f"last={mutation.get('last_mutation_ms')}ms activity={mutation.get('mutation_activity')}"
+        if mutation else "—"
+    )
+
+    console_diag = deep.get("console_diagnostics") or []
+    console_lines = [
+        f"{c.get('level')}: {c.get('message')}" for c in console_diag[:10] if isinstance(c, dict)
+    ]
+
+    resources = deep.get("resource_diagnostics") or {}
+    resource_line = (
+        f"js={resources.get('js_count')} css={resources.get('css_count')} "
+        f"fetch/xhr={resources.get('fetch_xhr_count')} "
+        f"failed={len(resources.get('failed_loads') or [])} "
+        f"slow={len(resources.get('slow_loads') or [])}"
+        if resources else "—"
+    )
+    failed_lines = [
+        f"{r.get('name')} ({r.get('response_status') or '?'})"
+        for r in (resources.get("failed_loads") or [])[:5]
+        if isinstance(r, dict)
+    ]
+    slow_lines = [
+        f"{r.get('name')} ({r.get('duration_ms')}ms)"
+        for r in (resources.get("slow_loads") or [])[:5]
+        if isinstance(r, dict)
+    ]
+
+    frameworks = deep.get("framework_detection") or []
+    obs = deep.get("observation_window") or {}
+    obs_line = (
+        f"{obs.get('observation_ms')}ms window; DOM {obs.get('start_dom_size')}→{obs.get('end_dom_size')} "
+        f"(Δ{obs.get('dom_size_delta')}); text {obs.get('start_visible_text_length')}→"
+        f"{obs.get('end_visible_text_length')} (Δ{obs.get('visible_text_length_delta')})"
+        if obs else "—"
+    )
+
     details = (
         f"<dt>outer_html_length</dt><dd>{_he(deep.get('outer_html_length'))}</dd>"
         f"<dt>outer_html_preview</dt>"
@@ -1286,6 +1339,20 @@ def _probe_deep_inspect_section(rows: list[dict[str, Any]]) -> str:
         f"<dt>ready_state</dt><dd>{_he(deep.get('ready_state') or '—')}</dd>"
         f"<dt>visible_text_preview</dt>"
         f"<dd class=\"muted\">{_he(str(deep.get('visible_text_preview') or '')[:500])}</dd>"
+        f"<dt>SPA roots</dt><dd><code style=\"font-size:10px\">"
+        f"{_he('; '.join(spa_lines) or '—')}</code></dd>"
+        f"<dt>mutation_timeline</dt><dd class=\"muted\">{_he(mutation_line)}</dd>"
+        f"<dt>console_diagnostics</dt><dd><code style=\"font-size:10px\">"
+        f"{_he('; '.join(console_lines) or '—')}</code></dd>"
+        f"<dt>resource_diagnostics</dt><dd class=\"muted\">{_he(resource_line)}</dd>"
+        f"<dt>failed_loads</dt><dd><code style=\"font-size:10px\">"
+        f"{_he('; '.join(failed_lines) or '—')}</code></dd>"
+        f"<dt>slow_loads</dt><dd><code style=\"font-size:10px\">"
+        f"{_he('; '.join(slow_lines) or '—')}</code></dd>"
+        f"<dt>framework_detection</dt><dd>{_he(', '.join(frameworks) or '—')}</dd>"
+        f"<dt>observation_window</dt><dd class=\"muted\">{_he(obs_line)}</dd>"
+        f"<dt>end_visible_text_preview</dt>"
+        f"<dd class=\"muted\">{_he(str(obs.get('end_visible_text_preview') or '')[:500])}</dd>"
     )
 
     probed = _fmt_iso(amex_row.get("probed_at") or amex_row.get("timestamp"))

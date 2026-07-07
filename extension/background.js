@@ -1,6 +1,8 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.3.9-deep-inspect';
+const MIGHTY_EXT_VERSION = '1.4.0-amex-post-load-diagnostics';
+const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
+const AMEX_MUTATION_OBSERVE_MS = 10000;
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -2226,15 +2228,18 @@ async function _postProviderAccessProbe(apiKey, payload, { skipDedup = false } =
   }
 }
 
-async function injectDeepInspectErrorCollector(tabId) {
+async function injectDeepInspectObservers(tabId) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
       injectImmediately: true,
-      func: () => {
-        if (window.__mightyProbeErrorsInstalled) return;
-        window.__mightyProbeErrorsInstalled = true;
+      func: (mutationObserveMs, observationWindowMs) => {
+        if (window.__mightyProbeObserversInstalled) return;
+        window.__mightyProbeObserversInstalled = true;
+        window.__mightyProbeObservationMs = observationWindowMs;
         window.__mightyProbeJsErrors = window.__mightyProbeJsErrors || [];
+        window.__mightyProbeConsoleMessages = window.__mightyProbeConsoleMessages || [];
+
         window.addEventListener('error', (e) => {
           window.__mightyProbeJsErrors.push({
             message: e.message || String(e.error || 'error'),
@@ -2252,11 +2257,78 @@ async function injectDeepInspectErrorCollector(tabId) {
             col: null,
           });
         });
+
+        const pushConsole = (level, args) => {
+          try {
+            window.__mightyProbeConsoleMessages.push({
+              level,
+              message: args.map((a) => {
+                try {
+                  return typeof a === 'string' ? a : JSON.stringify(a);
+                } catch (_) {
+                  return String(a);
+                }
+              }).join(' ').slice(0, 500),
+            });
+          } catch (_) {}
+        };
+        const origError = console.error;
+        const origWarn = console.warn;
+        console.error = (...args) => {
+          pushConsole('error', args);
+          origError.apply(console, args);
+        };
+        console.warn = (...args) => {
+          pushConsole('warn', args);
+          origWarn.apply(console, args);
+        };
+
+        function startObservation() {
+          if (window.__mightyProbeObservationStarted) return;
+          window.__mightyProbeObservationStarted = true;
+          const startTs = Date.now();
+          const bodyText = document.body?.innerText || '';
+          window.__mightyProbeObservation = {
+            started_at_ms: startTs,
+            start_dom_size: document.documentElement?.outerHTML?.length || 0,
+            start_visible_text_length: bodyText.length,
+            start_visible_text_preview: bodyText.slice(0, 500),
+            mutation_count: 0,
+            first_mutation_ms: null,
+            last_mutation_ms: null,
+            observe_duration_ms: mutationObserveMs,
+          };
+
+          const observer = new MutationObserver(() => {
+            const now = Date.now();
+            const obs = window.__mightyProbeObservation;
+            obs.mutation_count += 1;
+            const elapsed = now - startTs;
+            if (obs.first_mutation_ms === null) obs.first_mutation_ms = elapsed;
+            obs.last_mutation_ms = elapsed;
+          });
+          try {
+            observer.observe(document.documentElement, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              characterData: true,
+            });
+            setTimeout(() => observer.disconnect(), mutationObserveMs);
+          } catch (_) {}
+        }
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', startObservation, { once: true });
+        } else {
+          startObservation();
+        }
       },
+      args: [AMEX_MUTATION_OBSERVE_MS, AMEX_MANUAL_PROBE_OBSERVATION_MS],
     });
     return true;
   } catch (e) {
-    console.warn('[Mighty Probe] deep inspect error collector failed:', e.message);
+    console.warn('[Mighty Probe] deep inspect observers failed:', e.message);
     return false;
   }
 }
@@ -2320,9 +2392,9 @@ async function runProviderAccessProbeInTab(tabId, provider, probeMeta = {}) {
   }
 }
 
-async function waitForProbePageStability(tabId) {
+async function waitForProbePageStability(tabId, { observationMs = 5000 } = {}) {
   await waitForTabLoad(tabId, 25_000);
-  await sleep(5000);
+  await sleep(observationMs);
 }
 
 async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
@@ -2356,10 +2428,12 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
       return;
     }
     if (deepInspect) {
-      await injectDeepInspectErrorCollector(tab.id);
+      await injectDeepInspectObservers(tab.id);
     }
     const domWaitStart = Date.now();
-    await waitForProbePageStability(tab.id);
+    await waitForProbePageStability(tab.id, {
+      observationMs: deepInspect ? AMEX_MANUAL_PROBE_OBSERVATION_MS : 5000,
+    });
     const domWaitMs = Date.now() - domWaitStart;
     const result = await runProviderAccessProbeInTab(tab.id, provider, {
       classifierStartedAt,
@@ -4457,6 +4531,134 @@ function collectDeepInspectInPage(contentScriptSucceeded) {
   const outerHTML = docEl ? docEl.outerHTML : '';
   const bodyText = document.body?.innerText || '';
 
+  function inspectSpaRoot(selector, key) {
+    const el = document.querySelector(selector);
+    if (!el) {
+      return { key, exists: false };
+    }
+    const inner = el.innerHTML || '';
+    const text = el.innerText || el.textContent || '';
+    return {
+      key,
+      exists: true,
+      child_element_count: el.childElementCount,
+      inner_html_length: inner.length,
+      text_length: text.length,
+    };
+  }
+
+  const spa_roots = [
+    inspectSpaRoot('#root', 'root'),
+    inspectSpaRoot('#__next', '__next'),
+    inspectSpaRoot('#app', 'app'),
+    inspectSpaRoot('[data-reactroot]', 'data-reactroot'),
+  ];
+
+  const obs = window.__mightyProbeObservation || {};
+  const mutationCount = obs.mutation_count || 0;
+  const firstMutationMs = obs.first_mutation_ms ?? null;
+  const lastMutationMs = obs.last_mutation_ms ?? null;
+  const observeDurationMs = obs.observe_duration_ms || 10000;
+  let mutation_activity = 'none';
+  if (mutationCount > 0) {
+    if (lastMutationMs !== null && lastMutationMs >= observeDurationMs - 2000) {
+      mutation_activity = 'continued';
+    } else if (lastMutationMs !== null && lastMutationMs <= 3000) {
+      mutation_activity = 'stopped_early';
+    } else {
+      mutation_activity = 'stopped_mid_window';
+    }
+  }
+
+  const mutation_timeline = {
+    total_count: mutationCount,
+    first_mutation_ms: firstMutationMs,
+    last_mutation_ms: lastMutationMs,
+    observe_duration_ms: observeDurationMs,
+    mutation_activity,
+  };
+
+  const console_diagnostics = (window.__mightyProbeConsoleMessages || [])
+    .filter((m) => m && (m.level === 'error' || m.level === 'warn'))
+    .slice(0, 50)
+    .map((m) => ({ level: m.level, message: m.message }));
+
+  function detectFrameworks() {
+    const present = [];
+    if (window.React || window.__REACT_DEVTOOLS_GLOBAL_HOOK__ || document.querySelector('[data-reactroot], [data-react-root]')) {
+      present.push('React');
+    }
+    if (window.__NEXT_DATA__ || document.querySelector('#__next')) {
+      present.push('Next.js');
+    }
+    if (window.ng || window.getAllAngularRootElements || document.querySelector('[ng-version]')) {
+      present.push('Angular');
+    }
+    if (window.Vue || window.__VUE__ || document.querySelector('[data-v-app]')) {
+      present.push('Vue');
+    }
+    return present;
+  }
+
+  function summarizeResources() {
+    const SLOW_MS = 3000;
+    const entries = performance.getEntriesByType('resource') || [];
+    const jsResources = [];
+    const cssResources = [];
+    const fetchResources = [];
+    const failedLoads = [];
+    const slowLoads = [];
+
+    for (const entry of entries) {
+      const name = entry.name || '';
+      const durationMs = Math.round(entry.duration || 0);
+      const initiator = entry.initiatorType || '';
+      const summary = {
+        name,
+        duration_ms: durationMs,
+        initiator_type: initiator,
+      };
+      if (typeof entry.responseStatus === 'number' && entry.responseStatus >= 400) {
+        summary.response_status = entry.responseStatus;
+        failedLoads.push(summary);
+      } else if (durationMs >= SLOW_MS) {
+        slowLoads.push(summary);
+      }
+
+      if (initiator === 'script' || /\.m?js(?:\?|$)/i.test(name)) {
+        jsResources.push(summary);
+      } else if (initiator === 'css' || initiator === 'link' || /\.css(?:\?|$)/i.test(name)) {
+        cssResources.push(summary);
+      } else if (initiator === 'fetch' || initiator === 'xmlhttprequest') {
+        fetchResources.push(summary);
+      }
+    }
+
+    return {
+      js_count: jsResources.length,
+      css_count: cssResources.length,
+      fetch_xhr_count: fetchResources.length,
+      failed_loads: failedLoads.slice(0, 20),
+      slow_loads: slowLoads.slice(0, 20),
+    };
+  }
+
+  const endDomSize = outerHTML.length;
+  const endVisibleTextLength = bodyText.length;
+  const observation_window = {
+    observation_ms: window.__mightyProbeObservationMs || 15000,
+    start_dom_size: obs.start_dom_size ?? null,
+    end_dom_size: endDomSize,
+    start_visible_text_length: obs.start_visible_text_length ?? null,
+    end_visible_text_length: endVisibleTextLength,
+    start_visible_text_preview: obs.start_visible_text_preview || '',
+    end_visible_text_preview: bodyText.slice(0, 500),
+    dom_size_delta: obs.start_dom_size != null ? endDomSize - obs.start_dom_size : null,
+    visible_text_length_delta: obs.start_visible_text_length != null
+      ? endVisibleTextLength - obs.start_visible_text_length
+      : null,
+  };
+
   const iframes = Array.from(document.querySelectorAll('iframe')).map((frame, index) => ({
     index,
     src: frame.src || frame.getAttribute('src') || '',
@@ -4549,6 +4751,12 @@ function collectDeepInspectInPage(contentScriptSucceeded) {
     page_title: document.title || '',
     ready_state: document.readyState,
     visible_text_preview: bodyText.slice(0, 500),
+    spa_roots,
+    mutation_timeline,
+    console_diagnostics,
+    resource_diagnostics: summarizeResources(),
+    framework_detection: detectFrameworks(),
+    observation_window,
   };
 }
 

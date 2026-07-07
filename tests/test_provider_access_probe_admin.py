@@ -303,6 +303,32 @@ def test_admin_page_shows_deep_inspect_for_amex(client, monkeypatch):
                 "page_title": "One App",
                 "ready_state": "complete",
                 "visible_text_preview": "Give Feedback",
+                "spa_roots": [
+                    {"key": "root", "exists": True, "child_element_count": 1, "inner_html_length": 42000, "text_length": 13},
+                ],
+                "mutation_timeline": {
+                    "total_count": 5,
+                    "first_mutation_ms": 200,
+                    "last_mutation_ms": 2500,
+                    "mutation_activity": "stopped_early",
+                },
+                "console_diagnostics": [
+                    {"level": "warn", "message": "locale/account title unresolved"},
+                ],
+                "resource_diagnostics": {
+                    "js_count": 42,
+                    "css_count": 4,
+                    "fetch_xhr_count": 6,
+                    "failed_loads": [],
+                    "slow_loads": [],
+                },
+                "framework_detection": ["React"],
+                "observation_window": {
+                    "observation_ms": 15000,
+                    "start_dom_size": 43000,
+                    "end_dom_size": 43000,
+                    "visible_text_length_delta": 0,
+                },
             },
         },
     )
@@ -315,6 +341,10 @@ def test_admin_page_shows_deep_inspect_for_amex(client, monkeypatch):
     assert "One App" in text
     assert "sessionId" in text
     assert "names/keys only" in text
+    assert "SPA roots" in text
+    assert "mutation_timeline" in text
+    assert "framework_detection" in text
+    assert "observation_window" in text
 
 
 def test_admin_page_forbidden_for_non_admin(client):

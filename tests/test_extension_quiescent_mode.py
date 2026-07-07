@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.3.9-deep-inspect" in src
+    assert "1.4.0-amex-post-load-diagnostics" in src
     assert "background.js loaded — version" in src
 
 
@@ -85,13 +85,37 @@ def test_extension_deep_inspect_for_manual_amex():
     src = _read_background_js()
     assert "collectDeepInspectInPage" in src
     assert "DEEP_INSPECT_PROVIDERS" in src
-    assert "injectDeepInspectErrorCollector" in src
+    assert "injectDeepInspectObservers" in src
     assert "deep_inspect" in src
     assert "deepInspect" in src
     assert "cookie_names" in src
     assert "local_storage_keys" in src
     assert "session_storage_keys" in src
     assert "outer_html_preview" in src
+    assert "spa_roots" in src
+    assert "mutation_timeline" in src
+    assert "console_diagnostics" in src
+    assert "resource_diagnostics" in src
+    assert "framework_detection" in src
+    assert "observation_window" in src
+    assert "AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000" in src
+    assert "AMEX_MUTATION_OBSERVE_MS = 10000" in src
+
+
+def test_amex_manual_probe_uses_15_second_observation():
+    src = _read_background_js()
+    assert "observationMs: deepInspect ? AMEX_MANUAL_PROBE_OBSERVATION_MS : 5000" in src
+
+
+def test_delta_manual_probe_keeps_5_second_observation():
+    src = _read_background_js()
+    assert "waitForProbePageStability(tab.id, {" in src
+    assert "DEEP_INSPECT_PROVIDERS.has(provider)" in src or "deepInspect ? AMEX_MANUAL_PROBE_OBSERVATION_MS : 5000" in src
+
+
+def test_automatic_probe_still_uses_default_wait():
+    src = _read_background_js()
+    assert "await waitForProbePageStability(tab.id);" in src
 
 
 def test_prefetch_config_on_startup():
