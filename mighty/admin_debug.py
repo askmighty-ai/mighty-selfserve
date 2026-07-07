@@ -1529,6 +1529,12 @@ def _probe_bootstrap_trace_section(
             f"</dl></div>"
         )
 
+    trace_blocks_html = (
+        "".join(trace_blocks)
+        if trace_blocks
+        else '<p class="muted" style="font-size:11px">No bootstrap traces yet.</p>'
+    )
+
     return (
         '<div class="card" style="margin-bottom:16px">'
         "<h3>Amex Bootstrap Trace</h3>"
@@ -1539,7 +1545,7 @@ def _probe_bootstrap_trace_section(
         f' <span id="bootstrap-entry-label" class="muted" style="font-size:12px;margin-left:8px">'
         f'{_he((running or {}).get("entry_url") or "")}</span></p>'
         f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">{entry_buttons}</div>'
-        f"{''.join(trace_blocks) or '<p class=\"muted\" style=\"font-size:11px\">No bootstrap traces yet.</p>'}"
+        f"{trace_blocks_html}"
         "</div>"
     )
 
