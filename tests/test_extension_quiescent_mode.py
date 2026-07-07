@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.3.8-manual-probe-gate" in src
+    assert "1.3.9-deep-inspect" in src
     assert "background.js loaded — version" in src
 
 
@@ -79,6 +79,19 @@ def test_extension_probe_page_diagnostics_in_page_script():
     assert "collectPageDiagnostics" in src
     assert "blank_or_unloaded_page" in src
     assert "page_diagnostics" in src
+
+
+def test_extension_deep_inspect_for_manual_amex():
+    src = _read_background_js()
+    assert "collectDeepInspectInPage" in src
+    assert "DEEP_INSPECT_PROVIDERS" in src
+    assert "injectDeepInspectErrorCollector" in src
+    assert "deep_inspect" in src
+    assert "deepInspect" in src
+    assert "cookie_names" in src
+    assert "local_storage_keys" in src
+    assert "session_storage_keys" in src
+    assert "outer_html_preview" in src
 
 
 def test_prefetch_config_on_startup():
