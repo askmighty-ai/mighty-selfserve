@@ -1437,13 +1437,124 @@ def _probe_auth_network_trace_section(deep: dict[str, Any]) -> str:
     )
 
 
+def _fmt_bootstrap_nav_event(event: dict[str, Any]) -> str:
+    if not isinstance(event, dict):
+        return str(event)
+    parts = [
+        f"{event.get('observed_at_ms', '?')}ms",
+        event.get("source") or event.get("type") or "nav",
+        event.get("url") or event.get("href") or "—",
+    ]
+    if event.get("status"):
+        parts.append(f"status={event.get('status')}")
+    if event.get("transition_type"):
+        parts.append(f"transition={event.get('transition_type')}")
+    return " | ".join(parts)
+
+
+def _fmt_bootstrap_request(req: dict[str, Any]) -> str:
+    if not isinstance(req, dict):
+        return str(req)
+    parts = [
+        f"{req.get('start_time_ms', '?')}ms",
+        req.get("url") or "—",
+        f"status={req.get('status_code') or '?'}",
+    ]
+    if req.get("duration_ms") is not None:
+        parts.append(f"{req.get('duration_ms')}ms")
+    if req.get("redirect_count"):
+        parts.append(f"redirects={req.get('redirect_count')}")
+    header_names = req.get("response_header_names") or []
+    if header_names:
+        parts.append(f"headers=[{','.join(header_names[:8])}]")
+    return " | ".join(parts)
+
+
+def _probe_bootstrap_trace_section(
+    bootstrap_traces: dict[str, dict[str, Any]],
+    bootstrap_entry_urls: list[str],
+) -> str:
+    entry_buttons = "".join(
+        f'<button class="btn bootstrap-trace-btn" data-entry-url="{_he(url)}" '
+        f'style="font-size:11px;padding:6px 10px">Trace — {_he(url.split("//")[-1][:48])}</button>'
+        for url in bootstrap_entry_urls
+    )
+    running = next(
+        (t for t in bootstrap_traces.values() if t.get("lifecycle") == "running"),
+        None,
+    )
+    lc = running.get("lifecycle") if running else "idle"
+    lc_colors = {
+        "idle": ("#374151", "#f3f4f6"),
+        "running": ("#92400e", "#fef3c7"),
+        "done": ("#065f46", "#d1fae5"),
+        "error": ("#991b1b", "#fee2e2"),
+    }
+    lc_fg, lc_bg = lc_colors.get(lc, lc_colors["idle"])
+    badge = (
+        f'<span id="bootstrap-lifecycle-badge" style="display:inline-block;padding:4px 10px;'
+        f'border-radius:6px;font-size:12px;font-weight:600;color:{lc_fg};background:{lc_bg}">'
+        f'{_he(lc)}</span>'
+    )
+
+    trace_blocks = []
+    for entry_url in bootstrap_entry_urls:
+        state = bootstrap_traces.get(entry_url) or {}
+        trace = state.get("trace") or {}
+        nav = trace.get("navigation_timeline") or {}
+        nav_events = nav.get("events") or []
+        requests = trace.get("bootstrap_requests") or []
+        nav_lines = [_fmt_bootstrap_nav_event(e) for e in nav_events[:15]]
+        req_lines = [_fmt_bootstrap_request(r) for r in requests[:15]]
+        first_401 = trace.get("first_401_url") or "—"
+        first_401_ms = trace.get("first_401_at_ms")
+        diagnostic = state.get("diagnostic_summary") or trace.get("diagnostic_summary") or "—"
+        lifecycle_label = state.get("lifecycle") or "not run"
+        trace_blocks.append(
+            f'<div style="margin-top:12px;padding-top:12px;border-top:1px solid #e5e7eb">'
+            f'<p style="font-size:11px;margin:0 0 6px"><strong>Entry:</strong> '
+            f'<code>{_he(entry_url)}</code> '
+            f'<span class="muted">({_he(lifecycle_label)})</span></p>'
+            f'<dl style="display:grid;grid-template-columns:140px 1fr;gap:4px 10px;'
+            f'font-size:11px;margin:0 0 8px">'
+            f"<dt>final URL</dt><dd class=\"muted\" style=\"word-break:break-all\">"
+            f"{_he(nav.get('final_url') or '—')}</dd>"
+            f"<dt>first 401</dt><dd class=\"muted\" style=\"word-break:break-all\">"
+            f"{_he(str(first_401_ms) + 'ms — ' + str(first_401) if first_401_ms else first_401)}</dd>"
+            f"<dt>diagnostic</dt><dd>{_he(diagnostic)}</dd>"
+            f"<dt>navigation</dt><dd><code style=\"font-size:10px;word-break:break-all\">"
+            f"{_he('; '.join(nav_lines) or '—')}</code></dd>"
+            f"<dt>bootstrap/session</dt><dd><code style=\"font-size:10px;word-break:break-all\">"
+            f"{_he('; '.join(req_lines) or '—')}</code></dd>"
+            f"</dl></div>"
+        )
+
+    return (
+        '<div class="card" style="margin-bottom:16px">'
+        "<h3>Amex Bootstrap Trace</h3>"
+        '<p class="muted" style="font-size:12px;margin:0 0 12px">'
+        "Diagnostic-only: opens one Amex tab at a chosen entry URL, observes 20 seconds of "
+        "navigation and bootstrap/session network activity. No cookie values, tokens, or bodies.</p>"
+        f'<p style="margin:0 0 12px">Lifecycle: {badge}'
+        f' <span id="bootstrap-entry-label" class="muted" style="font-size:12px;margin-left:8px">'
+        f'{_he((running or {}).get("entry_url") or "")}</span></p>'
+        f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">{entry_buttons}</div>'
+        f"{''.join(trace_blocks) or '<p class=\"muted\" style=\"font-size:11px\">No bootstrap traces yet.</p>'}"
+        "</div>"
+    )
+
+
 def render_provider_access_probe_page(
     rows: list[dict[str, Any]],
     *,
     manual_state: dict[str, Any] | None = None,
     automatic_probes_disabled: bool = False,
+    bootstrap_traces: dict[str, dict[str, Any]] | None = None,
+    bootstrap_entry_urls: list[str] | None = None,
 ) -> str:
     manual_state = manual_state or {}
+    bootstrap_traces = bootstrap_traces or {}
+    bootstrap_entry_urls = bootstrap_entry_urls or []
     lifecycle = manual_state.get("lifecycle") or "idle"
     lifecycle_colors = {
         "idle": ("#374151", "#f3f4f6"),
@@ -1555,7 +1666,83 @@ def render_provider_access_probe_page(
   buttons.forEach(btn => {
     btn.addEventListener('click', () => runProbe(btn.dataset.provider));
   });
+
+  const bootstrapBadge = document.getElementById('bootstrap-lifecycle-badge');
+  const bootstrapEntryEl = document.getElementById('bootstrap-entry-label');
+  const bootstrapButtons = Array.from(document.querySelectorAll('.bootstrap-trace-btn'));
+  let bootstrapPollTimer = null;
+
+  function setBootstrapLifecycle(data) {
+    if (!bootstrapBadge) return;
+    const lc = data.lifecycle || 'idle';
+    bootstrapBadge.textContent = lc;
+    if (bootstrapEntryEl) {
+      bootstrapEntryEl.textContent = data.entry_url ? ('(' + data.entry_url + ')') : '';
+    }
+    const colors = {
+      idle: ['#374151', '#f3f4f6'],
+      running: ['#92400e', '#fef3c7'],
+      done: ['#065f46', '#d1fae5'],
+      error: ['#991b1b', '#fee2e2'],
+    };
+    const [fg, bg] = colors[lc] || colors.idle;
+    bootstrapBadge.style.color = fg;
+    bootstrapBadge.style.background = bg;
+    const busy = lc === 'running';
+    bootstrapButtons.forEach(b => { b.disabled = busy; });
+    if (busy && !bootstrapPollTimer) {
+      bootstrapPollTimer = setInterval(refreshBootstrapStatus, 2000);
+    } else if (!busy && bootstrapPollTimer) {
+      clearInterval(bootstrapPollTimer);
+      bootstrapPollTimer = null;
+      if (lc === 'done' || lc === 'error') {
+        setTimeout(() => location.reload(), 800);
+      }
+    }
+  }
+
+  async function refreshBootstrapStatus() {
+    try {
+      const r = await fetch('/api/admin/provider-access-probe/bootstrap-trace-status');
+      if (r.ok) setBootstrapLifecycle(await r.json());
+    } catch (e) {}
+  }
+
+  async function runBootstrapTrace(entryUrl) {
+    bootstrapButtons.forEach(b => { b.disabled = true; });
+    if (bootstrapBadge) bootstrapBadge.textContent = 'running';
+    try {
+      const r = await fetch('/api/admin/provider-access-probe/bootstrap-trace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_url: entryUrl }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert(data.error || 'Bootstrap trace failed');
+        await refreshBootstrapStatus();
+        return;
+      }
+      setBootstrapLifecycle(data);
+      window.postMessage({
+        type: '__mighty_dashboard__',
+        action: 'run_bootstrap_trace',
+        entry_url: entryUrl,
+        trace_run_id: data.trace_run_id,
+      }, '*');
+      bootstrapPollTimer = bootstrapPollTimer || setInterval(refreshBootstrapStatus, 2000);
+    } catch (e) {
+      alert('Bootstrap trace failed: ' + e.message);
+      await refreshBootstrapStatus();
+    }
+  }
+
+  bootstrapButtons.forEach(btn => {
+    btn.addEventListener('click', () => runBootstrapTrace(btn.dataset.entryUrl));
+  });
+
   refreshStatus();
+  refreshBootstrapStatus();
 })();
 </script>"""
 
@@ -1588,6 +1775,7 @@ def render_provider_access_probe_page(
         '<p class="muted" style="font-size:11px">JSON API: '
         '<code>/api/admin/provider-access-probe</code></p>'
         f"{run_controls}"
+        f"{_probe_bootstrap_trace_section(bootstrap_traces, bootstrap_entry_urls)}"
         f"{_probe_deep_inspect_section(rows)}"
         '<div class="card"><table><thead><tr>'
         "<th>Provider</th><th>Status</th><th>Auth state</th><th>Final URL</th>"

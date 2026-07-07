@@ -1,8 +1,14 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.1-amex-auth-network-trace';
+const MIGHTY_EXT_VERSION = '1.4.3-amex-bootstrap-trace';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
+const AMEX_BOOTSTRAP_TRACE_MS = 20000;
+const AMEX_BOOTSTRAP_ENTRY_URLS = [
+  'https://www.americanexpress.com/en-us/account/',
+  'https://www.americanexpress.com/en-us/account/login',
+  'https://global.americanexpress.com/login',
+];
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -1216,6 +1222,15 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     sendResponse({ ok: true });
     return false;
   }
+  if (msg.action === 'run_bootstrap_trace') {
+    (async () => {
+      const { api_key } = await chrome.storage.local.get('api_key');
+      if (!api_key || !msg.entry_url) return;
+      await runAmexBootstrapTrace(api_key, msg.trace_run_id || null, msg.entry_url);
+    })().catch(console.error);
+    sendResponse({ ok: true });
+    return false;
+  }
   if (msg.action === 'get_status') {
     chrome.storage.local.get(['last_sync', 'sync_status', 'api_key', 'captured_accounts'], sendResponse);
     return true;
@@ -2166,6 +2181,8 @@ let _automaticProbesEnabled = true;
 let _automaticProbesConfigFetchedAt = 0;
 let _manualProbeInProgress = false;
 let _lastProcessedManualRunId = null;
+let _bootstrapTraceInProgress = false;
+let _lastProcessedBootstrapTraceId = null;
 let _manualProbePollTimer = null;
 
 async function fetchAutomaticProbesEnabled(apiKey) {
@@ -2586,13 +2603,296 @@ async function runProviderAccessProbeInTab(tabId, provider, probeMeta = {}) {
   }
 }
 
+async function _postBootstrapTrace(apiKey, payload) {
+  if (!apiKey || !payload?.trace_run_id) return null;
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/bootstrap-trace`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body: JSON.stringify({ ...payload, compared_at: new Date().toISOString() }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) {
+      console.log('[Mighty Probe] Amex bootstrap trace submitted', data);
+    } else {
+      console.warn('[Mighty Probe] bootstrap trace POST failed', resp.status, data);
+    }
+    return { ok: resp.ok, data };
+  } catch (e) {
+    console.warn('[Mighty Probe] bootstrap trace POST error:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+async function injectBootstrapTraceObservers(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      injectImmediately: true,
+      func: (observeMs) => {
+        if (window.__mightyBootstrapTraceInstalled) return;
+        window.__mightyBootstrapTraceInstalled = true;
+        const startedAt = Date.now();
+        const BOOTSTRAP_KEYWORD_RE = /bootstrap|session|login|auth|token|csrf|sso|identity|ReadUserSession|UpdateUserSession/i;
+        const SENSITIVE_PARAM_RE = /^(token|auth|session|key|secret|password|csrf|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|code|signature|sig)$/i;
+
+        function sanitizeUrl(rawUrl) {
+          try {
+            const u = new URL(rawUrl, location.href);
+            u.searchParams.forEach((_, name) => {
+              if (SENSITIVE_PARAM_RE.test(name)) u.searchParams.set(name, '[REDACTED]');
+            });
+            return u.origin + u.pathname + (u.search ? u.search : '');
+          } catch (_) {
+            return String(rawUrl || '').split('?')[0];
+          }
+        }
+
+        window.__mightyBootstrapTrace = {
+          started_at_ms: startedAt,
+          href_timeline: [],
+          history_events: [],
+          hash_changes: [],
+          bootstrap_requests: [],
+        };
+
+        function elapsedMs() {
+          return Date.now() - startedAt;
+        }
+
+        function recordHref(type) {
+          window.__mightyBootstrapTrace.href_timeline.push({
+            observed_at_ms: elapsedMs(),
+            href: sanitizeUrl(location.href),
+            hash: location.hash || '',
+            type,
+          });
+        }
+
+        function pushBootstrapRequest(entry) {
+          const url = sanitizeUrl(entry.url || '');
+          if (!BOOTSTRAP_KEYWORD_RE.test(url)) return;
+          if (window.__mightyBootstrapTrace.bootstrap_requests.length >= 150) return;
+          window.__mightyBootstrapTrace.bootstrap_requests.push({
+            url,
+            method: entry.method || null,
+            resource_type: entry.resource_type || entry.initiator_type || null,
+            initiator_type: entry.initiator_type || null,
+            status_code: entry.status_code ?? null,
+            start_time_ms: entry.start_time_ms ?? elapsedMs(),
+            duration_ms: entry.duration_ms ?? null,
+            redirect_count: entry.redirect_count ?? null,
+            response_header_names: entry.response_header_names || null,
+            cors_error: !!entry.cors_error,
+            network_error: !!entry.network_error,
+          });
+        }
+
+        recordHref('initial');
+
+        const origPush = history.pushState;
+        const origReplace = history.replaceState;
+        history.pushState = function pushStateTrace(state, title, url) {
+          window.__mightyBootstrapTrace.history_events.push({
+            observed_at_ms: elapsedMs(),
+            type: 'pushState',
+            href: sanitizeUrl(url ? new URL(url, location.href).href : location.href),
+            path: url ? String(url) : location.pathname,
+            hash: location.hash || '',
+            state_type: state === null ? 'null' : typeof state,
+          });
+          return origPush.apply(this, arguments);
+        };
+        history.replaceState = function replaceStateTrace(state, title, url) {
+          window.__mightyBootstrapTrace.history_events.push({
+            observed_at_ms: elapsedMs(),
+            type: 'replaceState',
+            href: sanitizeUrl(url ? new URL(url, location.href).href : location.href),
+            path: url ? String(url) : location.pathname,
+            hash: location.hash || '',
+            state_type: state === null ? 'null' : typeof state,
+          });
+          return origReplace.apply(this, arguments);
+        };
+
+        window.addEventListener('hashchange', () => {
+          window.__mightyBootstrapTrace.hash_changes.push({
+            observed_at_ms: elapsedMs(),
+            href: sanitizeUrl(location.href),
+            hash: location.hash || '',
+            type: 'hashchange',
+          });
+        });
+
+        const sampleTimer = setInterval(() => recordHref('sample'), 500);
+        setTimeout(() => clearInterval(sampleTimer), observeMs);
+
+        if (!window.__mightyBootstrapNetworkPatched) {
+          window.__mightyBootstrapNetworkPatched = true;
+          const origFetch = window.fetch;
+          if (typeof origFetch === 'function') {
+            window.fetch = function bootstrapFetch(input, init) {
+              const start = performance.now();
+              const method = (init && init.method) || 'GET';
+              const url = typeof input === 'string' ? input : (input && input.url) || '';
+              return origFetch.apply(this, arguments).then((response) => {
+                let headerNames = [];
+                try {
+                  headerNames = [...response.headers.keys()];
+                } catch (_) {}
+                pushBootstrapRequest({
+                  url,
+                  method,
+                  resource_type: 'fetch',
+                  initiator_type: 'fetch',
+                  status_code: response.status,
+                  start_time_ms: Math.round(start),
+                  duration_ms: Math.round(performance.now() - start),
+                  response_header_names: headerNames,
+                });
+                return response;
+              }).catch((err) => {
+                pushBootstrapRequest({
+                  url,
+                  method,
+                  resource_type: 'fetch',
+                  initiator_type: 'fetch',
+                  start_time_ms: Math.round(start),
+                  duration_ms: Math.round(performance.now() - start),
+                  network_error: true,
+                  cors_error: /cors/i.test(String(err?.message || err)),
+                });
+                throw err;
+              });
+            };
+          }
+        }
+
+        try {
+          const po = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              const url = entry.name || '';
+              if (!/^https?:/i.test(url)) continue;
+              pushBootstrapRequest({
+                url,
+                resource_type: entry.initiatorType || 'resource',
+                initiator_type: entry.initiatorType || null,
+                status_code: typeof entry.responseStatus === 'number' ? entry.responseStatus : null,
+                start_time_ms: Math.round(entry.startTime || 0),
+                duration_ms: Math.round(entry.duration || 0),
+                redirect_count: typeof entry.redirectCount === 'number' ? entry.redirectCount : null,
+              });
+            }
+          });
+          po.observe({ type: 'resource', buffered: true });
+        } catch (_) {}
+      },
+      args: [AMEX_BOOTSTRAP_TRACE_MS],
+    });
+    return true;
+  } catch (e) {
+    console.warn('[Mighty Probe] bootstrap trace observers failed:', e.message);
+    return false;
+  }
+}
+
+async function runAmexBootstrapTrace(apiKey, traceRunId, entryUrl) {
+  if (_bootstrapTraceInProgress || _manualProbeInProgress) {
+    console.log('[Mighty Probe] bootstrap trace skipped — another diagnostic in progress');
+    return;
+  }
+  if (!AMEX_BOOTSTRAP_ENTRY_URLS.includes(entryUrl)) {
+    console.warn('[Mighty Probe] unsupported bootstrap entry URL:', entryUrl);
+    return;
+  }
+  if (traceRunId && traceRunId === _lastProcessedBootstrapTraceId) return;
+
+  _bootstrapTraceInProgress = true;
+  const wallStart = Date.now();
+  const navigationEvents = [];
+  let tab;
+  const onTabUpdated = (tabId, changeInfo) => {
+    if (!tab?.id || tabId !== tab.id) return;
+    if (changeInfo.url) {
+      navigationEvents.push({
+        observed_at_ms: Date.now() - wallStart,
+        url: changeInfo.url,
+        status: changeInfo.status || null,
+        transition_type: null,
+        source: 'tabs.onUpdated',
+      });
+    }
+  };
+  chrome.tabs.onUpdated.addListener(onTabUpdated);
+
+  console.log(`[Mighty Probe] Amex bootstrap trace entry=${entryUrl} (${traceRunId || 'no-id'})`);
+  try {
+    tab = await createProviderTab(entryUrl, { active: false }, MANUAL_PROBE_TAB_REASON);
+    if (!tab?.id) {
+      await _postBootstrapTrace(apiKey, {
+        trace_run_id: traceRunId,
+        entry_url: entryUrl,
+        error: 'tab_creation_blocked',
+      });
+      return;
+    }
+    navigationEvents.push({
+      observed_at_ms: 0,
+      url: entryUrl,
+      status: 'loading',
+      source: 'initial',
+    });
+    await injectBootstrapTraceObservers(tab.id);
+    await waitForProbePageStability(tab.id, { observationMs: AMEX_BOOTSTRAP_TRACE_MS });
+    const [pageR] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: collectBootstrapTraceInPage,
+      args: [entryUrl],
+    });
+    const pageTrace = pageR?.result || {};
+    const allNavEvents = [
+      ...navigationEvents,
+      ...(pageTrace.navigation_events || []),
+    ].sort((a, b) => (a.observed_at_ms || 0) - (b.observed_at_ms || 0));
+
+    await _postBootstrapTrace(apiKey, {
+      trace_run_id: traceRunId,
+      entry_url: entryUrl,
+      observation_ms: AMEX_BOOTSTRAP_TRACE_MS,
+      navigation_timeline: {
+        initial_url: entryUrl,
+        final_url: pageTrace.final_url || tab.url || entryUrl,
+        events: allNavEvents,
+      },
+      location_history: pageTrace.location_history,
+      bootstrap_requests: pageTrace.bootstrap_requests,
+      first_401_at_ms: pageTrace.first_401_at_ms,
+      first_401_url: pageTrace.first_401_url,
+      page_title: pageTrace.page_title,
+      visible_text_preview: pageTrace.visible_text_preview,
+    });
+    if (traceRunId) _lastProcessedBootstrapTraceId = traceRunId;
+  } catch (e) {
+    await _postBootstrapTrace(apiKey, {
+      trace_run_id: traceRunId,
+      entry_url: entryUrl,
+      error: e.message,
+    });
+    if (traceRunId) _lastProcessedBootstrapTraceId = traceRunId;
+  } finally {
+    chrome.tabs.onUpdated.removeListener(onTabUpdated);
+    if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+    _bootstrapTraceInProgress = false;
+  }
+}
+
 async function waitForProbePageStability(tabId, { observationMs = 5000 } = {}) {
   await waitForTabLoad(tabId, 25_000);
   await sleep(observationMs);
 }
 
 async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
-  if (_manualProbeInProgress) {
+  if (_manualProbeInProgress || _bootstrapTraceInProgress) {
     console.log('[Mighty Probe] manual probe already in progress — skipping');
     return;
   }
@@ -2663,18 +2963,29 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
 }
 
 async function pollManualProbeTrigger() {
-  if (_manualProbeInProgress) return;
+  if (_manualProbeInProgress || _bootstrapTraceInProgress) return;
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/manual`, {
       headers: { 'X-Mighty-Key': api_key },
     });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    if (data.lifecycle !== 'running' || !data.provider || !data.manual_run_id) return;
-    if (data.manual_run_id === _lastProcessedManualRunId) return;
-    await runManualProviderAccessProbe(api_key, data.provider, data.manual_run_id);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.lifecycle === 'running' && data.provider && data.manual_run_id
+          && data.manual_run_id !== _lastProcessedManualRunId) {
+        await runManualProviderAccessProbe(api_key, data.provider, data.manual_run_id);
+        return;
+      }
+    }
+    const btResp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/bootstrap-trace`, {
+      headers: { 'X-Mighty-Key': api_key },
+    });
+    if (!btResp.ok) return;
+    const btData = await btResp.json();
+    if (btData.lifecycle !== 'running' || !btData.trace_run_id || !btData.entry_url) return;
+    if (btData.trace_run_id === _lastProcessedBootstrapTraceId) return;
+    await runAmexBootstrapTrace(api_key, btData.trace_run_id, btData.entry_url);
   } catch (e) {
     console.warn('[Mighty Probe] manual poll failed:', e.message);
   }
@@ -4717,6 +5028,70 @@ function extractAmexMembershipRewardsPage() {
     || sample.includes('recent activity');
   console.log(LOG, loggedIn ? 'balance not found' : 'not logged in');
   return { loggedIn, value: null };
+}
+
+// Amex bootstrap trace collector (20s manual diagnostic)
+function collectBootstrapTraceInPage(entryUrl) {
+  const trace = window.__mightyBootstrapTrace || {};
+  const BOOTSTRAP_KEYWORD_RE = /bootstrap|session|login|auth|token|csrf|sso|identity|ReadUserSession|UpdateUserSession/i;
+  const SENSITIVE_PARAM_RE = /^(token|auth|session|key|secret|password|csrf|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|code|signature|sig)$/i;
+
+  function sanitizeUrl(rawUrl) {
+    try {
+      const u = new URL(rawUrl, location.href);
+      u.searchParams.forEach((_, name) => {
+        if (SENSITIVE_PARAM_RE.test(name)) u.searchParams.set(name, '[REDACTED]');
+      });
+      return u.origin + u.pathname + (u.search ? u.search : '');
+    } catch (_) {
+      return String(rawUrl || '').split('?')[0];
+    }
+  }
+
+  const requests = Array.isArray(trace.bootstrap_requests) ? [...trace.bootstrap_requests] : [];
+  const seen = new Set();
+  for (const entry of performance.getEntriesByType('resource') || []) {
+    const url = entry.name || '';
+    if (!/^https?:/i.test(url) || !BOOTSTRAP_KEYWORD_RE.test(url)) continue;
+    const key = `${url}|${Math.round(entry.startTime || 0)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    requests.push({
+      url: sanitizeUrl(url),
+      resource_type: entry.initiatorType || 'resource',
+      initiator_type: entry.initiatorType || null,
+      status_code: typeof entry.responseStatus === 'number' ? entry.responseStatus : null,
+      start_time_ms: Math.round(entry.startTime || 0),
+      duration_ms: Math.round(entry.duration || 0),
+      redirect_count: typeof entry.redirectCount === 'number' ? entry.redirectCount : null,
+    });
+  }
+
+  requests.sort((a, b) => (a.start_time_ms || 0) - (b.start_time_ms || 0));
+
+  let first401 = null;
+  for (const req of requests) {
+    if (req.status_code === 401) {
+      first401 = req;
+      break;
+    }
+  }
+
+  const bodyText = document.body?.innerText || '';
+  return {
+    final_url: location.href,
+    page_title: document.title || '',
+    visible_text_preview: bodyText.slice(0, 500),
+    location_history: {
+      href_timeline: trace.href_timeline || [],
+      history_events: trace.history_events || [],
+      hash_changes: trace.hash_changes || [],
+    },
+    bootstrap_requests: requests.slice(0, 100),
+    first_401_at_ms: first401 ? first401.start_time_ms : null,
+    first_401_url: first401 ? first401.url : null,
+    navigation_events: [],
+  };
 }
 
 // Deep inspect diagnostics — manual Amex probes (Phase 1 account access reliability)

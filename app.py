@@ -823,9 +823,10 @@ def init_db():
         except Exception:
             pass
         try:
-            from mighty.provider_access_probe import ensure_probe_tables, ensure_manual_probe_tables
+            from mighty.provider_access_probe import ensure_probe_tables, ensure_manual_probe_tables, ensure_bootstrap_trace_tables
             ensure_probe_tables(db)
             ensure_manual_probe_tables(db)
+            ensure_bootstrap_trace_tables(db)
         except Exception:
             pass
 
@@ -21151,6 +21152,8 @@ def admin_provider_access_probe_page():
         merge_probe_summaries,
         get_latest_probe_per_provider,
         get_manual_probe_state,
+        get_latest_bootstrap_traces_by_entry,
+        AMEX_BOOTSTRAP_ENTRY_URLS,
         is_automatic_probe_disabled,
     )
 
@@ -21158,10 +21161,13 @@ def admin_provider_access_probe_page():
     latest = get_latest_probe_per_provider(get_db(), uid)
     rows = merge_probe_summaries(latest, sorted(PROBE_PROVIDERS))
     manual_state = get_manual_probe_state(get_db(), uid)
+    bootstrap_traces = get_latest_bootstrap_traces_by_entry(get_db(), uid)
     return _admin_debug.render_provider_access_probe_page(
         rows,
         manual_state=manual_state,
         automatic_probes_disabled=is_automatic_probe_disabled(),
+        bootstrap_traces=bootstrap_traces,
+        bootstrap_entry_urls=list(AMEX_BOOTSTRAP_ENTRY_URLS),
     )
 
 
@@ -21288,6 +21294,126 @@ def api_extension_provider_access_probe():
         )
 
     return jsonify(row_to_json(result))
+
+
+@app.route("/api/admin/provider-access-probe/bootstrap-trace", methods=["POST"])
+@require_admin
+def api_admin_provider_access_probe_bootstrap_trace():
+    from mighty.provider_access_probe import (
+        AMEX_BOOTSTRAP_ENTRY_URLS,
+        ConcurrentProbeError,
+        start_bootstrap_trace,
+        bootstrap_trace_state_to_json,
+    )
+
+    uid = session["user_id"]
+    body = request.get_json(silent=True) or {}
+    entry_url = (body.get("entry_url") or AMEX_BOOTSTRAP_ENTRY_URLS[0]).strip()
+    try:
+        state = start_bootstrap_trace(get_db(), uid, entry_url)
+    except ConcurrentProbeError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(bootstrap_trace_state_to_json(state))
+
+
+@app.route("/api/admin/provider-access-probe/bootstrap-trace-status")
+@require_admin
+def api_admin_provider_access_probe_bootstrap_trace_status():
+    from mighty.provider_access_probe import (
+        get_latest_bootstrap_traces_by_entry,
+        bootstrap_trace_state_to_json,
+        PROBE_LIFECYCLE_IDLE,
+    )
+
+    uid = session["user_id"]
+    traces = get_latest_bootstrap_traces_by_entry(get_db(), uid)
+    running = next((t for t in traces.values() if t.get("lifecycle") == "running"), None)
+    if running:
+        return jsonify(bootstrap_trace_state_to_json(running))
+    latest = max(traces.values(), key=lambda t: t.get("requested_at") or "", default=None)
+    if latest:
+        return jsonify(bootstrap_trace_state_to_json(latest))
+    return jsonify(bootstrap_trace_state_to_json({"lifecycle": PROBE_LIFECYCLE_IDLE}))
+
+
+@app.route("/api/extension/provider-access-probe/bootstrap-trace")
+def api_extension_provider_access_probe_bootstrap_trace_pending():
+    from mighty.provider_access_probe import (
+        get_pending_bootstrap_trace,
+        bootstrap_trace_state_to_json,
+        PROBE_LIFECYCLE_IDLE,
+    )
+
+    user = api_user()[0]
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+    pending = get_pending_bootstrap_trace(get_db(), user["id"])
+    if not pending:
+        return jsonify(bootstrap_trace_state_to_json({"lifecycle": PROBE_LIFECYCLE_IDLE}))
+    return jsonify(bootstrap_trace_state_to_json(pending))
+
+
+@app.route("/api/extension/provider-access-probe/bootstrap-trace", methods=["POST"])
+def api_extension_provider_access_probe_bootstrap_trace_submit():
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+
+    trace_run_id = (body.get("trace_run_id") or "").strip()
+    if not trace_run_id:
+        return jsonify({"error": "trace_run_id required"}), 400
+
+    from mighty.provider_access_probe import (
+        PROBE_LIFECYCLE_DONE,
+        PROBE_LIFECYCLE_ERROR,
+        build_amex_bootstrap_trace,
+        complete_bootstrap_trace,
+        bootstrap_trace_state_to_json,
+    )
+
+    if body.get("error"):
+        complete_bootstrap_trace(
+            get_db(),
+            user["id"],
+            trace_run_id,
+            lifecycle=PROBE_LIFECYCLE_ERROR,
+            error_message=str(body.get("error")),
+        )
+        return jsonify(bootstrap_trace_state_to_json({
+            "trace_run_id": trace_run_id,
+            "entry_url": body.get("entry_url"),
+            "lifecycle": PROBE_LIFECYCLE_ERROR,
+            "error_message": str(body.get("error")),
+        }))
+
+    try:
+        trace = build_amex_bootstrap_trace(body)
+    except Exception as exc:
+        complete_bootstrap_trace(
+            get_db(),
+            user["id"],
+            trace_run_id,
+            lifecycle=PROBE_LIFECYCLE_ERROR,
+            error_message=str(exc),
+        )
+        return jsonify({"error": str(exc)}), 400
+
+    complete_bootstrap_trace(
+        get_db(),
+        user["id"],
+        trace_run_id,
+        lifecycle=PROBE_LIFECYCLE_DONE,
+        trace=trace,
+    )
+    return jsonify(bootstrap_trace_state_to_json({
+        "trace_run_id": trace_run_id,
+        "entry_url": trace.get("entry_url"),
+        "lifecycle": PROBE_LIFECYCLE_DONE,
+        "trace": trace,
+        "diagnostic_summary": trace.get("diagnostic_summary"),
+    }))
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────

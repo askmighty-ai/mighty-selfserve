@@ -47,6 +47,15 @@ from mighty.provider_access_probe import (
     ensure_probe_tables,
     get_latest_probe_per_provider,
     start_manual_probe,
+    AMEX_BOOTSTRAP_ENTRY_URLS,
+    sanitize_bootstrap_trace,
+    build_amex_bootstrap_trace,
+    compute_bootstrap_diagnostic,
+    start_bootstrap_trace,
+    complete_bootstrap_trace,
+    get_latest_bootstrap_traces_by_entry,
+    get_pending_bootstrap_trace,
+    bootstrap_trace_state_to_json,
 )
 
 
@@ -903,3 +912,127 @@ class TestAutomaticProbeDisabled:
         monkeypatch.delenv("MIGHTY_ADMIN_TEST", raising=False)
         monkeypatch.delenv("DISABLE_AUTOMATIC_PROVIDER_PROBES", raising=False)
         assert is_automatic_probe_disabled() is False
+
+
+class TestAmexBootstrapTrace:
+    def test_bootstrap_trace_stores_ordered_navigation_events(self):
+        raw = {
+            "entry_url": AMEX_BOOTSTRAP_ENTRY_URLS[0],
+            "navigation_timeline": {
+                "initial_url": AMEX_BOOTSTRAP_ENTRY_URLS[0],
+                "final_url": "https://www.americanexpress.com/en-us/account/",
+                "events": [
+                    {"observed_at_ms": 200, "url": "https://www.americanexpress.com/en-us/account/", "source": "tabs.onUpdated"},
+                    {"observed_at_ms": 0, "url": AMEX_BOOTSTRAP_ENTRY_URLS[0], "source": "initial"},
+                ],
+            },
+            "bootstrap_requests": [
+                {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401, "start_time_ms": 800},
+            ],
+        }
+        result = sanitize_bootstrap_trace(raw)
+        events = result["navigation_timeline"]["events"]
+        assert events[0]["observed_at_ms"] == 0
+        assert events[1]["observed_at_ms"] == 200
+        assert result["bootstrap_requests"][0]["status_code"] == 401
+
+    def test_sensitive_query_params_are_redacted(self):
+        url = sanitize_probe_url(
+            "https://www.americanexpress.com/login?token=secret&session=abc&foo=bar"
+        )
+        assert "secret" not in url
+        assert "abc" not in url
+        assert "REDACTED" in url
+        assert "foo=bar" in url
+
+    def test_response_header_values_not_stored(self):
+        raw = {
+            "bootstrap_requests": [{
+                "url": "https://functions.americanexpress.com/ReadUserSession.v1",
+                "response_header_names": ["set-cookie", "authorization"],
+                "response_headers": {"set-cookie": "secret=1"},
+                "authorization": "Bearer secret",
+            }],
+        }
+        result = sanitize_bootstrap_trace(raw)
+        req = result["bootstrap_requests"][0]
+        assert "response_headers" not in req
+        assert "authorization" not in req
+        assert req["response_header_names"] == ["set-cookie", "authorization"]
+
+    def test_multiple_entry_urls_tracked_separately(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "bootstrap.db"))
+        db.row_factory = sqlite3.Row
+        entry_a, entry_b = AMEX_BOOTSTRAP_ENTRY_URLS[0], AMEX_BOOTSTRAP_ENTRY_URLS[1]
+        state_a = start_bootstrap_trace(db, "user-1", entry_a)
+        complete_bootstrap_trace(
+            db,
+            "user-1",
+            state_a["trace_run_id"],
+            lifecycle=PROBE_LIFECYCLE_DONE,
+            trace=build_amex_bootstrap_trace({
+                "entry_url": entry_a,
+                "navigation_timeline": {"initial_url": entry_a, "final_url": entry_a, "events": []},
+            }),
+        )
+        state_b = start_bootstrap_trace(db, "user-1", entry_b)
+        complete_bootstrap_trace(
+            db,
+            "user-1",
+            state_b["trace_run_id"],
+            lifecycle=PROBE_LIFECYCLE_DONE,
+            trace=build_amex_bootstrap_trace({
+                "entry_url": entry_b,
+                "navigation_timeline": {"initial_url": entry_b, "final_url": entry_b + "done", "events": []},
+            }),
+        )
+        latest = get_latest_bootstrap_traces_by_entry(db, "user-1")
+        assert len(latest) == 2
+        assert latest[entry_a]["trace"]["navigation_timeline"]["final_url"] == entry_a
+        assert latest[entry_b]["trace"]["navigation_timeline"]["final_url"] == entry_b + "done"
+
+    def test_compute_bootstrap_diagnostic_first_401(self):
+        trace = {
+            "navigation_timeline": {
+                "initial_url": AMEX_BOOTSTRAP_ENTRY_URLS[0],
+                "final_url": AMEX_BOOTSTRAP_ENTRY_URLS[0],
+            },
+            "bootstrap_requests": [
+                {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401, "start_time_ms": 900},
+            ],
+            "first_401_at_ms": 900,
+            "first_401_url": "https://functions.americanexpress.com/ReadUserSession.v1",
+        }
+        msg = compute_bootstrap_diagnostic(trace)
+        assert "401" in msg
+        assert "ReadUserSession" in msg
+
+    def test_concurrent_bootstrap_trace_rejected(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "bootstrap2.db"))
+        db.row_factory = sqlite3.Row
+        start_bootstrap_trace(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[0])
+        with pytest.raises(ConcurrentProbeError):
+            start_bootstrap_trace(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[1])
+
+    def test_bootstrap_trace_blocked_when_manual_probe_running(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "bootstrap3.db"))
+        db.row_factory = sqlite3.Row
+        start_manual_probe(db, "user-1", "amex")
+        with pytest.raises(ConcurrentProbeError):
+            start_bootstrap_trace(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[0])
+
+    def test_get_pending_bootstrap_trace(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "bootstrap4.db"))
+        db.row_factory = sqlite3.Row
+        state = start_bootstrap_trace(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[0])
+        pending = get_pending_bootstrap_trace(db, "user-1")
+        assert pending["trace_run_id"] == state["trace_run_id"]
+        assert pending["entry_url"] == AMEX_BOOTSTRAP_ENTRY_URLS[0]

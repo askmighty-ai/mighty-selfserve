@@ -397,3 +397,86 @@ def test_admin_json_endpoint(client, monkeypatch):
     assert providers["delta"]["status"] == "signed_in_data_seen"
     assert providers["delta"]["auth_state"] == "private_data_visible"
     assert providers["amex"]["status"] == "not_started"
+
+
+def test_admin_page_shows_bootstrap_trace_section(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAIL", client.email)
+    r = client.get("/admin/provider-access-probe")
+    assert r.status_code == 200
+    text = r.data.decode("utf-8")
+    assert "Amex Bootstrap Trace" in text
+    assert "bootstrap-trace-btn" in text
+    assert "https://www.americanexpress.com/en-us/account/" in text
+
+
+def test_admin_bootstrap_trace_start_and_extension_poll(client, admin_client):
+    start = admin_client.post(
+        "/api/admin/provider-access-probe/bootstrap-trace",
+        json={"entry_url": "https://www.americanexpress.com/en-us/account/"},
+    )
+    assert start.status_code == 200
+    body = start.get_json()
+    trace_run_id = body["trace_run_id"]
+    assert body["lifecycle"] == "running"
+
+    pending = client.get(
+        "/api/extension/provider-access-probe/bootstrap-trace",
+        headers={"X-Mighty-Key": client.api_key},
+    )
+    assert pending.status_code == 200
+    assert pending.get_json()["trace_run_id"] == trace_run_id
+
+
+def test_extension_bootstrap_trace_submit(client, admin_client):
+    start = admin_client.post(
+        "/api/admin/provider-access-probe/bootstrap-trace",
+        json={"entry_url": "https://www.americanexpress.com/en-us/account/login"},
+    )
+    trace_run_id = start.get_json()["trace_run_id"]
+
+    submit = client.post(
+        "/api/extension/provider-access-probe/bootstrap-trace",
+        headers={"X-Mighty-Key": client.api_key},
+        json={
+            "trace_run_id": trace_run_id,
+            "entry_url": "https://www.americanexpress.com/en-us/account/login",
+            "navigation_timeline": {
+                "initial_url": "https://www.americanexpress.com/en-us/account/login",
+                "final_url": "https://www.americanexpress.com/en-us/account/login",
+                "events": [
+                    {"observed_at_ms": 0, "url": "https://www.americanexpress.com/en-us/account/login", "source": "initial"},
+                ],
+            },
+            "bootstrap_requests": [
+                {
+                    "url": "https://functions.americanexpress.com/ReadUserSession.v1?token=secret",
+                    "status_code": 401,
+                    "start_time_ms": 500,
+                    "response_header_names": ["content-type"],
+                },
+            ],
+            "first_401_at_ms": 500,
+            "first_401_url": "https://functions.americanexpress.com/ReadUserSession.v1?token=secret",
+        },
+    )
+    assert submit.status_code == 200
+    data = submit.get_json()
+    assert data["lifecycle"] == "done"
+    assert "401" in (data.get("diagnostic_summary") or "")
+    assert "secret" not in str(data.get("trace"))
+
+    status = admin_client.get("/api/admin/provider-access-probe/bootstrap-trace-status")
+    assert status.status_code == 200
+    assert status.get_json()["lifecycle"] == "done"
+
+
+def test_bootstrap_trace_concurrent_rejected(admin_client):
+    admin_client.post(
+        "/api/admin/provider-access-probe/bootstrap-trace",
+        json={"entry_url": "https://www.americanexpress.com/en-us/account/"},
+    )
+    conflict = admin_client.post(
+        "/api/admin/provider-access-probe/bootstrap-trace",
+        json={"entry_url": "https://global.americanexpress.com/login"},
+    )
+    assert conflict.status_code == 409
