@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.3.7-manual-probe" in src
+    assert "1.3.8-manual-probe-gate" in src
     assert "background.js loaded — version" in src
 
 
@@ -22,32 +22,52 @@ def test_startup_uses_run_sync_if_allowed_not_raw_run_sync():
     assert "setTimeout(() => runSyncIfAllowed('browser-startup')" in src
     assert "runSyncIfAllowed('sync-alarm')" in src
     assert "runSyncIfAllowed('sync_now')" in src
-    # install-reload must not call runSync() directly
+    assert "runSyncIfAllowed('extension-setup')" in src
     assert "setTimeout(() => runSync()," not in src
+    # runSync may only be invoked from runSyncIfAllowed
+    assert src.count("return runSync();") == 1
 
 
-def test_manual_probe_mode_defers_sync_and_starts_polling():
+def test_config_disabled_log_message():
     src = _read_background_js()
-    assert "shouldDeferAutomaticProviderNavigation" in src
-    assert "automatic_probes_enabled=false" in src
-    assert "ensureManualProbePolling()" in src
-    assert "runSync: manual-probe mode — aborting (no provider tabs)" in src
+    assert (
+        "[Mighty] automatic navigation disabled by server config — "
+        "skipping automatic probes and sync"
+    ) in src
 
 
-def test_automatic_probe_tab_uses_reason_log():
+def test_tab_wrappers_block_when_navigation_disabled():
     src = _read_background_js()
-    assert "createProviderTab(entry, { active: false }, 'automatic_probe')" in src
-    assert "createProviderTab(entry, { active: false }, 'manual_probe')" in src
-    assert "logProviderTabAction" in src
-    assert "reason=manual_probe" not in src  # reason is passed as arg, logged dynamically
+    assert "_providerTabBlocked" in src
+    assert "MANUAL_PROBE_TAB_REASON" in src
+    assert "_logAutomaticNavigationDisabled(`tab create reason=${reason}`)" in src
+    assert "_logAutomaticNavigationDisabled(`tab update reason=${reason}`)" in src
 
 
-def test_extraction_tab_uses_reason_log():
+def test_automatic_probe_hard_guard():
     src = _read_background_js()
-    assert "createProviderTab(ACCOUNT_ENTRY.amex, { active: false }, 'extraction')" in src
+    assert "_logAutomaticNavigationDisabled(`automatic_probe ${provider}`)" in src
+    assert "_logAutomaticNavigationDisabled('runProviderAccessProbes')" in src
 
 
-def test_run_provider_access_probes_respects_server_config():
+def test_sync_and_discovery_hard_guards():
     src = _read_background_js()
-    assert "fetchAutomaticProbesEnabled(apiKey)" in src
-    assert "automatic probes disabled — manual only" in src
+    assert "_logAutomaticNavigationDisabled('runSync')" in src
+    assert "_logAutomaticNavigationDisabled(`runSyncIfAllowed trigger=${trigger}`)" in src
+    assert "_logAutomaticNavigationDisabled(`crawlAccount ${account.source}`)" in src
+    assert "_logAutomaticNavigationDisabled(`syncSingleAccount ${source}`)" in src
+    assert "_logAutomaticNavigationDisabled('runAmexExtraction')" in src
+
+
+def test_manual_probe_exempt_from_tab_block():
+    src = _read_background_js()
+    assert (
+        "createProviderTab(entry, { active: false }, MANUAL_PROBE_TAB_REASON)" in src
+    )
+    assert "if (reason === MANUAL_PROBE_TAB_REASON) return false;" in src
+
+
+def test_prefetch_config_on_startup():
+    src = _read_background_js()
+    assert "prefetchAutomaticProbesConfig()" in src
+    assert "server config: automatic_probes_enabled=" in src

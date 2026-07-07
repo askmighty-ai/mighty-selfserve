@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.3.7-manual-probe';
+const MIGHTY_EXT_VERSION = '1.3.8-manual-probe-gate';
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -54,21 +54,51 @@ const _SKIP_PATH_RE = /\/(book|search|flight-search|find-flights|deals|shop|cart
 
 // ── Provider tab instrumentation (Phase 1A.5) ─────────────────────────────────
 
+const MANUAL_PROBE_TAB_REASON = 'manual_probe';
+
 function logProviderTabAction(action, url, reason, extra = {}) {
   console.log(`[Mighty Tab] ${action} reason=${reason} url=${url || '(none)'}`, extra);
 }
 
+function _logAutomaticNavigationDisabled(context) {
+  console.log(
+    '[Mighty] automatic navigation disabled by server config — skipping automatic probes and sync' +
+    (context ? ` (${context})` : '')
+  );
+}
+
+async function _providerTabBlocked(apiKey, reason) {
+  if (reason === MANUAL_PROBE_TAB_REASON) return false;
+  if (!apiKey) return false;
+  return shouldDeferAutomaticProviderNavigation(apiKey);
+}
+
 async function createProviderTab(url, opts, reason) {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (await _providerTabBlocked(api_key, reason)) {
+    _logAutomaticNavigationDisabled(`tab create reason=${reason}`);
+    return null;
+  }
   logProviderTabAction('create', url, reason, opts || {});
   return chrome.tabs.create({ url, ...(opts || {}) });
 }
 
 async function updateProviderTab(tabId, opts, reason) {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (await _providerTabBlocked(api_key, reason)) {
+    _logAutomaticNavigationDisabled(`tab update reason=${reason}`);
+    return null;
+  }
   logProviderTabAction('update', opts?.url || '(no url change)', reason, { tabId, ...(opts || {}) });
   return chrome.tabs.update(tabId, opts || {});
 }
 
 async function createProviderWindow(opts, reason) {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (await _providerTabBlocked(api_key, reason)) {
+    _logAutomaticNavigationDisabled(`window create reason=${reason}`);
+    return null;
+  }
   logProviderTabAction('window.create', opts?.url || '(no url)', reason, opts || {});
   return chrome.windows.create(opts || {});
 }
@@ -1872,6 +1902,10 @@ const _postLoginSyncedAt = {};
 
 /** Sync a single account by source key after a successful re-login. */
 async function syncSingleAccount(source, apiKey) {
+  if (await shouldDeferAutomaticProviderNavigation(apiKey)) {
+    _logAutomaticNavigationDisabled(`syncSingleAccount ${source}`);
+    return;
+  }
   const now = Date.now();
   if (_postLoginSyncedAt[source] && now - _postLoginSyncedAt[source] < 300_000) {
     console.log(`[Mighty] Post-login sync for ${source} debounced — already ran within 5 min`);
@@ -1973,6 +2007,10 @@ async function extractAmexRewardsInTab(tabId, apiKey) {
 
 async function runAmexExtraction(apiKey, accounts) {
   if (!apiKey) return;
+  if (await shouldDeferAutomaticProviderNavigation(apiKey)) {
+    _logAutomaticNavigationDisabled('runAmexExtraction');
+    return;
+  }
   const amex = accounts?.find(a => a.source === 'amex');
   if (!amex) {
     console.log('[Mighty Amex] no amex account configured — skip extraction');
@@ -2092,6 +2130,7 @@ async function _postAmexConnected(apiKey) {
 /** Update provider connection state via the extension adapter (session probe). */
 async function probeAmexConnectionState(apiKey, accounts) {
   if (!apiKey || !Array.isArray(accounts)) return;
+  const navigationBlocked = await shouldDeferAutomaticProviderNavigation(apiKey);
   const amex = accounts.find(a => a.source === 'amex');
   if (!amex) return;
 
@@ -2100,7 +2139,7 @@ async function probeAmexConnectionState(apiKey, accounts) {
 
   if (status === 'connected') {
     if (!loggedIn) await _postAmexNeedsLogin(apiKey);
-    else if (!amex.is_synced) await runAmexExtraction(apiKey, accounts);
+    else if (!amex.is_synced && !navigationBlocked) await runAmexExtraction(apiKey, accounts);
     return;
   }
 
@@ -2109,7 +2148,7 @@ async function probeAmexConnectionState(apiKey, accounts) {
   if (loggedIn) {
     await _postAmexConnected(apiKey);
     const refreshed = await _fetchExtensionAccounts(apiKey);
-    await runAmexExtraction(apiKey, refreshed);
+    if (!navigationBlocked) await runAmexExtraction(apiKey, refreshed);
   } else if (status === 'waiting_for_extension') {
     await _postAmexNeedsLogin(apiKey);
   }
@@ -2140,12 +2179,24 @@ async function fetchAutomaticProbesEnabled(apiKey) {
       const data = await resp.json();
       _automaticProbesEnabled = !!data.automatic_probes_enabled;
       _automaticProbesConfigFetchedAt = now;
+      console.log(`[Mighty] server config: automatic_probes_enabled=${_automaticProbesEnabled}`);
+      if (!_automaticProbesEnabled) {
+        _logAutomaticNavigationDisabled('config fetch');
+        ensureManualProbePolling();
+      }
     }
   } catch (e) {
     console.warn('[Mighty Probe] config fetch failed:', e.message);
   }
   return _automaticProbesEnabled;
 }
+
+function prefetchAutomaticProbesConfig() {
+  chrome.storage.local.get('api_key').then(({ api_key }) => {
+    if (api_key) fetchAutomaticProbesEnabled(api_key).catch(() => {});
+  }).catch(() => {});
+}
+prefetchAutomaticProbesConfig();
 
 async function _postProviderAccessProbe(apiKey, payload, { skipDedup = false } = {}) {
   if (!apiKey || !payload?.provider) return null;
@@ -2216,7 +2267,11 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
   console.log(`[Mighty Probe] manual run for ${provider} (${manualRunId || 'no-id'})`);
   let tab;
   try {
-    tab = await createProviderTab(entry, { active: false }, 'manual_probe');
+    tab = await createProviderTab(entry, { active: false }, MANUAL_PROBE_TAB_REASON);
+    if (!tab?.id) {
+      console.warn('[Mighty Probe] manual tab creation blocked');
+      return;
+    }
     await waitForProbePageStability(tab.id);
     const result = await runProviderAccessProbeInTab(tab.id, provider);
     const payload = result || {
@@ -2273,6 +2328,11 @@ function ensureManualProbePolling() {
 }
 
 async function runProviderAccessProbe(apiKey, provider) {
+  if (!(await fetchAutomaticProbesEnabled(apiKey))) {
+    _logAutomaticNavigationDisabled(`automatic_probe ${provider}`);
+    return;
+  }
+
   const entry = ACCOUNT_ENTRY[provider];
   if (!entry) {
     console.log(`[Mighty Probe] no entry URL for ${provider}`);
@@ -2316,9 +2376,8 @@ async function runProviderAccessProbe(apiKey, provider) {
 
 async function runProviderAccessProbes(apiKey, accounts) {
   if (!apiKey || !Array.isArray(accounts)) return;
-  const autoEnabled = await fetchAutomaticProbesEnabled(apiKey);
-  if (!autoEnabled) {
-    console.log('[Mighty Probe] automatic probes disabled — manual only');
+  if (!(await fetchAutomaticProbesEnabled(apiKey))) {
+    _logAutomaticNavigationDisabled('runProviderAccessProbes');
     ensureManualProbePolling();
     return;
   }
@@ -2344,10 +2403,7 @@ async function runSyncIfAllowed(trigger) {
     return;
   }
   if (await shouldDeferAutomaticProviderNavigation(api_key)) {
-    console.log(
-      `[Mighty] ${trigger}: manual-probe mode (automatic_probes_enabled=false) — ` +
-      'deferring sync; no provider tabs will open'
-    );
+    _logAutomaticNavigationDisabled(`runSyncIfAllowed trigger=${trigger}`);
     ensureManualProbePolling();
     return;
   }
@@ -2355,6 +2411,17 @@ async function runSyncIfAllowed(trigger) {
 }
 
 async function runSync() {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) {
+    await setStatus('No API key — open the extension to set it up');
+    return;
+  }
+  if (await shouldDeferAutomaticProviderNavigation(api_key)) {
+    _logAutomaticNavigationDisabled('runSync');
+    ensureManualProbePolling();
+    return;
+  }
+
   // Prevent concurrent syncs — each would spawn its own tab set.
   // _syncInProgress is in-memory only and resets on MV3 service worker restart.
   // We also check a persistent storage lock so restarts don't trigger a second sync
@@ -2401,21 +2468,6 @@ async function runSync() {
       await chrome.storage.local.remove('_leaked_sync_tab');
     }
   } catch {}
-
-  const { api_key } = await chrome.storage.local.get('api_key');
-  if (!api_key) {
-    _syncInProgress = false;
-    await setStatus('No API key — open the extension to set it up');
-    return;
-  }
-
-  if (await shouldDeferAutomaticProviderNavigation(api_key)) {
-    console.log('[Mighty] runSync: manual-probe mode — aborting (no provider tabs)');
-    _syncInProgress = false;
-    try { await chrome.storage.local.remove('_sync_lock_ts'); } catch {}
-    ensureManualProbePolling();
-    return;
-  }
 
   // Record session start time — all accounts in this sync use the same timestamp
   // so the dashboard shows consistent "Synced X" labels across all cards.
@@ -2844,7 +2896,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           headers: { 'X-Mighty-Key': key },
         })
           .then(r => r.ok ? r.json() : [])
-          .then(accts => probeAmexConnectionState(key, accts))
+          .then(async (accts) => {
+            if (!(await shouldDeferAutomaticProviderNavigation(key))) {
+              await probeAmexConnectionState(key, accts);
+            }
+          })
           .catch(() => {});
         runSyncIfAllowed('extension-setup');
       });
@@ -3106,6 +3162,10 @@ function isSpaUrl(url) {
  * The SUPPLEMENT_WATCH onUpdated listener captures the page automatically.
  */
 async function syncAccountViaTab(apiKey, account, urls, syncSessionTime) {
+  if (await shouldDeferAutomaticProviderNavigation(apiKey)) {
+    _logAutomaticNavigationDisabled(`syncAccountViaTab ${account.source}`);
+    return;
+  }
   const source = account.source;
   const url = urls[0];
   console.log(`[Mighty] Tab-sync ${source}: opening tab → ${url}`);
@@ -3406,6 +3466,10 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
 }
 
 async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null, _lazySharedTab = null) {
+  if (await shouldDeferAutomaticProviderNavigation(apiKey)) {
+    _logAutomaticNavigationDisabled(`crawlAccount ${account.source}`);
+    return;
+  }
   const entry = account.entry_url || ACCOUNT_ENTRY[account.source];
   if (!entry) {
     console.log(`[Mighty] No entry URL for ${account.source} — skipping`);
