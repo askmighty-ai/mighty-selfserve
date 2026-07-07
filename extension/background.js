@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '2026-06-30-amex-mr'; // bump on each deploy to confirm reload
+const MIGHTY_EXT_VERSION = '1.3.7-manual-probe';
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
@@ -51,6 +51,27 @@ const MIGHTY_URL    = 'https://mighty-selfserve-production.up.railway.app';
 const SYNC_ALARM    = 'mighty-sync';
 const SYNC_INTERVAL = 60; // minutes (every 1 hour)
 const _SKIP_PATH_RE = /\/(book|search|flight-search|find-flights|deals|shop|cart|checkout|help|faq|legal|careers|about|press|sitemap|accessibility|sign-?up|register|login|sign-?in|privacy|cookie|terms|policy|contact|feedback|newsroom|investor)(\b|\/|$)/i;
+
+// ── Provider tab instrumentation (Phase 1A.5) ─────────────────────────────────
+
+function logProviderTabAction(action, url, reason, extra = {}) {
+  console.log(`[Mighty Tab] ${action} reason=${reason} url=${url || '(none)'}`, extra);
+}
+
+async function createProviderTab(url, opts, reason) {
+  logProviderTabAction('create', url, reason, opts || {});
+  return chrome.tabs.create({ url, ...(opts || {}) });
+}
+
+async function updateProviderTab(tabId, opts, reason) {
+  logProviderTabAction('update', opts?.url || '(no url change)', reason, { tabId, ...(opts || {}) });
+  return chrome.tabs.update(tabId, opts || {});
+}
+
+async function createProviderWindow(opts, reason) {
+  logProviderTabAction('window.create', opts?.url || '(no url)', reason, opts || {});
+  return chrome.windows.create(opts || {});
+}
 
 // ── Path registry helpers ─────────────────────────────────────────────────────
 
@@ -918,8 +939,8 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
   });
   console.log('[Mighty] Extension installed/reloaded, sync every', SYNC_INTERVAL, 'min, keepalive every', KEEPALIVE_INTERVAL, 'min');
-  // Sync immediately on install/reload so data is fresh right away
-  setTimeout(() => runSync(), 3000);
+  // In manual-probe/dev mode, defer automatic sync so reload does not open provider tabs.
+  setTimeout(() => runSyncIfAllowed('install-reload'), 3000);
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -930,12 +951,11 @@ chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.get(KEEPALIVE_ALARM, (a) => {
     if (!a) chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
   });
-  // Sync immediately on browser startup so data is fresh right away
-  setTimeout(() => runSync(), 3000);
+  setTimeout(() => runSyncIfAllowed('browser-startup'), 3000);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === SYNC_ALARM)     runSync();
+  if (alarm.name === SYNC_ALARM)     runSyncIfAllowed('sync-alarm');
   if (alarm.name === KEEPALIVE_ALARM) runSessionKeepalive();
 });
 
@@ -1058,7 +1078,7 @@ chrome.storage.onChanged.addListener(async function(changes, area) {
       // the successful login and auto-sync the account.
       console.log(`[Mighty] ${source}: MFA required — opening login tab for user to complete`);
       const loginUrl = _AUTO_LOGIN_URLS[source] || ACCOUNT_ENTRY[source];
-      chrome.tabs.create({ url: loginUrl, active: true });
+      await createProviderTab(loginUrl, { active: true }, 'credential_validation');
     }
     // If failed/error: dashboard shows "Session expired" with manual sign-in button
     return;
@@ -1152,7 +1172,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   if (msg.action === 'sync_now') {
     // Respond immediately so the message channel doesn't time out during a long sync
     sendResponse({ ok: true });
-    runSync().catch(console.error);
+    runSyncIfAllowed('sync_now').catch(console.error);
     return false;
   }
   if (msg.action === 'run_manual_probe') {
@@ -1595,7 +1615,7 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
     } catch (_) {}
 
     _dbg('CREATE_SYNC_WIN', { spawnLeft, spawnTop, initialUrl });
-    const win = await chrome.windows.create({
+    const win = await createProviderWindow({
       url:     initialUrl,
       type:    'popup',
       left:    spawnLeft,
@@ -1603,7 +1623,7 @@ async function _createSyncWindow(initialUrl = 'about:blank') {
       width:   100,
       height:  100,
       focused: false,
-    });
+    }, 'sync');
     const tabId = win.tabs?.[0]?.id;
     if (!tabId) throw new Error('no tab in popup');
     _dbg('SYNC_WIN_CREATED', { winId: win.id, tabId });
@@ -1979,7 +1999,7 @@ async function runAmexExtraction(apiKey, accounts) {
   console.log('[Mighty Amex] opening background account tab for extraction');
   let tab;
   try {
-    tab = await chrome.tabs.create({ url: ACCOUNT_ENTRY.amex, active: false });
+    tab = await createProviderTab(ACCOUNT_ENTRY.amex, { active: false }, 'extraction');
     await waitForTabLoad(tab.id, 25_000);
     await sleep(6000);
     await extractAmexRewardsInTab(tab.id, apiKey);
@@ -2196,7 +2216,7 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
   console.log(`[Mighty Probe] manual run for ${provider} (${manualRunId || 'no-id'})`);
   let tab;
   try {
-    tab = await chrome.tabs.create({ url: entry, active: false });
+    tab = await createProviderTab(entry, { active: false }, 'manual_probe');
     await waitForProbePageStability(tab.id);
     const result = await runProviderAccessProbeInTab(tab.id, provider);
     const payload = result || {
@@ -2276,7 +2296,7 @@ async function runProviderAccessProbe(apiKey, provider) {
   console.log(`[Mighty Probe] opening background tab for ${provider}`);
   let tab;
   try {
-    tab = await chrome.tabs.create({ url: entry, active: false });
+    tab = await createProviderTab(entry, { active: false }, 'automatic_probe');
     await waitForProbePageStability(tab.id);
     const result = await runProviderAccessProbeInTab(tab.id, provider);
     if (result) await _postProviderAccessProbe(apiKey, result);
@@ -2308,6 +2328,30 @@ async function runProviderAccessProbes(apiKey, accounts) {
   for (const provider of configured) {
     await runProviderAccessProbe(apiKey, provider);
   }
+}
+
+/** True when server config disables automatic provider navigation (manual-probe/dev mode). */
+async function shouldDeferAutomaticProviderNavigation(apiKey) {
+  if (!apiKey) return true;
+  return !(await fetchAutomaticProbesEnabled(apiKey));
+}
+
+/** Gate sync on server config — reload/startup must not open provider tabs in manual-probe mode. */
+async function runSyncIfAllowed(trigger) {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) {
+    console.log(`[Mighty] ${trigger}: no api_key — skip sync`);
+    return;
+  }
+  if (await shouldDeferAutomaticProviderNavigation(api_key)) {
+    console.log(
+      `[Mighty] ${trigger}: manual-probe mode (automatic_probes_enabled=false) — ` +
+      'deferring sync; no provider tabs will open'
+    );
+    ensureManualProbePolling();
+    return;
+  }
+  return runSync();
 }
 
 async function runSync() {
@@ -2362,6 +2406,14 @@ async function runSync() {
   if (!api_key) {
     _syncInProgress = false;
     await setStatus('No API key — open the extension to set it up');
+    return;
+  }
+
+  if (await shouldDeferAutomaticProviderNavigation(api_key)) {
+    console.log('[Mighty] runSync: manual-probe mode — aborting (no provider tabs)');
+    _syncInProgress = false;
+    try { await chrome.storage.local.remove('_sync_lock_ts'); } catch {}
+    ensureManualProbePolling();
     return;
   }
 
@@ -2612,7 +2664,7 @@ async function runSync() {
             // api_relay.js will detect login success and fire syncSingleAccount automatically.
             const loginUrl = _AUTO_LOGIN_URLS[source] || ACCOUNT_ENTRY[source];
             console.log(`[Mighty] ${source}: MFA required — opening login tab`);
-            chrome.tabs.create({ url: loginUrl, active: true });
+            await createProviderTab(loginUrl, { active: true }, 'credential_validation');
           }
           // 'failed' / 'error' / null: leave as login_required, user sees the red dot
         }
@@ -2657,7 +2709,7 @@ async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date()
 
   try {
     for (let i = 0; i < info.urls.length; i++) {
-      await chrome.tabs.update(tabId, { url: info.urls[i] });
+      await updateProviderTab(tabId, { url: info.urls[i] }, 'sync');
       await waitForTabLoad(tabId, 20_000);
       await sleep(SETTLE_MS.default);
 
@@ -2677,7 +2729,7 @@ async function resyncCaptured(apiKey, source, info, syncSessionTime = new Date()
     }
   } finally {
     if (!useShared) chrome.tabs.remove(tabId).catch(() => {});
-    else chrome.tabs.update(tabId, { url: 'about:blank' }).catch(() => {});
+    else updateProviderTab(tabId, { url: 'about:blank' }, 'sync').catch(() => {});
   }
 
   if (!allTexts.length) throw new Error('No page text captured');
@@ -2794,7 +2846,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           .then(r => r.ok ? r.json() : [])
           .then(accts => probeAmexConnectionState(key, accts))
           .catch(() => {});
-        runSync();
+        runSyncIfAllowed('extension-setup');
       });
     }
   }).catch(() => {});
@@ -3067,7 +3119,7 @@ async function syncAccountViaTab(apiKey, account, urls, syncSessionTime) {
   }).catch(() => null);
 
   // Open a real tab (not a popup) — SUPPLEMENT_WATCH fires on load.
-  const tab = await chrome.tabs.create({ url, active: false });
+  const tab = await createProviderTab(url, { active: false }, 'sync');
   const tabId = tab.id;
 
   // Wait up to 25 s for the page to load and be captured.
@@ -3183,7 +3235,7 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
       let newText = '';
       try {
         // Navigate to entry URL to establish session context
-        await chrome.tabs.update(tabId, { url: entry });
+        await updateProviderTab(tabId, { url: entry }, 'sync');
         await waitForTabLoad(tabId, 15_000);
         await sleep(3_000);
 
@@ -3191,7 +3243,7 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
           const fullUrl = entryOrigin + path;
           await randomDelay(1000, 2000);
           try {
-            await chrome.tabs.update(tabId, { url: fullUrl });
+            await updateProviderTab(tabId, { url: fullUrl }, 'sync');
             await waitForTabLoad(tabId, 15_000);
             await sleep(3_000);
 
@@ -3273,7 +3325,7 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
         console.log(`[Mighty] ${source}: no shared tab for cert pass, skipping`);
       } else {
         let certText = '';
-        await chrome.tabs.update(tabId, { url: entry });
+        await updateProviderTab(tabId, { url: entry }, 'sync');
         await waitForTabLoad(tabId, 15_000);
         await sleep(2_000);
 
@@ -3281,7 +3333,7 @@ async function gapFillAccount(apiKey, account, syncSessionTime, maxIterations = 
           const fullUrl = entryOrigin + path;
           await randomDelay(800, 1500);
           try {
-            await chrome.tabs.update(tabId, { url: fullUrl });
+            await updateProviderTab(tabId, { url: fullUrl }, 'sync');
             await waitForTabLoad(tabId, 15_000);
             await sleep(4_000); // extra settle time for SPAs
 
@@ -3559,7 +3611,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       // When useShared=true (_syncWinId=null) we always deactivate because we
       // don't have a dedicated sync window to compare against.
       if (_syncWinId == null || newTab.windowId !== _syncWinId) {
-        await chrome.tabs.update(newTab.id, { active: false }).catch(() => {});
+        await updateProviderTab(newTab.id, { active: false }, 'sync').catch(() => {});
         _dbg('ROGUE_DEACTIVATED', { rogueId: newTab.id });
       }
     } catch (e) { _dbg('ROGUE_ERR', { err: e.message }); }
@@ -3604,7 +3656,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     };
 
     // Navigate to the entry URL (always — shared tab may be on a different domain)
-    await chrome.tabs.update(tabId, { url: warmup || entry });
+    await updateProviderTab(tabId, { url: warmup || entry }, 'sync');
     await waitForTabLoad(tabId, 15_000);
     await _markSyncTab(); // prevent api_relay.js from detecting login in this tab
 
@@ -3614,7 +3666,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
     // is registered.
     if (warmup && warmup !== entry) {
       await sleep(3_000);
-      await chrome.tabs.update(tabId, { url: entry });
+      await updateProviderTab(tabId, { url: entry }, 'sync');
       await waitForTabLoad(tabId, 15_000);
       await _markSyncTab();
     }
@@ -3928,7 +3980,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
         // Random inter-page delay to avoid bot detection
         await randomDelay();
 
-        await chrome.tabs.update(tabId, { url: link.href });
+        await updateProviderTab(tabId, { url: link.href }, 'discovery');
         await waitForTabLoad(tabId, 15_000);
 
         // Settle while watching for login redirect — catches slow JS auth checks.
@@ -4110,7 +4162,7 @@ async function crawlAccount(apiKey, account, syncSessionTime, sharedTabId = null
       chrome.tabs.remove(tabId).catch(() => {});
     } else {
       // Leave the tab open for the next account; navigate to blank to clear state
-      chrome.tabs.update(tabId, { url: 'about:blank' }).catch(() => {});
+      updateProviderTab(tabId, { url: 'about:blank' }, 'sync').catch(() => {});
       await sleep(500); // brief pause before next account
     }
   }
