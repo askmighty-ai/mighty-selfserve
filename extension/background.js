@@ -2225,17 +2225,30 @@ async function _postProviderAccessProbe(apiKey, payload, { skipDedup = false } =
   }
 }
 
-async function runProviderAccessProbeInTab(tabId, provider) {
+async function runProviderAccessProbeInTab(tabId, provider, probeMeta = {}) {
+  const classifierStartedAt = probeMeta.classifierStartedAt || new Date().toISOString();
   try {
     const [r] = await chrome.scripting.executeScript({
       target: { tabId },
       func: runProviderAccessProbeInPage,
-      args: [provider],
+      args: [provider, classifierStartedAt],
     });
-    return r?.result || null;
+    const result = r?.result || null;
+    if (result) {
+      result.classifier_started_at = result.classifier_started_at || classifierStartedAt;
+      if (probeMeta.domWaitMs != null) result.dom_wait_ms = probeMeta.domWaitMs;
+    }
+    return result;
   } catch (e) {
     console.warn(`[Mighty Probe] tab script failed for ${provider}:`, e.message);
-    return { provider, error: e.message, blocked: false };
+    return {
+      provider,
+      error: e.message,
+      content_script_error: e.message,
+      blocked: false,
+      classifier_started_at: classifierStartedAt,
+      dom_wait_ms: probeMeta.domWaitMs ?? null,
+    };
   }
 }
 
@@ -2266,14 +2279,20 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
   _manualProbeInProgress = true;
   console.log(`[Mighty Probe] manual run for ${provider} (${manualRunId || 'no-id'})`);
   let tab;
+  const classifierStartedAt = new Date().toISOString();
   try {
     tab = await createProviderTab(entry, { active: false }, MANUAL_PROBE_TAB_REASON);
     if (!tab?.id) {
       console.warn('[Mighty Probe] manual tab creation blocked');
       return;
     }
+    const domWaitStart = Date.now();
     await waitForProbePageStability(tab.id);
-    const result = await runProviderAccessProbeInTab(tab.id, provider);
+    const domWaitMs = Date.now() - domWaitStart;
+    const result = await runProviderAccessProbeInTab(tab.id, provider, {
+      classifierStartedAt,
+      domWaitMs,
+    });
     const payload = result || {
       provider,
       url_visited: entry,
@@ -4360,17 +4379,51 @@ function extractAmexMembershipRewardsPage() {
 }
 
 // Runs inside provider account pages — Phase 1 access probe (Amex + Delta first)
-function runProviderAccessProbeInPage(provider) {
+function runProviderAccessProbeInPage(provider, classifierStartedAt) {
   const url = location.href;
   const path = location.pathname.toLowerCase();
-  const bodyText = (document.body?.innerText || '').slice(0, 12000);
+  const bodyEl = document.body;
+  const bodyText = (bodyEl?.innerText || '').slice(0, 12000);
   const lower = bodyText.toLowerCase();
   const ts = new Date().toISOString();
 
+  function collectPageDiagnostics() {
+    const inputs = document.querySelectorAll('input');
+    const passwords = document.querySelectorAll('input[type="password"], input[type="PASSWORD"]');
+    return {
+      ready_state: document.readyState,
+      body_exists: !!bodyEl,
+      body_text_length: bodyText.length,
+      visible_text_preview: bodyText.slice(0, 500),
+      page_title: document.title || '',
+      iframe_count: document.querySelectorAll('iframe').length,
+      input_count: inputs.length,
+      button_count: document.querySelectorAll('button').length,
+      password_input_count: passwords.length,
+      final_url: url,
+      classifier_started_at: classifierStartedAt || ts,
+    };
+  }
+
+  function isBlankOrUnloaded(diag) {
+    if (!diag.body_exists) return true;
+    if (diag.body_text_length < 20) return true;
+    if (document.readyState === 'loading' && diag.body_text_length < 20) return true;
+    return false;
+  }
+
   function finish(payload) {
+    const pageDiagnostics = collectPageDiagnostics();
+    if (!payload.failure_reason && !payload.blocked && !payload.error && isBlankOrUnloaded(pageDiagnostics)) {
+      payload.failure_reason = 'blank_or_unloaded_page';
+      payload.signed_in_detected = false;
+      payload.private_data_detected = false;
+    }
     return {
       provider,
       url_visited: url,
+      final_url: url,
+      page_title: pageDiagnostics.page_title || null,
       signed_in_detected: !!payload.signed_in_detected,
       private_data_detected: !!payload.private_data_detected,
       evidence_type: payload.evidence_type || null,
@@ -4380,6 +4433,9 @@ function runProviderAccessProbeInPage(provider) {
       timestamp: ts,
       blocked: !!payload.blocked,
       error: payload.error || null,
+      content_script_error: payload.content_script_error || null,
+      page_diagnostics: pageDiagnostics,
+      classifier_started_at: pageDiagnostics.classifier_started_at,
     };
   }
 

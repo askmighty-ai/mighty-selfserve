@@ -72,7 +72,26 @@ AUTH_TO_PROBE_STATUS: dict[str, str] = {
     AUTH_ERROR: PROBE_ERROR,
 }
 
-# ── Evidence types ────────────────────────────────────────────────────────────
+# ── Blank / unloaded page diagnostics ───────────────────────────────────────────
+
+FAILURE_BLANK_OR_UNLOADED = "blank_or_unloaded_page"
+BLANK_PAGE_MIN_TEXT_LENGTH = 20
+
+PAGE_DIAGNOSTIC_KEYS: tuple[str, ...] = (
+    "ready_state",
+    "body_exists",
+    "body_text_length",
+    "visible_text_preview",
+    "page_title",
+    "iframe_count",
+    "input_count",
+    "button_count",
+    "password_input_count",
+    "final_url",
+    "classifier_started_at",
+    "dom_wait_ms",
+    "content_script_error",
+)
 
 EVIDENCE_DOM_TEXT = "dom_text"
 EVIDENCE_API_RESPONSE = "api_response"
@@ -503,6 +522,51 @@ def detect_private_data(
     return False, None, None, []
 
 
+def extract_page_diagnostics(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize page diagnostics from extension probe payload."""
+    payload = payload or {}
+    diag: dict[str, Any] = {}
+    nested = payload.get("page_diagnostics")
+    if isinstance(nested, dict):
+        diag.update(nested)
+    for key in PAGE_DIAGNOSTIC_KEYS:
+        if key in payload and payload.get(key) is not None:
+            diag[key] = payload.get(key)
+    if not diag.get("final_url"):
+        diag["final_url"] = payload.get("final_url") or payload.get("url_visited")
+    if not diag.get("page_title") and payload.get("page_title"):
+        diag["page_title"] = payload.get("page_title")
+    if diag.get("body_text_length") is None and payload.get("dom_text") is not None:
+        diag["body_text_length"] = len(str(payload.get("dom_text") or ""))
+    return diag
+
+
+def is_blank_or_unloaded_page(
+    dom_text: str = "",
+    *,
+    payload: dict[str, Any] | None = None,
+) -> bool:
+    """True when the probe saw an empty or not-yet-loaded page."""
+    diag = extract_page_diagnostics(payload)
+    if diag.get("body_exists") is False:
+        return True
+    text_len = diag.get("body_text_length")
+    if text_len is not None:
+        try:
+            if int(text_len) < BLANK_PAGE_MIN_TEXT_LENGTH:
+                return True
+        except (TypeError, ValueError):
+            pass
+    stripped = (dom_text or "").strip()
+    if len(stripped) < BLANK_PAGE_MIN_TEXT_LENGTH:
+        ready_state = str(diag.get("ready_state") or "").lower()
+        if not stripped or ready_state in ("loading", "uninitialized"):
+            return True
+        if not diag.get("input_count") and not diag.get("button_count"):
+            return True
+    return False
+
+
 def classify_auth_state(
     *,
     provider: str,
@@ -556,6 +620,11 @@ def classify_auth_state(
     elif bot_block or blocked:
         auth_state = AUTH_BOT_BLOCKED
         failure_reason = failure_reason or "access_blocked"
+    elif is_blank_or_unloaded_page(dom_text, payload=payload):
+        auth_state = AUTH_UNKNOWN
+        signed_in = False
+        private_found = False
+        failure_reason = FAILURE_BLANK_OR_UNLOADED
     elif session_expired:
         auth_state = AUTH_SESSION_EXPIRED
         failure_reason = failure_reason or "session_expired"
@@ -660,6 +729,10 @@ def evaluate_probe_payload(provider: str, payload: dict[str, Any]) -> dict[str, 
         payload=payload,
     )
 
+    page_diagnostics = extract_page_diagnostics(payload)
+    if not page_title and page_diagnostics.get("page_title"):
+        page_title = str(page_diagnostics["page_title"]).strip() or None
+
     status = AUTH_TO_PROBE_STATUS.get(auth["auth_state"], PROBE_NEEDS_SIGN_IN)
     probed_at = payload.get("timestamp") or utc_now_iso()
 
@@ -685,6 +758,7 @@ def evaluate_probe_payload(provider: str, payload: dict[str, Any]) -> dict[str, 
         "matched_private_data_rules": auth["matched_private_data_rules"],
         "matched_blocking_rules": auth["matched_blocking_rules"],
         "failure_reason": auth["failure_reason"],
+        "page_diagnostics": page_diagnostics,
         "probed_at": probed_at,
         "timestamp": probed_at,
     }
@@ -706,6 +780,7 @@ _PROBE_RUN_COLUMNS: tuple[tuple[str, str], ...] = (
     ("matched_login_rules", "TEXT"),
     ("matched_private_data_rules", "TEXT"),
     ("matched_blocking_rules", "TEXT"),
+    ("page_diagnostics_json", "TEXT"),
 )
 
 
@@ -726,6 +801,28 @@ def _json_list(value: Any) -> str | None:
     if isinstance(value, str):
         return value
     return json.dumps(list(value))
+
+
+def _json_diagnostics(value: Any) -> str | None:
+    if not value:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return json.dumps(value)
+    return None
+
+
+def _parse_json_dict(value: Any) -> dict[str, Any]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        parsed = json.loads(value)
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
 
 
 def _parse_json_list(value: Any) -> list[str]:
@@ -795,8 +892,9 @@ def record_probe_run(db: Any, user_id: str, result: dict[str, Any]) -> str:
             entry_url, final_url, page_title, auth_state,
             login_form_present, password_field_present, username_field_present,
             mfa_signal_present, bot_block_signal_present, session_expired_signal_present,
-            matched_login_rules, matched_private_data_rules, matched_blocking_rules
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            matched_login_rules, matched_private_data_rules, matched_blocking_rules,
+            page_diagnostics_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -824,6 +922,7 @@ def record_probe_run(db: Any, user_id: str, result: dict[str, Any]) -> str:
             _json_list(result.get("matched_login_rules")),
             _json_list(result.get("matched_private_data_rules")),
             _json_list(result.get("matched_blocking_rules")),
+            _json_diagnostics(result.get("page_diagnostics")),
         ),
     )
     db.commit()
@@ -847,6 +946,7 @@ def _normalize_probe_row(row: dict[str, Any]) -> dict[str, Any]:
     d["matched_login_rules"] = _parse_json_list(d.get("matched_login_rules"))
     d["matched_private_data_rules"] = _parse_json_list(d.get("matched_private_data_rules"))
     d["matched_blocking_rules"] = _parse_json_list(d.get("matched_blocking_rules"))
+    d["page_diagnostics"] = _parse_json_dict(d.get("page_diagnostics_json"))
     if not d.get("final_url"):
         d["final_url"] = d.get("url_visited")
     return d
@@ -920,6 +1020,7 @@ def row_to_json(row: dict[str, Any]) -> dict[str, Any]:
         "matched_blocking_rules": row.get("matched_blocking_rules") or [],
         "timestamp": row.get("probed_at") or row.get("timestamp"),
         "failure_reason": row.get("failure_reason"),
+        "page_diagnostics": row.get("page_diagnostics") or _parse_json_dict(row.get("page_diagnostics_json")),
         "run_id": row.get("run_id"),
     }
 

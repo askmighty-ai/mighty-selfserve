@@ -1177,6 +1177,35 @@ def _probe_matched_rules(row: dict[str, Any]) -> str:
     return "; ".join(groups) or "—"
 
 
+def _probe_page_diagnostics(row: dict[str, Any]) -> str:
+    auth_state = row.get("auth_state") or ""
+    failure = row.get("failure_reason") or ""
+    if auth_state != "unknown" and failure != "blank_or_unloaded_page":
+        return "—"
+    diag = row.get("page_diagnostics") or {}
+    if not diag:
+        return "—"
+    parts = []
+    for key in (
+        "ready_state",
+        "body_exists",
+        "body_text_length",
+        "iframe_count",
+        "input_count",
+        "button_count",
+        "password_input_count",
+        "dom_wait_ms",
+        "classifier_started_at",
+        "content_script_error",
+    ):
+        if key in diag and diag.get(key) is not None and diag.get(key) != "":
+            parts.append(f"{key}={diag.get(key)}")
+    preview = diag.get("visible_text_preview")
+    if preview:
+        parts.append(f"preview={str(preview)[:120]}")
+    return "; ".join(parts) or "—"
+
+
 def render_provider_access_probe_page(
     rows: list[dict[str, Any]],
     *,
@@ -1315,9 +1344,11 @@ def render_provider_access_probe_page(
         f"{_he((r.get('evidence_snippet') or '—')[:120])}</td>"
         f"<td>{_fmt_iso(r.get('probed_at') or r.get('timestamp'))}</td>"
         f"<td class=\"muted\">{_he(r.get('failure_reason') or '—')}</td>"
+        f"<td class=\"muted\" style=\"font-size:11px;max-width:320px;word-break:break-word\">"
+        f"{_he(_probe_page_diagnostics(r))}</td>"
         f"</tr>"
         for r in rows
-    ) or '<tr><td colspan="10" class="muted">No probe runs yet</td></tr>'
+    ) or '<tr><td colspan="11" class="muted">No probe runs yet</td></tr>'
 
     body = (
         '<p class="lede">Phase 1 account reliability diagnostic. Probes verify whether the '
@@ -1330,6 +1361,7 @@ def render_provider_access_probe_page(
         "<th>Provider</th><th>Status</th><th>Auth state</th><th>Final URL</th>"
         "<th>Page title</th><th>Form signals</th><th>Matched rules</th>"
         "<th>Evidence snippet</th><th>Probed at</th><th>Failure reason</th>"
+        "<th>Page diagnostics</th>"
         f"</tr></thead><tbody>{table}</tbody></table></div>"
         f"{script}"
     )
