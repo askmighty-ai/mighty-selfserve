@@ -368,6 +368,50 @@ def test_admin_page_shows_deep_inspect_for_amex(client, monkeypatch):
     assert "observation_window" in text
 
 
+def test_admin_session_comparison_page(admin_client, client, monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAIL", admin_client.email)
+    start = admin_client.post("/api/admin/provider-access-probe/session-comparison", json={})
+    assert start.status_code == 200
+    cmp_id = start.get_json()["comparison_run_id"]
+    client.post(
+        "/api/extension/provider-access-probe/session-comparison",
+        headers={"X-Mighty-Key": client.api_key},
+        json={
+            "comparison_run_id": cmp_id,
+            "manual_probe_tab": {
+                "found": True,
+                "final_url": "https://www.americanexpress.com/en-us/account/",
+                "visible_text_preview": "Give Feedback",
+                "document_cookie_names": ["sessionId"],
+                "session_api_statuses": [
+                    {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 401},
+                ],
+                "probe_result": {"url_visited": "https://www.americanexpress.com/en-us/account/", "dom_text": ""},
+            },
+            "existing_tab": {
+                "found": True,
+                "final_url": "https://www.americanexpress.com/en-us/account/home",
+                "visible_text_preview": "Account Home",
+                "network_trace_limitation": "live_observers_not_installed_retroactive_performance_only",
+                "session_api_statuses": [
+                    {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 200},
+                ],
+                "probe_result": {
+                    "url_visited": "https://www.americanexpress.com/en-us/account/home",
+                    "dom_text": AMEX_ACCOUNT_TEXT,
+                },
+            },
+        },
+    )
+    r = client.get("/admin/provider-access-probe")
+    assert r.status_code == 200
+    text = r.data.decode("utf-8")
+    assert "Amex session comparison" in text
+    assert "Manual probe tab" in text
+    assert "Existing Amex tab" in text
+    assert "401" in text
+
+
 def test_admin_page_forbidden_for_non_admin(client):
     assert client.get("/admin/provider-access-probe").status_code == 403
 

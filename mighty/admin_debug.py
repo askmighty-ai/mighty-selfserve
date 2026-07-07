@@ -1437,11 +1437,83 @@ def _probe_auth_network_trace_section(deep: dict[str, Any]) -> str:
     )
 
 
+def _probe_session_comparison_section(session_comparison: dict[str, Any] | None) -> str:
+    session_comparison = session_comparison or {}
+    comparison = session_comparison.get("comparison") or {}
+    lifecycle = session_comparison.get("lifecycle") or "idle"
+    lc_colors = {
+        "idle": ("#374151", "#f3f4f6"),
+        "running": ("#92400e", "#fef3c7"),
+        "done": ("#065f46", "#d1fae5"),
+        "error": ("#991b1b", "#fee2e2"),
+    }
+    lc_fg, lc_bg = lc_colors.get(lifecycle, ("#374151", "#f3f4f6"))
+    lifecycle_badge = (
+        f'<span id="session-comparison-lifecycle" style="display:inline-block;padding:4px 10px;'
+        f'border-radius:6px;font-size:12px;font-weight:600;color:{lc_fg};background:{lc_bg}">'
+        f'{_he(lifecycle)}</span>'
+    )
+
+    if not comparison and lifecycle == "idle":
+        return (
+            '<div class="card" style="margin-bottom:16px">'
+            "<h3>Amex session comparison</h3>"
+            '<p class="muted" style="font-size:11px;margin:0 0 12px">'
+            "Compare manual probe tab vs an existing user-visible Amex tab. "
+            "Safe metadata only — no cookie values or tokens.</p>"
+            f'<p style="margin:0 0 12px">Lifecycle: {lifecycle_badge}</p>'
+            '<button class="btn" id="run-session-comparison-amex">'
+            "Run Amex Session Comparison</button>"
+            "</div>"
+        )
+
+    manual = comparison.get("manual_probe_tab") or {}
+    existing = comparison.get("existing_tab") or {}
+    differences = comparison.get("differences") or []
+    diagnostic = comparison.get("diagnostic_summary") or session_comparison.get("diagnostic_summary") or "—"
+
+    def _side_summary(side: dict[str, Any], label: str) -> str:
+        if not side.get("found"):
+            return f"{label}: not available"
+        apis = side.get("session_api_statuses") or []
+        read_st = next((a.get("status_code") for a in apis if isinstance(a, dict) and "ReadUserSession.v1" in str(a.get("url") or "")), None)
+        upd_st = next((a.get("status_code") for a in apis if isinstance(a, dict) and "UpdateUserSession.v1" in str(a.get("url") or "")), None)
+        return (
+            f"{label}: url={side.get('final_url') or '—'}; title={side.get('page_title') or '—'}; "
+            f"auth_state={side.get('auth_state') or '—'}; ReadUserSession={read_st or '?'}; "
+            f"UpdateUserSession={upd_st or '?'}; preview={str(side.get('visible_text_preview') or '')[:80]}"
+        )
+
+    diff_lines = differences[:15] if differences else ["—"]
+
+    return (
+        '<div class="card" style="margin-bottom:16px">'
+        "<h3>Amex session comparison</h3>"
+        f'<p class="muted" style="font-size:11px;margin:0 0 8px">'
+        "Diagnostic comparison of manual probe tab (A) vs existing Amex tab (B).</p>"
+        f'<p style="margin:0 0 12px">Lifecycle: {lifecycle_badge}'
+        f' <button class="btn" id="run-session-comparison-amex" style="margin-left:8px">'
+        "Run Again</button></p>"
+        f'<p style="font-size:11px;margin:0 0 12px"><strong>Diagnostic:</strong> {_he(diagnostic)}</p>'
+        f'<dl style="display:grid;grid-template-columns:160px 1fr;gap:6px 12px;font-size:11px;margin:0 0 12px">'
+        f"<dt>Manual probe tab</dt><dd class=\"muted\" style=\"word-break:break-word\">"
+        f"{_he(_side_summary(manual, 'A'))}</dd>"
+        f"<dt>Existing Amex tab</dt><dd class=\"muted\" style=\"word-break:break-word\">"
+        f"{_he(_side_summary(existing, 'B'))}</dd>"
+        f"<dt>Existing tab limitation</dt><dd class=\"muted\">"
+        f"{_he(existing.get('network_trace_limitation') or '—')}</dd>"
+        f"<dt>Differences</dt><dd><code style=\"font-size:10px\">"
+        f"{_he('; '.join(diff_lines))}</code></dd>"
+        f"</dl></div>"
+    )
+
+
 def render_provider_access_probe_page(
     rows: list[dict[str, Any]],
     *,
     manual_state: dict[str, Any] | None = None,
     automatic_probes_disabled: bool = False,
+    session_comparison: dict[str, Any] | None = None,
 ) -> str:
     manual_state = manual_state or {}
     lifecycle = manual_state.get("lifecycle") or "idle"
@@ -1555,6 +1627,57 @@ def render_provider_access_probe_page(
   buttons.forEach(btn => {
     btn.addEventListener('click', () => runProbe(btn.dataset.provider));
   });
+
+  const cmpBtn = document.getElementById('run-session-comparison-amex');
+  let cmpPollTimer = null;
+  async function refreshComparisonStatus() {
+    try {
+      const r = await fetch('/api/admin/provider-access-probe/session-comparison-status');
+      if (!r.ok) return;
+      const data = await r.json();
+      const el = document.getElementById('session-comparison-lifecycle');
+      if (el) el.textContent = data.lifecycle || 'idle';
+      if (data.lifecycle === 'running') {
+        cmpPollTimer = cmpPollTimer || setInterval(refreshComparisonStatus, 2000);
+      } else if (cmpPollTimer) {
+        clearInterval(cmpPollTimer);
+        cmpPollTimer = null;
+        if (data.lifecycle === 'done' || data.lifecycle === 'error') {
+          setTimeout(() => location.reload(), 800);
+        }
+      }
+    } catch (e) {}
+  }
+  async function runSessionComparison() {
+    if (cmpBtn) cmpBtn.disabled = true;
+    try {
+      const r = await fetch('/api/admin/provider-access-probe/session-comparison', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert(data.error || 'Session comparison failed');
+        await refreshComparisonStatus();
+        return;
+      }
+      window.postMessage({
+        type: '__mighty_dashboard__',
+        action: 'run_session_comparison',
+        comparison_run_id: data.comparison_run_id,
+      }, '*');
+      cmpPollTimer = cmpPollTimer || setInterval(refreshComparisonStatus, 2000);
+      await refreshComparisonStatus();
+    } catch (e) {
+      alert('Session comparison failed: ' + e.message);
+    } finally {
+      if (cmpBtn) cmpBtn.disabled = false;
+    }
+  }
+  if (cmpBtn) cmpBtn.addEventListener('click', runSessionComparison);
+  refreshComparisonStatus();
+
   refreshStatus();
 })();
 </script>"""
@@ -1588,6 +1711,7 @@ def render_provider_access_probe_page(
         '<p class="muted" style="font-size:11px">JSON API: '
         '<code>/api/admin/provider-access-probe</code></p>'
         f"{run_controls}"
+        f"{_probe_session_comparison_section(session_comparison)}"
         f"{_probe_deep_inspect_section(rows)}"
         '<div class="card"><table><thead><tr>'
         "<th>Provider</th><th>Status</th><th>Auth state</th><th>Final URL</th>"
