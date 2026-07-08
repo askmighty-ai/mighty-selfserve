@@ -482,6 +482,55 @@ def test_bootstrap_trace_concurrent_rejected(admin_client):
     assert conflict.status_code == 409
 
 
+def test_admin_page_shows_operational_redirect_section(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAIL", client.email)
+    client.post(
+        "/api/extension/provider-access-probe",
+        headers={"X-Mighty-Key": client.api_key},
+        json={
+            "provider": "amex",
+            "url_visited": "https://www.americanexpress.com/en-us/account/login?DestPage=https%3A%2F%2Fglobal.americanexpress.com%2Foverview",
+            "dom_text": "Sign in to your account\nUser ID\nPassword",
+            "operational_redirect_diagnostic": {
+                "requested_entry_url": "https://global.americanexpress.com/overview",
+                "first_observed_tab_url": "https://global.americanexpress.com/overview",
+                "final_url": "https://www.americanexpress.com/en-us/account/login?DestPage=https%3A%2F%2Fglobal.americanexpress.com%2Foverview",
+                "final_url_is_login": True,
+                "url_transitions": [
+                    {
+                        "observed_at_ms": 0,
+                        "url": "https://global.americanexpress.com/overview",
+                        "source": "requested_entry",
+                    },
+                    {
+                        "observed_at_ms": 90,
+                        "url": "https://www.americanexpress.com/en-us/account/login?DestPage=https%3A%2F%2Fglobal.americanexpress.com%2Foverview",
+                        "source": "tabs.onUpdated",
+                    },
+                ],
+                "cookie_names_before": {
+                    "americanexpress.com": ["s_sess"],
+                    "global.americanexpress.com": [],
+                    "www.americanexpress.com": [],
+                },
+                "cookie_names_after": {
+                    "americanexpress.com": ["s_sess"],
+                    "global.americanexpress.com": [],
+                    "www.americanexpress.com": [],
+                },
+            },
+        },
+    )
+    r = client.get("/admin/provider-access-probe")
+    assert r.status_code == 200
+    text = r.data.decode("utf-8")
+    assert "Amex operational redirect diagnostic" in text
+    assert "requested_entry_url" in text
+    assert "global.americanexpress.com/overview" in text
+    assert "login redirect" in text
+    assert "cookie_names_before" in text
+
+
 def test_admin_page_shows_live_session_comparator_section(client, monkeypatch):
     monkeypatch.setenv("ADMIN_EMAIL", client.email)
     r = client.get("/admin/provider-access-probe")

@@ -1206,6 +1206,105 @@ def _probe_page_diagnostics(row: dict[str, Any]) -> str:
     return "; ".join(parts) or "—"
 
 
+def _fmt_operational_redirect_transition(event: dict[str, Any]) -> str:
+    if not isinstance(event, dict):
+        return ""
+    parts = [f"{event.get('observed_at_ms', '?')}ms"]
+    if event.get("source"):
+        parts.append(str(event["source"]))
+    if event.get("transition_type"):
+        parts.append(str(event["transition_type"]))
+    if event.get("status"):
+        parts.append(str(event["status"]))
+    if event.get("url"):
+        parts.append(str(event["url"]))
+    return " | ".join(parts)
+
+
+def _probe_amex_operational_redirect_section(rows: list[dict[str, Any]]) -> str:
+    amex_row = next((r for r in rows if r.get("provider") == "amex"), None)
+    if not amex_row:
+        return ""
+    deep = amex_row.get("deep_inspect") or {}
+    redirect = deep.get("operational_redirect_diagnostic") or {}
+    if not redirect:
+        return (
+            '<div class="card" style="margin-bottom:16px">'
+            "<h3>Amex operational redirect diagnostic</h3>"
+            '<p class="muted" style="font-size:12px;margin:0">'
+            "No redirect trace yet. Run <strong>Run Probe — Amex</strong> to capture entry → "
+            "first URL → final URL transitions. Cookie names only — never values.</p>"
+            "</div>"
+        )
+
+    def _fmt_cookie_domains(label: str, domain_map: dict[str, Any] | None) -> str:
+        if not isinstance(domain_map, dict) or not domain_map:
+            return f"<dt>{_he(label)}</dt><dd class=\"muted\">—</dd>"
+        lines = []
+        for domain, names in domain_map.items():
+            if isinstance(names, list) and names:
+                lines.append(f"{domain}: {', '.join(str(n) for n in names[:20])}")
+            else:
+                lines.append(f"{domain}: —")
+        return (
+            f"<dt>{_he(label)}</dt>"
+            f"<dd><code style=\"font-size:10px;word-break:break-all\">{_he('; '.join(lines))}</code></dd>"
+        )
+
+    transitions = redirect.get("url_transitions") or []
+    transition_lines = [_fmt_operational_redirect_transition(e) for e in transitions[:25]]
+    history = redirect.get("client_history_events") or []
+    history_lines = [
+        f"{h.get('observed_at_ms', '?')}ms {h.get('type', '?')} → {h.get('href', '—')}"
+        for h in history[:15]
+        if isinstance(h, dict)
+    ]
+    first_nav = redirect.get("first_navigation_response") or {}
+    if first_nav.get("available"):
+        first_nav_line = (
+            f"{first_nav.get('source') or 'unknown'} "
+            f"status={first_nav.get('status_code', '—')} "
+            f"redirect_url={first_nav.get('redirect_url') or '—'} "
+            f"redirect_count={first_nav.get('redirect_count', '—')}"
+        )
+    else:
+        first_nav_line = first_nav.get("reason") or "—"
+
+    login_badge = (
+        '<span style="color:#991b1b;font-weight:600">login redirect</span>'
+        if redirect.get("final_url_is_login")
+        else '<span style="color:#065f46;font-weight:600">not login</span>'
+    )
+
+    details = (
+        f"<dt>requested_entry_url</dt><dd class=\"muted\" style=\"word-break:break-all\">"
+        f"{_he(redirect.get('requested_entry_url') or '—')}</dd>"
+        f"<dt>first_observed_tab_url</dt><dd class=\"muted\" style=\"word-break:break-all\">"
+        f"{_he(redirect.get('first_observed_tab_url') or '—')}</dd>"
+        f"<dt>final_url</dt><dd class=\"muted\" style=\"word-break:break-all\">"
+        f"{_he(redirect.get('final_url') or '—')}</dd>"
+        f"<dt>final_url_is_login</dt><dd>{login_badge}</dd>"
+        f"{_fmt_cookie_domains('cookie_names_before', redirect.get('cookie_names_before'))}"
+        f"{_fmt_cookie_domains('cookie_names_after', redirect.get('cookie_names_after'))}"
+        f"<dt>first_navigation_response</dt><dd class=\"muted\">{_he(first_nav_line)}</dd>"
+        f"<dt>url_transitions</dt><dd><code style=\"font-size:10px;word-break:break-all\">"
+        f"{_he('; '.join(transition_lines) or '—')}</code></dd>"
+        f"<dt>client_history_events</dt><dd><code style=\"font-size:10px;word-break:break-all\">"
+        f"{_he('; '.join(history_lines) or '—')}</code></dd>"
+    )
+
+    return (
+        '<div class="card" style="margin-bottom:16px">'
+        "<h3>Amex operational redirect diagnostic</h3>"
+        '<p class="muted" style="font-size:11px;margin:0 0 12px">'
+        "Manual Run Probe — Amex only. Traces whether the operational entry URL redirects to login "
+        "via server or client navigation. Metadata only — no cookie values, tokens, or bodies.</p>"
+        f'<dl style="display:grid;grid-template-columns:200px 1fr;gap:6px 12px;'
+        f'font-size:11px;margin:0">{details}</dl>'
+        "</div>"
+    )
+
+
 def _probe_deep_inspect_section(rows: list[dict[str, Any]]) -> str:
     """Render deep inspect diagnostics for the latest Amex probe run."""
     amex_row = next((r for r in rows if r.get("provider") == "amex"), None)
@@ -1970,6 +2069,7 @@ def render_provider_access_probe_page(
         f"{run_controls}"
         f"{_probe_live_session_comparison_section(live_session_comparison, live_session_entry_urls)}"
         f"{_probe_bootstrap_trace_section(bootstrap_traces, bootstrap_entry_urls)}"
+        f"{_probe_amex_operational_redirect_section(rows)}"
         f"{_probe_deep_inspect_section(rows)}"
         '<div class="card"><table><thead><tr>'
         "<th>Provider</th><th>Status</th><th>Auth state</th><th>Final URL</th>"
