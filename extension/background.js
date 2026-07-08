@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.4-amex-live-session-comparator';
+const MIGHTY_EXT_VERSION = '1.4.5-amex-live-session-tab-discovery';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 const AMEX_BOOTSTRAP_TRACE_MS = 20000;
@@ -45,9 +45,12 @@ chrome.windows.onFocusChanged.addListener(wId =>
 chrome.tabs.onRemoved.addListener((id, info) => {
   _dbg('TAB_REMOVED', { id, windowId: info.windowId });
   _newTabsSeen.delete(id); // prune — Set would otherwise grow for every tab ever opened
+  _amexMrTabEvidenceByTabId.delete(id);
 });
 // Track first URL a newly-created tab navigates to — tells us which link/button opened it
 const _newTabsSeen = new Set();
+/** tabId → { url, at } when content script reports MR balance (live session tab discovery only) */
+const _amexMrTabEvidenceByTabId = new Map();
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'loading') return;
   if (!changeInfo.url) return;
@@ -1201,9 +1204,14 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   }
   if (msg.type === 'AMEX_MR_EXTRACTED') {
     (async () => {
+      const tabId = sender?.tab?.id;
+      const tabUrl = msg.url || sender?.tab?.url || '';
+      if (tabId) {
+        _amexMrTabEvidenceByTabId.set(tabId, { url: tabUrl, at: Date.now() });
+      }
       const { api_key } = await chrome.storage.local.get('api_key');
       if (!api_key || !msg.value) return;
-      console.log('[Mighty Amex] content script reported MR balance:', msg.value, msg.url || '');
+      console.log('[Mighty Amex] content script reported MR balance:', msg.value, tabUrl);
       await _pushAmexExtraction(api_key, msg.value, 'content-script');
     })();
     return false;
@@ -2830,12 +2838,161 @@ async function getAmexCookieNamesOnly() {
   return out;
 }
 
+const AMEX_LIVE_SESSION_TAB_URL_PATTERNS = [
+  '*://*.americanexpress.com/*',
+  '*://americanexpress.com/*',
+  '*://global.americanexpress.com/*',
+  '*://www.americanexpress.com/*',
+];
+
+function isAmexHostForLiveSessionComparison(rawUrl) {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    return host === 'americanexpress.com' || host.endsWith('.americanexpress.com');
+  } catch (_) {
+    return false;
+  }
+}
+
+function isAmexLoginPageUrlForLiveSessionComparison(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    const path = u.pathname || '';
+    const host = u.hostname.toLowerCase();
+    const cfg = SITE_LOGIN_CONFIG.amex;
+    if (cfg?.loginPathRe?.test(path) || cfg?.loginPathRe?.test(rawUrl)) return true;
+    if (/\/(log-?in|sign-?in)(\/|$|\?)/i.test(path)) return true;
+    if (host === 'global.americanexpress.com' && /^\/login(\/|$|\?)/i.test(path)) return true;
+    const firstLabel = host.split('.')[0];
+    if (/^(login|sso|auth|signin|sign-in|logon|authenticate|identity)$/i.test(firstLabel)) return true;
+    return false;
+  } catch (_) {
+    return true;
+  }
+}
+
+function scoreAmexLoggedInTabForLiveSessionComparison(tab, mrEvidenceByTabId) {
+  const url = tab.url || '';
+  let score = 0;
+  const reasons = [];
+  try {
+    const u = new URL(url);
+    const path = u.pathname.toLowerCase();
+    const host = u.hostname.toLowerCase();
+
+    if (host === 'global.americanexpress.com' && /\/overview(\/|$|\?)/i.test(path)) {
+      score += 100;
+      reasons.push('global_overview');
+    }
+    if (/\/en-us\/account(\/|$|\?)/i.test(path) && !/\/log-?in/i.test(path)) {
+      score += 80;
+      reasons.push('www_account');
+    }
+    if (/\/en-us\/rewards(\/|$|\?)/i.test(path)) {
+      score += 70;
+      reasons.push('www_rewards');
+    }
+    if (typeof _ACCOUNT_PATH_RE !== 'undefined' && _ACCOUNT_PATH_RE.test(path)) {
+      score += 40;
+      reasons.push('account_path');
+    }
+    const title = (tab.title || '').toLowerCase();
+    if (/membership rewards|account home|overview|my account|recent activity|payment due/i.test(title)) {
+      score += 30;
+      reasons.push('private_title');
+    }
+    if (mrEvidenceByTabId.get(tab.id)) {
+      score += 120;
+      reasons.push('mr_balance_content_script');
+    }
+    if (tab.active) {
+      score += 10;
+      reasons.push('active_tab');
+    }
+  } catch (_) {}
+  return { score, reasons };
+}
+
+async function queryAmexTabsForLiveSessionComparison() {
+  const byId = new Map();
+  for (const pattern of AMEX_LIVE_SESSION_TAB_URL_PATTERNS) {
+    try {
+      const tabs = await chrome.tabs.query({ url: pattern });
+      for (const tab of tabs) {
+        if (tab?.id) byId.set(tab.id, tab);
+      }
+    } catch (e) {
+      console.warn('[Mighty Probe] live session tab query failed for pattern', pattern, e.message);
+    }
+  }
+  if (!byId.size) {
+    const allTabs = await chrome.tabs.query({});
+    for (const tab of allTabs) {
+      if (!tab?.id || !tab.url) continue;
+      if (isAmexHostForLiveSessionComparison(tab.url)) byId.set(tab.id, tab);
+    }
+  }
+  return [...byId.values()];
+}
+
+function _logLiveSessionTabCandidate(tab, verdict, reason, extra) {
+  console.log('[Mighty Probe] live session tab candidate', {
+    tabId: tab?.id ?? null,
+    url: tab?.url ?? '',
+    title: tab?.title || '',
+    active: !!tab?.active,
+    verdict,
+    reason,
+    ...(extra || {}),
+  });
+}
+
 async function findExistingUserAmexTab() {
-  const tabs = await chrome.tabs.query({ url: '*://*.americanexpress.com/*' });
-  const loginRe = /\/account\/log-?in/i;
-  const candidates = tabs.filter((tab) => tab.id && tab.url && !loginRe.test(tab.url));
-  if (!candidates.length) return null;
-  return candidates.find((tab) => tab.active) || candidates[0];
+  const tabs = await queryAmexTabsForLiveSessionComparison();
+  if (!tabs.length) {
+    console.log('[Mighty Probe] live session tab discovery: no Amex tabs found');
+    return null;
+  }
+
+  const ranked = [];
+  for (const tab of tabs) {
+    if (!tab?.id || !tab.url) {
+      _logLiveSessionTabCandidate(tab || {}, 'rejected', 'missing_tab_id_or_url');
+      continue;
+    }
+    if (!isAmexHostForLiveSessionComparison(tab.url)) {
+      _logLiveSessionTabCandidate(tab, 'rejected', 'not_amex_host');
+      continue;
+    }
+    if (isAmexLoginPageUrlForLiveSessionComparison(tab.url)) {
+      _logLiveSessionTabCandidate(tab, 'rejected', 'login_page');
+      continue;
+    }
+    const { score, reasons } = scoreAmexLoggedInTabForLiveSessionComparison(tab, _amexMrTabEvidenceByTabId);
+    if (score <= 0) {
+      _logLiveSessionTabCandidate(tab, 'rejected', 'no_private_account_evidence', { score, reasons });
+      continue;
+    }
+    _logLiveSessionTabCandidate(tab, 'accepted', 'private_account_evidence', { score, reasons });
+    ranked.push({ tab, score, reasons });
+  }
+
+  if (!ranked.length) {
+    console.log('[Mighty Probe] live session tab discovery: no authenticated Amex tabs after filtering');
+    return null;
+  }
+
+  ranked.sort((a, b) => b.score - a.score || Number(!!b.tab.active) - Number(!!a.tab.active));
+  const selected = ranked[0];
+  console.log('[Mighty Probe] live session tab selected', {
+    tabId: selected.tab.id,
+    url: selected.tab.url,
+    title: selected.tab.title || '',
+    score: selected.score,
+    reasons: selected.reasons,
+    candidateCount: ranked.length,
+  });
+  return selected.tab;
 }
 
 async function injectLiveSessionComparisonObservers(tabId) {

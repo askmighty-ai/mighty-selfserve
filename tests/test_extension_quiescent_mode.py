@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.4.4-amex-live-session-comparator" in src
+    assert "1.4.5-amex-live-session-tab-discovery" in src
     assert "background.js loaded — version" in src
 
 
@@ -143,3 +143,65 @@ def test_amex_live_session_comparator_present():
     assert "collectAmexLiveSessionSnapshot" in src
     assert "live-session-comparison" in src
     assert "_liveSessionComparisonInProgress" in src
+
+
+def test_amex_live_session_tab_discovery_helpers_present():
+    src = _read_background_js()
+    assert "AMEX_LIVE_SESSION_TAB_URL_PATTERNS" in src
+    assert "isAmexLoginPageUrlForLiveSessionComparison" in src
+    assert "scoreAmexLoggedInTabForLiveSessionComparison" in src
+    assert "queryAmexTabsForLiveSessionComparison" in src
+    assert "global.americanexpress.com/overview" in src or "global_overview" in src
+    assert "live session tab candidate" in src
+    assert "live session tab selected" in src
+    assert "_amexMrTabEvidenceByTabId" in src
+
+
+def test_amex_live_session_tab_discovery_url_rules():
+    """Mirror live session tab discovery URL rules used in extension/background.js."""
+
+    import re
+    from urllib.parse import urlparse
+
+    account_login_re = re.compile(r"/en-us/account/log-?in", re.I)
+    login_path_re = re.compile(r"/(log-?in|sign-?in)(/|$|\?)", re.I)
+
+    def is_login(url: str) -> bool:
+        u = urlparse(url)
+        path = u.path or ""
+        host = (u.hostname or "").lower()
+        if account_login_re.search(path):
+            return True
+        if login_path_re.search(path):
+            return True
+        if host == "global.americanexpress.com" and re.match(r"^/login(/|$|\?)", path, re.I):
+            return True
+        first = host.split(".")[0]
+        if first in {"login", "sso", "auth", "signin", "sign-in", "logon", "authenticate", "identity"}:
+            return True
+        return False
+
+    def has_private_evidence(url: str, title: str = "") -> bool:
+        u = urlparse(url)
+        path = (u.path or "").lower()
+        host = (u.hostname or "").lower()
+        if host == "global.americanexpress.com" and re.search(r"/overview(/|$|\?)", path):
+            return True
+        if re.search(r"/en-us/account(/|$|\?)", path) and not re.search(r"/log-?in", path):
+            return True
+        if "membership rewards" in title.lower():
+            return True
+        return False
+
+    overview = "https://global.americanexpress.com/overview"
+    assert not is_login(overview)
+    assert has_private_evidence(overview)
+
+    assert is_login("https://www.americanexpress.com/en-us/account/login")
+    assert is_login("https://global.americanexpress.com/login")
+    assert not has_private_evidence("https://global.americanexpress.com/login")
+
+    assert has_private_evidence(
+        "https://www.americanexpress.com/en-us/account/",
+        "Membership Rewards | American Express",
+    )
