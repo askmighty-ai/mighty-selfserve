@@ -1184,3 +1184,40 @@ class TestAmexLiveSessionComparison:
         assert latest["comparison"]["provider"] == "amex"
         json_state = live_session_comparison_state_to_json(latest)
         assert json_state["comparison"]["field_diffs"] == comparison["field_diffs"]
+
+    def test_logged_in_snapshot_found_in_stored_comparison(self):
+        comparison = build_amex_live_session_comparison({
+            "entry_url": AMEX_BOOTSTRAP_ENTRY_URLS[0],
+            "logged_in_tab": {
+                "found": True,
+                "final_url": "https://global.americanexpress.com/overview",
+                "page_title": "Overview",
+                "auth_session_requests": [
+                    {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 200},
+                ],
+            },
+            "bootstrap_probe_tab": {
+                "found": True,
+                "final_url": "https://www.americanexpress.com/en-us/account/login",
+                "auth_session_requests": [
+                    {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 400},
+                ],
+            },
+        })
+        assert comparison["logged_in_tab"]["found"] is True
+        assert "global.americanexpress.com/overview" in comparison["logged_in_tab"]["final_url"]
+        assert comparison["field_diffs"][0]["field"] != "logged_in_tab"
+
+    def test_snapshot_failed_diagnostic_not_no_tab(self):
+        logged_in = {"found": False, "network_trace_limitation": "snapshot_failed"}
+        bootstrap = {"found": True, "final_url": AMEX_BOOTSTRAP_ENTRY_URLS[0]}
+        diagnostic = compute_live_session_comparison_diagnostic(logged_in, bootstrap)
+        assert "logged-in tab snapshot failed" in diagnostic
+        assert "no logged-in Amex tab available" not in diagnostic
+
+    def test_field_diff_uses_snapshot_failed_not_not_found(self):
+        diffs = compute_live_session_field_diffs(
+            {"found": False, "network_trace_limitation": "snapshot_failed"},
+            {"found": True},
+        )
+        assert diffs[0]["logged_in_tab"] == "snapshot_failed"

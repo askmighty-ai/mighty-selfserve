@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.5-amex-live-session-tab-discovery';
+const MIGHTY_EXT_VERSION = '1.4.6-amex-live-session-snapshot-fix';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 const AMEX_BOOTSTRAP_TRACE_MS = 20000;
@@ -3190,6 +3190,14 @@ async function injectLiveSessionComparisonObservers(tabId) {
 
 async function _postLiveSessionComparison(apiKey, payload) {
   if (!apiKey || !payload?.comparison_run_id) return null;
+  console.log('[Mighty Probe] live session comparison payload before POST', {
+    comparison_run_id: payload.comparison_run_id,
+    logged_in_side: !!payload.logged_in_tab?.found,
+    logged_in_url: payload.logged_in_tab?.final_url || '',
+    logged_in_limitation: payload.logged_in_tab?.network_trace_limitation || '',
+    bootstrap_side: !!payload.bootstrap_probe_tab?.found,
+    bootstrap_url: payload.bootstrap_probe_tab?.final_url || '',
+  });
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/live-session-comparison`, {
       method: 'POST',
@@ -3209,35 +3217,59 @@ async function _postLiveSessionComparison(apiKey, payload) {
   }
 }
 
-async function captureLoggedInAmexTabSnapshot(tabId, chromeCookieNames) {
+async function captureLoggedInAmexTabSnapshot(tabId, tabUrl, chromeCookieNames) {
+  console.log('[Mighty Probe] live session logged-in snapshot started', { tabId, url: tabUrl });
   await injectLiveSessionComparisonObservers(tabId);
   await sleep(AMEX_LIVE_SESSION_LOGGED_IN_OBSERVE_MS);
   try {
     const [r] = await chrome.scripting.executeScript({
       target: { tabId },
-      func: async (cookieNamesPayload, limitation) => {
-        const page = await collectAmexLiveSessionSnapshot('logged_in_tab');
-        return {
-          found: true,
-          ...page,
-          chrome_cookie_names: cookieNamesPayload,
-          network_trace_limitation: limitation,
-        };
-      },
-      args: [chromeCookieNames, 'live_observers_installed_on_existing_tab_short_window'],
+      func: collectAmexLiveSessionSnapshot,
+      args: ['logged_in_tab'],
     });
-    return r?.result || { found: false, network_trace_limitation: 'script_injection_failed' };
+    const page = r?.result;
+    if (!page || typeof page !== 'object') {
+      console.warn('[Mighty Probe] live session logged-in snapshot failed', {
+        tabId,
+        url: tabUrl,
+        reason: 'empty_snapshot_result',
+      });
+      return {
+        found: false,
+        error: 'empty_snapshot_result',
+        network_trace_limitation: 'snapshot_failed',
+      };
+    }
+    const snapshot = {
+      found: true,
+      ...page,
+      chrome_cookie_names: chromeCookieNames,
+      network_trace_limitation: 'live_observers_installed_on_existing_tab_short_window',
+    };
+    console.log('[Mighty Probe] live session logged-in snapshot succeeded', {
+      tabId,
+      url: tabUrl,
+      final_url: snapshot.final_url,
+      page_title: snapshot.page_title || '',
+    });
+    return snapshot;
   } catch (e) {
+    console.warn('[Mighty Probe] live session logged-in snapshot failed', {
+      tabId,
+      url: tabUrl,
+      error: e.message,
+    });
     return {
       found: false,
       error: e.message,
-      network_trace_limitation: 'logged_in_tab_inspection_failed',
+      network_trace_limitation: 'snapshot_failed',
     };
   }
 }
 
 async function captureBootstrapProbeTabForComparison(entryUrl, chromeCookieNames) {
   let tab;
+  console.log('[Mighty Probe] live session bootstrap snapshot started', { entryUrl });
   try {
     tab = await createProviderTab(entryUrl, { active: false }, MANUAL_PROBE_TAB_REASON);
     if (!tab?.id) {
@@ -3247,17 +3279,33 @@ async function captureBootstrapProbeTabForComparison(entryUrl, chromeCookieNames
     await waitForProbePageStability(tab.id, { observationMs: AMEX_BOOTSTRAP_TRACE_MS });
     const [r] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: async (cookieNamesPayload) => {
-        const page = await collectAmexLiveSessionSnapshot('bootstrap_probe_tab');
-        return {
-          found: true,
-          ...page,
-          chrome_cookie_names: cookieNamesPayload,
-        };
-      },
-      args: [chromeCookieNames],
+      func: collectAmexLiveSessionSnapshot,
+      args: ['bootstrap_probe_tab'],
     });
-    return r?.result || { found: false, error: 'bootstrap_probe_collection_failed' };
+    const page = r?.result;
+    if (!page || typeof page !== 'object') {
+      console.warn('[Mighty Probe] live session bootstrap snapshot failed', {
+        tabId: tab.id,
+        reason: 'empty_snapshot_result',
+      });
+      return { found: false, error: 'empty_snapshot_result', network_trace_limitation: 'snapshot_failed' };
+    }
+    console.log('[Mighty Probe] live session bootstrap snapshot succeeded', {
+      tabId: tab.id,
+      final_url: page.final_url,
+    });
+    return {
+      found: true,
+      ...page,
+      chrome_cookie_names: chromeCookieNames,
+    };
+  } catch (e) {
+    console.warn('[Mighty Probe] live session bootstrap snapshot failed', { error: e.message });
+    return {
+      found: false,
+      error: e.message,
+      network_trace_limitation: 'snapshot_failed',
+    };
   } finally {
     if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
   }
@@ -3284,7 +3332,16 @@ async function runAmexLiveSessionComparison(apiKey, comparisonRunId, entryUrl) {
       network_trace_limitation: 'no_logged_in_amex_tab',
     };
     if (existingTab?.id) {
-      loggedInSnapshot = await captureLoggedInAmexTabSnapshot(existingTab.id, chromeCookieNames);
+      console.log('[Mighty Probe] live session using selected logged-in tab', {
+        tabId: existingTab.id,
+        url: existingTab.url,
+        title: existingTab.title || '',
+      });
+      loggedInSnapshot = await captureLoggedInAmexTabSnapshot(
+        existingTab.id,
+        existingTab.url,
+        chromeCookieNames,
+      );
       loggedInSnapshot.tab_id = existingTab.id;
       loggedInSnapshot.tab_active = !!existingTab.active;
     }

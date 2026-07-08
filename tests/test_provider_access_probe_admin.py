@@ -582,3 +582,44 @@ def test_live_session_comparison_concurrent_rejected(admin_client):
         json={"entry_url": "https://global.americanexpress.com/login"},
     )
     assert conflict.status_code == 409
+
+
+def test_admin_live_session_page_shows_logged_in_tab_found(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAIL", client.email)
+    import app as mighty
+    from mighty.provider_access_probe import (
+        complete_live_session_comparison,
+        build_amex_live_session_comparison,
+        start_live_session_comparison,
+        PROBE_LIFECYCLE_DONE,
+    )
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        with client.session_transaction() as sess:
+            user_id = sess["user_id"]
+        state = start_live_session_comparison(db, user_id, "https://www.americanexpress.com/en-us/account/")
+        comparison = build_amex_live_session_comparison({
+            "entry_url": "https://www.americanexpress.com/en-us/account/",
+            "logged_in_tab": {
+                "found": True,
+                "final_url": "https://global.americanexpress.com/overview",
+                "page_title": "Overview",
+            },
+            "bootstrap_probe_tab": {"found": True, "final_url": "https://www.americanexpress.com/en-us/account/login"},
+        })
+        complete_live_session_comparison(
+            db,
+            user_id,
+            state["comparison_run_id"],
+            lifecycle=PROBE_LIFECYCLE_DONE,
+            comparison=comparison,
+        )
+
+    r = client.get("/admin/provider-access-probe")
+    assert r.status_code == 200
+    text = r.data.decode("utf-8")
+    assert "Logged-in tab:" in text
+    assert "found —" in text
+    assert "global.americanexpress.com/overview" in text
+    assert "Logged-in tab:</strong> not found" not in text
