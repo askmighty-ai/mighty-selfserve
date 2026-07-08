@@ -1519,6 +1519,15 @@ def _probe_live_session_comparison_section(
 
     diagnostic = comparison.get("diagnostic_summary") or live_session_comparison.get("diagnostic_summary") or "—"
     field_diffs = comparison.get("field_diffs") or []
+    logged_in = comparison.get("logged_in_tab") or {}
+    if logged_in.get("found"):
+        logged_in_status = f"found — {_he(logged_in.get('final_url') or '—')}"
+    elif logged_in.get("network_trace_limitation") == "snapshot_failed":
+        logged_in_status = "snapshot_failed"
+    elif logged_in.get("network_trace_limitation") == "no_logged_in_amex_tab":
+        logged_in_status = "not found"
+    else:
+        logged_in_status = _he(logged_in.get("network_trace_limitation") or "not found")
 
     diff_rows = ""
     for diff in field_diffs[:40]:
@@ -1562,6 +1571,7 @@ def _probe_live_session_comparison_section(
         f'{_he(live_session_comparison.get("entry_url") or default_entry)}</span></p>'
         f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">{entry_buttons}</div>'
         f'<p style="font-size:11px;margin:0 0 12px"><strong>Diagnostic:</strong> {_he(diagnostic)}</p>'
+        f'<p style="font-size:11px;margin:0 0 12px"><strong>Logged-in tab:</strong> {logged_in_status}</p>'
         "<h4 style=\"font-size:12px;margin:0 0 6px\">Differences only</h4>"
         f"{diff_table}"
         "</div>"

@@ -2167,9 +2167,11 @@ def compute_live_session_field_diffs(
     diffs: list[dict[str, Any]] = []
 
     if not logged_in.get("found"):
+        limitation = str(logged_in.get("network_trace_limitation") or "")
+        left_label = "snapshot_failed" if limitation == "snapshot_failed" else "not found"
         diffs.append({
             "field": "logged_in_tab",
-            "logged_in_tab": "not found",
+            "logged_in_tab": left_label,
             "bootstrap_probe_tab": "available" if bootstrap.get("found") else "not found",
         })
         return diffs
@@ -2287,7 +2289,13 @@ def compute_live_session_comparison_diagnostic(
     parts: list[str] = []
 
     if not logged_in.get("found"):
-        parts.append("no logged-in Amex tab available for comparison")
+        limitation = str(logged_in.get("network_trace_limitation") or "")
+        if limitation == "snapshot_failed":
+            parts.append("logged-in tab snapshot failed")
+        elif limitation == "no_logged_in_amex_tab":
+            parts.append("no logged-in Amex tab available for comparison")
+        else:
+            parts.append("logged-in tab unavailable for comparison")
     else:
         left_apis = _session_api_summary(logged_in)
         right_apis = _session_api_summary(bootstrap)

@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.4.5-amex-live-session-tab-discovery" in src
+    assert "1.4.6-amex-live-session-snapshot-fix" in src
     assert "background.js loaded — version" in src
 
 
@@ -205,3 +205,12 @@ def test_amex_live_session_tab_discovery_url_rules():
         "https://www.americanexpress.com/en-us/account/",
         "Membership Rewards | American Express",
     )
+
+
+def test_live_session_snapshot_uses_injected_collector_function():
+    src = _read_background_js()
+    assert "func: collectAmexLiveSessionSnapshot" in src
+    assert "live session logged-in snapshot started" in src
+    assert "live session logged-in snapshot succeeded" in src
+    assert "live session comparison payload before POST" in src
+    assert "logged_in_side" in src
