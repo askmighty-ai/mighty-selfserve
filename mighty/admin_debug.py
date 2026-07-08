@@ -1535,6 +1535,11 @@ def _probe_live_session_comparison_section(
             f"</tr>"
         )
 
+    diff_rows_body = diff_rows or (
+        '<tr><td colspan="3" class="muted" style="font-size:11px">'
+        "No differences recorded yet.</td></tr>"
+    )
+
     diff_table = (
         '<table style="width:100%;border-collapse:collapse;margin-top:12px">'
         '<thead><tr style="background:#f9fafb">'
@@ -1542,7 +1547,7 @@ def _probe_live_session_comparison_section(
         "<th style=\"font-size:11px;text-align:left;padding:6px\">Logged-in tab</th>"
         "<th style=\"font-size:11px;text-align:left;padding:6px\">Bootstrap probe</th>"
         "</tr></thead><tbody>"
-        f"{diff_rows or '<tr><td colspan=\"3\" class=\"muted\" style=\"font-size:11px;padding:6px\">No differences recorded yet.</td></tr>'}"
+        f"{diff_rows_body}"
         "</tbody></table>"
     )
 
