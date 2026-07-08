@@ -75,7 +75,7 @@ def test_probe_api_records_amex_result(client):
         headers={"X-Mighty-Key": client.api_key},
         json={
             "provider": "amex",
-            "url_visited": "https://www.americanexpress.com/en-us/account/",
+            "url_visited": "https://global.americanexpress.com/overview",
             "dom_text": AMEX_ACCOUNT_TEXT,
         },
     )
@@ -110,7 +110,7 @@ def test_admin_page_shows_auth_state_fields(client, monkeypatch):
         headers={"X-Mighty-Key": client.api_key},
         json={
             "provider": "amex",
-            "url_visited": "https://www.americanexpress.com/en-us/account/",
+            "url_visited": "https://global.americanexpress.com/overview",
             "dom_text": AMEX_ACCOUNT_TEXT,
             "page_title": "Amex Account Home",
         },
@@ -250,7 +250,7 @@ def test_admin_page_shows_page_diagnostics_for_unknown(client, monkeypatch):
         headers={"X-Mighty-Key": client.api_key},
         json={
             "provider": "amex",
-            "url_visited": "https://www.americanexpress.com/en-us/account/",
+            "url_visited": "https://global.americanexpress.com/overview",
             "dom_text": "",
             "page_diagnostics": {
                 "ready_state": "complete",
@@ -259,7 +259,7 @@ def test_admin_page_shows_page_diagnostics_for_unknown(client, monkeypatch):
                 "visible_text_preview": "",
                 "iframe_count": 0,
                 "input_count": 0,
-                "final_url": "https://www.americanexpress.com/en-us/account/",
+                "final_url": "https://global.americanexpress.com/overview",
             },
         },
     )
@@ -278,7 +278,7 @@ def test_admin_page_shows_deep_inspect_for_amex(client, monkeypatch):
         headers={"X-Mighty-Key": client.api_key},
         json={
             "provider": "amex",
-            "url_visited": "https://www.americanexpress.com/en-us/account/",
+            "url_visited": "https://global.americanexpress.com/overview",
             "dom_text": "",
             "page_diagnostics": {
                 "ready_state": "complete",
@@ -299,7 +299,7 @@ def test_admin_page_shows_deep_inspect_for_amex(client, monkeypatch):
                 "local_storage_keys": ["prefs"],
                 "session_storage_keys": [],
                 "content_script_injection_succeeded": True,
-                "final_url": "https://www.americanexpress.com/en-us/account/",
+                "final_url": "https://global.americanexpress.com/overview",
                 "page_title": "One App",
                 "ready_state": "complete",
                 "visible_text_preview": "Give Feedback",
@@ -537,7 +537,7 @@ def test_extension_live_session_comparison_submit(client, admin_client):
             "entry_url": "https://www.americanexpress.com/en-us/account/",
             "logged_in_tab": {
                 "found": True,
-                "final_url": "https://www.americanexpress.com/en-us/account/",
+                "final_url": "https://global.americanexpress.com/overview",
                 "page_title": "Account Home",
                 "navigator_user_agent": "Mozilla/5.0",
                 "auth_session_requests": [

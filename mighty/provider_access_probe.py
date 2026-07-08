@@ -281,8 +281,9 @@ class ProviderProbeConfig:
 PROVIDER_PROBE_CONFIG: dict[str, ProviderProbeConfig] = {
     "amex": ProviderProbeConfig(
         source="amex",
-        entry_url="https://www.americanexpress.com/en-us/account/",
+        entry_url="https://global.americanexpress.com/overview",
         account_path_res=(
+            _rx(r"/overview(?:/|$|\?)"),
             _rx(r"/en-us/account(?:/|$|\?)"),
             _rx(r"/en-us/rewards(?:/|$|\?)"),
             _rx(r"/account/(?:home|summary|dashboard)"),

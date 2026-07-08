@@ -932,7 +932,7 @@ def scrape_amex(page, c, ctx):
         _inbox_mark(ctx)
         _click(page, ["#loginSubmit",'button[type="submit"]'])
         _handle_2fa(page, ctx)
-        page.wait_for_url("**americanexpress.com/en-us/account/**", timeout=LOGIN_TIMEOUT)
+        page.wait_for_url("**global.americanexpress.com/overview**", timeout=LOGIN_TIMEOUT)
         # Visit high-value pages first so they lead the raw_text
         _benefit_pages = [
             "https://www.americanexpress.com/en-us/benefits/overview/",

@@ -130,7 +130,7 @@ export const MOBILE_SITES: MobileSite[] = [
     emoji: '💳',
     loginUrl: 'https://www.americanexpress.com/en-us/account/login',
     accountPages: [
-      'https://www.americanexpress.com/en-us/account/',
+      'https://global.americanexpress.com/overview',
       'https://www.americanexpress.com/en-us/rewards/membership-rewards/',
     ],
   },

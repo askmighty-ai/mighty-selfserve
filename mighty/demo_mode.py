@@ -78,7 +78,7 @@ _DEMO_CHASE_DINING_DAYS = 12
 
 _DEMO_ACCOUNT_URLS = {
     "marriott": "https://www.marriott.com/loyalty/myAccount/default.mi",
-    "amex": "https://www.americanexpress.com/en-us/account/",
+    "amex": "https://global.americanexpress.com/overview",
     "delta": "https://www.delta.com/myprofile/",
     "chase": "https://secure.chase.com/web/auth/dashboard",
     "southwest": "https://www.southwest.com/loyalty/myaccount/",

@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.7-amex-live-session-global-overview-entry';
+const MIGHTY_EXT_VERSION = '1.4.8-amex-operational-global-overview-entry';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 const AMEX_BOOTSTRAP_TRACE_MS = 20000;
@@ -542,7 +542,7 @@ const ACCOUNT_ENTRY = {
   american_air: 'https://www.aa.com/loyalty/home.do',
   alaska_air:   'https://www.alaskaair.com/account/dashboard',
   sfcu:         'https://www.sfcu.org/accounts/online-banking',
-  amex:         'https://www.americanexpress.com/en-us/account/',
+  amex:         'https://global.americanexpress.com/overview',
   chase:        'https://secure.chase.com/web/auth/dashboard',
   wells_fargo:  'https://www.wellsfargo.com/change-the-way-you-bank/online-banking/jump/',
   bofa:         'https://www.bankofamerica.com/myaccounts/brain/render.go',
