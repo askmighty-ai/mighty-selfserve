@@ -21156,6 +21156,7 @@ def admin_provider_access_probe_page():
         get_latest_bootstrap_traces_by_entry,
         get_latest_live_session_comparison,
         AMEX_BOOTSTRAP_ENTRY_URLS,
+        AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS,
         is_automatic_probe_disabled,
     )
 
@@ -21171,6 +21172,7 @@ def admin_provider_access_probe_page():
         automatic_probes_disabled=is_automatic_probe_disabled(),
         bootstrap_traces=bootstrap_traces,
         bootstrap_entry_urls=list(AMEX_BOOTSTRAP_ENTRY_URLS),
+        live_session_entry_urls=list(AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS),
         live_session_comparison=live_session_comparison,
     )
 
@@ -21424,7 +21426,7 @@ def api_extension_provider_access_probe_bootstrap_trace_submit():
 @require_admin
 def api_admin_provider_access_probe_live_session_comparison():
     from mighty.provider_access_probe import (
-        AMEX_BOOTSTRAP_ENTRY_URLS,
+        AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS,
         ConcurrentProbeError,
         start_live_session_comparison,
         live_session_comparison_state_to_json,
@@ -21432,7 +21434,7 @@ def api_admin_provider_access_probe_live_session_comparison():
 
     uid = session["user_id"]
     body = request.get_json(silent=True) or {}
-    entry_url = (body.get("entry_url") or AMEX_BOOTSTRAP_ENTRY_URLS[0]).strip()
+    entry_url = (body.get("entry_url") or AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS[0]).strip()
     try:
         state = start_live_session_comparison(get_db(), uid, entry_url)
     except ConcurrentProbeError as exc:

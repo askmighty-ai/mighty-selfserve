@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.6-amex-live-session-snapshot-fix';
+const MIGHTY_EXT_VERSION = '1.4.7-amex-live-session-global-overview-entry';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 const AMEX_BOOTSTRAP_TRACE_MS = 20000;
@@ -9,6 +9,10 @@ const AMEX_BOOTSTRAP_ENTRY_URLS = [
   'https://www.americanexpress.com/en-us/account/',
   'https://www.americanexpress.com/en-us/account/login',
   'https://global.americanexpress.com/login',
+];
+const AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS = [
+  ...AMEX_BOOTSTRAP_ENTRY_URLS,
+  'https://global.americanexpress.com/overview',
 ];
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
@@ -1247,7 +1251,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
       await runAmexLiveSessionComparison(
         api_key,
         msg.comparison_run_id || null,
-        msg.entry_url || AMEX_BOOTSTRAP_ENTRY_URLS[0],
+        msg.entry_url || AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS[0],
       );
     })().catch(console.error);
     sendResponse({ ok: true });
@@ -3316,7 +3320,7 @@ async function runAmexLiveSessionComparison(apiKey, comparisonRunId, entryUrl) {
     console.log('[Mighty Probe] live session comparison skipped — another diagnostic in progress');
     return;
   }
-  if (!AMEX_BOOTSTRAP_ENTRY_URLS.includes(entryUrl)) {
+  if (!AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS.includes(entryUrl)) {
     console.warn('[Mighty Probe] unsupported live session comparison entry URL:', entryUrl);
     return;
   }

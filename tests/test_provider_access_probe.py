@@ -48,6 +48,7 @@ from mighty.provider_access_probe import (
     get_latest_probe_per_provider,
     start_manual_probe,
     AMEX_BOOTSTRAP_ENTRY_URLS,
+    AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS,
     sanitize_bootstrap_trace,
     build_amex_bootstrap_trace,
     compute_bootstrap_diagnostic,
@@ -1141,6 +1142,16 @@ class TestAmexLiveSessionComparison:
         start_live_session_comparison(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[0])
         with pytest.raises(ConcurrentProbeError):
             start_live_session_comparison(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[1])
+
+    def test_start_live_session_comparison_accepts_global_overview_entry(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "lsc-overview.db"))
+        db.row_factory = sqlite3.Row
+        overview_url = "https://global.americanexpress.com/overview"
+        assert overview_url in AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS
+        state = start_live_session_comparison(db, "user-1", overview_url)
+        assert state["entry_url"] == overview_url
 
     def test_live_session_comparison_blocked_when_bootstrap_running(self, tmp_path):
         import sqlite3

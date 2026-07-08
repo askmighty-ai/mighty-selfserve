@@ -1493,7 +1493,7 @@ def _fmt_live_session_diff_value(value: Any) -> str:
 
 def _probe_live_session_comparison_section(
     live_session_comparison: dict[str, Any] | None,
-    bootstrap_entry_urls: list[str],
+    live_session_entry_urls: list[str],
 ) -> str:
     live_session_comparison = live_session_comparison or {}
     comparison = live_session_comparison.get("comparison") or {}
@@ -1510,11 +1510,11 @@ def _probe_live_session_comparison_section(
         f'border-radius:6px;font-size:12px;font-weight:600;color:{lc_fg};background:{lc_bg}">'
         f'{_he(lifecycle)}</span>'
     )
-    default_entry = bootstrap_entry_urls[0] if bootstrap_entry_urls else ""
+    default_entry = live_session_entry_urls[0] if live_session_entry_urls else ""
     entry_buttons = "".join(
         f'<button class="btn live-session-comparison-btn" data-entry-url="{_he(url)}" '
         f'style="font-size:11px;padding:6px 10px">Compare — {_he(url.split("//")[-1][:40])}</button>'
-        for url in bootstrap_entry_urls
+        for url in live_session_entry_urls
     )
 
     diagnostic = comparison.get("diagnostic_summary") or live_session_comparison.get("diagnostic_summary") or "—"
@@ -1665,11 +1665,13 @@ def render_provider_access_probe_page(
     automatic_probes_disabled: bool = False,
     bootstrap_traces: dict[str, dict[str, Any]] | None = None,
     bootstrap_entry_urls: list[str] | None = None,
+    live_session_entry_urls: list[str] | None = None,
     live_session_comparison: dict[str, Any] | None = None,
 ) -> str:
     manual_state = manual_state or {}
     bootstrap_traces = bootstrap_traces or {}
     bootstrap_entry_urls = bootstrap_entry_urls or []
+    live_session_entry_urls = live_session_entry_urls or bootstrap_entry_urls
     live_session_comparison = live_session_comparison or {}
     lifecycle = manual_state.get("lifecycle") or "idle"
     lifecycle_colors = {
@@ -1966,7 +1968,7 @@ def render_provider_access_probe_page(
         '<p class="muted" style="font-size:11px">JSON API: '
         '<code>/api/admin/provider-access-probe</code></p>'
         f"{run_controls}"
-        f"{_probe_live_session_comparison_section(live_session_comparison, bootstrap_entry_urls)}"
+        f"{_probe_live_session_comparison_section(live_session_comparison, live_session_entry_urls)}"
         f"{_probe_bootstrap_trace_section(bootstrap_traces, bootstrap_entry_urls)}"
         f"{_probe_deep_inspect_section(rows)}"
         '<div class="card"><table><thead><tr>'

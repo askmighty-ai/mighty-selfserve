@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.4.6-amex-live-session-snapshot-fix" in src
+    assert "1.4.7-amex-live-session-global-overview-entry" in src
     assert "background.js loaded — version" in src
 
 
@@ -143,6 +143,8 @@ def test_amex_live_session_comparator_present():
     assert "collectAmexLiveSessionSnapshot" in src
     assert "live-session-comparison" in src
     assert "_liveSessionComparisonInProgress" in src
+    assert "AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS" in src
+    assert "https://global.americanexpress.com/overview" in src
 
 
 def test_amex_live_session_tab_discovery_helpers_present():
