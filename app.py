@@ -823,10 +823,11 @@ def init_db():
         except Exception:
             pass
         try:
-            from mighty.provider_access_probe import ensure_probe_tables, ensure_manual_probe_tables, ensure_bootstrap_trace_tables
+            from mighty.provider_access_probe import ensure_probe_tables, ensure_manual_probe_tables, ensure_bootstrap_trace_tables, ensure_live_session_comparison_tables
             ensure_probe_tables(db)
             ensure_manual_probe_tables(db)
             ensure_bootstrap_trace_tables(db)
+            ensure_live_session_comparison_tables(db)
         except Exception:
             pass
 
@@ -21153,6 +21154,7 @@ def admin_provider_access_probe_page():
         get_latest_probe_per_provider,
         get_manual_probe_state,
         get_latest_bootstrap_traces_by_entry,
+        get_latest_live_session_comparison,
         AMEX_BOOTSTRAP_ENTRY_URLS,
         is_automatic_probe_disabled,
     )
@@ -21162,12 +21164,14 @@ def admin_provider_access_probe_page():
     rows = merge_probe_summaries(latest, sorted(PROBE_PROVIDERS))
     manual_state = get_manual_probe_state(get_db(), uid)
     bootstrap_traces = get_latest_bootstrap_traces_by_entry(get_db(), uid)
+    live_session_comparison = get_latest_live_session_comparison(get_db(), uid)
     return _admin_debug.render_provider_access_probe_page(
         rows,
         manual_state=manual_state,
         automatic_probes_disabled=is_automatic_probe_disabled(),
         bootstrap_traces=bootstrap_traces,
         bootstrap_entry_urls=list(AMEX_BOOTSTRAP_ENTRY_URLS),
+        live_session_comparison=live_session_comparison,
     )
 
 
@@ -21413,6 +21417,122 @@ def api_extension_provider_access_probe_bootstrap_trace_submit():
         "lifecycle": PROBE_LIFECYCLE_DONE,
         "trace": trace,
         "diagnostic_summary": trace.get("diagnostic_summary"),
+    }))
+
+
+@app.route("/api/admin/provider-access-probe/live-session-comparison", methods=["POST"])
+@require_admin
+def api_admin_provider_access_probe_live_session_comparison():
+    from mighty.provider_access_probe import (
+        AMEX_BOOTSTRAP_ENTRY_URLS,
+        ConcurrentProbeError,
+        start_live_session_comparison,
+        live_session_comparison_state_to_json,
+    )
+
+    uid = session["user_id"]
+    body = request.get_json(silent=True) or {}
+    entry_url = (body.get("entry_url") or AMEX_BOOTSTRAP_ENTRY_URLS[0]).strip()
+    try:
+        state = start_live_session_comparison(get_db(), uid, entry_url)
+    except ConcurrentProbeError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(live_session_comparison_state_to_json(state))
+
+
+@app.route("/api/admin/provider-access-probe/live-session-comparison-status")
+@require_admin
+def api_admin_provider_access_probe_live_session_comparison_status():
+    from mighty.provider_access_probe import (
+        get_latest_live_session_comparison,
+        live_session_comparison_state_to_json,
+        PROBE_LIFECYCLE_IDLE,
+    )
+
+    uid = session["user_id"]
+    latest = get_latest_live_session_comparison(get_db(), uid)
+    if not latest:
+        return jsonify(live_session_comparison_state_to_json({"lifecycle": PROBE_LIFECYCLE_IDLE}))
+    return jsonify(live_session_comparison_state_to_json(latest))
+
+
+@app.route("/api/extension/provider-access-probe/live-session-comparison")
+def api_extension_provider_access_probe_live_session_comparison_pending():
+    from mighty.provider_access_probe import (
+        get_pending_live_session_comparison,
+        live_session_comparison_state_to_json,
+        PROBE_LIFECYCLE_IDLE,
+    )
+
+    user = api_user()[0]
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+    pending = get_pending_live_session_comparison(get_db(), user["id"])
+    if not pending:
+        return jsonify(live_session_comparison_state_to_json({"lifecycle": PROBE_LIFECYCLE_IDLE}))
+    return jsonify(live_session_comparison_state_to_json(pending))
+
+
+@app.route("/api/extension/provider-access-probe/live-session-comparison", methods=["POST"])
+def api_extension_provider_access_probe_live_session_comparison_submit():
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+
+    comparison_run_id = (body.get("comparison_run_id") or "").strip()
+    if not comparison_run_id:
+        return jsonify({"error": "comparison_run_id required"}), 400
+
+    from mighty.provider_access_probe import (
+        PROBE_LIFECYCLE_DONE,
+        PROBE_LIFECYCLE_ERROR,
+        build_amex_live_session_comparison,
+        complete_live_session_comparison,
+        live_session_comparison_state_to_json,
+    )
+
+    if body.get("logged_in_tab", {}).get("error") and body.get("bootstrap_probe_tab", {}).get("error"):
+        complete_live_session_comparison(
+            get_db(),
+            user["id"],
+            comparison_run_id,
+            lifecycle=PROBE_LIFECYCLE_ERROR,
+            error_message=str(body.get("logged_in_tab", {}).get("error") or body.get("bootstrap_probe_tab", {}).get("error")),
+        )
+        return jsonify(live_session_comparison_state_to_json({
+            "comparison_run_id": comparison_run_id,
+            "entry_url": body.get("entry_url"),
+            "lifecycle": PROBE_LIFECYCLE_ERROR,
+            "error_message": str(body.get("logged_in_tab", {}).get("error") or body.get("bootstrap_probe_tab", {}).get("error")),
+        }))
+
+    try:
+        comparison = build_amex_live_session_comparison(body)
+    except Exception as exc:
+        complete_live_session_comparison(
+            get_db(),
+            user["id"],
+            comparison_run_id,
+            lifecycle=PROBE_LIFECYCLE_ERROR,
+            error_message=str(exc),
+        )
+        return jsonify({"error": str(exc)}), 400
+
+    complete_live_session_comparison(
+        get_db(),
+        user["id"],
+        comparison_run_id,
+        lifecycle=PROBE_LIFECYCLE_DONE,
+        comparison=comparison,
+    )
+    return jsonify(live_session_comparison_state_to_json({
+        "comparison_run_id": comparison_run_id,
+        "entry_url": comparison.get("entry_url"),
+        "lifecycle": PROBE_LIFECYCLE_DONE,
+        "comparison": comparison,
+        "diagnostic_summary": comparison.get("diagnostic_summary"),
     }))
 
 
