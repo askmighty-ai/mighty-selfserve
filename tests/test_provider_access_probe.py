@@ -42,6 +42,7 @@ from mighty.provider_access_probe import (
     is_automatic_probe_disabled,
     is_blank_or_unloaded_page,
     is_marketing_url,
+    is_account_url,
     merge_probe_summaries,
     record_probe_run,
     ensure_probe_tables,
@@ -66,12 +67,14 @@ from mighty.provider_access_probe import (
     get_latest_live_session_comparison,
     get_pending_live_session_comparison,
     live_session_comparison_state_to_json,
+    PROVIDER_PROBE_CONFIG,
 )
 
 
 # ── Amex fixtures ─────────────────────────────────────────────────────────────
 
-AMEX_ACCOUNT_URL = "https://www.americanexpress.com/en-us/account/"
+AMEX_ACCOUNT_URL = "https://global.americanexpress.com/overview"
+AMEX_LEGACY_ACCOUNT_URL = "https://www.americanexpress.com/en-us/account/"
 AMEX_LOGIN_URL = "https://www.americanexpress.com/en-us/account/login"
 AMEX_MARKETING_URL = "https://www.americanexpress.com/en-us/credit-cards/"
 
@@ -161,6 +164,12 @@ Sign In
 
 
 class TestAmexSignedInDetection:
+    def test_operational_entry_url_uses_global_overview(self):
+        assert PROVIDER_PROBE_CONFIG["amex"].entry_url == AMEX_ACCOUNT_URL
+
+    def test_global_overview_counts_as_account_url(self):
+        assert is_account_url("amex", AMEX_ACCOUNT_URL)
+
     def test_account_dashboard_counts_as_signed_in(self):
         assert detect_signed_in_from_text("amex", AMEX_ACCOUNT_URL, AMEX_LOGGED_IN_TEXT)
 

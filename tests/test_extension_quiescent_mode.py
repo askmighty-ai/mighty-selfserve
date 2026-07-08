@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.4.7-amex-live-session-global-overview-entry" in src
+    assert "1.4.8-amex-operational-global-overview-entry" in src
     assert "background.js loaded — version" in src
 
 
@@ -135,6 +135,11 @@ def test_amex_bootstrap_trace_runner_present():
     assert "collectBootstrapTraceInPage" in src
     assert "bootstrap-trace" in src
     assert "_bootstrapTraceInProgress" in src
+
+
+def test_amex_operational_account_entry_uses_global_overview():
+    src = _read_background_js()
+    assert "amex:         'https://global.americanexpress.com/overview'" in src
 
 
 def test_amex_live_session_comparator_present():
