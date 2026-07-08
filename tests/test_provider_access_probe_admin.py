@@ -489,7 +489,19 @@ def test_admin_page_shows_live_session_comparator_section(client, monkeypatch):
     text = r.data.decode("utf-8")
     assert "Amex Live Session Comparator" in text
     assert "live-session-comparison-btn" in text
+    assert "Compare — global.americanexpress.com/overview" in text
     assert "Differences only" in text
+
+
+def test_admin_live_session_comparison_accepts_global_overview_entry(admin_client):
+    start = admin_client.post(
+        "/api/admin/provider-access-probe/live-session-comparison",
+        json={"entry_url": "https://global.americanexpress.com/overview"},
+    )
+    assert start.status_code == 200
+    body = start.get_json()
+    assert body["entry_url"] == "https://global.americanexpress.com/overview"
+    assert body["lifecycle"] == "running"
 
 
 def test_admin_live_session_comparison_start_and_extension_poll(client, admin_client):

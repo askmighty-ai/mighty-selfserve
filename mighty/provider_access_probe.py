@@ -1673,6 +1673,11 @@ AMEX_BOOTSTRAP_ENTRY_URLS: tuple[str, ...] = (
     "https://global.americanexpress.com/login",
 )
 
+AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS: tuple[str, ...] = (
+    *AMEX_BOOTSTRAP_ENTRY_URLS,
+    "https://global.americanexpress.com/overview",
+)
+
 BOOTSTRAP_KEYWORD_RE = re.compile(
     r"bootstrap|session|login|auth|token|csrf|sso|identity|ReadUserSession|UpdateUserSession",
     re.IGNORECASE,
@@ -2429,10 +2434,10 @@ def get_pending_live_session_comparison(db: Any, user_id: str) -> dict[str, Any]
 def start_live_session_comparison(db: Any, user_id: str, entry_url: str) -> dict[str, Any]:
     """Queue an Amex live session comparison diagnostic."""
     entry_url = entry_url.strip()
-    if entry_url not in AMEX_BOOTSTRAP_ENTRY_URLS:
+    if entry_url not in AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS:
         raise ValueError(
-            f"unsupported bootstrap entry URL: {entry_url!r} "
-            f"(allowed: {', '.join(AMEX_BOOTSTRAP_ENTRY_URLS)})"
+            f"unsupported live session comparison entry URL: {entry_url!r} "
+            f"(allowed: {', '.join(AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS)})"
         )
     ensure_live_session_comparison_tables(db)
     ensure_manual_probe_tables(db)
