@@ -480,3 +480,105 @@ def test_bootstrap_trace_concurrent_rejected(admin_client):
         json={"entry_url": "https://global.americanexpress.com/login"},
     )
     assert conflict.status_code == 409
+
+
+def test_admin_page_shows_live_session_comparator_section(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAIL", client.email)
+    r = client.get("/admin/provider-access-probe")
+    assert r.status_code == 200
+    text = r.data.decode("utf-8")
+    assert "Amex Live Session Comparator" in text
+    assert "live-session-comparison-btn" in text
+    assert "Differences only" in text
+
+
+def test_admin_live_session_comparison_start_and_extension_poll(client, admin_client):
+    start = admin_client.post(
+        "/api/admin/provider-access-probe/live-session-comparison",
+        json={"entry_url": "https://www.americanexpress.com/en-us/account/"},
+    )
+    assert start.status_code == 200
+    body = start.get_json()
+    comparison_run_id = body["comparison_run_id"]
+    assert body["lifecycle"] == "running"
+
+    pending = client.get(
+        "/api/extension/provider-access-probe/live-session-comparison",
+        headers={"X-Mighty-Key": client.api_key},
+    )
+    assert pending.status_code == 200
+    assert pending.get_json()["comparison_run_id"] == comparison_run_id
+
+
+def test_extension_live_session_comparison_submit(client, admin_client):
+    start = admin_client.post(
+        "/api/admin/provider-access-probe/live-session-comparison",
+        json={"entry_url": "https://www.americanexpress.com/en-us/account/"},
+    )
+    comparison_run_id = start.get_json()["comparison_run_id"]
+
+    submit = client.post(
+        "/api/extension/provider-access-probe/live-session-comparison",
+        headers={"X-Mighty-Key": client.api_key},
+        json={
+            "comparison_run_id": comparison_run_id,
+            "entry_url": "https://www.americanexpress.com/en-us/account/",
+            "logged_in_tab": {
+                "found": True,
+                "final_url": "https://www.americanexpress.com/en-us/account/",
+                "page_title": "Account Home",
+                "navigator_user_agent": "Mozilla/5.0",
+                "auth_session_requests": [
+                    {
+                        "url": "https://functions.americanexpress.com/ReadUserSession.v1",
+                        "status_code": 200,
+                        "with_credentials": True,
+                        "request_header_names": ["accept"],
+                        "response_header_names": ["content-type"],
+                    },
+                ],
+            },
+            "bootstrap_probe_tab": {
+                "found": True,
+                "final_url": "https://www.americanexpress.com/en-us/account/login",
+                "page_title": "Login",
+                "navigator_user_agent": "Mozilla/5.0",
+                "auth_session_requests": [
+                    {
+                        "url": "https://functions.americanexpress.com/ReadUserSession.v1",
+                        "status_code": 400,
+                        "with_credentials": True,
+                        "request_header_names": ["accept"],
+                        "response_header_names": ["content-type"],
+                    },
+                    {
+                        "url": "https://functions.americanexpress.com/UpdateUserSession.v1",
+                        "status_code": 401,
+                        "with_credentials": False,
+                    },
+                ],
+            },
+        },
+    )
+    assert submit.status_code == 200
+    data = submit.get_json()
+    assert data["lifecycle"] == "done"
+    comparison = data.get("comparison") or {}
+    assert comparison.get("field_diffs")
+    assert "400" in (data.get("diagnostic_summary") or "")
+
+    status = admin_client.get("/api/admin/provider-access-probe/live-session-comparison-status")
+    assert status.status_code == 200
+    assert status.get_json()["lifecycle"] == "done"
+
+
+def test_live_session_comparison_concurrent_rejected(admin_client):
+    admin_client.post(
+        "/api/admin/provider-access-probe/live-session-comparison",
+        json={"entry_url": "https://www.americanexpress.com/en-us/account/"},
+    )
+    conflict = admin_client.post(
+        "/api/admin/provider-access-probe/live-session-comparison",
+        json={"entry_url": "https://global.americanexpress.com/login"},
+    )
+    assert conflict.status_code == 409

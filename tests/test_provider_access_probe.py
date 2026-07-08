@@ -56,6 +56,15 @@ from mighty.provider_access_probe import (
     get_latest_bootstrap_traces_by_entry,
     get_pending_bootstrap_trace,
     bootstrap_trace_state_to_json,
+    sanitize_live_session_snapshot,
+    build_amex_live_session_comparison,
+    compute_live_session_field_diffs,
+    compute_live_session_comparison_diagnostic,
+    start_live_session_comparison,
+    complete_live_session_comparison,
+    get_latest_live_session_comparison,
+    get_pending_live_session_comparison,
+    live_session_comparison_state_to_json,
 )
 
 
@@ -1036,3 +1045,142 @@ class TestAmexBootstrapTrace:
         pending = get_pending_bootstrap_trace(db, "user-1")
         assert pending["trace_run_id"] == state["trace_run_id"]
         assert pending["entry_url"] == AMEX_BOOTSTRAP_ENTRY_URLS[0]
+
+
+class TestAmexLiveSessionComparison:
+    def test_sanitize_live_session_snapshot_redacts_url_tokens(self):
+        raw = {
+            "found": True,
+            "final_url": "https://www.americanexpress.com/en-us/account/?token=secret",
+            "document_cookie_names": ["session=abc"],
+            "auth_session_requests": [
+                {
+                    "url": "https://functions.americanexpress.com/ReadUserSession.v1?token=secret",
+                    "method": "GET",
+                    "status_code": 401,
+                    "request_header_names": ["authorization", "cookie"],
+                    "response_header_names": ["content-type: application/json"],
+                    "with_credentials": True,
+                    "request_body": "must-not-persist",
+                },
+            ],
+            "navigator_user_agent_data": {
+                "brands": [{"brand": "Chromium", "version": "120"}],
+                "mobile": False,
+                "platform": "macOS",
+            },
+        }
+        result = sanitize_live_session_snapshot(raw)
+        assert "secret" not in result["final_url"]
+        assert result["document_cookie_names"] == ["session"]
+        req = result["auth_session_requests"][0]
+        assert "secret" not in req["url"]
+        assert req["request_header_names"] == ["authorization", "cookie"]
+        assert req["response_header_names"] == ["content-type"]
+        assert "request_body" not in req
+
+    def test_build_live_session_comparison_detects_session_api_divergence(self):
+        payload = {
+            "entry_url": AMEX_BOOTSTRAP_ENTRY_URLS[0],
+            "logged_in_tab": {
+                "found": True,
+                "final_url": "https://www.americanexpress.com/en-us/account/",
+                "page_title": "Account Home",
+                "auth_session_requests": [
+                    {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 200, "with_credentials": True},
+                    {"url": "https://functions.americanexpress.com/UpdateUserSession.v1", "status_code": 200, "with_credentials": True},
+                ],
+            },
+            "bootstrap_probe_tab": {
+                "found": True,
+                "final_url": "https://www.americanexpress.com/en-us/account/login",
+                "page_title": "Login",
+                "auth_session_requests": [
+                    {"url": "https://functions.americanexpress.com/ReadUserSession.v1", "status_code": 400, "with_credentials": True},
+                    {"url": "https://functions.americanexpress.com/UpdateUserSession.v1", "status_code": 401, "with_credentials": False},
+                ],
+            },
+        }
+        comparison = build_amex_live_session_comparison(payload)
+        assert comparison["logged_in_tab"]["source"] == "logged_in_tab"
+        assert comparison["bootstrap_probe_tab"]["source"] == "bootstrap_probe_tab"
+        assert any(d.get("field") == "read_user_session_status" for d in comparison["field_diffs"])
+        assert any(d.get("field") == "update_user_session_status" for d in comparison["field_diffs"])
+        diagnostic = compute_live_session_comparison_diagnostic(
+            comparison["logged_in_tab"],
+            comparison["bootstrap_probe_tab"],
+            comparison["differences"],
+        )
+        assert "bootstrap probe ReadUserSession.v1 returned 400" in diagnostic
+        assert "session API succeeds on logged-in tab but fails on bootstrap probe" in diagnostic
+
+    def test_live_session_field_diffs_only_include_differences(self):
+        logged_in = {
+            "found": True,
+            "final_url": "https://www.americanexpress.com/en-us/account/",
+            "page_title": "Account",
+            "document_cookie_names": ["a"],
+        }
+        bootstrap = {
+            "found": True,
+            "final_url": "https://www.americanexpress.com/en-us/account/login",
+            "page_title": "Login",
+            "document_cookie_names": ["a"],
+        }
+        diffs = compute_live_session_field_diffs(logged_in, bootstrap)
+        fields = {d["field"] for d in diffs}
+        assert "final_url" in fields
+        assert "page_title" in fields
+        assert "document_cookie_names" not in fields
+
+    def test_concurrent_live_session_comparison_rejected(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "lsc.db"))
+        db.row_factory = sqlite3.Row
+        start_live_session_comparison(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[0])
+        with pytest.raises(ConcurrentProbeError):
+            start_live_session_comparison(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[1])
+
+    def test_live_session_comparison_blocked_when_bootstrap_running(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "lsc2.db"))
+        db.row_factory = sqlite3.Row
+        start_bootstrap_trace(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[0])
+        with pytest.raises(ConcurrentProbeError):
+            start_live_session_comparison(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[0])
+
+    def test_get_pending_live_session_comparison(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "lsc3.db"))
+        db.row_factory = sqlite3.Row
+        state = start_live_session_comparison(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[0])
+        pending = get_pending_live_session_comparison(db, "user-1")
+        assert pending["comparison_run_id"] == state["comparison_run_id"]
+        assert pending["entry_url"] == AMEX_BOOTSTRAP_ENTRY_URLS[0]
+
+    def test_complete_live_session_comparison_persists_payload(self, tmp_path):
+        import sqlite3
+
+        db = sqlite3.connect(str(tmp_path / "lsc4.db"))
+        db.row_factory = sqlite3.Row
+        state = start_live_session_comparison(db, "user-1", AMEX_BOOTSTRAP_ENTRY_URLS[0])
+        comparison = build_amex_live_session_comparison({
+            "entry_url": AMEX_BOOTSTRAP_ENTRY_URLS[0],
+            "logged_in_tab": {"found": True, "final_url": AMEX_BOOTSTRAP_ENTRY_URLS[0]},
+            "bootstrap_probe_tab": {"found": True, "final_url": AMEX_BOOTSTRAP_ENTRY_URLS[0]},
+        })
+        complete_live_session_comparison(
+            db,
+            "user-1",
+            state["comparison_run_id"],
+            lifecycle=PROBE_LIFECYCLE_DONE,
+            comparison=comparison,
+        )
+        latest = get_latest_live_session_comparison(db, "user-1")
+        assert latest["lifecycle"] == PROBE_LIFECYCLE_DONE
+        assert latest["comparison"]["provider"] == "amex"
+        json_state = live_session_comparison_state_to_json(latest)
+        assert json_state["comparison"]["field_diffs"] == comparison["field_diffs"]

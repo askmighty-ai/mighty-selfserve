@@ -1470,6 +1470,99 @@ def _fmt_bootstrap_request(req: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
+def _fmt_live_session_diff_value(value: Any) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        if all(isinstance(v, dict) for v in value):
+            parts = []
+            for item in value[:5]:
+                if not isinstance(item, dict):
+                    continue
+                bits = [f"{k}={item.get(k)!r}" for k in ("url", "status_code", "method", "with_credentials") if item.get(k) is not None]
+                if bits:
+                    parts.append("; ".join(bits))
+            return " | ".join(parts) if parts else f"[{len(value)} request(s)]"
+        return ", ".join(str(v) for v in value[:20])
+    if isinstance(value, dict):
+        return ", ".join(f"{k}={v!r}" for k, v in list(value.items())[:8])
+    return str(value)
+
+
+def _probe_live_session_comparison_section(
+    live_session_comparison: dict[str, Any] | None,
+    bootstrap_entry_urls: list[str],
+) -> str:
+    live_session_comparison = live_session_comparison or {}
+    comparison = live_session_comparison.get("comparison") or {}
+    lifecycle = live_session_comparison.get("lifecycle") or "idle"
+    lc_colors = {
+        "idle": ("#374151", "#f3f4f6"),
+        "running": ("#92400e", "#fef3c7"),
+        "done": ("#065f46", "#d1fae5"),
+        "error": ("#991b1b", "#fee2e2"),
+    }
+    lc_fg, lc_bg = lc_colors.get(lifecycle, ("#374151", "#f3f4f6"))
+    lifecycle_badge = (
+        f'<span id="live-session-comparison-lifecycle" style="display:inline-block;padding:4px 10px;'
+        f'border-radius:6px;font-size:12px;font-weight:600;color:{lc_fg};background:{lc_bg}">'
+        f'{_he(lifecycle)}</span>'
+    )
+    default_entry = bootstrap_entry_urls[0] if bootstrap_entry_urls else ""
+    entry_buttons = "".join(
+        f'<button class="btn live-session-comparison-btn" data-entry-url="{_he(url)}" '
+        f'style="font-size:11px;padding:6px 10px">Compare — {_he(url.split("//")[-1][:40])}</button>'
+        for url in bootstrap_entry_urls
+    )
+
+    diagnostic = comparison.get("diagnostic_summary") or live_session_comparison.get("diagnostic_summary") or "—"
+    field_diffs = comparison.get("field_diffs") or []
+
+    diff_rows = ""
+    for diff in field_diffs[:40]:
+        if not isinstance(diff, dict):
+            continue
+        field = diff.get("field") or "unknown"
+        left = _fmt_live_session_diff_value(diff.get("logged_in_tab"))
+        right = _fmt_live_session_diff_value(diff.get("bootstrap_probe_tab"))
+        diff_rows += (
+            f'<tr style="background:#fff7ed">'
+            f'<td style="font-size:11px;font-weight:600;vertical-align:top">{_he(field)}</td>'
+            f'<td style="font-size:11px;word-break:break-word;vertical-align:top">{_he(left)}</td>'
+            f'<td style="font-size:11px;word-break:break-word;vertical-align:top">{_he(right)}</td>'
+            f"</tr>"
+        )
+
+    diff_table = (
+        '<table style="width:100%;border-collapse:collapse;margin-top:12px">'
+        '<thead><tr style="background:#f9fafb">'
+        "<th style=\"font-size:11px;text-align:left;padding:6px\">Field</th>"
+        "<th style=\"font-size:11px;text-align:left;padding:6px\">Logged-in tab</th>"
+        "<th style=\"font-size:11px;text-align:left;padding:6px\">Bootstrap probe</th>"
+        "</tr></thead><tbody>"
+        f"{diff_rows or '<tr><td colspan=\"3\" class=\"muted\" style=\"font-size:11px;padding:6px\">No differences recorded yet.</td></tr>'}"
+        "</tbody></table>"
+    )
+
+    return (
+        '<div class="card" style="margin-bottom:16px">'
+        "<h3>Amex Live Session Comparator</h3>"
+        '<p class="muted" style="font-size:11px;margin:0 0 12px">'
+        "Compare a known-good logged-in Amex tab against a fresh bootstrap probe tab. "
+        "Collects metadata only — never cookie values, tokens, or response bodies.</p>"
+        f'<p style="margin:0 0 12px">Lifecycle: {lifecycle_badge}'
+        f' <span id="live-session-comparison-entry-label" class="muted" style="font-size:12px;margin-left:8px">'
+        f'{_he(live_session_comparison.get("entry_url") or default_entry)}</span></p>'
+        f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">{entry_buttons}</div>'
+        f'<p style="font-size:11px;margin:0 0 12px"><strong>Diagnostic:</strong> {_he(diagnostic)}</p>'
+        "<h4 style=\"font-size:12px;margin:0 0 6px\">Differences only</h4>"
+        f"{diff_table}"
+        "</div>"
+    )
+
+
 def _probe_bootstrap_trace_section(
     bootstrap_traces: dict[str, dict[str, Any]],
     bootstrap_entry_urls: list[str],
@@ -1557,10 +1650,12 @@ def render_provider_access_probe_page(
     automatic_probes_disabled: bool = False,
     bootstrap_traces: dict[str, dict[str, Any]] | None = None,
     bootstrap_entry_urls: list[str] | None = None,
+    live_session_comparison: dict[str, Any] | None = None,
 ) -> str:
     manual_state = manual_state or {}
     bootstrap_traces = bootstrap_traces or {}
     bootstrap_entry_urls = bootstrap_entry_urls or []
+    live_session_comparison = live_session_comparison or {}
     lifecycle = manual_state.get("lifecycle") or "idle"
     lifecycle_colors = {
         "idle": ("#374151", "#f3f4f6"),
@@ -1747,8 +1842,83 @@ def render_provider_access_probe_page(
     btn.addEventListener('click', () => runBootstrapTrace(btn.dataset.entryUrl));
   });
 
+  const liveSessionBadge = document.getElementById('live-session-comparison-lifecycle');
+  const liveSessionEntryEl = document.getElementById('live-session-comparison-entry-label');
+  const liveSessionButtons = Array.from(document.querySelectorAll('.live-session-comparison-btn'));
+  let liveSessionPollTimer = null;
+
+  function setLiveSessionLifecycle(data) {
+    if (!liveSessionBadge) return;
+    const lc = data.lifecycle || 'idle';
+    liveSessionBadge.textContent = lc;
+    if (liveSessionEntryEl) {
+      liveSessionEntryEl.textContent = data.entry_url ? ('(' + data.entry_url + ')') : '';
+    }
+    const colors = {
+      idle: ['#374151', '#f3f4f6'],
+      running: ['#92400e', '#fef3c7'],
+      done: ['#065f46', '#d1fae5'],
+      error: ['#991b1b', '#fee2e2'],
+    };
+    const [fg, bg] = colors[lc] || colors.idle;
+    liveSessionBadge.style.color = fg;
+    liveSessionBadge.style.background = bg;
+    const busy = lc === 'running';
+    liveSessionButtons.forEach(b => { b.disabled = busy; });
+    if (busy && !liveSessionPollTimer) {
+      liveSessionPollTimer = setInterval(refreshLiveSessionStatus, 2000);
+    } else if (!busy && liveSessionPollTimer) {
+      clearInterval(liveSessionPollTimer);
+      liveSessionPollTimer = null;
+      if (lc === 'done' || lc === 'error') {
+        setTimeout(() => location.reload(), 800);
+      }
+    }
+  }
+
+  async function refreshLiveSessionStatus() {
+    try {
+      const r = await fetch('/api/admin/provider-access-probe/live-session-comparison-status');
+      if (r.ok) setLiveSessionLifecycle(await r.json());
+    } catch (e) {}
+  }
+
+  async function runLiveSessionComparison(entryUrl) {
+    liveSessionButtons.forEach(b => { b.disabled = true; });
+    if (liveSessionBadge) liveSessionBadge.textContent = 'running';
+    try {
+      const r = await fetch('/api/admin/provider-access-probe/live-session-comparison', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_url: entryUrl }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert(data.error || 'Live session comparison failed');
+        await refreshLiveSessionStatus();
+        return;
+      }
+      setLiveSessionLifecycle(data);
+      window.postMessage({
+        type: '__mighty_dashboard__',
+        action: 'run_live_session_comparison',
+        entry_url: entryUrl,
+        comparison_run_id: data.comparison_run_id,
+      }, '*');
+      liveSessionPollTimer = liveSessionPollTimer || setInterval(refreshLiveSessionStatus, 2000);
+    } catch (e) {
+      alert('Live session comparison failed: ' + e.message);
+      await refreshLiveSessionStatus();
+    }
+  }
+
+  liveSessionButtons.forEach(btn => {
+    btn.addEventListener('click', () => runLiveSessionComparison(btn.dataset.entryUrl));
+  });
+
   refreshStatus();
   refreshBootstrapStatus();
+  refreshLiveSessionStatus();
 })();
 </script>"""
 
@@ -1781,6 +1951,7 @@ def render_provider_access_probe_page(
         '<p class="muted" style="font-size:11px">JSON API: '
         '<code>/api/admin/provider-access-probe</code></p>'
         f"{run_controls}"
+        f"{_probe_live_session_comparison_section(live_session_comparison, bootstrap_entry_urls)}"
         f"{_probe_bootstrap_trace_section(bootstrap_traces, bootstrap_entry_urls)}"
         f"{_probe_deep_inspect_section(rows)}"
         '<div class="card"><table><thead><tr>'

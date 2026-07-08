@@ -153,6 +153,7 @@ NETWORK_TRACE_ENTRY_KEYS: frozenset[str] = frozenset({
     "credentials",
     "mode",
     "with_credentials",
+    "request_header_names",
     "response_header_names",
     "cors_error",
     "network_error",
@@ -663,7 +664,7 @@ def _sanitize_network_trace_entry(entry: Any) -> dict[str, Any]:
             out[key] = sanitize_probe_url(str(value))
         elif key == "redirect_urls" and isinstance(value, list):
             out[key] = [sanitize_probe_url(str(u)) for u in value[:10]]
-        elif key == "response_header_names" and isinstance(value, list):
+        elif key in ("request_header_names", "response_header_names") and isinstance(value, list):
             out[key] = [str(h).split(":", 1)[0].strip() for h in value[:50] if str(h).strip()]
         elif key in ("status_code", "start_time_ms", "duration_ms", "redirect_count"):
             try:
@@ -1589,8 +1590,14 @@ def start_manual_probe(db: Any, user_id: str, provider: str) -> dict[str, Any]:
             f"(allowed: {', '.join(MANUAL_PROBE_PROVIDERS)})"
         )
     ensure_manual_probe_tables(db)
+    ensure_bootstrap_trace_tables(db)
+    ensure_live_session_comparison_tables(db)
     if _has_running_manual_probe(db, user_id):
         raise ConcurrentProbeError("a manual probe is already running")
+    if _has_running_bootstrap_trace(db, user_id):
+        raise ConcurrentProbeError("a bootstrap trace is already running")
+    if _has_running_live_session_comparison(db, user_id):
+        raise ConcurrentProbeError("a live session comparison is already running")
 
     manual_run_id = str(uuid.uuid4())
     now = utc_now_iso()
@@ -1921,10 +1928,13 @@ def start_bootstrap_trace(db: Any, user_id: str, entry_url: str) -> dict[str, An
         )
     ensure_bootstrap_trace_tables(db)
     ensure_manual_probe_tables(db)
+    ensure_live_session_comparison_tables(db)
     if _has_running_manual_probe(db, user_id):
         raise ConcurrentProbeError("a manual probe is already running")
     if _has_running_bootstrap_trace(db, user_id):
         raise ConcurrentProbeError("a bootstrap trace is already running")
+    if _has_running_live_session_comparison(db, user_id):
+        raise ConcurrentProbeError("a live session comparison is already running")
 
     trace_run_id = str(uuid.uuid4())
     now = utc_now_iso()
@@ -1992,4 +2002,504 @@ def bootstrap_trace_state_to_json(state: dict[str, Any]) -> dict[str, Any]:
         "started_at": state.get("started_at"),
         "completed_at": state.get("completed_at"),
         "trace": state.get("trace"),
+    }
+
+
+# ── Amex live session comparison (Phase 1 diagnostic) ─────────────────────────
+
+LIVE_SESSION_AUTH_REQUEST_RE = re.compile(
+    r"ReadUserSession\.v1|UpdateUserSession\.v1|session|login|auth|token|csrf|sso|identity",
+    re.IGNORECASE,
+)
+
+LIVE_SESSION_SNAPSHOT_STRING_KEYS: frozenset[str] = frozenset({
+    "source",
+    "final_url",
+    "page_title",
+    "visible_text_preview",
+    "referrer",
+    "navigator_user_agent",
+    "network_trace_limitation",
+})
+
+LIVE_SESSION_SNAPSHOT_LIST_KEYS: frozenset[str] = frozenset({
+    "document_cookie_names",
+    "local_storage_keys",
+    "session_storage_keys",
+    "auth_session_requests",
+})
+
+
+def _sanitize_user_agent_data(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, Any] = {}
+    brands = raw.get("brands")
+    if isinstance(brands, list):
+        sanitized_brands = []
+        for brand in brands[:10]:
+            if not isinstance(brand, dict):
+                continue
+            sanitized_brands.append({
+                "brand": str(brand.get("brand") or "")[:80],
+                "version": str(brand.get("version") or "")[:40],
+            })
+        if sanitized_brands:
+            out["brands"] = sanitized_brands
+    for key in ("mobile", "platform"):
+        if raw.get(key) is not None:
+            out[key] = str(raw[key])[:80]
+    return out or None
+
+
+def _sanitize_service_worker(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("scope", "script_url"):
+        if entry.get(key):
+            out[key] = sanitize_probe_url(str(entry[key]))
+    for key in ("state", "update_via_cache"):
+        if entry.get(key) is not None:
+            out[key] = str(entry[key])[:80]
+    return out
+
+
+def _sanitize_auth_session_request(entry: Any) -> dict[str, Any]:
+    sanitized = _sanitize_network_trace_entry(entry)
+    url = str(sanitized.get("url") or "")
+    if url and not LIVE_SESSION_AUTH_REQUEST_RE.search(url):
+        return {}
+    return sanitized
+
+
+def sanitize_live_session_snapshot(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize one tab side of an Amex live session comparison."""
+    raw = raw or {}
+    out: dict[str, Any] = {"found": bool(raw.get("found", True))}
+
+    for key in LIVE_SESSION_SNAPSHOT_STRING_KEYS:
+        if raw.get(key) is not None:
+            val = str(raw[key])
+            out[key] = val[:500] if key == "visible_text_preview" else val
+
+    if raw.get("final_url"):
+        out["final_url"] = sanitize_probe_url(str(raw["final_url"]))
+    if raw.get("referrer"):
+        out["referrer"] = sanitize_probe_url(str(raw["referrer"]))
+
+    for key in LIVE_SESSION_SNAPSHOT_LIST_KEYS:
+        items = raw.get(key)
+        if not isinstance(items, list):
+            continue
+        if key == "auth_session_requests":
+            out[key] = [
+                req for req in (_sanitize_auth_session_request(i) for i in items[:100])
+                if req
+            ]
+        elif key == "document_cookie_names":
+            out[key] = [_cookie_name_only(c) for c in items]
+        else:
+            out[key] = [str(k) for k in items[:100]]
+
+    chrome_cookies = raw.get("chrome_cookie_names")
+    if isinstance(chrome_cookies, dict):
+        out["chrome_cookie_names"] = {
+            str(domain): [_cookie_name_only(n) for n in names[:100]]
+            for domain, names in chrome_cookies.items()
+            if isinstance(names, list)
+        }
+
+    sw_regs = raw.get("service_worker_registrations")
+    if isinstance(sw_regs, list):
+        out["service_worker_registrations"] = [
+            _sanitize_service_worker(r) for r in sw_regs[:20] if isinstance(r, dict)
+        ]
+
+    ua_data = _sanitize_user_agent_data(raw.get("navigator_user_agent_data"))
+    if ua_data:
+        out["navigator_user_agent_data"] = ua_data
+
+    if raw.get("network_trace_limitation"):
+        out["network_trace_limitation"] = str(raw["network_trace_limitation"])
+
+    return out
+
+
+def _find_auth_request(requests: list[dict[str, Any]], needle: str) -> dict[str, Any] | None:
+    for req in requests:
+        if isinstance(req, dict) and needle in str(req.get("url") or ""):
+            return req
+    return None
+
+
+def _session_api_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
+    requests = snapshot.get("auth_session_requests") or []
+    read_user = _find_auth_request(requests, "ReadUserSession.v1")
+    update_user = _find_auth_request(requests, "UpdateUserSession.v1")
+    return {
+        "read_user_session_status": read_user.get("status_code") if read_user else None,
+        "update_user_session_status": update_user.get("status_code") if update_user else None,
+        "read_user_session": read_user,
+        "update_user_session": update_user,
+    }
+
+
+def _fmt_diff_value(value: Any) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        if all(isinstance(v, dict) for v in value):
+            return f"[{len(value)} item(s)]"
+        return ", ".join(str(v) for v in value[:20])
+    if isinstance(value, dict):
+        return ", ".join(f"{k}={v!r}" for k, v in list(value.items())[:10])
+    return str(value)
+
+
+def compute_live_session_field_diffs(
+    logged_in: dict[str, Any],
+    bootstrap: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return side-by-side diffs for fields that differ between the two tabs."""
+    diffs: list[dict[str, Any]] = []
+
+    if not logged_in.get("found"):
+        diffs.append({
+            "field": "logged_in_tab",
+            "logged_in_tab": "not found",
+            "bootstrap_probe_tab": "available" if bootstrap.get("found") else "not found",
+        })
+        return diffs
+
+    scalar_fields = (
+        "final_url",
+        "page_title",
+        "visible_text_preview",
+        "referrer",
+        "navigator_user_agent",
+    )
+    for field in scalar_fields:
+        left = logged_in.get(field)
+        right = bootstrap.get(field)
+        if left != right:
+            diffs.append({
+                "field": field,
+                "logged_in_tab": left,
+                "bootstrap_probe_tab": right,
+            })
+
+    left_ua = logged_in.get("navigator_user_agent_data") or {}
+    right_ua = bootstrap.get("navigator_user_agent_data") or {}
+    if left_ua != right_ua:
+        diffs.append({
+            "field": "navigator_user_agent_data",
+            "logged_in_tab": left_ua or None,
+            "bootstrap_probe_tab": right_ua or None,
+        })
+
+    for field in ("document_cookie_names", "local_storage_keys", "session_storage_keys"):
+        left = sorted(set(logged_in.get(field) or []))
+        right = sorted(set(bootstrap.get(field) or []))
+        if left != right:
+            diffs.append({
+                "field": field,
+                "logged_in_tab": left,
+                "bootstrap_probe_tab": right,
+            })
+
+    left_sw = logged_in.get("service_worker_registrations") or []
+    right_sw = bootstrap.get("service_worker_registrations") or []
+    if left_sw != right_sw:
+        diffs.append({
+            "field": "service_worker_registrations",
+            "logged_in_tab": left_sw,
+            "bootstrap_probe_tab": right_sw,
+        })
+
+    left_fn = sorted(set((logged_in.get("chrome_cookie_names") or {}).get("functions.americanexpress.com") or []))
+    right_fn = sorted(set((bootstrap.get("chrome_cookie_names") or {}).get("functions.americanexpress.com") or []))
+    if left_fn != right_fn:
+        diffs.append({
+            "field": "chrome_cookie_names.functions.americanexpress.com",
+            "logged_in_tab": left_fn,
+            "bootstrap_probe_tab": right_fn,
+        })
+
+    left_apis = _session_api_summary(logged_in)
+    right_apis = _session_api_summary(bootstrap)
+    for api_key in ("read_user_session_status", "update_user_session_status"):
+        if left_apis.get(api_key) != right_apis.get(api_key):
+            diffs.append({
+                "field": api_key,
+                "logged_in_tab": left_apis.get(api_key),
+                "bootstrap_probe_tab": right_apis.get(api_key),
+            })
+
+    for label, req_key in (
+        ("ReadUserSession.v1", "read_user_session"),
+        ("UpdateUserSession.v1", "update_user_session"),
+    ):
+        left_req = left_apis.get(req_key) or {}
+        right_req = right_apis.get(req_key) or {}
+        for meta_key in ("method", "with_credentials", "request_header_names", "response_header_names"):
+            left_val = left_req.get(meta_key)
+            right_val = right_req.get(meta_key)
+            if left_val != right_val:
+                diffs.append({
+                    "field": f"{label}.{meta_key}",
+                    "logged_in_tab": left_val,
+                    "bootstrap_probe_tab": right_val,
+                })
+
+    if logged_in.get("network_trace_limitation"):
+        diffs.append({
+            "field": "logged_in_tab.network_trace_limitation",
+            "logged_in_tab": logged_in.get("network_trace_limitation"),
+            "bootstrap_probe_tab": bootstrap.get("network_trace_limitation"),
+        })
+
+    return diffs
+
+
+def compute_live_session_comparison_differences(
+    logged_in: dict[str, Any],
+    bootstrap: dict[str, Any],
+) -> list[str]:
+    """Human-readable difference lines derived from field diffs."""
+    lines: list[str] = []
+    for diff in compute_live_session_field_diffs(logged_in, bootstrap):
+        field = diff.get("field") or "unknown"
+        left = _fmt_diff_value(diff.get("logged_in_tab"))
+        right = _fmt_diff_value(diff.get("bootstrap_probe_tab"))
+        lines.append(f"{field}: logged_in={left} bootstrap={right}")
+    return lines
+
+
+def compute_live_session_comparison_diagnostic(
+    logged_in: dict[str, Any],
+    bootstrap: dict[str, Any],
+    differences: list[str] | None = None,
+) -> str:
+    differences = differences or compute_live_session_comparison_differences(logged_in, bootstrap)
+    parts: list[str] = []
+
+    if not logged_in.get("found"):
+        parts.append("no logged-in Amex tab available for comparison")
+    else:
+        left_apis = _session_api_summary(logged_in)
+        right_apis = _session_api_summary(bootstrap)
+        read_logged = left_apis.get("read_user_session_status")
+        read_boot = right_apis.get("read_user_session_status")
+        upd_logged = left_apis.get("update_user_session_status")
+        upd_boot = right_apis.get("update_user_session_status")
+
+        if read_boot in (400, 401):
+            parts.append(f"bootstrap probe ReadUserSession.v1 returned {read_boot}")
+        if upd_boot in (400, 401):
+            parts.append(f"bootstrap probe UpdateUserSession.v1 returned {upd_boot}")
+        if read_logged not in (None, 400, 401):
+            parts.append(f"logged-in tab ReadUserSession.v1 returned {read_logged}")
+        if upd_logged not in (None, 400, 401):
+            parts.append(f"logged-in tab UpdateUserSession.v1 returned {upd_logged}")
+        if read_logged not in (None, 400, 401) and read_boot in (400, 401):
+            parts.append("session API succeeds on logged-in tab but fails on bootstrap probe")
+        if upd_logged not in (None, 400, 401) and upd_boot in (400, 401):
+            parts.append("UpdateUserSession succeeds on logged-in tab but fails on bootstrap probe")
+
+    if differences:
+        parts.append(f"{len(differences)} metadata difference(s) recorded")
+    if not parts:
+        return "live session comparison captured; no major auth/session divergence detected"
+    return "; ".join(parts)
+
+
+def build_amex_live_session_comparison(payload: dict[str, Any]) -> dict[str, Any]:
+    """Sanitize and compare logged-in tab vs bootstrap probe tab snapshots."""
+    logged_in_raw = payload.get("logged_in_tab") or {}
+    bootstrap_raw = payload.get("bootstrap_probe_tab") or {}
+
+    logged_in = sanitize_live_session_snapshot(logged_in_raw)
+    logged_in["source"] = "logged_in_tab"
+    bootstrap = sanitize_live_session_snapshot(bootstrap_raw)
+    bootstrap["source"] = "bootstrap_probe_tab"
+
+    differences = compute_live_session_comparison_differences(logged_in, bootstrap)
+    field_diffs = compute_live_session_field_diffs(logged_in, bootstrap)
+    diagnostic = compute_live_session_comparison_diagnostic(logged_in, bootstrap, differences)
+
+    entry_url = str(payload.get("entry_url") or "")
+    if entry_url:
+        entry_url = sanitize_probe_url(entry_url)
+
+    return {
+        "provider": "amex",
+        "entry_url": entry_url,
+        "logged_in_tab": logged_in,
+        "bootstrap_probe_tab": bootstrap,
+        "field_diffs": field_diffs,
+        "differences": differences,
+        "diagnostic_summary": diagnostic,
+        "compared_at": payload.get("compared_at") or utc_now_iso(),
+    }
+
+
+def ensure_live_session_comparison_tables(db: Any) -> None:
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_access_probe_live_session_comparisons (
+            comparison_run_id   TEXT PRIMARY KEY,
+            user_id               TEXT NOT NULL,
+            entry_url             TEXT NOT NULL,
+            lifecycle             TEXT NOT NULL,
+            payload_json          TEXT,
+            diagnostic_summary    TEXT,
+            error_message         TEXT,
+            requested_at          TEXT NOT NULL,
+            started_at            TEXT,
+            completed_at          TEXT
+        )
+        """
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_paplsc_user_requested "
+        "ON provider_access_probe_live_session_comparisons(user_id, requested_at DESC)"
+    )
+    db.commit()
+
+
+def _has_running_live_session_comparison(db: Any, user_id: str) -> bool:
+    ensure_live_session_comparison_tables(db)
+    row = db.execute(
+        """
+        SELECT 1 FROM provider_access_probe_live_session_comparisons
+        WHERE user_id = ? AND lifecycle = ?
+        LIMIT 1
+        """,
+        (user_id, PROBE_LIFECYCLE_RUNNING),
+    ).fetchone()
+    return row is not None
+
+
+def get_latest_live_session_comparison(db: Any, user_id: str) -> dict[str, Any] | None:
+    ensure_live_session_comparison_tables(db)
+    row = db.execute(
+        """
+        SELECT comparison_run_id, user_id, entry_url, lifecycle, payload_json,
+               diagnostic_summary, error_message, requested_at, started_at, completed_at
+        FROM provider_access_probe_live_session_comparisons
+        WHERE user_id = ?
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    data["comparison"] = _parse_json_dict(data.get("payload_json"))
+    return data
+
+
+def get_pending_live_session_comparison(db: Any, user_id: str) -> dict[str, Any] | None:
+    ensure_live_session_comparison_tables(db)
+    row = db.execute(
+        """
+        SELECT comparison_run_id, user_id, entry_url, lifecycle, requested_at, started_at
+        FROM provider_access_probe_live_session_comparisons
+        WHERE user_id = ? AND lifecycle = ?
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (user_id, PROBE_LIFECYCLE_RUNNING),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def start_live_session_comparison(db: Any, user_id: str, entry_url: str) -> dict[str, Any]:
+    """Queue an Amex live session comparison diagnostic."""
+    entry_url = entry_url.strip()
+    if entry_url not in AMEX_BOOTSTRAP_ENTRY_URLS:
+        raise ValueError(
+            f"unsupported bootstrap entry URL: {entry_url!r} "
+            f"(allowed: {', '.join(AMEX_BOOTSTRAP_ENTRY_URLS)})"
+        )
+    ensure_live_session_comparison_tables(db)
+    ensure_manual_probe_tables(db)
+    ensure_bootstrap_trace_tables(db)
+    if _has_running_manual_probe(db, user_id):
+        raise ConcurrentProbeError("a manual probe is already running")
+    if _has_running_bootstrap_trace(db, user_id):
+        raise ConcurrentProbeError("a bootstrap trace is already running")
+    if _has_running_live_session_comparison(db, user_id):
+        raise ConcurrentProbeError("a live session comparison is already running")
+
+    comparison_run_id = str(uuid.uuid4())
+    now = utc_now_iso()
+    db.execute(
+        """
+        INSERT INTO provider_access_probe_live_session_comparisons (
+            comparison_run_id, user_id, entry_url, lifecycle, requested_at, started_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (comparison_run_id, user_id, entry_url, PROBE_LIFECYCLE_RUNNING, now, now),
+    )
+    db.commit()
+    return {
+        "comparison_run_id": comparison_run_id,
+        "entry_url": entry_url,
+        "provider": "amex",
+        "lifecycle": PROBE_LIFECYCLE_RUNNING,
+        "requested_at": now,
+        "started_at": now,
+    }
+
+
+def complete_live_session_comparison(
+    db: Any,
+    user_id: str,
+    comparison_run_id: str,
+    *,
+    lifecycle: str,
+    comparison: dict[str, Any] | None = None,
+    error_message: str | None = None,
+) -> None:
+    if lifecycle not in PROBE_LIFECYCLES:
+        raise ValueError(f"invalid live session comparison lifecycle: {lifecycle!r}")
+    ensure_live_session_comparison_tables(db)
+    now = utc_now_iso()
+    db.execute(
+        """
+        UPDATE provider_access_probe_live_session_comparisons
+        SET lifecycle = ?, payload_json = ?, diagnostic_summary = ?,
+            error_message = ?, completed_at = ?
+        WHERE comparison_run_id = ? AND user_id = ?
+        """,
+        (
+            lifecycle,
+            _json_diagnostics(comparison),
+            (comparison or {}).get("diagnostic_summary") if comparison else error_message,
+            error_message,
+            now,
+            comparison_run_id,
+            user_id,
+        ),
+    )
+    db.commit()
+
+
+def live_session_comparison_state_to_json(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "comparison_run_id": state.get("comparison_run_id"),
+        "entry_url": state.get("entry_url"),
+        "provider": state.get("provider") or "amex",
+        "lifecycle": state.get("lifecycle") or PROBE_LIFECYCLE_IDLE,
+        "diagnostic_summary": state.get("diagnostic_summary"),
+        "error_message": state.get("error_message"),
+        "requested_at": state.get("requested_at"),
+        "started_at": state.get("started_at"),
+        "completed_at": state.get("completed_at"),
+        "comparison": state.get("comparison"),
     }
