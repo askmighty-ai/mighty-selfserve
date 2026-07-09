@@ -18,6 +18,20 @@ from mighty.provider_access_probe import (
 
 LoginVerdict = Literal["YES", "NO", "UNKNOWN"]
 ObservationKind = Literal["private", "login"]
+AccessState = Literal[
+    "accessible",
+    "needs_first_connection",
+    "needs_reauthentication",
+    "unknown",
+    "unexpected_problem",
+]
+NextActionType = Literal[
+    "none",
+    "connect_account",
+    "reauthenticate",
+    "wait_for_observation",
+    "report_problem",
+]
 
 PRIVATE_DATA_WINDOW_HOURS = 24
 
@@ -65,6 +79,31 @@ class LoginTruthDisplayRow:
     login_known: LoginVerdict = "UNKNOWN"
 
 
+@dataclass(frozen=True)
+class AccessStateRow:
+    provider: str
+    login_known: LoginVerdict
+    access_state: AccessState
+    next_action_type: NextActionType
+    next_action_text: str
+    evidence: str
+    last_observed_at: str | None
+    source: str
+
+
+@dataclass(frozen=True)
+class AccessStateDisplayRow:
+    provider: str
+    access_state: AccessState
+    access_label: str
+    evidence: str
+    last_confirmed_at: str | None
+    next_action_text: str
+    source_label: str
+    source_internal: str | None = None
+    login_known: LoginVerdict = "UNKNOWN"
+
+
 STATUS_LABELS: dict[LoginVerdict, str] = {
     "YES": "Logged in",
     "NO": "Not logged in",
@@ -75,6 +114,45 @@ STATUS_SORT_ORDER: dict[LoginVerdict, int] = {
     "YES": 0,
     "NO": 1,
     "UNKNOWN": 2,
+}
+
+ACCESS_STATE_LABELS: dict[AccessState, str] = {
+    "accessible": "Accessible",
+    "needs_first_connection": "Not connected yet",
+    "needs_reauthentication": "Sign in needed",
+    "unknown": "Unknown",
+    "unexpected_problem": "Needs investigation",
+}
+
+ACCESS_STATE_SORT_ORDER: dict[AccessState, int] = {
+    "accessible": 0,
+    "needs_reauthentication": 1,
+    "needs_first_connection": 2,
+    "unknown": 3,
+    "unexpected_problem": 4,
+}
+
+NEXT_ACTION_BY_STATE: dict[AccessState, tuple[NextActionType, str]] = {
+    "accessible": (
+        "none",
+        "Nothing. Mighty can monitor this account automatically.",
+    ),
+    "needs_reauthentication": (
+        "reauthenticate",
+        "Sign into this account again.",
+    ),
+    "needs_first_connection": (
+        "connect_account",
+        "Sign into this account once. Mighty will detect it automatically.",
+    ),
+    "unknown": (
+        "wait_for_observation",
+        "Visit this account while signed in so Mighty can check it.",
+    ),
+    "unexpected_problem": (
+        "report_problem",
+        "Mighty saw conflicting signals. This may be a bug.",
+    ),
 }
 
 SOURCE_DISPLAY_LABELS: dict[str, tuple[str, str | None]] = {
@@ -309,15 +387,54 @@ def resolve_login_truth(
     )
 
 
-def compute_login_truth_rows(
+def resolve_access_state(
+    observations: list[TruthObservation],
+    login_row: LoginTruthRow,
+    *,
+    now: datetime | None = None,
+    window_hours: int = PRIVATE_DATA_WINDOW_HOURS,
+) -> AccessStateRow:
+    """Map Login Truth plus observation history to a user-facing access state."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=window_hours)
+    private_recent = [
+        o for o in observations if o.kind == "private" and o.observed_at >= cutoff
+    ]
+    private_ever = [o for o in observations if o.kind == "private"]
+
+    if private_recent and login_row.login_known != "YES":
+        access_state: AccessState = "unexpected_problem"
+    elif login_row.login_known == "YES":
+        access_state = "accessible"
+    elif login_row.login_known == "NO":
+        access_state = "needs_reauthentication"
+    elif not private_ever:
+        access_state = "needs_first_connection"
+    else:
+        access_state = "unknown"
+
+    next_action_type, next_action_text = NEXT_ACTION_BY_STATE[access_state]
+    return AccessStateRow(
+        provider=login_row.provider,
+        login_known=login_row.login_known,
+        access_state=access_state,
+        next_action_type=next_action_type,
+        next_action_text=next_action_text,
+        evidence=login_row.evidence,
+        last_observed_at=login_row.last_observed_at,
+        source=login_row.source,
+    )
+
+
+def _load_provider_truth_bundles(
     db: Any,
     user_id: str,
     *,
     decrypt_account_fn: Callable[[str, str], dict[str, Any]],
     providers: tuple[str, ...] | list[str] | None = None,
     now: datetime | None = None,
-) -> list[LoginTruthRow]:
-    """Build login-truth rows for each configured probe provider."""
+) -> list[tuple[LoginTruthRow, list[TruthObservation]]]:
+    """Load login-truth rows and raw observations for each configured probe provider."""
     ensure_probe_tables(db)
     provider_list = list(providers or sorted(PROBE_PROVIDERS))
 
@@ -352,7 +469,7 @@ def compute_login_truth_rows(
         if provider in probe_by_provider:
             probe_by_provider[provider].append(dict(row))
 
-    rows: list[LoginTruthRow] = []
+    bundles: list[tuple[LoginTruthRow, list[TruthObservation]]] = []
     for provider in provider_list:
         source = PROVIDER_PROBE_CONFIG.get(provider, None)
         source_key = source.source if source else provider
@@ -371,15 +488,56 @@ def compute_login_truth_rows(
             probe_rows=probe_by_provider.get(provider, []),
         )
         result = resolve_login_truth(observations, now=now)
-        rows.append(
-            LoginTruthRow(
-                provider=provider,
-                login_known=result.login_known,
-                evidence=result.evidence,
-                last_observed_at=result.last_observed_at,
-                source=result.source,
-            )
+        login_row = LoginTruthRow(
+            provider=provider,
+            login_known=result.login_known,
+            evidence=result.evidence,
+            last_observed_at=result.last_observed_at,
+            source=result.source,
         )
+        bundles.append((login_row, observations))
+    return bundles
+
+
+def compute_login_truth_rows(
+    db: Any,
+    user_id: str,
+    *,
+    decrypt_account_fn: Callable[[str, str], dict[str, Any]],
+    providers: tuple[str, ...] | list[str] | None = None,
+    now: datetime | None = None,
+) -> list[LoginTruthRow]:
+    """Build login-truth rows for each configured probe provider."""
+    return [
+        login_row
+        for login_row, _observations in _load_provider_truth_bundles(
+            db,
+            user_id,
+            decrypt_account_fn=decrypt_account_fn,
+            providers=providers,
+            now=now,
+        )
+    ]
+
+
+def compute_access_state_rows(
+    db: Any,
+    user_id: str,
+    *,
+    decrypt_account_fn: Callable[[str, str], dict[str, Any]],
+    providers: tuple[str, ...] | list[str] | None = None,
+    now: datetime | None = None,
+) -> list[AccessStateRow]:
+    """Build canonical access-state rows for each configured probe provider."""
+    rows: list[AccessStateRow] = []
+    for login_row, observations in _load_provider_truth_bundles(
+        db,
+        user_id,
+        decrypt_account_fn=decrypt_account_fn,
+        providers=providers,
+        now=now,
+    ):
+        rows.append(resolve_access_state(observations, login_row, now=now))
     return rows
 
 
@@ -410,6 +568,43 @@ def format_login_truth_display_row(row: LoginTruthRow) -> LoginTruthDisplayRow:
         status_label=format_status_label(row.login_known),
         evidence=row.evidence,
         last_confirmed_at=row.last_observed_at,
+        source_label=source_label,
+        source_internal=source_internal,
+        login_known=row.login_known,
+    )
+
+
+def format_access_state_label(access_state: AccessState) -> str:
+    return ACCESS_STATE_LABELS[access_state]
+
+
+def sort_access_state_rows(rows: list[AccessStateRow]) -> list[AccessStateRow]:
+    return sorted(
+        rows,
+        key=lambda row: (ACCESS_STATE_SORT_ORDER[row.access_state], row.provider),
+    )
+
+
+def access_state_summary(rows: list[AccessStateRow]) -> dict[str, int]:
+    return {
+        "accessible": sum(1 for row in rows if row.access_state == "accessible"),
+        "sign_in_needed": sum(1 for row in rows if row.access_state == "needs_reauthentication"),
+        "not_connected_or_unknown": sum(
+            1 for row in rows if row.access_state in {"needs_first_connection", "unknown"}
+        ),
+        "needs_investigation": sum(1 for row in rows if row.access_state == "unexpected_problem"),
+    }
+
+
+def format_access_state_display_row(row: AccessStateRow) -> AccessStateDisplayRow:
+    source_label, source_internal = friendly_source_label(row.source)
+    return AccessStateDisplayRow(
+        provider=row.provider,
+        access_state=row.access_state,
+        access_label=format_access_state_label(row.access_state),
+        evidence=row.evidence,
+        last_confirmed_at=row.last_observed_at,
+        next_action_text=row.next_action_text,
         source_label=source_label,
         source_internal=source_internal,
         login_known=row.login_known,
