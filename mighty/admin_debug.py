@@ -60,6 +60,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
         "Login Truth",
         "Current account access vs cached private data",
     ),
+    (
+        "session-evidence",
+        "Session Evidence Timeline",
+        "Why Mighty believes each provider is connected, signed out, or unknown",
+    ),
 ]
 
 
@@ -2079,3 +2084,140 @@ def render_login_truth_page(rows: list[Any]) -> str:
         "questions. A signed-out session can still leave fresh Membership Rewards data on file.</p>"
     )
     return _admin_shell("login-truth", "Current Account Access", body)
+
+
+def _session_result_badge(result: str, *, category: str) -> str:
+    if category == "cached_data":
+        return (
+            '<span style="display:inline-block;padding:3px 10px;border-radius:6px;'
+            'font-size:12px;font-weight:700;color:#1e3a5f;background:#dbeafe">'
+            "Cached data</span>"
+        )
+    colors = {
+        "connected": ("#065f46", "#d1fae5"),
+        "signed_out": ("#7f1d1d", "#fee2e2"),
+        "unknown": ("#374151", "#f3f4f6"),
+        "error": ("#7f1d1d", "#fecaca"),
+    }
+    from mighty.login_truth import format_session_evidence_result_label
+
+    label = format_session_evidence_result_label(result, category=category)  # type: ignore[arg-type]
+    fg, bg = colors.get(result, colors["unknown"])
+    return (
+        f'<span style="display:inline-block;padding:3px 10px;border-radius:6px;'
+        f'font-size:12px;font-weight:700;color:{fg};background:{bg}">{_he(label)}</span>'
+    )
+
+
+def _session_evidence_filters(
+    *,
+    providers: list[str],
+    selected_provider: str | None,
+    include_cached_data: bool,
+) -> str:
+    provider_options = '<option value="">All providers</option>' + "".join(
+        f'<option value="{_he(p)}"{" selected" if p == selected_provider else ""}>{_he(p)}</option>'
+        for p in providers
+    )
+    session_selected = "" if include_cached_data else " selected"
+    include_selected = " selected" if include_cached_data else ""
+    return f"""
+<form class="source-picker" method="get" action="/admin/session-evidence" style="flex-wrap:wrap">
+  <label>Provider</label>
+  <select name="provider" onchange="this.form.submit()">{provider_options}</select>
+  <label>Evidence</label>
+  <select name="include_cached" onchange="this.form.submit()">
+    <option value="0"{session_selected}>Session evidence only</option>
+    <option value="1"{include_selected}>Include cached data</option>
+  </select>
+</form>
+"""
+
+
+def render_session_evidence_timeline_page(
+    sections: list[Any],
+    *,
+    providers: list[str],
+    selected_provider: str | None = None,
+    include_cached_data: bool = True,
+) -> str:
+    from mighty.login_truth import (
+        format_current_winner_line,
+        friendly_source_label,
+    )
+
+    filters = _session_evidence_filters(
+        providers=providers,
+        selected_provider=selected_provider,
+        include_cached_data=include_cached_data,
+    )
+
+    body = (
+        '<p class="lede">Session evidence explains why Mighty currently treats a provider as '
+        "connected, signed out, or unknown. Cached data (balances and private fields) is shown "
+        "separately and never counts as current login proof.</p>"
+        f"{filters}"
+    )
+
+    if not sections:
+        body += '<p class="muted">No providers to show.</p>'
+        return _admin_shell("session-evidence", "Session Evidence Timeline", body)
+
+    for section in sections:
+        current = section.current
+        winner = format_current_winner_line(section)
+
+        if current is None:
+            current_table = (
+                '<p class="muted">No provider_session_state row yet.</p>'
+            )
+        else:
+            source_label, _internal = friendly_source_label(current.source)
+            current_table = (
+                "<table><thead><tr>"
+                "<th>Provider</th><th>State</th><th>Evidence type</th>"
+                "<th>Evidence summary</th><th>Observed at</th><th>Source</th><th>Confidence</th>"
+                "</tr></thead><tbody><tr>"
+                f"<td><strong>{_he(current.provider)}</strong></td>"
+                f"<td>{_session_result_badge(current.state, category='session')}</td>"
+                f"<td>{_he(current.evidence_type)}</td>"
+                f"<td>{_he(current.evidence_summary)}</td>"
+                f"<td class='muted'>{_fmt_iso(current.observed_at)}</td>"
+                f"<td>{_he(source_label)}</td>"
+                f"<td>{_he(current.confidence)}</td>"
+                "</tr></tbody></table>"
+            )
+
+        event_rows = "".join(
+            (
+                "<tr>"
+                f"<td class='muted'>{_fmt_iso(ev.observed_at.isoformat())}</td>"
+                f"<td>{_he(ev.provider)}</td>"
+                f"<td>{_he(ev.evidence_type)}"
+                f"{' <span class=\"badge badge-muted\">cached</span>' if ev.category == 'cached_data' else ''}"
+                "</td>"
+                f"<td>{_session_result_badge(ev.result, category=ev.category)}</td>"
+                f"<td>{_he(friendly_source_label(ev.source)[0])}</td>"
+                f"<td>{_he(ev.summary)}</td>"
+                "</tr>"
+            )
+            for ev in section.events
+        ) or '<tr><td colspan="6" class="muted">No evidence events</td></tr>'
+
+        body += (
+            f'<div class="card">'
+            f"<h3 style=\"text-transform:capitalize;margin:0 0 8px\">{_he(section.provider)}</h3>"
+            f'<p style="font-size:13px;color:#e5e7eb;margin:0 0 12px">{_he(winner)}</p>'
+            f'<div style="margin-bottom:14px"><div class="muted" style="font-size:11px;'
+            f'text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Current state</div>'
+            f"{current_table}</div>"
+            f'<div class="muted" style="font-size:11px;text-transform:uppercase;'
+            f'letter-spacing:.04em;margin-bottom:6px">Evidence timeline</div>'
+            f"<table><thead><tr>"
+            "<th>Time</th><th>Provider</th><th>Evidence type</th>"
+            "<th>Result</th><th>Source</th><th>Summary</th>"
+            f"</tr></thead><tbody>{event_rows}</tbody></table>"
+            f"</div>"
+        )
+
+    return _admin_shell("session-evidence", "Session Evidence Timeline", body)

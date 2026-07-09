@@ -21191,6 +21191,34 @@ def admin_login_truth_page():
     return _admin_debug.render_login_truth_page(rows)
 
 
+@app.route("/admin/session-evidence")
+@require_admin
+def admin_session_evidence_page():
+    from mighty.login_truth import gather_session_evidence_timeline
+    from mighty.provider_access_probe import PROBE_PROVIDERS
+
+    uid = session["user_id"]
+    selected_provider = (request.args.get("provider") or "").strip() or None
+    if selected_provider and selected_provider not in PROBE_PROVIDERS:
+        selected_provider = None
+    include_cached_raw = (request.args.get("include_cached") or "1").strip().lower()
+    include_cached_data = include_cached_raw not in {"0", "false", "no", "session"}
+    providers = sorted(PROBE_PROVIDERS)
+    sections = gather_session_evidence_timeline(
+        get_db(),
+        uid,
+        decrypt_account_fn=decrypt_account_data,
+        provider=selected_provider,
+        include_cached_data=include_cached_data,
+    )
+    return _admin_debug.render_session_evidence_timeline_page(
+        sections,
+        providers=providers,
+        selected_provider=selected_provider,
+        include_cached_data=include_cached_data,
+    )
+
+
 @app.route("/admin/provider-access-probe")
 @require_admin
 def admin_provider_access_probe_page():

@@ -25,6 +25,7 @@ from mighty.provider_access_probe import (
 from mighty.provider_session_state import (
     ProviderSessionState,
     SessionEvidence,
+    derive_session_evidence_from_probe,
     ensure_provider_session_state_tables,
     get_provider_session_states,
     project_session_state_from_probe_rows,
@@ -240,6 +241,7 @@ SOURCE_DISPLAY_LABELS: dict[str, tuple[str, str | None]] = {
     "field_observations": ("Field observation history", "field_observations"),
     "provider_access_probe": ("Account access probe", "provider_access_probe"),
     "account_data.sync_status": ("Sync status signal", "account_data.sync_status"),
+    "account_data.connection_status": ("Connection status", "account_data.connection_status"),
     "provider_session_state": ("Provider session state", "provider_session_state"),
     "extension_amex_connected": ("Amex extension connected", "extension_amex_connected"),
     "extension_amex_needs_login": ("Amex extension needs login", "extension_amex_needs_login"),
@@ -247,6 +249,31 @@ SOURCE_DISPLAY_LABELS: dict[str, tuple[str, str | None]] = {
     "extension_amex_login_cleared": ("Amex login cleared", "extension_amex_login_cleared"),
     "—": ("—", None),
 }
+
+EvidenceCategory = Literal["session", "cached_data"]
+
+
+@dataclass(frozen=True)
+class SessionEvidenceTimelineEvent:
+    """One timestamped evidence row for the Session Evidence Timeline admin page."""
+
+    observed_at: datetime
+    provider: str
+    category: EvidenceCategory
+    evidence_type: str
+    result: str
+    summary: str
+    source: str
+    confidence: str | None = None
+
+
+@dataclass(frozen=True)
+class ProviderSessionEvidenceSection:
+    """Current session winner plus timeline events for one provider."""
+
+    provider: str
+    current: ProviderSessionState | None
+    events: list[SessionEvidenceTimelineEvent]
 
 SESSION_STATE_TO_CURRENT_ACCESS: dict[str, CurrentAccess] = {
     "connected": "connected_now",
@@ -612,7 +639,8 @@ def _load_provider_observation_context(
     account_rows = {
         row["source"]: dict(row)
         for row in db.execute(
-            "SELECT source, data_enc, synced_at, sync_status, sync_failure_reason "
+            "SELECT source, data_enc, synced_at, sync_status, sync_failure_reason, "
+            "connection_status "
             "FROM account_data WHERE user_id=?",
             (user_id,),
         ).fetchall()
@@ -813,6 +841,276 @@ def compute_current_account_access_rows(
         )
         for provider in provider_list
     ]
+
+
+def _event_dedupe_key(event: SessionEvidenceTimelineEvent) -> tuple[Any, ...]:
+    return (
+        event.provider,
+        event.category,
+        event.evidence_type,
+        event.result,
+        event.summary,
+        event.source,
+        event.observed_at.isoformat(),
+    )
+
+
+def _session_event_from_state(
+    state: ProviderSessionState,
+) -> SessionEvidenceTimelineEvent | None:
+    when = _parse_iso(state.observed_at)
+    if when is None:
+        return None
+    return SessionEvidenceTimelineEvent(
+        observed_at=when,
+        provider=state.provider,
+        category="session",
+        evidence_type=state.evidence_type or "provider_session_state",
+        result=state.state,
+        summary=state.evidence_summary or "—",
+        source=state.source or "provider_session_state",
+        confidence=state.confidence,
+    )
+
+
+def _session_events_from_probes(
+    provider: str,
+    probe_rows: list[dict[str, Any]],
+) -> list[SessionEvidenceTimelineEvent]:
+    events: list[SessionEvidenceTimelineEvent] = []
+    for row in probe_rows:
+        payload = dict(row)
+        payload["provider"] = provider
+        evidence = derive_session_evidence_from_probe(payload)
+        if evidence is None:
+            continue
+        events.append(
+            SessionEvidenceTimelineEvent(
+                observed_at=evidence.observed_at,
+                provider=provider,
+                category="session",
+                evidence_type=evidence.evidence_type,
+                result=evidence.state,
+                summary=evidence.evidence_summary,
+                source=evidence.source,
+                confidence=evidence.confidence,
+            )
+        )
+    return events
+
+
+def _connection_status_event(
+    provider: str,
+    account_row: dict[str, Any] | None,
+    ad_data: dict[str, Any] | None,
+) -> SessionEvidenceTimelineEvent | None:
+    if not account_row:
+        return None
+    status = (account_row.get("connection_status") or "").strip()
+    if not status and ad_data:
+        status = str(ad_data.get("connection_status") or "").strip()
+    if status not in {"connected", "needs_login"}:
+        return None
+    when = _parse_iso(account_row.get("synced_at"))
+    if when is None:
+        return None
+    result = "connected" if status == "connected" else "signed_out"
+    return SessionEvidenceTimelineEvent(
+        observed_at=when,
+        provider=provider,
+        category="session",
+        evidence_type="connection_status",
+        result=result,
+        summary=f"connection_status: {status}",
+        source="account_data.connection_status",
+        confidence="medium",
+    )
+
+
+def _cached_data_events(
+    provider: str,
+    observations: list[TruthObservation],
+) -> list[SessionEvidenceTimelineEvent]:
+    events: list[SessionEvidenceTimelineEvent] = []
+    for obs in observations:
+        if obs.kind != "private":
+            continue
+        events.append(
+            SessionEvidenceTimelineEvent(
+                observed_at=obs.observed_at,
+                provider=provider,
+                category="cached_data",
+                evidence_type="cached_private_data",
+                result="cached_data",
+                summary=obs.evidence,
+                source=obs.source,
+                confidence=None,
+            )
+        )
+    return events
+
+
+def gather_session_evidence_timeline(
+    db: Any,
+    user_id: str,
+    *,
+    decrypt_account_fn: Callable[[str, str], dict[str, Any]],
+    providers: tuple[str, ...] | list[str] | None = None,
+    provider: str | None = None,
+    include_cached_data: bool = True,
+) -> list[ProviderSessionEvidenceSection]:
+    """Build per-provider session evidence timelines (newest first).
+
+    Session evidence (connected / signed_out / unknown / error) is kept separate from
+    cached private-data observations, which never imply current login.
+    """
+    ensure_probe_tables(db)
+    ensure_provider_session_state_tables(db)
+
+    if provider:
+        if provider not in PROBE_PROVIDERS:
+            return []
+        provider_list = [provider]
+    else:
+        provider_list = list(providers) if providers is not None else sorted(PROBE_PROVIDERS)
+        provider_list = [p for p in provider_list if p in PROBE_PROVIDERS]
+
+    if not provider_list:
+        return []
+
+    provider_list, observations_by_provider, session_by_provider = (
+        _load_provider_observation_context(
+            db,
+            user_id,
+            decrypt_account_fn=decrypt_account_fn,
+            providers=provider_list,
+        )
+    )
+
+    account_rows = {
+        row["source"]: dict(row)
+        for row in db.execute(
+            "SELECT source, data_enc, synced_at, sync_status, connection_status "
+            "FROM account_data WHERE user_id=?",
+            (user_id,),
+        ).fetchall()
+    }
+
+    probe_by_provider: dict[str, list[dict[str, Any]]] = {p: [] for p in provider_list}
+    for row in db.execute(
+        """
+        SELECT provider, probed_at, auth_state, private_data_detected, failure_reason,
+               matched_private_data_rules, evidence_snippet, deep_inspect_json, status
+        FROM provider_access_probe_runs
+        WHERE user_id=?
+        ORDER BY probed_at DESC
+        """,
+        (user_id,),
+    ).fetchall():
+        pname = row["provider"]
+        if pname not in probe_by_provider:
+            continue
+        probe = dict(row)
+        deep = _parse_probe_json(probe.get("deep_inspect_json"))
+        if isinstance(deep, dict):
+            probe["deep_inspect"] = deep
+        probe_by_provider[pname].append(probe)
+
+    sections: list[ProviderSessionEvidenceSection] = []
+    for pname in provider_list:
+        events: list[SessionEvidenceTimelineEvent] = []
+        seen: set[tuple[Any, ...]] = set()
+
+        def _add(event: SessionEvidenceTimelineEvent | None) -> None:
+            if event is None:
+                return
+            key = _event_dedupe_key(event)
+            if key in seen:
+                return
+            seen.add(key)
+            events.append(event)
+
+        current = session_by_provider.get(pname)
+        if current is not None:
+            _add(_session_event_from_state(current))
+
+        for event in _session_events_from_probes(pname, probe_by_provider.get(pname, [])):
+            _add(event)
+
+        for obs in observations_by_provider.get(pname, []):
+            if obs.kind != "login":
+                continue
+            # Login observations from sync_status / probes that are session-relevant.
+            if obs.source == "account_data.sync_status":
+                _add(
+                    SessionEvidenceTimelineEvent(
+                        observed_at=obs.observed_at,
+                        provider=pname,
+                        category="session",
+                        evidence_type="login_required",
+                        result="signed_out",
+                        summary=obs.evidence,
+                        source=obs.source,
+                        confidence="medium",
+                    )
+                )
+
+        source_cfg = PROVIDER_PROBE_CONFIG.get(pname)
+        source_key = source_cfg.source if source_cfg else pname
+        account_row = account_rows.get(source_key)
+        ad_data = None
+        if account_row and account_row.get("data_enc"):
+            try:
+                ad_data = decrypt_account_fn(user_id, account_row["data_enc"])
+            except Exception:
+                ad_data = {}
+        _add(_connection_status_event(pname, account_row, ad_data))
+
+        if include_cached_data:
+            for event in _cached_data_events(
+                pname, observations_by_provider.get(pname, [])
+            ):
+                _add(event)
+
+        events.sort(key=lambda e: e.observed_at, reverse=True)
+        sections.append(
+            ProviderSessionEvidenceSection(
+                provider=pname,
+                current=current,
+                events=events,
+            )
+        )
+    return sections
+
+
+def format_session_evidence_result_label(result: str, *, category: EvidenceCategory) -> str:
+    if category == "cached_data":
+        return "Cached data"
+    labels = {
+        "connected": "Connected",
+        "signed_out": "Signed out",
+        "unknown": "Unknown",
+        "error": "Error",
+        "cached_data": "Cached data",
+    }
+    return labels.get(result, result.replace("_", " ").title())
+
+
+def format_current_winner_line(section: ProviderSessionEvidenceSection) -> str:
+    """Human-readable 'Current winner' line for a provider section."""
+    current = section.current
+    if current is None or current.state == "unknown":
+        return "Current winner: unknown — no explicit session evidence yet"
+    when = _fmt_iso_for_winner(current.observed_at)
+    summary = current.evidence_summary or "—"
+    return f"Current winner: {current.state} because of {summary} at {when}"
+
+
+def _fmt_iso_for_winner(value: str | None) -> str:
+    dt = _parse_iso(value)
+    if dt is None:
+        return value or "—"
+    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def format_status_label(verdict: LoginVerdict) -> str:
