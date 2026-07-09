@@ -54,6 +54,38 @@ class LoginTruthRow:
     source: str
 
 
+@dataclass(frozen=True)
+class LoginTruthDisplayRow:
+    provider: str
+    status_label: str
+    evidence: str
+    last_confirmed_at: str | None
+    source_label: str
+    source_internal: str | None = None
+    login_known: LoginVerdict = "UNKNOWN"
+
+
+STATUS_LABELS: dict[LoginVerdict, str] = {
+    "YES": "Logged in",
+    "NO": "Not logged in",
+    "UNKNOWN": "Unknown",
+}
+
+STATUS_SORT_ORDER: dict[LoginVerdict, int] = {
+    "YES": 0,
+    "NO": 1,
+    "UNKNOWN": 2,
+}
+
+SOURCE_DISPLAY_LABELS: dict[str, tuple[str, str | None]] = {
+    "account_data.items": ("Extracted account data", "account_data.items"),
+    "field_observations": ("Field observation history", "field_observations"),
+    "provider_access_probe": ("Account access probe", "provider_access_probe"),
+    "account_data.sync_status": ("Sync status signal", "account_data.sync_status"),
+    "—": ("—", None),
+}
+
+
 def _parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -77,9 +109,9 @@ def _private_field_keys(provider: str) -> frozenset[str]:
 
 def _private_evidence(provider: str, field_key: str, *, probe_rule: str | None = None) -> str:
     if provider == "amex" and field_key in {AMEX_MR_KEY, "membership_rewards_balance", "points_balance"}:
-        return "saw Membership Rewards balance"
+        return "Observed Membership Rewards balance"
     if provider == "amex" and probe_rule == "membership_rewards_balance":
-        return "saw Membership Rewards balance"
+        return "Observed Membership Rewards balance"
     if provider == "delta" and field_key in {"skymiles_number", "miles_balance", "medallion_status", "skymiles"}:
         label = {
             "skymiles_number": "SkyMiles number",
@@ -349,3 +381,36 @@ def compute_login_truth_rows(
             )
         )
     return rows
+
+
+def format_status_label(verdict: LoginVerdict) -> str:
+    return STATUS_LABELS[verdict]
+
+
+def friendly_source_label(internal: str) -> tuple[str, str | None]:
+    return SOURCE_DISPLAY_LABELS.get(internal, (internal.replace("_", " ").title(), internal))
+
+
+def sort_login_truth_rows(rows: list[LoginTruthRow]) -> list[LoginTruthRow]:
+    return sorted(rows, key=lambda row: (STATUS_SORT_ORDER[row.login_known], row.provider))
+
+
+def login_truth_summary(rows: list[LoginTruthRow]) -> dict[str, int]:
+    return {
+        "logged_in": sum(1 for row in rows if row.login_known == "YES"),
+        "not_logged_in": sum(1 for row in rows if row.login_known == "NO"),
+        "unknown": sum(1 for row in rows if row.login_known == "UNKNOWN"),
+    }
+
+
+def format_login_truth_display_row(row: LoginTruthRow) -> LoginTruthDisplayRow:
+    source_label, source_internal = friendly_source_label(row.source)
+    return LoginTruthDisplayRow(
+        provider=row.provider,
+        status_label=format_status_label(row.login_known),
+        evidence=row.evidence,
+        last_confirmed_at=row.last_observed_at,
+        source_label=source_label,
+        source_internal=source_internal,
+        login_known=row.login_known,
+    )
