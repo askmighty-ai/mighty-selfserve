@@ -13,10 +13,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from mighty.adapters.amex_extraction import apply_amex_membership_rewards_extraction
 from mighty.connection_state import advance_amex_to_waiting, amex_extension_connected, start_amex_connect
 from mighty.login_truth import (
+    LoginTruthRow,
     TruthObservation,
     compute_login_truth_rows,
-    gather_provider_observations,
+    format_login_truth_display_row,
+    format_status_label,
+    friendly_source_label,
+    login_truth_summary,
     resolve_login_truth,
+    sort_login_truth_rows,
 )
 from mighty.provider_access_probe import AUTH_LOGIN_PAGE, record_probe_run
 
@@ -84,7 +89,7 @@ def test_private_amex_mr_observation_yes(client):
         rows = compute_login_truth_rows(db, uid, decrypt_account_fn=mighty.decrypt_account_data)
         amex = next(r for r in rows if r.provider == "amex")
         assert amex.login_known == "YES"
-        assert amex.evidence == "saw Membership Rewards balance"
+        assert amex.evidence == "Observed Membership Rewards balance"
         assert amex.source == "account_data.items"
 
 
@@ -117,7 +122,7 @@ def test_stale_login_probe_does_not_override_private_data(client):
         rows = compute_login_truth_rows(db, uid, decrypt_account_fn=mighty.decrypt_account_data)
         amex = next(r for r in rows if r.provider == "amex")
         assert amex.login_known == "YES"
-        assert amex.evidence == "saw Membership Rewards balance"
+        assert amex.evidence == "Observed Membership Rewards balance"
         assert amex.source == "account_data.items"
 
 
@@ -165,7 +170,7 @@ def test_resolve_login_truth_private_beats_login():
         TruthObservation(
             observed_at=now - timedelta(hours=2),
             kind="private",
-            evidence="saw Membership Rewards balance",
+            evidence="Observed Membership Rewards balance",
             source="account_data.items",
         ),
         TruthObservation(
@@ -177,7 +182,74 @@ def test_resolve_login_truth_private_beats_login():
     ]
     result = resolve_login_truth(observations, now=now)
     assert result.login_known == "YES"
-    assert result.evidence == "saw Membership Rewards balance"
+    assert result.evidence == "Observed Membership Rewards balance"
+
+
+def test_format_status_labels():
+    assert format_status_label("YES") == "Logged in"
+    assert format_status_label("NO") == "Not logged in"
+    assert format_status_label("UNKNOWN") == "Unknown"
+
+
+def test_friendly_source_label_maps_account_data_items():
+    label, internal = friendly_source_label("account_data.items")
+    assert label == "Extracted account data"
+    assert internal == "account_data.items"
+
+
+def test_login_truth_summary_counts():
+    rows = [
+        LoginTruthRow("amex", "YES", "Observed Membership Rewards balance", "2026-07-08T12:00:00+00:00", "account_data.items"),
+        LoginTruthRow("delta", "NO", "login page detected", "2026-07-08T11:00:00+00:00", "provider_access_probe"),
+        LoginTruthRow("hilton", "UNKNOWN", "—", None, "—"),
+        LoginTruthRow("united", "UNKNOWN", "—", None, "—"),
+    ]
+    summary = login_truth_summary(rows)
+    assert summary == {"logged_in": 1, "not_logged_in": 1, "unknown": 2}
+
+
+def test_sort_login_truth_rows_by_status_then_provider():
+    rows = [
+        LoginTruthRow("hilton", "UNKNOWN", "—", None, "—"),
+        LoginTruthRow("delta", "NO", "login page detected", "2026-07-08T11:00:00+00:00", "provider_access_probe"),
+        LoginTruthRow("amex", "YES", "Observed Membership Rewards balance", "2026-07-08T12:00:00+00:00", "account_data.items"),
+        LoginTruthRow("marriott", "UNKNOWN", "—", None, "—"),
+        LoginTruthRow("united", "NO", "login page detected", "2026-07-08T10:00:00+00:00", "provider_access_probe"),
+    ]
+    sorted_rows = sort_login_truth_rows(rows)
+    assert [row.provider for row in sorted_rows] == ["amex", "delta", "united", "hilton", "marriott"]
+
+
+def test_format_login_truth_display_row():
+    row = LoginTruthRow(
+        "amex",
+        "YES",
+        "Observed Membership Rewards balance",
+        "2026-07-08T12:00:00+00:00",
+        "account_data.items",
+    )
+    display = format_login_truth_display_row(row)
+    assert display.status_label == "Logged in"
+    assert display.evidence == "Observed Membership Rewards balance"
+    assert display.source_label == "Extracted account data"
+    assert display.source_internal == "account_data.items"
+
+
+def test_amex_evidence_text(client):
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        ctx = _ctx(mighty)
+        start_amex_connect(db, uid, **ctx)
+        advance_amex_to_waiting(db, uid, **ctx)
+        amex_extension_connected(db, uid, session_verified=True, **ctx)
+        apply_amex_membership_rewards_extraction(db, uid, "55,000", **ctx)
+
+        rows = compute_login_truth_rows(db, uid, decrypt_account_fn=mighty.decrypt_account_data)
+        amex = next(r for r in rows if r.provider == "amex")
+        assert amex.evidence == "Observed Membership Rewards balance"
 
 
 def test_admin_login_truth_page_forbidden(client):
@@ -187,5 +259,8 @@ def test_admin_login_truth_page_forbidden(client):
 def test_admin_login_truth_page_loads(admin_client):
     r = admin_client.get("/admin/login-truth")
     assert r.status_code == 200
-    assert b"Login Truth" in r.data
-    assert b"Login known?" in r.data
+    assert b"Account Login Truth" in r.data
+    assert b"What Mighty saw" in r.data
+    assert b"Why this matters" in r.data
+    assert b"Logged in" in r.data
+    assert b"Last confirmed" in r.data
