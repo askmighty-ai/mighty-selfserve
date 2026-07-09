@@ -1,4 +1,4 @@
-"""Tests for Login Truth dashboard logic and admin page."""
+"""Tests for Login Truth / Current Account Access diagnostic model and admin page."""
 
 import os
 import secrets
@@ -14,20 +14,27 @@ from mighty.adapters.amex_extraction import apply_amex_membership_rewards_extrac
 from mighty.connection_state import advance_amex_to_waiting, amex_extension_connected, start_amex_connect
 from mighty.login_truth import (
     AccessStateRow,
+    CurrentAccountAccess,
     LoginTruthRow,
     TruthObservation,
     access_state_summary,
-    compute_access_state_rows,
+    compute_current_account_access_rows,
     compute_login_truth_rows,
+    current_account_access_summary,
     format_access_state_display_row,
     format_access_state_label,
+    format_cached_data_label,
+    format_current_access_label,
+    format_current_account_access_display_row,
     format_login_truth_display_row,
     format_status_label,
     friendly_source_label,
     login_truth_summary,
     resolve_access_state,
+    resolve_current_account_access,
     resolve_login_truth,
     sort_access_state_rows,
+    sort_current_account_access_rows,
     sort_login_truth_rows,
 )
 from mighty.provider_access_probe import AUTH_LOGIN_PAGE, record_probe_run
@@ -81,7 +88,7 @@ def _uid(client):
         return sess["user_id"]
 
 
-def test_private_amex_mr_observation_accessible(client):
+def test_private_amex_mr_observation_connected_now_with_fresh_cache(client):
     import app as mighty
 
     uid = _uid(client)
@@ -93,16 +100,19 @@ def test_private_amex_mr_observation_accessible(client):
         amex_extension_connected(db, uid, session_verified=True, **ctx)
         apply_amex_membership_rewards_extraction(db, uid, "142,500", **ctx)
 
-        rows = compute_access_state_rows(db, uid, decrypt_account_fn=mighty.decrypt_account_data)
+        rows = compute_current_account_access_rows(
+            db, uid, decrypt_account_fn=mighty.decrypt_account_data
+        )
         amex = next(r for r in rows if r.provider == "amex")
-        assert amex.login_known == "YES"
-        assert amex.access_state == "accessible"
+        assert amex.current_access == "connected_now"
+        assert amex.cached_data_state == "fresh"
         assert amex.evidence == "Observed Membership Rewards balance"
         assert amex.next_action_text == "Nothing. Mighty can monitor this account automatically."
         assert amex.source == "account_data.items"
+        assert amex.last_private_data is not None
 
 
-def test_stale_login_probe_does_not_override_private_data(client):
+def test_newer_login_page_overrides_private_data_for_current_access(client):
     import app as mighty
 
     uid = _uid(client)
@@ -113,6 +123,18 @@ def test_stale_login_probe_does_not_override_private_data(client):
         advance_amex_to_waiting(db, uid, **ctx)
         amex_extension_connected(db, uid, session_verified=True, **ctx)
         apply_amex_membership_rewards_extraction(db, uid, "99,000", **ctx)
+
+        # Private data is older; a newer login-page observation must win for Current Access.
+        older_private_at = _iso_minutes_ago(30)
+        db.execute(
+            "UPDATE account_data SET synced_at=? WHERE user_id=? AND source=?",
+            (older_private_at, uid, "amex"),
+        )
+        db.execute(
+            "UPDATE field_observations SET last_seen=? WHERE user_id=? AND source=?",
+            (older_private_at, uid, "amex"),
+        )
+        db.commit()
 
         record_probe_run(
             db,
@@ -128,15 +150,18 @@ def test_stale_login_probe_does_not_override_private_data(client):
             },
         )
 
-        rows = compute_access_state_rows(db, uid, decrypt_account_fn=mighty.decrypt_account_data)
+        rows = compute_current_account_access_rows(
+            db, uid, decrypt_account_fn=mighty.decrypt_account_data
+        )
         amex = next(r for r in rows if r.provider == "amex")
-        assert amex.login_known == "YES"
-        assert amex.access_state == "accessible"
-        assert amex.evidence == "Observed Membership Rewards balance"
-        assert amex.source == "account_data.items"
+        assert amex.current_access == "signed_out"
+        assert amex.cached_data_state == "fresh"
+        assert amex.evidence == "login page detected"
+        assert amex.source == "provider_access_probe"
+        assert amex.next_action_text == "Sign into this account again."
 
 
-def test_login_page_with_no_private_data_needs_reauthentication(client):
+def test_login_page_with_no_private_data_signed_out(client):
     import app as mighty
 
     uid = _uid(client)
@@ -156,32 +181,144 @@ def test_login_page_with_no_private_data_needs_reauthentication(client):
             },
         )
 
-        rows = compute_access_state_rows(db, uid, decrypt_account_fn=mighty.decrypt_account_data)
+        rows = compute_current_account_access_rows(
+            db, uid, decrypt_account_fn=mighty.decrypt_account_data
+        )
         delta = next(r for r in rows if r.provider == "delta")
-        assert delta.login_known == "NO"
-        assert delta.access_state == "needs_reauthentication"
+        assert delta.current_access == "signed_out"
+        assert delta.cached_data_state == "none"
         assert delta.evidence == "login page detected"
         assert delta.next_action_text == "Sign into this account again."
         assert delta.source == "provider_access_probe"
+        assert delta.last_private_data is None
 
 
-def test_no_observations_needs_first_connection(client):
+def test_no_observations_unknown_with_no_cached_data(client):
     import app as mighty
 
     uid = _uid(client)
     with mighty.app.app_context():
         db = mighty.get_db()
-        rows = compute_access_state_rows(db, uid, decrypt_account_fn=mighty.decrypt_account_data)
-        assert all(r.login_known == "UNKNOWN" for r in rows)
-        assert all(r.access_state == "needs_first_connection" for r in rows)
+        rows = compute_current_account_access_rows(
+            db, uid, decrypt_account_fn=mighty.decrypt_account_data
+        )
+        assert all(r.current_access == "unknown" for r in rows)
+        assert all(r.cached_data_state == "none" for r in rows)
         assert all(r.evidence == "—" for r in rows)
+        assert all(r.last_verified is None for r in rows)
+        assert all(r.last_private_data is None for r in rows)
         assert all(
-            r.next_action_text == "Sign into this account once. Mighty will detect it automatically."
+            r.next_action_text
+            == "Sign into this account once. Mighty will detect it automatically."
             for r in rows
         )
 
 
+def test_resolve_current_access_private_then_newer_login_signed_out():
+    now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+    observations = [
+        TruthObservation(
+            observed_at=now - timedelta(hours=2),
+            kind="private",
+            evidence="Observed Membership Rewards balance",
+            source="account_data.items",
+        ),
+        TruthObservation(
+            observed_at=now - timedelta(minutes=30),
+            kind="login",
+            evidence="login page detected",
+            source="provider_access_probe",
+        ),
+    ]
+    result = resolve_current_account_access("amex", observations, now=now)
+    assert result.current_access == "signed_out"
+    assert result.cached_data_state == "fresh"
+    assert result.evidence == "login page detected"
+    assert result.last_private_data == (now - timedelta(hours=2)).isoformat()
+
+
+def test_resolve_current_access_login_then_newer_private_connected_now():
+    now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+    observations = [
+        TruthObservation(
+            observed_at=now - timedelta(hours=2),
+            kind="login",
+            evidence="login page detected",
+            source="provider_access_probe",
+        ),
+        TruthObservation(
+            observed_at=now - timedelta(minutes=30),
+            kind="private",
+            evidence="Observed Membership Rewards balance",
+            source="account_data.items",
+        ),
+    ]
+    result = resolve_current_account_access("amex", observations, now=now)
+    assert result.current_access == "connected_now"
+    assert result.cached_data_state == "fresh"
+    assert result.evidence == "Observed Membership Rewards balance"
+    assert result.last_verified == (now - timedelta(minutes=30)).isoformat()
+
+
+def test_resolve_current_access_private_only_connected_now_fresh():
+    now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+    observations = [
+        TruthObservation(
+            observed_at=now - timedelta(minutes=5),
+            kind="private",
+            evidence="Observed Membership Rewards balance",
+            source="account_data.items",
+        ),
+    ]
+    result = resolve_current_account_access("amex", observations, now=now)
+    assert result.current_access == "connected_now"
+    assert result.cached_data_state == "fresh"
+    assert result.last_private_data == (now - timedelta(minutes=5)).isoformat()
+
+
+def test_resolve_current_access_login_only_signed_out_no_cache():
+    now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+    observations = [
+        TruthObservation(
+            observed_at=now - timedelta(minutes=10),
+            kind="login",
+            evidence="login page detected",
+            source="provider_access_probe",
+        ),
+    ]
+    result = resolve_current_account_access("delta", observations, now=now)
+    assert result.current_access == "signed_out"
+    assert result.cached_data_state == "none"
+    assert result.last_private_data is None
+
+
+def test_resolve_current_access_no_observations_unknown_none():
+    now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+    result = resolve_current_account_access("hilton", [], now=now)
+    assert result.current_access == "unknown"
+    assert result.cached_data_state == "none"
+    assert result.last_verified is None
+    assert result.last_private_data is None
+    assert result.evidence == "—"
+
+
+def test_resolve_current_access_stale_private_is_connected_with_stale_cache():
+    now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+    observations = [
+        TruthObservation(
+            observed_at=now - timedelta(days=5),
+            kind="private",
+            evidence="saw miles balance",
+            source="field_observations",
+        ),
+    ]
+    result = resolve_current_account_access("delta", observations, now=now)
+    assert result.current_access == "connected_now"
+    assert result.cached_data_state == "stale"
+
+
 def test_resolve_login_truth_private_beats_login():
+    """Legacy Login Truth still uses the 24h private-data-wins rule."""
     now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
     observations = [
         TruthObservation(
@@ -321,6 +458,15 @@ def test_access_state_labels():
     assert format_access_state_label("unexpected_problem") == "Needs investigation"
 
 
+def test_current_access_and_cached_data_labels():
+    assert format_current_access_label("connected_now") == "Connected now"
+    assert format_current_access_label("signed_out") == "Signed out"
+    assert format_current_access_label("unknown") == "Unknown"
+    assert format_cached_data_label("fresh") == "Fresh"
+    assert format_cached_data_label("stale") == "Stale"
+    assert format_cached_data_label("none") == "None"
+
+
 def test_access_state_summary_counts():
     rows = [
         AccessStateRow("amex", "YES", "accessible", "none", "Nothing.", "mr", "t", "account_data.items"),
@@ -338,6 +484,25 @@ def test_access_state_summary_counts():
     }
 
 
+def test_current_account_access_summary_counts():
+    rows = [
+        CurrentAccountAccess(
+            "amex", "connected_now", "fresh", "t", "t", "mr", "account_data.items", "none", "Nothing."
+        ),
+        CurrentAccountAccess(
+            "delta", "signed_out", "none", "t", None, "login", "provider_access_probe", "reauthenticate", "Sign in."
+        ),
+        CurrentAccountAccess(
+            "hilton", "unknown", "none", None, None, "—", "—", "connect_account", "Connect."
+        ),
+        CurrentAccountAccess(
+            "united", "unknown", "stale", None, "t", "—", "—", "connect_account", "Connect."
+        ),
+    ]
+    summary = current_account_access_summary(rows)
+    assert summary == {"connected_now": 1, "signed_out": 1, "unknown": 2}
+
+
 def test_sort_access_state_rows_by_state_then_provider():
     rows = [
         AccessStateRow("hilton", "UNKNOWN", "unknown", "wait_for_observation", "Visit.", "—", None, "—"),
@@ -353,6 +518,34 @@ def test_sort_access_state_rows_by_state_then_provider():
         "marriott",
         "hilton",
         "united",
+    ]
+
+
+def test_sort_current_account_access_rows_by_access_then_provider():
+    rows = [
+        CurrentAccountAccess(
+            "hilton", "unknown", "none", None, None, "—", "—", "connect_account", "Connect."
+        ),
+        CurrentAccountAccess(
+            "delta", "signed_out", "none", "t", None, "login", "provider_access_probe", "reauthenticate", "Sign in."
+        ),
+        CurrentAccountAccess(
+            "amex", "connected_now", "fresh", "t", "t", "mr", "account_data.items", "none", "Nothing."
+        ),
+        CurrentAccountAccess(
+            "united", "signed_out", "fresh", "t", "t", "login", "provider_access_probe", "reauthenticate", "Sign in."
+        ),
+        CurrentAccountAccess(
+            "marriott", "unknown", "stale", None, "t", "—", "—", "connect_account", "Connect."
+        ),
+    ]
+    sorted_rows = sort_current_account_access_rows(rows)
+    assert [row.provider for row in sorted_rows] == [
+        "amex",
+        "delta",
+        "united",
+        "hilton",
+        "marriott",
     ]
 
 
@@ -375,6 +568,27 @@ def test_format_access_state_display_row_uses_friendly_source():
     assert display.next_action_text == "Nothing. Mighty can monitor this account automatically."
 
 
+def test_format_current_account_access_display_row():
+    row = CurrentAccountAccess(
+        provider="amex",
+        current_access="signed_out",
+        cached_data_state="fresh",
+        last_verified="2026-07-08T12:00:00+00:00",
+        last_private_data="2026-07-08T11:00:00+00:00",
+        evidence="login page detected",
+        source="provider_access_probe",
+        next_action_type="reauthenticate",
+        next_action_text="Sign into this account again.",
+    )
+    display = format_current_account_access_display_row(row)
+    assert display.current_access_label == "Signed out"
+    assert display.cached_data_label == "Fresh"
+    assert display.evidence == "login page detected"
+    assert display.source_label == "Account access probe"
+    assert display.source_internal == "provider_access_probe"
+    assert display.next_action_text == "Sign into this account again."
+
+
 def test_admin_login_truth_page_forbidden(client):
     assert client.get("/admin/login-truth").status_code == 403
 
@@ -382,11 +596,15 @@ def test_admin_login_truth_page_forbidden(client):
 def test_admin_login_truth_page_loads(admin_client):
     r = admin_client.get("/admin/login-truth")
     assert r.status_code == 200
-    assert b"Account Access State" in r.data
-    assert b"Can Mighty access it?" in r.data
-    assert b"What Mighty knows" in r.data
-    assert b"Why this matters" in r.data
-    assert b"Accessible" in r.data
-    assert b"Not connected yet" in r.data
+    assert b"Current Account Access" in r.data
+    assert b"Current access" in r.data
+    assert b"Cached data" in r.data
+    assert b"Last verified" in r.data
     assert b"Next action" in r.data
+    assert b"Why this matters" in r.data
+    assert b"Connected now" in r.data
+    assert b"Signed out" in r.data
+    assert b"Unknown" in r.data
+    assert b"What Mighty knows" not in r.data
+    assert b"Can Mighty access it?" not in r.data
     assert b"account_data.items" not in r.data

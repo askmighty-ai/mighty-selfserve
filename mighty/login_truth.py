@@ -1,4 +1,11 @@
-"""Login Truth — whether Mighty knows the user is logged into each provider site."""
+"""Login Truth — diagnostic model for current account access vs cached data.
+
+Current Access answers: if Mighty tried to access this account right now, would it
+succeed? The newest observation always wins (no private-data-wins window).
+
+Cached Data answers: does Mighty have stored private account data, and is it fresh?
+That is independent of whether the user is signed in right now.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +25,8 @@ from mighty.provider_access_probe import (
 
 LoginVerdict = Literal["YES", "NO", "UNKNOWN"]
 ObservationKind = Literal["private", "login"]
+CurrentAccess = Literal["connected_now", "signed_out", "unknown"]
+CachedDataState = Literal["fresh", "stale", "none"]
 AccessState = Literal[
     "accessible",
     "needs_first_connection",
@@ -34,6 +43,7 @@ NextActionType = Literal[
 ]
 
 PRIVATE_DATA_WINDOW_HOURS = 24
+CACHED_DATA_FRESH_HOURS = PRIVATE_DATA_WINDOW_HOURS
 
 LOGIN_AUTH_STATES = frozenset({
     AUTH_LOGIN_PAGE,
@@ -104,6 +114,35 @@ class AccessStateDisplayRow:
     login_known: LoginVerdict = "UNKNOWN"
 
 
+@dataclass(frozen=True)
+class CurrentAccountAccess:
+    """Canonical read-model: current access vs cached private data."""
+
+    provider: str
+    current_access: CurrentAccess
+    cached_data_state: CachedDataState
+    last_verified: str | None
+    last_private_data: str | None
+    evidence: str
+    source: str
+    next_action_type: NextActionType
+    next_action_text: str
+
+
+@dataclass(frozen=True)
+class CurrentAccountAccessDisplayRow:
+    provider: str
+    current_access: CurrentAccess
+    current_access_label: str
+    cached_data_state: CachedDataState
+    cached_data_label: str
+    last_verified: str | None
+    next_action_text: str
+    evidence: str
+    source_label: str
+    source_internal: str | None = None
+
+
 STATUS_LABELS: dict[LoginVerdict, str] = {
     "YES": "Logged in",
     "NO": "Not logged in",
@@ -114,6 +153,24 @@ STATUS_SORT_ORDER: dict[LoginVerdict, int] = {
     "YES": 0,
     "NO": 1,
     "UNKNOWN": 2,
+}
+
+CURRENT_ACCESS_LABELS: dict[CurrentAccess, str] = {
+    "connected_now": "Connected now",
+    "signed_out": "Signed out",
+    "unknown": "Unknown",
+}
+
+CURRENT_ACCESS_SORT_ORDER: dict[CurrentAccess, int] = {
+    "connected_now": 0,
+    "signed_out": 1,
+    "unknown": 2,
+}
+
+CACHED_DATA_LABELS: dict[CachedDataState, str] = {
+    "fresh": "Fresh",
+    "stale": "Stale",
+    "none": "None",
 }
 
 ACCESS_STATE_LABELS: dict[AccessState, str] = {
@@ -130,6 +187,21 @@ ACCESS_STATE_SORT_ORDER: dict[AccessState, int] = {
     "needs_first_connection": 2,
     "unknown": 3,
     "unexpected_problem": 4,
+}
+
+NEXT_ACTION_BY_CURRENT_ACCESS: dict[CurrentAccess, tuple[NextActionType, str]] = {
+    "connected_now": (
+        "none",
+        "Nothing. Mighty can monitor this account automatically.",
+    ),
+    "signed_out": (
+        "reauthenticate",
+        "Sign into this account again.",
+    ),
+    "unknown": (
+        "connect_account",
+        "Sign into this account once. Mighty will detect it automatically.",
+    ),
 }
 
 NEXT_ACTION_BY_STATE: dict[AccessState, tuple[NextActionType, str]] = {
@@ -426,15 +498,84 @@ def resolve_access_state(
     )
 
 
-def _load_provider_truth_bundles(
+def resolve_cached_data_state(
+    observations: list[TruthObservation],
+    *,
+    now: datetime | None = None,
+    fresh_hours: int = CACHED_DATA_FRESH_HOURS,
+) -> tuple[CachedDataState, str | None]:
+    """Derive cached-data freshness from private observations only."""
+    now = now or datetime.now(timezone.utc)
+    private = [o for o in observations if o.kind == "private"]
+    if not private:
+        return "none", None
+    newest = max(private, key=lambda o: o.observed_at)
+    last_private_data = newest.observed_at.isoformat()
+    cutoff = now - timedelta(hours=fresh_hours)
+    if newest.observed_at >= cutoff:
+        return "fresh", last_private_data
+    return "stale", last_private_data
+
+
+def resolve_current_account_access(
+    provider: str,
+    observations: list[TruthObservation],
+    *,
+    now: datetime | None = None,
+    fresh_hours: int = CACHED_DATA_FRESH_HOURS,
+) -> CurrentAccountAccess:
+    """Newest observation wins for current access; cached data is independent."""
+    now = now or datetime.now(timezone.utc)
+    cached_data_state, last_private_data = resolve_cached_data_state(
+        observations,
+        now=now,
+        fresh_hours=fresh_hours,
+    )
+
+    if not observations:
+        next_action_type, next_action_text = NEXT_ACTION_BY_CURRENT_ACCESS["unknown"]
+        return CurrentAccountAccess(
+            provider=provider,
+            current_access="unknown",
+            cached_data_state=cached_data_state,
+            last_verified=None,
+            last_private_data=last_private_data,
+            evidence="—",
+            source="—",
+            next_action_type=next_action_type,
+            next_action_text=next_action_text,
+        )
+
+    newest = max(observations, key=lambda o: o.observed_at)
+    if newest.kind == "private":
+        current_access: CurrentAccess = "connected_now"
+    elif newest.kind == "login":
+        current_access = "signed_out"
+    else:
+        current_access = "unknown"
+
+    next_action_type, next_action_text = NEXT_ACTION_BY_CURRENT_ACCESS[current_access]
+    return CurrentAccountAccess(
+        provider=provider,
+        current_access=current_access,
+        cached_data_state=cached_data_state,
+        last_verified=newest.observed_at.isoformat(),
+        last_private_data=last_private_data,
+        evidence=newest.evidence,
+        source=newest.source,
+        next_action_type=next_action_type,
+        next_action_text=next_action_text,
+    )
+
+
+def _load_provider_observations(
     db: Any,
     user_id: str,
     *,
     decrypt_account_fn: Callable[[str, str], dict[str, Any]],
     providers: tuple[str, ...] | list[str] | None = None,
-    now: datetime | None = None,
-) -> list[tuple[LoginTruthRow, list[TruthObservation]]]:
-    """Load login-truth rows and raw observations for each configured probe provider."""
+) -> list[tuple[str, list[TruthObservation]]]:
+    """Load raw observations for each configured probe provider."""
     ensure_probe_tables(db)
     provider_list = list(providers or sorted(PROBE_PROVIDERS))
 
@@ -469,7 +610,7 @@ def _load_provider_truth_bundles(
         if provider in probe_by_provider:
             probe_by_provider[provider].append(dict(row))
 
-    bundles: list[tuple[LoginTruthRow, list[TruthObservation]]] = []
+    bundles: list[tuple[str, list[TruthObservation]]] = []
     for provider in provider_list:
         source = PROVIDER_PROBE_CONFIG.get(provider, None)
         source_key = source.source if source else provider
@@ -487,6 +628,26 @@ def _load_provider_truth_bundles(
             field_observations=fo_by_source.get(source_key, {}),
             probe_rows=probe_by_provider.get(provider, []),
         )
+        bundles.append((provider, observations))
+    return bundles
+
+
+def _load_provider_truth_bundles(
+    db: Any,
+    user_id: str,
+    *,
+    decrypt_account_fn: Callable[[str, str], dict[str, Any]],
+    providers: tuple[str, ...] | list[str] | None = None,
+    now: datetime | None = None,
+) -> list[tuple[LoginTruthRow, list[TruthObservation]]]:
+    """Load login-truth rows and raw observations for each configured probe provider."""
+    bundles: list[tuple[LoginTruthRow, list[TruthObservation]]] = []
+    for provider, observations in _load_provider_observations(
+        db,
+        user_id,
+        decrypt_account_fn=decrypt_account_fn,
+        providers=providers,
+    ):
         result = resolve_login_truth(observations, now=now)
         login_row = LoginTruthRow(
             provider=provider,
@@ -528,7 +689,7 @@ def compute_access_state_rows(
     providers: tuple[str, ...] | list[str] | None = None,
     now: datetime | None = None,
 ) -> list[AccessStateRow]:
-    """Build canonical access-state rows for each configured probe provider."""
+    """Build legacy access-state rows for each configured probe provider."""
     rows: list[AccessStateRow] = []
     for login_row, observations in _load_provider_truth_bundles(
         db,
@@ -539,6 +700,26 @@ def compute_access_state_rows(
     ):
         rows.append(resolve_access_state(observations, login_row, now=now))
     return rows
+
+
+def compute_current_account_access_rows(
+    db: Any,
+    user_id: str,
+    *,
+    decrypt_account_fn: Callable[[str, str], dict[str, Any]],
+    providers: tuple[str, ...] | list[str] | None = None,
+    now: datetime | None = None,
+) -> list[CurrentAccountAccess]:
+    """Build Current Access / Cached Data rows for each configured probe provider."""
+    return [
+        resolve_current_account_access(provider, observations, now=now)
+        for provider, observations in _load_provider_observations(
+            db,
+            user_id,
+            decrypt_account_fn=decrypt_account_fn,
+            providers=providers,
+        )
+    ]
 
 
 def format_status_label(verdict: LoginVerdict) -> str:
@@ -608,4 +789,47 @@ def format_access_state_display_row(row: AccessStateRow) -> AccessStateDisplayRo
         source_label=source_label,
         source_internal=source_internal,
         login_known=row.login_known,
+    )
+
+
+def format_current_access_label(current_access: CurrentAccess) -> str:
+    return CURRENT_ACCESS_LABELS[current_access]
+
+
+def format_cached_data_label(cached_data_state: CachedDataState) -> str:
+    return CACHED_DATA_LABELS[cached_data_state]
+
+
+def sort_current_account_access_rows(
+    rows: list[CurrentAccountAccess],
+) -> list[CurrentAccountAccess]:
+    return sorted(
+        rows,
+        key=lambda row: (CURRENT_ACCESS_SORT_ORDER[row.current_access], row.provider),
+    )
+
+
+def current_account_access_summary(rows: list[CurrentAccountAccess]) -> dict[str, int]:
+    return {
+        "connected_now": sum(1 for row in rows if row.current_access == "connected_now"),
+        "signed_out": sum(1 for row in rows if row.current_access == "signed_out"),
+        "unknown": sum(1 for row in rows if row.current_access == "unknown"),
+    }
+
+
+def format_current_account_access_display_row(
+    row: CurrentAccountAccess,
+) -> CurrentAccountAccessDisplayRow:
+    source_label, source_internal = friendly_source_label(row.source)
+    return CurrentAccountAccessDisplayRow(
+        provider=row.provider,
+        current_access=row.current_access,
+        current_access_label=format_current_access_label(row.current_access),
+        cached_data_state=row.cached_data_state,
+        cached_data_label=format_cached_data_label(row.cached_data_state),
+        last_verified=row.last_verified,
+        next_action_text=row.next_action_text,
+        evidence=row.evidence,
+        source_label=source_label,
+        source_internal=source_internal,
     )
