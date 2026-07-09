@@ -58,7 +58,7 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
     (
         "login-truth",
         "Login Truth",
-        "Whether Mighty can access each account site",
+        "Current account access vs cached private data",
     ),
 ]
 
@@ -1987,27 +1987,43 @@ def render_provider_access_probe_page(
     return _admin_shell("provider-access-probe", "Provider Access Probe", body)
 
 
-def _access_state_badge(access_label: str, *, access_state: str) -> str:
+def _current_access_badge(access_label: str, *, current_access: str) -> str:
     colors = {
-        "accessible": ("#065f46", "#d1fae5"),
-        "needs_reauthentication": ("#991b1b", "#fee2e2"),
-        "needs_first_connection": ("#92400e", "#fef3c7"),
+        "connected_now": ("#065f46", "#d1fae5"),
+        "signed_out": ("#991b1b", "#fee2e2"),
         "unknown": ("#374151", "#f3f4f6"),
-        "unexpected_problem": ("#7c2d12", "#ffedd5"),
     }
-    fg, bg = colors.get(access_state, colors["unknown"])
+    fg, bg = colors.get(current_access, colors["unknown"])
     return (
         f'<span style="display:inline-block;padding:3px 10px;border-radius:6px;'
         f'font-size:12px;font-weight:700;color:{fg};background:{bg}">{_he(access_label)}</span>'
     )
 
 
-def _access_state_source_detail(source_label: str, source_internal: str | None) -> str:
+def _cached_data_badge(cached_label: str, *, cached_data_state: str) -> str:
+    colors = {
+        "fresh": ("#065f46", "#d1fae5"),
+        "stale": ("#92400e", "#fef3c7"),
+        "none": ("#374151", "#f3f4f6"),
+    }
+    fg, bg = colors.get(cached_data_state, colors["none"])
+    return (
+        f'<span style="display:inline-block;padding:3px 10px;border-radius:6px;'
+        f'font-size:12px;font-weight:700;color:{fg};background:{bg}">{_he(cached_label)}</span>'
+    )
+
+
+def _current_access_source_detail(
+    evidence: str,
+    source_label: str,
+    source_internal: str | None,
+) -> str:
     if not source_internal or source_internal == source_label:
         return ""
     return (
         f'<details style="margin-top:4px">'
-        f'<summary class="muted" style="font-size:10px;cursor:pointer">Technical source</summary>'
+        f'<summary class="muted" style="font-size:10px;cursor:pointer">Technical details</summary>'
+        f'<div class="muted" style="font-size:10px;margin-top:2px">{_he(evidence)}</div>'
         f'<div class="muted" style="font-size:10px;margin-top:2px">{_he(source_label)}</div>'
         f"</details>"
     )
@@ -2015,22 +2031,22 @@ def _access_state_source_detail(source_label: str, source_internal: str | None) 
 
 def render_login_truth_page(rows: list[Any]) -> str:
     from mighty.login_truth import (
-        access_state_summary,
-        format_access_state_display_row,
-        sort_access_state_rows,
+        current_account_access_summary,
+        format_current_account_access_display_row,
+        sort_current_account_access_rows,
     )
 
-    sorted_rows = sort_access_state_rows(rows)
-    summary = access_state_summary(sorted_rows)
-    display_rows = [format_access_state_display_row(row) for row in sorted_rows]
+    sorted_rows = sort_current_account_access_rows(rows)
+    summary = current_account_access_summary(sorted_rows)
+    display_rows = [format_current_account_access_display_row(row) for row in sorted_rows]
 
     table = "".join(
         f"<tr>"
         f"<td><strong>{_he(r.provider)}</strong></td>"
-        f"<td>{_access_state_badge(r.access_label, access_state=r.access_state)}</td>"
-        f"<td>{_he(r.evidence)}"
-        f"{_access_state_source_detail(r.source_label, r.source_internal)}</td>"
-        f"<td class='muted'>{_fmt_iso(r.last_confirmed_at)}</td>"
+        f"<td>{_current_access_badge(r.current_access_label, current_access=r.current_access)}"
+        f"{_current_access_source_detail(r.evidence, r.source_label, r.source_internal)}</td>"
+        f"<td>{_cached_data_badge(r.cached_data_label, cached_data_state=r.cached_data_state)}</td>"
+        f"<td class='muted'>{_fmt_iso(r.last_verified)}</td>"
         f"<td>{_he(r.next_action_text)}</td>"
         f"</tr>"
         for r in display_rows
@@ -2039,28 +2055,26 @@ def render_login_truth_page(rows: list[Any]) -> str:
     summary_card = (
         '<div class="card" style="margin-bottom:16px">'
         '<div style="display:flex;gap:24px;flex-wrap:wrap">'
-        f'<div><div class="muted" style="font-size:11px">Accessible</div>'
-        f'<div style="font-size:24px;font-weight:700;color:#6ee7b7">{summary["accessible"]}</div></div>'
-        f'<div><div class="muted" style="font-size:11px">Sign in needed</div>'
-        f'<div style="font-size:24px;font-weight:700;color:#fca5a5">{summary["sign_in_needed"]}</div></div>'
-        f'<div><div class="muted" style="font-size:11px">Not connected / unknown</div>'
-        f'<div style="font-size:24px;font-weight:700;color:#9ca3af">{summary["not_connected_or_unknown"]}</div></div>'
-        f'<div><div class="muted" style="font-size:11px">Needs investigation</div>'
-        f'<div style="font-size:24px;font-weight:700;color:#fdba74">{summary["needs_investigation"]}</div></div>'
+        f'<div><div class="muted" style="font-size:11px">Connected now</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#6ee7b7">{summary["connected_now"]}</div></div>'
+        f'<div><div class="muted" style="font-size:11px">Signed out</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#fca5a5">{summary["signed_out"]}</div></div>'
+        f'<div><div class="muted" style="font-size:11px">Unknown</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#9ca3af">{summary["unknown"]}</div></div>'
         "</div></div>"
     )
 
     body = (
-        '<p class="lede">Can Mighty access this account? Accessible means Mighty recently observed '
-        "private account data. Sign in needed means Mighty recently saw a login page with no newer "
-        "private data. Not connected yet means Mighty has never seen private data for that provider.</p>"
+        '<p class="lede">Current Access answers whether Mighty could access this account right now. '
+        "The newest observation always wins. Cached Data is independent: Mighty may still hold "
+        "fresh private account data even when the user is signed out.</p>"
         f"{summary_card}"
         '<div class="card"><table><thead><tr>'
-        "<th>Provider</th><th>Can Mighty access it?</th><th>What Mighty knows</th>"
-        "<th>Last confirmed</th><th>Next action</th>"
+        "<th>Provider</th><th>Current access</th><th>Cached data</th>"
+        "<th>Last verified</th><th>Next action</th>"
         f"</tr></thead><tbody>{table}</tbody></table></div>"
         '<p class="muted" style="font-size:12px;margin-top:16px">'
-        "<strong>Why this matters:</strong> Mighty can only personalize benefits and recommendations "
-        "for accounts where it has recently seen private account data.</p>"
+        "<strong>Why this matters:</strong> Current Access and Cached Data answer different "
+        "questions. A signed-out session can still leave fresh Membership Rewards data on file.</p>"
     )
-    return _admin_shell("login-truth", "Account Access State", body)
+    return _admin_shell("login-truth", "Current Account Access", body)
