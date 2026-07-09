@@ -26,9 +26,11 @@ from mighty.login_truth import (
     format_cached_data_label,
     format_current_access_label,
     format_current_account_access_display_row,
+    format_current_winner_line,
     format_login_truth_display_row,
     format_status_label,
     friendly_source_label,
+    gather_session_evidence_timeline,
     login_truth_summary,
     resolve_access_state,
     resolve_current_account_access,
@@ -896,3 +898,190 @@ def test_admin_login_truth_page_loads(admin_client):
     assert b"What Mighty knows" not in r.data
     assert b"Can Mighty access it?" not in r.data
     assert b"account_data.items" not in r.data
+
+
+def test_admin_session_evidence_page_forbidden(client):
+    assert client.get("/admin/session-evidence").status_code == 403
+
+
+def test_admin_session_evidence_page_loads(admin_client):
+    r = admin_client.get("/admin/session-evidence")
+    assert r.status_code == 200
+    assert b"Session Evidence Timeline" in r.data
+    assert b"Current winner" in r.data
+    assert b"Evidence timeline" in r.data
+    assert b"Session evidence only" in r.data
+    assert b"Include cached data" in r.data
+
+
+def test_session_evidence_timeline_shows_provider_session_state_and_winner(client):
+    import app as mighty
+
+    uid = _uid(client)
+    observed = datetime.now(timezone.utc) - timedelta(minutes=10)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_verified",
+                evidence_summary="Amex extension reported verified authenticated session",
+                observed_at=observed,
+                source="extension_amex_connected",
+                confidence="high",
+            ),
+        )
+        sections = gather_session_evidence_timeline(
+            db,
+            uid,
+            decrypt_account_fn=mighty.decrypt_account_data,
+            provider="amex",
+            include_cached_data=False,
+        )
+        assert len(sections) == 1
+        section = sections[0]
+        assert section.current is not None
+        assert section.current.state == "connected"
+        assert section.current.evidence_type == "session_verified"
+        winner = format_current_winner_line(section)
+        assert winner.startswith("Current winner: connected because of ")
+        assert "Amex extension reported verified authenticated session" in winner
+        session_events = [e for e in section.events if e.category == "session"]
+        assert any(
+            e.source == "extension_amex_connected"
+            and e.result == "connected"
+            and e.evidence_type == "session_verified"
+            for e in session_events
+        )
+
+
+def test_session_evidence_cached_data_not_connected_evidence(client):
+    """Cached MR balance appears as cached-data evidence, not connected session evidence."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        ctx = _ctx(mighty)
+        start_amex_connect(db, uid, **ctx)
+        advance_amex_to_waiting(db, uid, **ctx)
+        amex_extension_connected(db, uid, session_verified=True, **ctx)
+        apply_amex_membership_rewards_extraction(db, uid, "142,500", **ctx)
+
+        sections = gather_session_evidence_timeline(
+            db,
+            uid,
+            decrypt_account_fn=mighty.decrypt_account_data,
+            provider="amex",
+            include_cached_data=True,
+        )
+        section = sections[0]
+        # Extraction alone does not write session state; current access stays unknown.
+        assert section.current is None or section.current.state == "unknown"
+        cached = [e for e in section.events if e.category == "cached_data"]
+        assert cached
+        assert all(e.result == "cached_data" for e in cached)
+        assert all(e.evidence_type == "cached_private_data" for e in cached)
+        assert any("Membership Rewards" in e.summary for e in cached)
+        connected_from_cache = [
+            e
+            for e in section.events
+            if e.category == "session" and e.result == "connected" and e.source in {
+                "account_data.items",
+                "field_observations",
+            }
+        ]
+        assert connected_from_cache == []
+
+        session_only = gather_session_evidence_timeline(
+            db,
+            uid,
+            decrypt_account_fn=mighty.decrypt_account_data,
+            provider="amex",
+            include_cached_data=False,
+        )[0]
+        assert all(e.category == "session" for e in session_only.events)
+
+
+def test_session_evidence_timeline_sorted_newest_first(client):
+    import app as mighty
+
+    uid = _uid(client)
+    older = datetime.now(timezone.utc) - timedelta(hours=2)
+    newer = datetime.now(timezone.utc) - timedelta(minutes=5)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_api",
+                evidence_summary="ReadUserSession.v1 returned 200",
+                observed_at=older,
+                source="provider_access_probe",
+                confidence="high",
+            ),
+        )
+        record_probe_run(
+            db,
+            uid,
+            {
+                "provider": "amex",
+                "status": "needs_sign_in",
+                "auth_state": AUTH_LOGIN_PAGE,
+                "private_data_detected": False,
+                "signed_in_detected": False,
+                "failure_reason": "login_required",
+                "probed_at": newer.isoformat(),
+            },
+        )
+        section = gather_session_evidence_timeline(
+            db,
+            uid,
+            decrypt_account_fn=mighty.decrypt_account_data,
+            provider="amex",
+            include_cached_data=False,
+        )[0]
+        assert section.events
+        times = [e.observed_at for e in section.events]
+        assert times == sorted(times, reverse=True)
+        assert section.events[0].result == "signed_out"
+        assert "Current winner: signed_out" in format_current_winner_line(section)
+
+
+def test_admin_session_evidence_page_shows_winner_and_cached(admin_client):
+    import app as mighty
+
+    uid = _uid(admin_client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        ctx = _ctx(mighty)
+        start_amex_connect(db, uid, **ctx)
+        advance_amex_to_waiting(db, uid, **ctx)
+        apply_amex_membership_rewards_extraction(db, uid, "50,000", **ctx)
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="signed_out",
+                evidence_type="login_page",
+                evidence_summary="login page detected",
+                observed_at=datetime.now(timezone.utc) - timedelta(minutes=3),
+                source="provider_access_probe",
+                confidence="high",
+            ),
+        )
+
+    r = admin_client.get("/admin/session-evidence?provider=amex&include_cached=1")
+    assert r.status_code == 200
+    assert b"Current winner: signed_out because of login page detected" in r.data
+    assert b"cached_private_data" in r.data or b"Cached data" in r.data
+    assert b"provider_session_state" in r.data or b"login page detected" in r.data
+    # Cached data badge must not be presented as Connected session evidence from items.
+    assert b"Membership Rewards" in r.data
