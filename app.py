@@ -21148,10 +21148,10 @@ def admin_delta_evidence_audit_detail_page(run_id):
 @app.route("/admin/login-truth")
 @require_admin
 def admin_login_truth_page():
-    from mighty.login_truth import compute_login_truth_rows
+    from mighty.login_truth import compute_access_state_rows
 
     uid = session["user_id"]
-    rows = compute_login_truth_rows(
+    rows = compute_access_state_rows(
         get_db(),
         uid,
         decrypt_account_fn=decrypt_account_data,

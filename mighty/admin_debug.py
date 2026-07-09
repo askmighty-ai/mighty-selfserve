@@ -58,7 +58,7 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
     (
         "login-truth",
         "Login Truth",
-        "Whether Mighty knows the user is logged into each account site",
+        "Whether Mighty can access each account site",
     ),
 ]
 
@@ -1987,46 +1987,51 @@ def render_provider_access_probe_page(
     return _admin_shell("provider-access-probe", "Provider Access Probe", body)
 
 
-def _login_truth_badge(status_label: str, *, login_known: str) -> str:
+def _access_state_badge(access_label: str, *, access_state: str) -> str:
     colors = {
-        "YES": ("#065f46", "#d1fae5"),
-        "NO": ("#991b1b", "#fee2e2"),
-        "UNKNOWN": ("#374151", "#f3f4f6"),
+        "accessible": ("#065f46", "#d1fae5"),
+        "needs_reauthentication": ("#991b1b", "#fee2e2"),
+        "needs_first_connection": ("#92400e", "#fef3c7"),
+        "unknown": ("#374151", "#f3f4f6"),
+        "unexpected_problem": ("#7c2d12", "#ffedd5"),
     }
-    fg, bg = colors.get(login_known, colors["UNKNOWN"])
+    fg, bg = colors.get(access_state, colors["unknown"])
     return (
         f'<span style="display:inline-block;padding:3px 10px;border-radius:6px;'
-        f'font-size:12px;font-weight:700;color:{fg};background:{bg}">{_he(status_label)}</span>'
+        f'font-size:12px;font-weight:700;color:{fg};background:{bg}">{_he(access_label)}</span>'
     )
 
 
-def _login_truth_source_cell(source_label: str, source_internal: str | None) -> str:
+def _access_state_source_detail(source_label: str, source_internal: str | None) -> str:
     if not source_internal or source_internal == source_label:
-        return _he(source_label)
+        return ""
     return (
-        f"{_he(source_label)}"
-        f'<div class="muted" style="font-size:10px;margin-top:2px"><code>{_he(source_internal)}</code></div>'
+        f'<details style="margin-top:4px">'
+        f'<summary class="muted" style="font-size:10px;cursor:pointer">Technical source</summary>'
+        f'<div class="muted" style="font-size:10px;margin-top:2px">{_he(source_label)}</div>'
+        f"</details>"
     )
 
 
 def render_login_truth_page(rows: list[Any]) -> str:
     from mighty.login_truth import (
-        format_login_truth_display_row,
-        login_truth_summary,
-        sort_login_truth_rows,
+        access_state_summary,
+        format_access_state_display_row,
+        sort_access_state_rows,
     )
 
-    sorted_rows = sort_login_truth_rows(rows)
-    summary = login_truth_summary(sorted_rows)
-    display_rows = [format_login_truth_display_row(row) for row in sorted_rows]
+    sorted_rows = sort_access_state_rows(rows)
+    summary = access_state_summary(sorted_rows)
+    display_rows = [format_access_state_display_row(row) for row in sorted_rows]
 
     table = "".join(
         f"<tr>"
         f"<td><strong>{_he(r.provider)}</strong></td>"
-        f"<td>{_login_truth_badge(r.status_label, login_known=r.login_known)}</td>"
-        f"<td>{_he(r.evidence)}</td>"
+        f"<td>{_access_state_badge(r.access_label, access_state=r.access_state)}</td>"
+        f"<td>{_he(r.evidence)}"
+        f"{_access_state_source_detail(r.source_label, r.source_internal)}</td>"
         f"<td class='muted'>{_fmt_iso(r.last_confirmed_at)}</td>"
-        f"<td class='muted'>{_login_truth_source_cell(r.source_label, r.source_internal)}</td>"
+        f"<td>{_he(r.next_action_text)}</td>"
         f"</tr>"
         for r in display_rows
     ) or '<tr><td colspan="5" class="muted">No providers configured</td></tr>'
@@ -2034,26 +2039,28 @@ def render_login_truth_page(rows: list[Any]) -> str:
     summary_card = (
         '<div class="card" style="margin-bottom:16px">'
         '<div style="display:flex;gap:24px;flex-wrap:wrap">'
-        f'<div><div class="muted" style="font-size:11px">Logged in</div>'
-        f'<div style="font-size:24px;font-weight:700;color:#6ee7b7">{summary["logged_in"]}</div></div>'
-        f'<div><div class="muted" style="font-size:11px">Not logged in</div>'
-        f'<div style="font-size:24px;font-weight:700;color:#fca5a5">{summary["not_logged_in"]}</div></div>'
-        f'<div><div class="muted" style="font-size:11px">Unknown</div>'
-        f'<div style="font-size:24px;font-weight:700;color:#9ca3af">{summary["unknown"]}</div></div>'
+        f'<div><div class="muted" style="font-size:11px">Accessible</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#6ee7b7">{summary["accessible"]}</div></div>'
+        f'<div><div class="muted" style="font-size:11px">Sign in needed</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#fca5a5">{summary["sign_in_needed"]}</div></div>'
+        f'<div><div class="muted" style="font-size:11px">Not connected / unknown</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#9ca3af">{summary["not_connected_or_unknown"]}</div></div>'
+        f'<div><div class="muted" style="font-size:11px">Needs investigation</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#fdba74">{summary["needs_investigation"]}</div></div>'
         "</div></div>"
     )
 
     body = (
-        '<p class="lede">YES means Mighty recently observed private account data. '
-        "NO means Mighty recently saw a login page with no newer private data. "
-        "UNKNOWN means Mighty has not confirmed either state.</p>"
+        '<p class="lede">Can Mighty access this account? Accessible means Mighty recently observed '
+        "private account data. Sign in needed means Mighty recently saw a login page with no newer "
+        "private data. Not connected yet means Mighty has never seen private data for that provider.</p>"
         f"{summary_card}"
         '<div class="card"><table><thead><tr>'
-        "<th>Provider</th><th>Status</th><th>What Mighty saw</th>"
-        "<th>Last confirmed</th><th>Source</th>"
+        "<th>Provider</th><th>Can Mighty access it?</th><th>What Mighty knows</th>"
+        "<th>Last confirmed</th><th>Next action</th>"
         f"</tr></thead><tbody>{table}</tbody></table></div>"
         '<p class="muted" style="font-size:12px;margin-top:16px">'
         "<strong>Why this matters:</strong> Mighty can only personalize benefits and recommendations "
         "for accounts where it has recently seen private account data.</p>"
     )
-    return _admin_shell("login-truth", "Account Login Truth", body)
+    return _admin_shell("login-truth", "Account Access State", body)
