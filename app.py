@@ -21145,6 +21145,20 @@ def admin_delta_evidence_audit_detail_page(run_id):
     return _admin_debug.render_delta_evidence_audit_detail_page(audit)
 
 
+@app.route("/admin/login-truth")
+@require_admin
+def admin_login_truth_page():
+    from mighty.login_truth import compute_login_truth_rows
+
+    uid = session["user_id"]
+    rows = compute_login_truth_rows(
+        get_db(),
+        uid,
+        decrypt_account_fn=decrypt_account_data,
+    )
+    return _admin_debug.render_login_truth_page(rows)
+
+
 @app.route("/admin/provider-access-probe")
 @require_admin
 def admin_provider_access_probe_page():

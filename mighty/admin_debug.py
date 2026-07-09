@@ -55,6 +55,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
         "Provider Access Probe",
         "Latest account access probe per provider (Phase 1 reliability)",
     ),
+    (
+        "login-truth",
+        "Login Truth",
+        "Whether Mighty knows the user is logged into each account site",
+    ),
 ]
 
 
@@ -1980,3 +1985,40 @@ def render_provider_access_probe_page(
         f"{script}"
     )
     return _admin_shell("provider-access-probe", "Provider Access Probe", body)
+
+
+def _login_truth_badge(verdict: str) -> str:
+    colors = {
+        "YES": ("#065f46", "#d1fae5"),
+        "NO": ("#991b1b", "#fee2e2"),
+        "UNKNOWN": ("#374151", "#f3f4f6"),
+    }
+    fg, bg = colors.get(verdict, colors["UNKNOWN"])
+    return (
+        f'<span style="display:inline-block;padding:3px 10px;border-radius:6px;'
+        f'font-size:12px;font-weight:700;color:{fg};background:{bg}">{_he(verdict)}</span>'
+    )
+
+
+def render_login_truth_page(rows: list[Any]) -> str:
+    table = "".join(
+        f"<tr>"
+        f"<td><strong>{_he(r.provider)}</strong></td>"
+        f"<td>{_login_truth_badge(r.login_known)}</td>"
+        f"<td>{_he(r.evidence)}</td>"
+        f"<td class='muted'>{_fmt_iso(r.last_observed_at)}</td>"
+        f"<td class='muted'><code>{_he(r.source)}</code></td>"
+        f"</tr>"
+        for r in rows
+    ) or '<tr><td colspan="5" class="muted">No providers configured</td></tr>'
+
+    body = (
+        '<p class="lede">Whether Mighty currently knows the user is logged into each account site. '
+        "Private account data within 24 hours means <strong>YES</strong>; a recent login page "
+        "with no newer private data means <strong>NO</strong>; otherwise <strong>UNKNOWN</strong>.</p>"
+        '<div class="card"><table><thead><tr>'
+        "<th>Provider</th><th>Login known?</th><th>Evidence</th>"
+        "<th>Last observed</th><th>Source</th>"
+        f"</tr></thead><tbody>{table}</tbody></table></div>"
+    )
+    return _admin_shell("login-truth", "Login Truth", body)
