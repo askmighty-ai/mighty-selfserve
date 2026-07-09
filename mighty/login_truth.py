@@ -1,7 +1,7 @@
 """Login Truth — diagnostic model for current account access vs cached data.
 
-Current Access answers: if Mighty tried to access this account right now, would it
-succeed? The newest observation always wins (no private-data-wins window).
+Current Access comes from canonical provider_session_state (explicit session
+evidence only). Cached private data never implies the user is connected now.
 
 Cached Data answers: does Mighty have stored private account data, and is it fresh?
 That is independent of whether the user is signed in right now.
@@ -21,6 +21,14 @@ from mighty.provider_access_probe import (
     PROBE_PROVIDERS,
     PROVIDER_PROBE_CONFIG,
     ensure_probe_tables,
+)
+from mighty.provider_session_state import (
+    ProviderSessionState,
+    SessionEvidence,
+    ensure_provider_session_state_tables,
+    get_provider_session_states,
+    project_session_state_from_probe_rows,
+    upsert_provider_session_state,
 )
 
 LoginVerdict = Literal["YES", "NO", "UNKNOWN"]
@@ -232,7 +240,15 @@ SOURCE_DISPLAY_LABELS: dict[str, tuple[str, str | None]] = {
     "field_observations": ("Field observation history", "field_observations"),
     "provider_access_probe": ("Account access probe", "provider_access_probe"),
     "account_data.sync_status": ("Sync status signal", "account_data.sync_status"),
+    "provider_session_state": ("Provider session state", "provider_session_state"),
     "—": ("—", None),
+}
+
+SESSION_STATE_TO_CURRENT_ACCESS: dict[str, CurrentAccess] = {
+    "connected": "connected_now",
+    "signed_out": "signed_out",
+    "unknown": "unknown",
+    "error": "unknown",
 }
 
 
@@ -521,10 +537,11 @@ def resolve_current_account_access(
     provider: str,
     observations: list[TruthObservation],
     *,
+    session_state: ProviderSessionState | None = None,
     now: datetime | None = None,
     fresh_hours: int = CACHED_DATA_FRESH_HOURS,
 ) -> CurrentAccountAccess:
-    """Newest observation wins for current access; cached data is independent."""
+    """Current access from session state; cached data from private observations only."""
     now = now or datetime.now(timezone.utc)
     cached_data_state, last_private_data = resolve_cached_data_state(
         observations,
@@ -532,51 +549,60 @@ def resolve_current_account_access(
         fresh_hours=fresh_hours,
     )
 
-    if not observations:
-        next_action_type, next_action_text = NEXT_ACTION_BY_CURRENT_ACCESS["unknown"]
-        return CurrentAccountAccess(
-            provider=provider,
-            current_access="unknown",
-            cached_data_state=cached_data_state,
-            last_verified=None,
-            last_private_data=last_private_data,
-            evidence="—",
-            source="—",
-            next_action_type=next_action_type,
-            next_action_text=next_action_text,
-        )
-
-    newest = max(observations, key=lambda o: o.observed_at)
-    if newest.kind == "private":
-        current_access: CurrentAccess = "connected_now"
-    elif newest.kind == "login":
-        current_access = "signed_out"
+    if session_state is None or session_state.state == "unknown":
+        current_access: CurrentAccess = "unknown"
+        evidence = "—"
+        source = "—"
+        last_verified = None
     else:
-        current_access = "unknown"
+        current_access = SESSION_STATE_TO_CURRENT_ACCESS.get(
+            session_state.state, "unknown"
+        )
+        evidence = session_state.evidence_summary or "—"
+        source = session_state.source or "provider_session_state"
+        last_verified = session_state.observed_at
 
     next_action_type, next_action_text = NEXT_ACTION_BY_CURRENT_ACCESS[current_access]
     return CurrentAccountAccess(
         provider=provider,
         current_access=current_access,
         cached_data_state=cached_data_state,
-        last_verified=newest.observed_at.isoformat(),
+        last_verified=last_verified,
         last_private_data=last_private_data,
-        evidence=newest.evidence,
-        source=newest.source,
+        evidence=evidence,
+        source=source,
         next_action_type=next_action_type,
         next_action_text=next_action_text,
     )
 
 
-def _load_provider_observations(
+def _parse_probe_json(value: Any) -> Any:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        import json
+
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_provider_observation_context(
     db: Any,
     user_id: str,
     *,
     decrypt_account_fn: Callable[[str, str], dict[str, Any]],
     providers: tuple[str, ...] | list[str] | None = None,
-) -> list[tuple[str, list[TruthObservation]]]:
-    """Load raw observations for each configured probe provider."""
+) -> tuple[
+    list[str],
+    dict[str, list[TruthObservation]],
+    dict[str, ProviderSessionState],
+]:
+    """Load private/login observations and canonical session state per provider."""
     ensure_probe_tables(db)
+    ensure_provider_session_state_tables(db)
     provider_list = list(providers or sorted(PROBE_PROVIDERS))
 
     account_rows = {
@@ -599,7 +625,7 @@ def _load_provider_observations(
     for row in db.execute(
         """
         SELECT provider, probed_at, auth_state, private_data_detected, failure_reason,
-               matched_private_data_rules, evidence_snippet
+               matched_private_data_rules, evidence_snippet, deep_inspect_json
         FROM provider_access_probe_runs
         WHERE user_id=?
         ORDER BY probed_at DESC
@@ -607,10 +633,49 @@ def _load_provider_observations(
         (user_id,),
     ).fetchall():
         provider = row["provider"]
-        if provider in probe_by_provider:
-            probe_by_provider[provider].append(dict(row))
+        if provider not in probe_by_provider:
+            continue
+        probe = dict(row)
+        deep = _parse_probe_json(probe.get("deep_inspect_json"))
+        if isinstance(deep, dict):
+            probe["deep_inspect"] = deep
+        probe_by_provider[provider].append(probe)
 
-    bundles: list[tuple[str, list[TruthObservation]]] = []
+    # Project probe history into canonical session state (newest explicit evidence wins).
+    for provider in provider_list:
+        project_session_state_from_probe_rows(
+            db, user_id, probe_by_provider.get(provider, [])
+        )
+        source = PROVIDER_PROBE_CONFIG.get(provider, None)
+        source_key = source.source if source else provider
+        account_row = account_rows.get(source_key)
+        if not account_row:
+            continue
+        sync_status = account_row.get("sync_status")
+        if sync_status != "login_required":
+            continue
+        when = _parse_iso(account_row.get("synced_at"))
+        if when is None:
+            continue
+        upsert_provider_session_state(
+            db,
+            user_id,
+            SessionEvidence(
+                provider=provider,
+                state="signed_out",
+                evidence_type="login_required",
+                evidence_summary="sync_status: login_required",
+                observed_at=when,
+                source="account_data.sync_status",
+                confidence="medium",
+            ),
+        )
+
+    session_by_provider = get_provider_session_states(
+        db, user_id, providers=provider_list
+    )
+
+    observations_by_provider: dict[str, list[TruthObservation]] = {}
     for provider in provider_list:
         source = PROVIDER_PROBE_CONFIG.get(provider, None)
         source_key = source.source if source else provider
@@ -621,15 +686,31 @@ def _load_provider_observations(
                 ad_data = decrypt_account_fn(user_id, account_row["data_enc"])
             except Exception:
                 ad_data = {}
-        observations = gather_provider_observations(
+        observations_by_provider[provider] = gather_provider_observations(
             provider,
             account_row=account_row,
             ad_data=ad_data,
             field_observations=fo_by_source.get(source_key, {}),
             probe_rows=probe_by_provider.get(provider, []),
         )
-        bundles.append((provider, observations))
-    return bundles
+    return provider_list, observations_by_provider, session_by_provider
+
+
+def _load_provider_observations(
+    db: Any,
+    user_id: str,
+    *,
+    decrypt_account_fn: Callable[[str, str], dict[str, Any]],
+    providers: tuple[str, ...] | list[str] | None = None,
+) -> list[tuple[str, list[TruthObservation]]]:
+    """Load raw observations for each configured probe provider."""
+    provider_list, observations_by_provider, _session = _load_provider_observation_context(
+        db,
+        user_id,
+        decrypt_account_fn=decrypt_account_fn,
+        providers=providers,
+    )
+    return [(provider, observations_by_provider[provider]) for provider in provider_list]
 
 
 def _load_provider_truth_bundles(
@@ -711,14 +792,22 @@ def compute_current_account_access_rows(
     now: datetime | None = None,
 ) -> list[CurrentAccountAccess]:
     """Build Current Access / Cached Data rows for each configured probe provider."""
-    return [
-        resolve_current_account_access(provider, observations, now=now)
-        for provider, observations in _load_provider_observations(
+    provider_list, observations_by_provider, session_by_provider = (
+        _load_provider_observation_context(
             db,
             user_id,
             decrypt_account_fn=decrypt_account_fn,
             providers=providers,
         )
+    )
+    return [
+        resolve_current_account_access(
+            provider,
+            observations_by_provider[provider],
+            session_state=session_by_provider.get(provider),
+            now=now,
+        )
+        for provider in provider_list
     ]
 
 
