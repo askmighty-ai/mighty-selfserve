@@ -18122,6 +18122,18 @@ def api_sync_login_cleared():
             (encrypt_account_data(uid, payload), "ok", now, uid, source)
         )
     db.commit()
+    # Only write connected session state when the request carries explicit
+    # authenticated/session_verified evidence — not merely because login_required cleared.
+    if source == "amex" and (body or {}).get("session_verified"):
+        from mighty.provider_session_state import record_amex_extension_connected
+        record_amex_extension_connected(
+            db,
+            uid,
+            observed_at=now,
+            evidence_type="session_verified",
+            evidence_summary="Amex extension reported verified authenticated session",
+            source="extension_amex_login_cleared",
+        )
     print(f"[LoginCleared] uid={uid} source={source} — status reset to ok, synced_at={now}", flush=True)
     return jsonify({"ok": True, "updated": True})
 
@@ -20584,6 +20596,8 @@ def api_extension_amex_needs_login():
         }), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    from mighty.provider_session_state import record_amex_extension_needs_login
+    record_amex_extension_needs_login(db, uid, observed_at=iso())
     from mighty.account_state import safe_recompute_account_state
     safe_recompute_account_state(db, uid, AMEX_SOURCE)
     return jsonify({
@@ -20618,6 +20632,8 @@ def api_extension_amex_connected():
         }), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    from mighty.provider_session_state import record_amex_extension_connected
+    record_amex_extension_connected(db, uid, observed_at=iso())
     from mighty.account_state import safe_recompute_account_state
     safe_recompute_account_state(db, uid, AMEX_SOURCE)
     info = get_amex_connection_status(db, uid, decrypt_fn=decrypt_account_data)
@@ -20655,6 +20671,17 @@ def api_extension_amex_extract():
         return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+    # Session verified flag on this request updates session state; MR value does not.
+    from mighty.provider_session_state import record_amex_extension_connected
+    record_amex_extension_connected(
+        db,
+        uid,
+        observed_at=iso(),
+        evidence_type="session_verified_extract",
+        evidence_summary="Amex extension reported verified authenticated session",
+        source="extension_amex_extract",
+    )
 
     return jsonify({
         "ok": True,

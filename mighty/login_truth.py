@@ -241,6 +241,10 @@ SOURCE_DISPLAY_LABELS: dict[str, tuple[str, str | None]] = {
     "provider_access_probe": ("Account access probe", "provider_access_probe"),
     "account_data.sync_status": ("Sync status signal", "account_data.sync_status"),
     "provider_session_state": ("Provider session state", "provider_session_state"),
+    "extension_amex_connected": ("Amex extension connected", "extension_amex_connected"),
+    "extension_amex_needs_login": ("Amex extension needs login", "extension_amex_needs_login"),
+    "extension_amex_extract": ("Amex extension extract", "extension_amex_extract"),
+    "extension_amex_login_cleared": ("Amex login cleared", "extension_amex_login_cleared"),
     "—": ("—", None),
 }
 

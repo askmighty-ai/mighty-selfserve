@@ -99,6 +99,23 @@ def _uid(client):
         return sess["user_id"]
 
 
+def _api_key(mighty, client):
+    uid = _uid(client)
+    with mighty.app.app_context():
+        return mighty.get_db().execute(
+            "SELECT api_key FROM users WHERE id=?", (uid,),
+        ).fetchone()["api_key"]
+
+
+def _prepare_amex_waiting(client, mighty):
+    with client.session_transaction() as sess:
+        csrf = sess["_csrf"]
+    headers = {"X-CSRF-Token": csrf}
+    assert client.post("/api/connect/amex", headers=headers).status_code == 200
+    assert client.post("/api/connect/amex/waiting", headers=headers).status_code == 200
+    return _api_key(mighty, client)
+
+
 def test_mr_balance_only_unknown_current_access_with_fresh_cache(client):
     """Cached MR balance alone must not mark Amex as currently connected."""
     import app as mighty
@@ -411,6 +428,181 @@ def test_derive_session_evidence_from_session_api_401():
     assert evidence is not None
     assert evidence.state == "signed_out"
     assert evidence.evidence_summary == "ReadUserSession.v1 returned 401"
+
+
+def test_extension_amex_connected_writes_provider_session_state(client):
+    import app as mighty
+    from mighty.provider_session_state import get_provider_session_state
+
+    api_key = _prepare_amex_waiting(client, mighty)
+    r = client.post(
+        "/api/extension/amex/connected",
+        headers={"X-Mighty-Key": api_key},
+        json={"session_verified": True},
+    )
+    assert r.status_code == 200
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        session = get_provider_session_state(mighty.get_db(), uid, "amex")
+        assert session is not None
+        assert session.state == "connected"
+        assert session.evidence_type == "session_verified"
+        assert session.source == "extension_amex_connected"
+        assert session.evidence_summary == (
+            "Amex extension reported verified authenticated session"
+        )
+        assert session.confidence == "high"
+
+
+def test_extension_amex_needs_login_writes_provider_session_state(client):
+    import app as mighty
+    from mighty.provider_session_state import get_provider_session_state
+
+    api_key = _prepare_amex_waiting(client, mighty)
+    r = client.post(
+        "/api/extension/amex/needs-login",
+        headers={"X-Mighty-Key": api_key},
+    )
+    assert r.status_code == 200
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        session = get_provider_session_state(mighty.get_db(), uid, "amex")
+        assert session is not None
+        assert session.state == "signed_out"
+        assert session.evidence_type == "login_required"
+        assert session.source == "extension_amex_needs_login"
+        assert session.evidence_summary == "Amex extension reported login required"
+
+
+def test_newer_needs_login_overrides_prior_connected(client):
+    import app as mighty
+    from mighty.provider_session_state import get_provider_session_state
+
+    api_key = _prepare_amex_waiting(client, mighty)
+    assert client.post(
+        "/api/extension/amex/connected",
+        headers={"X-Mighty-Key": api_key},
+        json={"session_verified": True},
+    ).status_code == 200
+    assert client.post(
+        "/api/extension/amex/needs-login",
+        headers={"X-Mighty-Key": api_key},
+    ).status_code == 200
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        session = get_provider_session_state(mighty.get_db(), uid, "amex")
+        assert session is not None
+        assert session.state == "signed_out"
+        assert session.source == "extension_amex_needs_login"
+
+
+def test_newer_connected_overrides_prior_needs_login(client):
+    import app as mighty
+    from mighty.provider_session_state import get_provider_session_state
+
+    api_key = _prepare_amex_waiting(client, mighty)
+    assert client.post(
+        "/api/extension/amex/needs-login",
+        headers={"X-Mighty-Key": api_key},
+    ).status_code == 200
+    assert client.post(
+        "/api/extension/amex/connected",
+        headers={"X-Mighty-Key": api_key},
+        json={"session_verified": True},
+    ).status_code == 200
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        session = get_provider_session_state(mighty.get_db(), uid, "amex")
+        assert session is not None
+        assert session.state == "connected"
+        assert session.source == "extension_amex_connected"
+
+
+def test_mr_extraction_without_session_endpoint_does_not_write_connected(client):
+    """Direct MR cache write (no session_verified endpoint) must not set connected."""
+    import app as mighty
+    from mighty.provider_session_state import get_provider_session_state
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        ctx = _ctx(mighty)
+        start_amex_connect(db, uid, **ctx)
+        advance_amex_to_waiting(db, uid, **ctx)
+        amex_extension_connected(db, uid, session_verified=True, **ctx)
+        apply_amex_membership_rewards_extraction(db, uid, "55,000", **ctx)
+
+        session = get_provider_session_state(db, uid, "amex")
+        assert session is None
+
+        rows = compute_current_account_access_rows(
+            db, uid, decrypt_account_fn=mighty.decrypt_account_data
+        )
+        amex = next(r for r in rows if r.provider == "amex")
+        assert amex.current_access == "unknown"
+        assert amex.cached_data_state == "fresh"
+
+
+def test_admin_login_truth_reflects_extension_session_state_immediately(admin_client):
+    import app as mighty
+
+    api_key = _prepare_amex_waiting(admin_client, mighty)
+    assert admin_client.post(
+        "/api/extension/amex/connected",
+        headers={"X-Mighty-Key": api_key},
+        json={"session_verified": True},
+    ).status_code == 200
+    assert admin_client.post(
+        "/api/extension/amex/needs-login",
+        headers={"X-Mighty-Key": api_key},
+    ).status_code == 200
+
+    r = admin_client.get("/admin/login-truth")
+    assert r.status_code == 200
+    assert b"Signed out" in r.data
+    assert b"Amex extension reported login required" in r.data or b"Signed out" in r.data
+
+    uid = _uid(admin_client)
+    with mighty.app.app_context():
+        rows = compute_current_account_access_rows(
+            mighty.get_db(), uid, decrypt_account_fn=mighty.decrypt_account_data
+        )
+        amex = next(row for row in rows if row.provider == "amex")
+        assert amex.current_access == "signed_out"
+        assert amex.source == "extension_amex_needs_login"
+        assert amex.evidence == "Amex extension reported login required"
+
+
+def test_extension_amex_extract_with_session_verified_writes_connected(client):
+    import app as mighty
+    from mighty.provider_session_state import get_provider_session_state
+
+    api_key = _prepare_amex_waiting(client, mighty)
+    # Extract requires waiting→connected path for account row; connect first.
+    assert client.post(
+        "/api/extension/amex/connected",
+        headers={"X-Mighty-Key": api_key},
+        json={"session_verified": True},
+    ).status_code == 200
+    r = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={"session_verified": True, "value": "88,000"},
+    )
+    assert r.status_code == 200
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        session = get_provider_session_state(mighty.get_db(), uid, "amex")
+        assert session is not None
+        assert session.state == "connected"
+        assert session.evidence_type == "session_verified_extract"
+        assert session.source == "extension_amex_extract"
+        assert "Membership Rewards" not in session.evidence_summary
 
 
 def test_resolve_login_truth_private_beats_login():
