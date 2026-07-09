@@ -2065,9 +2065,10 @@ def render_login_truth_page(rows: list[Any]) -> str:
     )
 
     body = (
-        '<p class="lede">Current Access answers whether Mighty could access this account right now. '
-        "The newest observation always wins. Cached Data is independent: Mighty may still hold "
-        "fresh private account data even when the user is signed out.</p>"
+        '<p class="lede">Current Access comes from explicit session evidence '
+        "(login page, session API, authenticated page) — not from cached private fields. "
+        "Cached Data is independent: Mighty may still hold a fresh Membership Rewards balance "
+        "even when the user is signed out.</p>"
         f"{summary_card}"
         '<div class="card"><table><thead><tr>'
         "<th>Provider</th><th>Current access</th><th>Cached data</th>"

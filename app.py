@@ -830,6 +830,11 @@ def init_db():
             ensure_live_session_comparison_tables(db)
         except Exception:
             pass
+        try:
+            from mighty.provider_session_state import ensure_provider_session_state_tables
+            ensure_provider_session_state_tables(db)
+        except Exception:
+            pass
 
 init_db()
 
