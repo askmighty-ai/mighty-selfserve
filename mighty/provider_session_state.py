@@ -242,6 +242,55 @@ def derive_session_evidence_from_probe(result: dict[str, Any]) -> SessionEvidenc
     return None
 
 
+def record_amex_extension_connected(
+    db: Any,
+    user_id: str,
+    *,
+    observed_at: datetime | str | None = None,
+    evidence_type: str = "session_verified",
+    evidence_summary: str = "Amex extension reported verified authenticated session",
+    source: str = "extension_amex_connected",
+) -> ProviderSessionState:
+    """Persist connected session state from an Amex extension verified-session report."""
+    when = _parse_iso(observed_at) if isinstance(observed_at, str) else observed_at
+    return upsert_provider_session_state(
+        db,
+        user_id,
+        SessionEvidence(
+            provider="amex",
+            state="connected",
+            evidence_type=evidence_type,
+            evidence_summary=evidence_summary,
+            observed_at=when or datetime.now(timezone.utc),
+            source=source,
+            confidence="high",
+        ),
+    )
+
+
+def record_amex_extension_needs_login(
+    db: Any,
+    user_id: str,
+    *,
+    observed_at: datetime | str | None = None,
+) -> ProviderSessionState:
+    """Persist signed_out session state from an Amex extension needs-login report."""
+    when = _parse_iso(observed_at) if isinstance(observed_at, str) else observed_at
+    return upsert_provider_session_state(
+        db,
+        user_id,
+        SessionEvidence(
+            provider="amex",
+            state="signed_out",
+            evidence_type="login_required",
+            evidence_summary="Amex extension reported login required",
+            observed_at=when or datetime.now(timezone.utc),
+            source="extension_amex_needs_login",
+            confidence="high",
+        ),
+    )
+
+
 def upsert_provider_session_state(
     db: Any,
     user_id: str,
