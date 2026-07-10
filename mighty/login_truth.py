@@ -247,7 +247,17 @@ SOURCE_DISPLAY_LABELS: dict[str, tuple[str, str | None]] = {
     "—": ("—", None),
 }
 
-EvidenceCategory = Literal["session", "cached_data"]
+EvidenceCategory = Literal["session", "cached_data", "legacy"]
+
+LEGACY_EVIDENCE_SOURCES = frozenset({
+    "account_data.sync_status",
+    "account_data.connection_status",
+})
+
+LEGACY_EVIDENCE_TYPES = frozenset({
+    "connection_status",
+    "sync_status",
+})
 
 
 @dataclass(frozen=True)
@@ -265,12 +275,33 @@ class SessionEvidenceTimelineEvent:
 
 
 @dataclass(frozen=True)
+class IgnoredEvidenceItem:
+    """A timeline signal that did not determine Current Access."""
+
+    label: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class CurrentWinnerExplanation:
+    """Transparent explanation of why the current session winner won."""
+
+    state_label: str
+    reason_headline: str
+    evidence_type: str | None
+    observed_at: str | None
+    confidence: str | None
+    ignored: list[IgnoredEvidenceItem]
+
+
+@dataclass(frozen=True)
 class ProviderSessionEvidenceSection:
     """Current session winner plus timeline events for one provider."""
 
     provider: str
     current: ProviderSessionState | None
     events: list[SessionEvidenceTimelineEvent]
+    winner_explanation: CurrentWinnerExplanation | None = None
 
 SESSION_STATE_TO_CURRENT_ACCESS: dict[str, CurrentAccess] = {
     "connected": "connected_now",
@@ -814,6 +845,36 @@ def compute_current_account_access_rows(
     ]
 
 
+def classify_evidence_category(
+    *,
+    evidence_type: str,
+    source: str,
+) -> EvidenceCategory:
+    """Map an evidence row to canonical session, cached data, or legacy."""
+    if source in LEGACY_EVIDENCE_SOURCES or evidence_type in LEGACY_EVIDENCE_TYPES:
+        return "legacy"
+    if evidence_type == "cached_private_data":
+        return "cached_data"
+    return "session"
+
+
+def filter_timeline_events(
+    events: list[SessionEvidenceTimelineEvent],
+    *,
+    include_cached_data: bool = False,
+    include_legacy: bool = False,
+) -> list[SessionEvidenceTimelineEvent]:
+    """Default view: canonical session only. Optional cached / legacy rows."""
+    visible: list[SessionEvidenceTimelineEvent] = []
+    for event in events:
+        if event.category == "legacy" and not include_legacy:
+            continue
+        if event.category == "cached_data" and not include_cached_data:
+            continue
+        visible.append(event)
+    return visible
+
+
 def _event_dedupe_key(event: SessionEvidenceTimelineEvent) -> tuple[Any, ...]:
     return (
         event.provider,
@@ -832,14 +893,18 @@ def _session_event_from_state(
     when = _parse_iso(state.observed_at)
     if when is None:
         return None
+    evidence_type = state.evidence_type or "provider_session_state"
+    source = state.source or "provider_session_state"
     return SessionEvidenceTimelineEvent(
         observed_at=when,
         provider=state.provider,
-        category="session",
-        evidence_type=state.evidence_type or "provider_session_state",
+        category=classify_evidence_category(
+            evidence_type=evidence_type, source=source
+        ),
+        evidence_type=evidence_type,
         result=state.state,
         summary=state.evidence_summary or "—",
-        source=state.source or "provider_session_state",
+        source=source,
         confidence=state.confidence,
     )
 
@@ -855,11 +920,14 @@ def _session_events_from_probes(
         evidence = derive_session_evidence_from_probe(payload)
         if evidence is None:
             continue
+        category = classify_evidence_category(
+            evidence_type=evidence.evidence_type, source=evidence.source
+        )
         events.append(
             SessionEvidenceTimelineEvent(
                 observed_at=evidence.observed_at,
                 provider=provider,
-                category="session",
+                category=category,
                 evidence_type=evidence.evidence_type,
                 result=evidence.state,
                 summary=evidence.evidence_summary,
@@ -889,11 +957,39 @@ def _connection_status_event(
     return SessionEvidenceTimelineEvent(
         observed_at=when,
         provider=provider,
-        category="session",
+        category="legacy",
         evidence_type="connection_status",
         result=result,
-        summary=f"connection_status: {status}",
+        summary=f"connection_status={status}",
         source="account_data.connection_status",
+        confidence="medium",
+    )
+
+
+def _sync_status_legacy_event(
+    provider: str,
+    account_row: dict[str, Any] | None,
+    ad_data: dict[str, Any] | None,
+) -> SessionEvidenceTimelineEvent | None:
+    """Legacy sync_status signal — never determines Current Access."""
+    if not account_row:
+        return None
+    status = (account_row.get("sync_status") or "").strip()
+    if not status and ad_data:
+        status = str(ad_data.get("sync_status") or "").strip()
+    if status != "login_required":
+        return None
+    when = _parse_iso(account_row.get("synced_at"))
+    if when is None:
+        return None
+    return SessionEvidenceTimelineEvent(
+        observed_at=when,
+        provider=provider,
+        category="legacy",
+        evidence_type="sync_status",
+        result="signed_out",
+        summary=f"sync_status={status}",
+        source="account_data.sync_status",
         confidence="medium",
     )
 
@@ -921,6 +1017,99 @@ def _cached_data_events(
     return events
 
 
+def _ignored_label_for_event(event: SessionEvidenceTimelineEvent) -> str:
+    if event.category == "legacy":
+        return event.summary
+    if event.category == "cached_data":
+        return event.summary
+    return f"{event.evidence_type}={event.result}"
+
+
+def _ignored_reason_for_event(event: SessionEvidenceTimelineEvent) -> str:
+    if event.category == "legacy":
+        return "Legacy compatibility signal"
+    if event.category == "cached_data":
+        return "Cached data never proves current login"
+    return "Not the winning session evidence"
+
+
+def build_current_winner_explanation(
+    current: ProviderSessionState | None,
+    all_events: list[SessionEvidenceTimelineEvent],
+) -> CurrentWinnerExplanation:
+    """Explain why Current Access won, and which signals were ignored."""
+    state_labels = {
+        "connected": "Connected",
+        "signed_out": "Signed out",
+        "unknown": "Unknown",
+        "error": "Error",
+    }
+    ignored: list[IgnoredEvidenceItem] = []
+    seen_labels: set[str] = set()
+
+    winner_key: tuple[Any, ...] | None = None
+    if current is not None and current.observed_at:
+        winner_when = _parse_iso(current.observed_at)
+        if winner_when is not None:
+            winner_key = (
+                current.evidence_type or "",
+                current.state,
+                (current.evidence_summary or "").strip(),
+                current.source or "",
+                winner_when.isoformat(),
+            )
+
+    for event in all_events:
+        if event.category == "session":
+            event_key = (
+                event.evidence_type,
+                event.result,
+                (event.summary or "").strip(),
+                event.source,
+                event.observed_at.isoformat(),
+            )
+            if winner_key is not None and event_key == winner_key:
+                continue
+            # Canonical session rows that are not the winner stay in the timeline;
+            # only legacy + cached are listed as ignored for Current Access.
+            continue
+        label = _ignored_label_for_event(event)
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        ignored.append(
+            IgnoredEvidenceItem(
+                label=label,
+                reason=_ignored_reason_for_event(event),
+            )
+        )
+
+    if current is None or current.state == "unknown":
+        return CurrentWinnerExplanation(
+            state_label="Unknown",
+            reason_headline="No explicit session evidence yet",
+            evidence_type=None,
+            observed_at=None,
+            confidence=None,
+            ignored=ignored,
+        )
+
+    confidence = (current.confidence or "").upper() or None
+    if confidence:
+        reason_headline = f"Latest {confidence} confidence evidence:"
+    else:
+        reason_headline = "Latest session evidence:"
+
+    return CurrentWinnerExplanation(
+        state_label=state_labels.get(current.state, current.state.replace("_", " ").title()),
+        reason_headline=reason_headline,
+        evidence_type=current.evidence_type,
+        observed_at=_fmt_iso_for_winner(current.observed_at),
+        confidence=current.confidence,
+        ignored=ignored,
+    )
+
+
 def gather_session_evidence_timeline(
     db: Any,
     user_id: str,
@@ -928,12 +1117,14 @@ def gather_session_evidence_timeline(
     decrypt_account_fn: Callable[[str, str], dict[str, Any]],
     providers: tuple[str, ...] | list[str] | None = None,
     provider: str | None = None,
-    include_cached_data: bool = True,
+    include_cached_data: bool = False,
+    include_legacy: bool = False,
 ) -> list[ProviderSessionEvidenceSection]:
     """Build per-provider session evidence timelines (newest first).
 
-    Session evidence (connected / signed_out / unknown / error) is kept separate from
-    cached private-data observations, which never imply current login.
+    Default view shows canonical session evidence only. Cached private data and
+    legacy compatibility signals (connection_status / sync_status) are optional
+    and never determine Current Access.
     """
     ensure_probe_tables(db)
     ensure_provider_session_state_tables(db)
@@ -989,7 +1180,7 @@ def gather_session_evidence_timeline(
 
     sections: list[ProviderSessionEvidenceSection] = []
     for pname in provider_list:
-        events: list[SessionEvidenceTimelineEvent] = []
+        all_events: list[SessionEvidenceTimelineEvent] = []
         seen: set[tuple[Any, ...]] = set()
 
         def _add(event: SessionEvidenceTimelineEvent | None) -> None:
@@ -999,7 +1190,7 @@ def gather_session_evidence_timeline(
             if key in seen:
                 return
             seen.add(key)
-            events.append(event)
+            all_events.append(event)
 
         current = session_by_provider.get(pname)
         if current is not None:
@@ -1007,24 +1198,6 @@ def gather_session_evidence_timeline(
 
         for event in _session_events_from_probes(pname, probe_by_provider.get(pname, [])):
             _add(event)
-
-        for obs in observations_by_provider.get(pname, []):
-            if obs.kind != "login":
-                continue
-            # Login observations from sync_status / probes that are session-relevant.
-            if obs.source == "account_data.sync_status":
-                _add(
-                    SessionEvidenceTimelineEvent(
-                        observed_at=obs.observed_at,
-                        provider=pname,
-                        category="session",
-                        evidence_type="login_required",
-                        result="signed_out",
-                        summary=obs.evidence,
-                        source=obs.source,
-                        confidence="medium",
-                    )
-                )
 
         source_cfg = PROVIDER_PROBE_CONFIG.get(pname)
         source_key = source_cfg.source if source_cfg else pname
@@ -1035,20 +1208,28 @@ def gather_session_evidence_timeline(
                 ad_data = decrypt_account_fn(user_id, account_row["data_enc"])
             except Exception:
                 ad_data = {}
+        _add(_sync_status_legacy_event(pname, account_row, ad_data))
         _add(_connection_status_event(pname, account_row, ad_data))
 
-        if include_cached_data:
-            for event in _cached_data_events(
-                pname, observations_by_provider.get(pname, [])
-            ):
-                _add(event)
+        # Always collect cached rows so winner explanation can list them as ignored.
+        for event in _cached_data_events(
+            pname, observations_by_provider.get(pname, [])
+        ):
+            _add(event)
 
-        events.sort(key=lambda e: e.observed_at, reverse=True)
+        all_events.sort(key=lambda e: e.observed_at, reverse=True)
+        visible = filter_timeline_events(
+            all_events,
+            include_cached_data=include_cached_data,
+            include_legacy=include_legacy,
+        )
+        explanation = build_current_winner_explanation(current, all_events)
         sections.append(
             ProviderSessionEvidenceSection(
                 provider=pname,
                 current=current,
-                events=events,
+                events=visible,
+                winner_explanation=explanation,
             )
         )
     return sections
@@ -1057,6 +1238,8 @@ def gather_session_evidence_timeline(
 def format_session_evidence_result_label(result: str, *, category: EvidenceCategory) -> str:
     if category == "cached_data":
         return "Cached data"
+    if category == "legacy":
+        return f"Legacy · {result.replace('_', ' ').title()}"
     labels = {
         "connected": "Connected",
         "signed_out": "Signed out",
@@ -1069,6 +1252,18 @@ def format_session_evidence_result_label(result: str, *, category: EvidenceCateg
 
 def format_current_winner_line(section: ProviderSessionEvidenceSection) -> str:
     """Human-readable 'Current winner' line for a provider section."""
+    explanation = section.winner_explanation
+    if explanation is not None:
+        if explanation.evidence_type is None:
+            return (
+                f"Current winner: {explanation.state_label.lower()} — "
+                f"{explanation.reason_headline}"
+            )
+        when = explanation.observed_at or "—"
+        return (
+            f"Current winner: {explanation.state_label.lower()} because of "
+            f"{explanation.evidence_type} at {when}"
+        )
     current = section.current
     if current is None or current.state == "unknown":
         return "Current winner: unknown — no explicit session evidence yet"
