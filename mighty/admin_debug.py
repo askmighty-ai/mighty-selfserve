@@ -2188,20 +2188,25 @@ def render_session_evidence_timeline_page(
                 "</tr></tbody></table>"
             )
 
-        event_rows = "".join(
-            (
+        def _event_row(ev: Any) -> str:
+            cached_badge = (
+                ' <span class="badge badge-muted">cached</span>'
+                if ev.category == "cached_data"
+                else ""
+            )
+            return (
                 "<tr>"
                 f"<td class='muted'>{_fmt_iso(ev.observed_at.isoformat())}</td>"
                 f"<td>{_he(ev.provider)}</td>"
-                f"<td>{_he(ev.evidence_type)}"
-                f"{' <span class=\"badge badge-muted\">cached</span>' if ev.category == 'cached_data' else ''}"
-                "</td>"
+                f"<td>{_he(ev.evidence_type)}{cached_badge}</td>"
                 f"<td>{_session_result_badge(ev.result, category=ev.category)}</td>"
                 f"<td>{_he(friendly_source_label(ev.source)[0])}</td>"
                 f"<td>{_he(ev.summary)}</td>"
                 "</tr>"
             )
-            for ev in section.events
+
+        event_rows = "".join(
+            _event_row(ev) for ev in section.events
         ) or '<tr><td colspan="6" class="muted">No evidence events</td></tr>'
 
         body += (
