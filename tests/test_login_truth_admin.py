@@ -49,6 +49,7 @@ from mighty.provider_session_state import (
     SessionEvidence,
     derive_session_evidence_from_probe,
     get_provider_session_state,
+    should_replace_session_evidence,
     upsert_provider_session_state,
 )
 
@@ -1085,3 +1086,245 @@ def test_admin_session_evidence_page_shows_winner_and_cached(admin_client):
     assert b"provider_session_state" in r.data or b"login page detected" in r.data
     # Cached data badge must not be presented as Connected session evidence from items.
     assert b"Membership Rewards" in r.data
+
+
+def _pss_snapshot(db, uid):
+    rows = db.execute(
+        "SELECT provider, state, evidence_type, evidence_summary, observed_at, source, "
+        "confidence, updated_at FROM provider_session_state WHERE user_id=? "
+        "ORDER BY provider",
+        (uid,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def test_admin_pages_are_read_only_for_provider_session_state(admin_client):
+    """Loading login-truth / session-evidence must not write provider_session_state."""
+    import app as mighty
+
+    uid = _uid(admin_client)
+    when = datetime.now(timezone.utc) - timedelta(minutes=15)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_verified",
+                evidence_summary="Amex extension reported verified authenticated session",
+                observed_at=when,
+                source="extension_amex_connected",
+                confidence="high",
+            ),
+        )
+        # Conflicting legacy fields at the same synced_at — previously lazy-written into PSS.
+        db.execute(
+            "INSERT OR REPLACE INTO account_data "
+            "(user_id, source, display_name, icon, color, data_enc, synced_at, "
+            "sync_status, connection_status) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                uid,
+                "amex",
+                "Amex",
+                "",
+                "",
+                "",
+                when.isoformat(),
+                "login_required",
+                "connected",
+            ),
+        )
+        db.commit()
+        before = _pss_snapshot(db, uid)
+
+    assert admin_client.get("/admin/login-truth").status_code == 200
+    assert admin_client.get("/admin/session-evidence").status_code == 200
+
+    with mighty.app.app_context():
+        after = _pss_snapshot(mighty.get_db(), uid)
+    assert after == before
+
+
+def test_same_timestamp_session_api_200_beats_legacy_login_required(client):
+    import app as mighty
+
+    uid = _uid(client)
+    when = datetime.now(timezone.utc)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="signed_out",
+                evidence_type="login_required",
+                evidence_summary="sync_status: login_required",
+                observed_at=when,
+                source="account_data.sync_status",
+                confidence="medium",
+            ),
+        )
+        winner = upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_api",
+                evidence_summary="ReadUserSession.v1 returned 200",
+                observed_at=when,
+                source="provider_access_probe",
+                confidence="high",
+            ),
+        )
+        assert winner.state == "connected"
+        assert winner.evidence_type == "session_api"
+        assert get_provider_session_state(db, uid, "amex").state == "connected"
+
+
+def test_same_timestamp_session_api_401_beats_legacy_connected(client):
+    import app as mighty
+
+    uid = _uid(client)
+    when = datetime.now(timezone.utc)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="connection_status",
+                evidence_summary="connection_status: connected",
+                observed_at=when,
+                source="account_data.connection_status",
+                confidence="medium",
+            ),
+        )
+        winner = upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="signed_out",
+                evidence_type="session_api",
+                evidence_summary="ReadUserSession.v1 returned 401",
+                observed_at=when,
+                source="provider_access_probe",
+                confidence="high",
+            ),
+        )
+        assert winner.state == "signed_out"
+        assert winner.evidence_type == "session_api"
+
+
+def test_newer_explicit_event_beats_older_event(client):
+    import app as mighty
+
+    uid = _uid(client)
+    older = datetime.now(timezone.utc) - timedelta(hours=1)
+    newer = datetime.now(timezone.utc) - timedelta(minutes=5)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_api",
+                evidence_summary="ReadUserSession.v1 returned 200",
+                observed_at=older,
+                source="provider_access_probe",
+                confidence="high",
+            ),
+        )
+        winner = upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="signed_out",
+                evidence_type="login_page",
+                evidence_summary="login page detected",
+                observed_at=newer,
+                source="provider_access_probe",
+                confidence="high",
+            ),
+        )
+        assert winner.state == "signed_out"
+        # Older high-priority evidence must not overwrite newer.
+        kept = upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_api",
+                evidence_summary="ReadUserSession.v1 returned 200",
+                observed_at=older,
+                source="provider_access_probe",
+                confidence="high",
+            ),
+        )
+        assert kept.state == "signed_out"
+
+
+def test_identical_timestamp_connected_and_login_required_resolve_deterministically():
+    when = datetime.now(timezone.utc)
+    legacy_login = SessionEvidence(
+        provider="amex",
+        state="signed_out",
+        evidence_type="login_required",
+        evidence_summary="sync_status: login_required",
+        observed_at=when,
+        source="account_data.sync_status",
+        confidence="medium",
+    )
+    legacy_connected = ProviderSessionState(
+        provider="amex",
+        state="connected",
+        evidence_type="connection_status",
+        evidence_summary="connection_status: connected",
+        observed_at=when.isoformat(),
+        source="account_data.connection_status",
+        confidence="medium",
+    )
+    # Equal confidence + equal time: both legacy → keep existing (no thrash).
+    assert should_replace_session_evidence(legacy_connected, legacy_login) is False
+    # Explicit session API always beats legacy at the same timestamp.
+    api = SessionEvidence(
+        provider="amex",
+        state="signed_out",
+        evidence_type="session_api",
+        evidence_summary="ReadUserSession.v1 returned 401",
+        observed_at=when,
+        source="provider_access_probe",
+        confidence="high",
+    )
+    assert should_replace_session_evidence(legacy_connected, api) is True
+
+
+def test_cached_data_never_changes_current_session_state(client):
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        ctx = _ctx(mighty)
+        start_amex_connect(db, uid, **ctx)
+        advance_amex_to_waiting(db, uid, **ctx)
+        apply_amex_membership_rewards_extraction(db, uid, "88,000", **ctx)
+        before = get_provider_session_state(db, uid, "amex")
+        rows = compute_current_account_access_rows(
+            db, uid, decrypt_account_fn=mighty.decrypt_account_data
+        )
+        amex = next(r for r in rows if r.provider == "amex")
+        assert amex.cached_data_state == "fresh"
+        assert amex.current_access == "unknown"
+        after = get_provider_session_state(db, uid, "amex")
+        assert after == before

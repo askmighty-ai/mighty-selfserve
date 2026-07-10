@@ -37,6 +37,28 @@ CONNECTED_AUTH_STATES = frozenset({
 
 SESSION_API_MARKERS = ("ReadUserSession.v1", "UpdateUserSession.v1")
 
+CONFIDENCE_RANK: dict[str, int] = {
+    "high": 3,
+    "medium": 2,
+    "low": 1,
+}
+
+# Higher wins when observed_at and confidence are equal.
+# Legacy connection_status / sync_status are lowest — timeline context only.
+EVIDENCE_PRIORITY: dict[str, int] = {
+    "session_api": 100,
+    "session_verified": 90,
+    "session_verified_extract": 90,
+    "login_required": 80,  # extension needs-login / explicit login_required
+    "login_page": 70,
+    "session_expired": 70,
+    "mfa_required": 70,
+    "authenticated_private_data": 60,
+    "authenticated_page": 60,
+    "probe_error": 20,
+    "connection_status": 10,
+}
+
 
 @dataclass(frozen=True)
 class ProviderSessionState:
@@ -75,6 +97,57 @@ def _parse_iso(value: str | None) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def evidence_priority(*, evidence_type: str, source: str) -> int:
+    """Rank explicit session evidence above legacy account_data signals."""
+    if source in {
+        "account_data.sync_status",
+        "account_data.connection_status",
+    }:
+        return 5
+    if source.startswith("extension_amex"):
+        return max(EVIDENCE_PRIORITY.get(evidence_type, 50), 85)
+    return EVIDENCE_PRIORITY.get(evidence_type, 40)
+
+
+def _confidence_rank(value: str | None) -> int:
+    return CONFIDENCE_RANK.get(value or "", 0)
+
+
+def should_replace_session_evidence(
+    existing: ProviderSessionState | None,
+    incoming: SessionEvidence,
+) -> bool:
+    """True when incoming evidence should replace the stored row.
+
+    Deterministic order: observed_at, then confidence, then evidence priority.
+    Equal on all axes keeps the existing row (no thrash).
+    """
+    if existing is None or not existing.observed_at:
+        return True
+    existing_at = _parse_iso(existing.observed_at)
+    if existing_at is None:
+        return True
+    if incoming.observed_at > existing_at:
+        return True
+    if incoming.observed_at < existing_at:
+        return False
+
+    incoming_conf = _confidence_rank(incoming.confidence)
+    existing_conf = _confidence_rank(existing.confidence)
+    if incoming_conf > existing_conf:
+        return True
+    if incoming_conf < existing_conf:
+        return False
+
+    incoming_pri = evidence_priority(
+        evidence_type=incoming.evidence_type, source=incoming.source
+    )
+    existing_pri = evidence_priority(
+        evidence_type=existing.evidence_type, source=existing.source
+    )
+    return incoming_pri > existing_pri
 
 
 def ensure_provider_session_state_tables(db: Any) -> None:
@@ -296,13 +369,12 @@ def upsert_provider_session_state(
     user_id: str,
     evidence: SessionEvidence,
 ) -> ProviderSessionState:
-    """Persist session evidence when it is newer than the stored observation."""
+    """Persist session evidence using observed_at, confidence, then evidence priority."""
     ensure_provider_session_state_tables(db)
     existing = get_provider_session_state(db, user_id, evidence.provider)
-    if existing and existing.observed_at:
-        existing_at = _parse_iso(existing.observed_at)
-        if existing_at and existing_at > evidence.observed_at:
-            return existing
+    if not should_replace_session_evidence(existing, evidence):
+        assert existing is not None
+        return existing
 
     now = utc_now_iso()
     observed_at = evidence.observed_at.isoformat()
