@@ -190,9 +190,13 @@ def test_pipeline_run_detail_shows_measured_timestamps(client, monkeypatch):
 
     r = c.get(f"/admin/pipeline-runs/{run_id}")
     assert r.status_code == 200
-    assert b"2026-07-04 10:00:00" in r.data
-    assert b"2026-07-04 10:00:03" in r.data
+    assert b'class="mighty-local-time"' in r.data
+    assert b'datetime="2026-07-04T10:00:00Z"' in r.data
+    assert b'datetime="2026-07-04T10:00:03Z"' in r.data
+    assert b'title="UTC: 2026-07-04T10:00:00Z"' in r.data
     assert b"measured" in r.data
+    assert b"/static/admin_local_time.js" in r.data
+    assert b"Times are shown in your browser" in r.data
 
 
 def test_list_recent_runs_orders_newest_first(pipeline_db):

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import html
 import json
-from datetime import datetime, timezone
 from typing import Any
 
 from flask import render_template_string
+
+from mighty.admin_local_time import format_admin_local_time, timezone_note_html
 
 ADMIN_TOOLS: list[tuple[str, str, str]] = [
     ("account-json", "Account JSON", "Decrypted account_data blobs per source"),
@@ -140,7 +141,13 @@ th{color:#9ca3af;background:#0b0d12}
 .stat .num{font-size:22px;font-weight:700;color:#f9fafb}
 .source-picker{display:flex;align-items:center;gap:10px;margin-bottom:12px}
 .source-picker select{background:#0f1117;color:#e5e7eb;border:1px solid #374151;border-radius:6px;padding:6px 8px}
-</style></head><body><div class="admin-layout">
+time.mighty-local-time{display:inline-flex;flex-direction:column;gap:1px;line-height:1.35;vertical-align:top}
+time.mighty-local-time .mighty-rel{color:#e5e7eb;font-size:12px}
+time.mighty-local-time .mighty-exact{color:#6b7280;font-size:10px}
+.mighty-tz-note{font-size:11px;margin:0 0 14px}
+</style>
+<script src="/static/admin_local_time.js" defer></script>
+</head><body><div class="admin-layout">
 <aside class="admin-sidebar"><h1>Admin Debug</h1>
 <p>Internal operator tools. Not linked from customer UI.</p>
 <nav class="admin-nav">{{ nav_items|safe }}</nav>
@@ -170,7 +177,7 @@ def render_account_json_page(sources, source, account_json, *, synced_at=None):
     raw = display.get("raw_text") or ""
     if raw:
         display["raw_text"] = f"[{len(raw)} chars] {raw[:500]}{'…' if len(raw) > 500 else ''}"
-    body = picker + f'<p class="muted">synced_at: {_he(synced_at or "—")}</p>' + _json_block(display)
+    body = picker + f'<p class="muted">synced_at: {format_admin_local_time(synced_at)}</p>' + _json_block(display)
     return _admin_shell("account-json", "Account JSON", body)
 
 
@@ -202,7 +209,8 @@ def render_provider_schemas_page(*, category_schemas, expected_fields, site_conn
 
 
 def _fmt_ts(ts):
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if ts else "—"
+    """Format epoch timestamps via the shared local-time helper."""
+    return format_admin_local_time(ts)
 
 
 def render_discovery_cache_page(entries, *, ttl_success, ttl_failure):
@@ -231,7 +239,8 @@ def render_ai_cache_page(*, provider_info, env_settings, call_log):
 
 
 def _fmt_iso(v):
-    return _he(v[:19].replace("T", " ")) if v else "—"
+    """Format ISO/admin timestamps via the shared local-time helper."""
+    return format_admin_local_time(v)
 
 
 def render_sync_history_page(sources, source, field_history, audit_events, account_meta):
@@ -244,7 +253,7 @@ def render_sync_history_page(sources, source, field_history, audit_events, accou
     meta = "".join(f"<tr><td>{_he(r.get('source',''))}</td><td>{_fmt_iso(r.get('synced_at'))}</td>"
                    f"<td>{_he(r.get('sync_status',''))}</td><td>{_he(r.get('sync_failure_reason') or '')}</td></tr>"
                    for r in account_meta) or '<tr><td colspan="4" class="muted">No sync metadata</td></tr>'
-    body = picker
+    body = picker + timezone_note_html()
     body += f'<div class="card"><h3>Field history</h3><table><tbody>{fh}</tbody></table></div>'
     body += f'<div class="card"><h3>Privacy audit log</h3><table><tbody>{audit}</tbody></table></div>'
     body += f'<div class="card"><h3>Account sync metadata</h3><table><tbody>{meta}</tbody></table></div>'
@@ -258,7 +267,8 @@ def render_sync_timeline_page(*, live_status, user_flags, account_timeline):
         f"<td>{_he(r.get('extraction_status',''))}</td><td>{_he(r.get('sync_failure_reason') or '')}</td></tr>"
         for r in sorted(account_timeline, key=lambda x: x.get('synced_at') or '', reverse=True)
     ) or '<tr><td colspan="6" class="muted">No accounts</td></tr>'
-    body = '<div class="card"><h3>Live _sync_status</h3>' + _json_block(live_status) + "</div>"
+    body = timezone_note_html()
+    body += '<div class="card"><h3>Live _sync_status</h3>' + _json_block(live_status) + "</div>"
     body += '<div class="card"><h3>User sync flags</h3>' + _json_block(user_flags) + "</div>"
     body += f'<div class="card"><h3>Account timeline</h3><table><tbody>{rows}</tbody></table></div>'
     return _admin_shell("sync-timeline", "Sync Timeline", body)
@@ -336,8 +346,9 @@ def render_pipeline_runs_page(runs: list[dict[str, Any]]) -> str:
         f"</tr>"
         for r in runs
     ) or '<tr><td colspan="9" class="muted">No pipeline runs yet</td></tr>'
-    body = '<p class="lede">Most recent pipeline runs, newest first.</p>'
-    body += (
+    body = (
+        '<p class="lede">Most recent pipeline runs, newest first.</p>'
+        f"{timezone_note_html()}"
         '<div class="card"><table><thead><tr>'
         "<th>Run</th><th>Source</th><th>Initiator</th><th>Data source</th>"
         "<th>Status</th><th>Terminal stage</th><th>Terminal reason</th>"
@@ -349,22 +360,24 @@ def render_pipeline_runs_page(runs: list[dict[str, Any]]) -> str:
 
 def render_pipeline_run_detail_page(run: dict[str, Any], stages: list[dict[str, Any]]) -> str:
     meta_items = [
-        ("Run ID", run.get("run_id")),
-        ("Source", run.get("source")),
-        ("Initiator", run.get("initiator")),
-        ("Data source", run.get("data_source") or "—"),
-        ("Status", None),
-        ("Terminal stage", run.get("terminal_stage") or "—"),
-        ("Terminal reason", run.get("terminal_reason") or "—"),
-        ("Created", _fmt_iso(run.get("created_at"))),
-        ("Finished", _fmt_iso(run.get("finished_at"))),
+        ("Run ID", run.get("run_id"), False),
+        ("Source", run.get("source"), False),
+        ("Initiator", run.get("initiator"), False),
+        ("Data source", run.get("data_source") or "—", False),
+        ("Status", None, False),
+        ("Terminal stage", run.get("terminal_stage") or "—", False),
+        ("Terminal reason", run.get("terminal_reason") or "—", False),
+        ("Created", _fmt_iso(run.get("created_at")), True),
+        ("Finished", _fmt_iso(run.get("finished_at")), True),
     ]
     meta_html = ""
-    for label, val in meta_items:
+    for label, val, is_html in meta_items:
         if label == "Status":
             display = _run_status_badge(run.get("run_status"))
         elif label == "Run ID":
             display = f'<span class="run-id">{_he(val)}</span>'
+        elif is_html:
+            display = val
         else:
             display = _he(val)
         meta_html += (
@@ -395,7 +408,7 @@ def render_pipeline_run_detail_page(run: dict[str, Any], stages: list[dict[str, 
         stage_cards += (
             f'<div class="{card_cls}">'
             f'<div class="stage-header"><h4>{_he(stage_name)}</h4>{_stage_status_badge(s.get("status"))}</div>'
-            f'<p class="muted">Started: {_he(started_display)} · Finished: {_he(finished_display)}'
+            f'<p class="muted">Started: {started_display} · Finished: {finished_display}'
             f" · Duration: {_he(duration_display)} · {source_badge}"
             + (f' · Failure: <strong style="color:#fca5a5">{_he(s.get("failure_reason"))}</strong>' if s.get("failure_reason") else "")
             + "</p>"
@@ -407,6 +420,7 @@ def render_pipeline_run_detail_page(run: dict[str, Any], stages: list[dict[str, 
 
     body = (
         f'<p><a href="/admin/pipeline-runs" class="btn">&larr; All runs</a></p>'
+        f"{timezone_note_html()}"
         f'<div class="run-meta">{meta_html}</div>'
         f"<h3 style=\"font-size:14px;color:#d1d5db;margin:0 0 12px\">Stages</h3>{stage_cards}"
     )
@@ -450,6 +464,7 @@ def render_coverage_page(rows: list[Any]) -> str:
     body = (
         '<p class="lede">How much of each provider do we actually understand? '
         "Observed types come from successful pipeline <code>trusted_observations</code> stages.</p>"
+        f"{timezone_note_html()}"
         '<div class="card"><table><thead><tr>'
         "<th>Provider</th><th>Expected</th><th>Observed</th><th>Coverage</th>"
         f"</tr></thead><tbody>{table_rows}</tbody></table></div>"
@@ -611,6 +626,7 @@ def render_delta_evidence_audit_page(runs: list[dict[str, Any]]) -> str:
         '<p class="lede">Diagnostic for Delta full-provider support. '
         "Compares captured evidence blocks in <code>raw_text</code> against pipeline "
         "extraction stages — does not change extraction logic.</p>"
+        f"{timezone_note_html()}"
         '<div class="card"><table><thead><tr>'
         "<th>Run</th><th>Created</th><th>Initiator</th>"
         "<th>Trusted obs</th><th>Detail</th>"
@@ -736,6 +752,7 @@ def render_capture_capability_page(rows: list[Any]) -> str:
         "<a href=\"/admin/pipeline-runs\" style=\"color:#818cf8\">Pipeline Inspector</a> → "
         "<a href=\"/admin/coverage\" style=\"color:#818cf8\">Coverage</a> → "
         "<a href=\"/admin/recommendation-unlocks\" style=\"color:#818cf8\">Recommendation Unlocks</a>.</p>"
+        f"{timezone_note_html()}"
         '<div class="card"><table><thead><tr>'
         "<th>Provider</th><th>Needed</th><th>Present</th><th>Missing</th><th>Last seen</th>"
         f"</tr></thead><tbody>{table_rows}</tbody></table></div>"
@@ -1975,6 +1992,7 @@ def render_provider_access_probe_page(
         '<p class="lede">Phase 1 account reliability diagnostic. Probes verify whether the '
         "extension can open each provider, detect login state, and capture at least one piece "
         "of private account-specific evidence. Does not drive user-facing account status.</p>"
+        f"{timezone_note_html()}"
         '<p class="muted" style="font-size:11px">JSON API: '
         '<code>/api/admin/provider-access-probe</code></p>'
         f"{run_controls}"
@@ -2074,6 +2092,7 @@ def render_login_truth_page(rows: list[Any]) -> str:
         "(login page, session API, authenticated page) — not from cached private fields. "
         "Cached Data is independent: Mighty may still hold a fresh Membership Rewards balance "
         "even when the user is signed out.</p>"
+        f"{timezone_note_html()}"
         f"{summary_card}"
         '<div class="card"><table><thead><tr>'
         "<th>Provider</th><th>Current access</th><th>Cached data</th>"
@@ -2201,11 +2220,20 @@ def _render_winner_explanation(section: Any) -> str:
 
     reason_body = ""
     if explanation.evidence_type:
+        raw_observed = None
+        current = getattr(section, "current", None)
+        if current is not None:
+            raw_observed = getattr(current, "observed_at", None)
+        observed_html = (
+            _fmt_iso(raw_observed)
+            if raw_observed
+            else _fmt_iso(explanation.observed_at)
+        )
         reason_body = (
             f'<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'
             f'font-size:13px;color:#e5e7eb">{_he(explanation.evidence_type)}</div>'
             f'<div class="muted" style="font-size:12px;margin-top:2px">'
-            f"{_he(explanation.observed_at or '—')}</div>"
+            f"{observed_html}</div>"
         )
     else:
         reason_body = (
@@ -2275,6 +2303,7 @@ def render_session_evidence_timeline_page(
         '<p class="lede">Session evidence explains why Mighty currently treats a provider as '
         "connected, signed out, or unknown. Canonical session evidence determines Current Access. "
         "Cached data and legacy compatibility signals are optional and never count as login proof.</p>"
+        f"{timezone_note_html()}"
         f"{_evidence_precedence_card()}"
         f"{filters}"
     )
