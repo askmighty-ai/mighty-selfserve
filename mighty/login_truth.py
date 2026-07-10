@@ -24,12 +24,9 @@ from mighty.provider_access_probe import (
 )
 from mighty.provider_session_state import (
     ProviderSessionState,
-    SessionEvidence,
     derive_session_evidence_from_probe,
     ensure_provider_session_state_tables,
     get_provider_session_states,
-    project_session_state_from_probe_rows,
-    upsert_provider_session_state,
 )
 
 LoginVerdict = Literal["YES", "NO", "UNKNOWN"]
@@ -631,7 +628,11 @@ def _load_provider_observation_context(
     dict[str, list[TruthObservation]],
     dict[str, ProviderSessionState],
 ]:
-    """Load private/login observations and canonical session state per provider."""
+    """Load private/login observations and canonical session state per provider.
+
+    Read-only: never projects probes or legacy sync_status into provider_session_state.
+    Current access comes only from the stored provider_session_state row.
+    """
     ensure_probe_tables(db)
     ensure_provider_session_state_tables(db)
     provider_list = list(providers or sorted(PROBE_PROVIDERS))
@@ -672,36 +673,6 @@ def _load_provider_observation_context(
         if isinstance(deep, dict):
             probe["deep_inspect"] = deep
         probe_by_provider[provider].append(probe)
-
-    # Project probe history into canonical session state (newest explicit evidence wins).
-    for provider in provider_list:
-        project_session_state_from_probe_rows(
-            db, user_id, probe_by_provider.get(provider, [])
-        )
-        source = PROVIDER_PROBE_CONFIG.get(provider, None)
-        source_key = source.source if source else provider
-        account_row = account_rows.get(source_key)
-        if not account_row:
-            continue
-        sync_status = account_row.get("sync_status")
-        if sync_status != "login_required":
-            continue
-        when = _parse_iso(account_row.get("synced_at"))
-        if when is None:
-            continue
-        upsert_provider_session_state(
-            db,
-            user_id,
-            SessionEvidence(
-                provider=provider,
-                state="signed_out",
-                evidence_type="login_required",
-                evidence_summary="sync_status: login_required",
-                observed_at=when,
-                source="account_data.sync_status",
-                confidence="medium",
-            ),
-        )
 
     session_by_provider = get_provider_session_states(
         db, user_id, providers=provider_list
