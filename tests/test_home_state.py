@@ -133,11 +133,33 @@ class TestHomeStatePriority:
         assert result.state == HomeState.ALL_CLEAR
         assert result.health.up_to_date == 2
         assert result.health.waiting == 6
-        assert result.health.needs_login == 0
+        assert result.health.attention_required == 0
         assert result.featured.headline == "You're all set for now."
+        assert "Nothing needs your attention right now." in result.featured.body
         assert "still setting up 6 accounts" in result.featured.body
         assert result.featured.cta_label
         assert "Log in" not in (result.featured.cta_label or "")
+
+    def test_attention_hero_when_error_with_setup_incomplete(self):
+        """1 up to date + 6 still setting up + 1 needs attention → hero agrees."""
+        accounts = [
+            _acct("amex", "American Express", "up_to_date"),
+            _acct("hilton", "Hilton", "waiting_for_extension"),
+            _acct("united", "United", "waiting_for_extension"),
+            _acct("marriott", "Marriott", "checking"),
+            _acct("chase", "Chase", "waiting_for_extension"),
+            _acct("citi", "Citi", "waiting_for_extension"),
+            _acct("capitalone", "Capital One", "waiting_for_extension"),
+            _acct("delta", "Delta", "error"),
+        ]
+        result = resolve_home_state(accounts=accounts, actions=[])
+        assert result.health.up_to_date == 1
+        assert result.health.waiting == 6
+        assert result.health.attention_required == 1
+        assert result.featured.headline == "One account needs your attention."
+        assert "Nothing needs your attention" not in result.featured.body
+        assert "still setting up 6 accounts" in result.featured.body
+        assert result.featured.cta_url == "/credentials?filter=needs_attention"
 
     def test_signed_out_shows_login_hero(self):
         accounts = [

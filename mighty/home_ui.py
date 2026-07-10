@@ -81,7 +81,7 @@ def _account_health_strip(result: HomeStateResult, escape: Callable[[Any], str])
     if health.waiting:
         label = f"{health.waiting} {user_copy.HOME_HEALTH_STILL_SETTING_UP}"
         chips.append(_health_chip(label, health.waiting, "waiting", escape))
-    attention = health.needs_login + health.needs_attention
+    attention = health.attention_required
     if attention:
         label = f"{attention} need{'s' if attention == 1 else ''} attention"
         chips.append(_health_chip(label, attention, "needs_attention", escape))
