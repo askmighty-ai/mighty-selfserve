@@ -21201,8 +21201,11 @@ def admin_session_evidence_page():
     selected_provider = (request.args.get("provider") or "").strip() or None
     if selected_provider and selected_provider not in PROBE_PROVIDERS:
         selected_provider = None
-    include_cached_raw = (request.args.get("include_cached") or "1").strip().lower()
-    include_cached_data = include_cached_raw not in {"0", "false", "no", "session"}
+    # Default: canonical session evidence only (no cached / legacy rows).
+    include_cached_raw = (request.args.get("include_cached") or "0").strip().lower()
+    include_cached_data = include_cached_raw in {"1", "true", "yes", "on"}
+    include_legacy_raw = (request.args.get("include_legacy") or "0").strip().lower()
+    include_legacy = include_legacy_raw in {"1", "true", "yes", "on"}
     providers = sorted(PROBE_PROVIDERS)
     sections = gather_session_evidence_timeline(
         get_db(),
@@ -21210,12 +21213,14 @@ def admin_session_evidence_page():
         decrypt_account_fn=decrypt_account_data,
         provider=selected_provider,
         include_cached_data=include_cached_data,
+        include_legacy=include_legacy,
     )
     return _admin_debug.render_session_evidence_timeline_page(
         sections,
         providers=providers,
         selected_provider=selected_provider,
         include_cached_data=include_cached_data,
+        include_legacy=include_legacy,
     )
 
 

@@ -911,8 +911,11 @@ def test_admin_session_evidence_page_loads(admin_client):
     assert b"Session Evidence Timeline" in r.data
     assert b"Current winner" in r.data
     assert b"Evidence timeline" in r.data
-    assert b"Session evidence only" in r.data
+    assert b"Evidence precedence" in r.data
     assert b"Include cached data" in r.data
+    assert b"Show legacy compatibility events" in r.data
+    assert b"connection_status" in r.data  # listed in precedence card
+    assert b"sync_status" in r.data
 
 
 def test_session_evidence_timeline_shows_provider_session_state_and_winner(client):
@@ -949,7 +952,12 @@ def test_session_evidence_timeline_shows_provider_session_state_and_winner(clien
         assert section.current.evidence_type == "session_verified"
         winner = format_current_winner_line(section)
         assert winner.startswith("Current winner: connected because of ")
-        assert "Amex extension reported verified authenticated session" in winner
+        assert "session_verified" in winner
+        explanation = section.winner_explanation
+        assert explanation is not None
+        assert explanation.state_label == "Connected"
+        assert explanation.evidence_type == "session_verified"
+        assert "HIGH" in explanation.reason_headline
         session_events = [e for e in section.events if e.category == "session"]
         assert any(
             e.source == "extension_amex_connected"
@@ -1005,6 +1013,13 @@ def test_session_evidence_cached_data_not_connected_evidence(client):
             include_cached_data=False,
         )[0]
         assert all(e.category == "session" for e in session_only.events)
+        # Cached data is ignored for Current Access even when not shown in the timeline.
+        assert session_only.winner_explanation is not None
+        assert any(
+            "Membership Rewards" in item.label
+            and "Cached data never proves current login" in item.reason
+            for item in session_only.winner_explanation.ignored
+        )
 
 
 def test_session_evidence_timeline_sorted_newest_first(client):
@@ -1052,7 +1067,7 @@ def test_session_evidence_timeline_sorted_newest_first(client):
         times = [e.observed_at for e in section.events]
         assert times == sorted(times, reverse=True)
         assert section.events[0].result == "signed_out"
-        assert "Current winner: signed_out" in format_current_winner_line(section)
+        assert "Current winner: signed out" in format_current_winner_line(section)
 
 
 def test_admin_session_evidence_page_shows_winner_and_cached(admin_client):
@@ -1081,11 +1096,172 @@ def test_admin_session_evidence_page_shows_winner_and_cached(admin_client):
 
     r = admin_client.get("/admin/session-evidence?provider=amex&include_cached=1")
     assert r.status_code == 200
-    assert b"Current winner: signed_out because of login page detected" in r.data
+    assert b"Current winner" in r.data
+    assert b"Signed out" in r.data
+    assert b"login_page" in r.data
+    assert b"Latest HIGH confidence evidence" in r.data
     assert b"cached_private_data" in r.data or b"Cached data" in r.data
-    assert b"provider_session_state" in r.data or b"login page detected" in r.data
+    assert b"Ignored evidence" in r.data
+    assert b"Cached data never proves current login" in r.data
     # Cached data badge must not be presented as Connected session evidence from items.
     assert b"Membership Rewards" in r.data
+
+
+def test_session_evidence_default_hides_legacy_rows(client):
+    """Default timeline shows canonical session only — not connection_status / sync_status."""
+    import app as mighty
+
+    uid = _uid(client)
+    when = datetime.now(timezone.utc) - timedelta(minutes=8)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_verified",
+                evidence_summary="Amex extension reported verified authenticated session",
+                observed_at=when,
+                source="extension_amex_connected",
+                confidence="high",
+            ),
+        )
+        db.execute(
+            "INSERT OR REPLACE INTO account_data "
+            "(user_id, source, display_name, icon, color, data_enc, synced_at, "
+            "sync_status, connection_status) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                uid,
+                "amex",
+                "Amex",
+                "",
+                "",
+                "",
+                when.isoformat(),
+                "login_required",
+                "connected",
+            ),
+        )
+        db.commit()
+
+        default = gather_session_evidence_timeline(
+            db,
+            uid,
+            decrypt_account_fn=mighty.decrypt_account_data,
+            provider="amex",
+        )[0]
+        assert all(e.category == "session" for e in default.events)
+        assert not any(e.evidence_type in {"connection_status", "sync_status"} for e in default.events)
+        assert default.winner_explanation is not None
+        assert default.winner_explanation.state_label == "Connected"
+        assert default.winner_explanation.evidence_type == "session_verified"
+        ignored_labels = [i.label for i in default.winner_explanation.ignored]
+        assert any(label.startswith("sync_status=") for label in ignored_labels)
+        assert any(label.startswith("connection_status=") for label in ignored_labels)
+        assert all(
+            i.reason == "Legacy compatibility signal"
+            for i in default.winner_explanation.ignored
+            if i.label.startswith(("sync_status=", "connection_status="))
+        )
+
+        with_legacy = gather_session_evidence_timeline(
+            db,
+            uid,
+            decrypt_account_fn=mighty.decrypt_account_data,
+            provider="amex",
+            include_legacy=True,
+        )[0]
+        legacy = [e for e in with_legacy.events if e.category == "legacy"]
+        assert legacy
+        assert any(e.evidence_type == "connection_status" for e in legacy)
+        assert any(e.evidence_type == "sync_status" for e in legacy)
+        # Legacy never appears as the current winner.
+        assert with_legacy.current is not None
+        assert with_legacy.current.evidence_type == "session_verified"
+        assert with_legacy.current.source == "extension_amex_connected"
+
+
+def test_session_evidence_cached_data_never_explains_connected(client):
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        ctx = _ctx(mighty)
+        start_amex_connect(db, uid, **ctx)
+        advance_amex_to_waiting(db, uid, **ctx)
+        apply_amex_membership_rewards_extraction(db, uid, "77,000", **ctx)
+
+        section = gather_session_evidence_timeline(
+            db,
+            uid,
+            decrypt_account_fn=mighty.decrypt_account_data,
+            provider="amex",
+            include_cached_data=True,
+        )[0]
+        assert section.winner_explanation is not None
+        assert section.winner_explanation.state_label == "Unknown"
+        assert section.winner_explanation.evidence_type is None
+        assert not any(
+            e.category == "cached_data" and e.result == "connected" for e in section.events
+        )
+
+
+def test_admin_session_evidence_legacy_toggle(admin_client):
+    import app as mighty
+
+    uid = _uid(admin_client)
+    when = datetime.now(timezone.utc) - timedelta(minutes=4)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_api",
+                evidence_summary="ReadUserSession.v1 returned 200",
+                observed_at=when,
+                source="provider_access_probe",
+                confidence="high",
+            ),
+        )
+        db.execute(
+            "INSERT OR REPLACE INTO account_data "
+            "(user_id, source, display_name, icon, color, data_enc, synced_at, "
+            "sync_status, connection_status) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                uid,
+                "amex",
+                "Amex",
+                "",
+                "",
+                "",
+                when.isoformat(),
+                "ok",
+                "connected",
+            ),
+        )
+        db.commit()
+
+    default_page = admin_client.get("/admin/session-evidence?provider=amex")
+    assert default_page.status_code == 200
+    assert b"Evidence precedence" in default_page.data
+    assert b"Show legacy compatibility events" in default_page.data
+    # Timeline rows for legacy are hidden by default (badge only appears on rows).
+    assert b">legacy</span>" not in default_page.data
+    assert b"Ignored evidence" in default_page.data
+    assert b"Legacy compatibility signal" in default_page.data
+
+    legacy_page = admin_client.get(
+        "/admin/session-evidence?provider=amex&include_legacy=1"
+    )
+    assert legacy_page.status_code == 200
+    assert b">legacy</span>" in legacy_page.data
+    assert b"connection_status" in legacy_page.data
 
 
 def _pss_snapshot(db, uid):

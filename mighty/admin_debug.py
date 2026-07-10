@@ -2093,6 +2093,15 @@ def _session_result_badge(result: str, *, category: str) -> str:
             'font-size:12px;font-weight:700;color:#1e3a5f;background:#dbeafe">'
             "Cached data</span>"
         )
+    if category == "legacy":
+        from mighty.login_truth import format_session_evidence_result_label
+
+        label = format_session_evidence_result_label(result, category="legacy")  # type: ignore[arg-type]
+        return (
+            '<span style="display:inline-block;padding:3px 10px;border-radius:6px;'
+            'font-size:12px;font-weight:600;color:#6b7280;background:#e5e7eb">'
+            f"{_he(label)}</span>"
+        )
     colors = {
         "connected": ("#065f46", "#d1fae5"),
         "signed_out": ("#7f1d1d", "#fee2e2"),
@@ -2109,29 +2118,140 @@ def _session_result_badge(result: str, *, category: str) -> str:
     )
 
 
+def _evidence_precedence_card() -> str:
+    return """
+<div class="card" style="margin-bottom:16px">
+  <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">
+    Evidence precedence
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;font-size:13px">
+    <div>
+      <div style="font-weight:700;margin-bottom:4px;color:#6ee7b7">High</div>
+      <ul style="margin:0;padding-left:18px;color:#d1d5db">
+        <li>verified session</li>
+        <li>session API 200</li>
+        <li>session API 401</li>
+        <li>explicit login page</li>
+      </ul>
+    </div>
+    <div>
+      <div style="font-weight:700;margin-bottom:4px;color:#93c5fd">Medium</div>
+      <ul style="margin:0;padding-left:18px;color:#d1d5db">
+        <li>authenticated page</li>
+      </ul>
+    </div>
+    <div>
+      <div style="font-weight:700;margin-bottom:4px;color:#fcd34d">Low</div>
+      <ul style="margin:0;padding-left:18px;color:#d1d5db">
+        <li>cached private data</li>
+      </ul>
+    </div>
+    <div>
+      <div style="font-weight:700;margin-bottom:4px;color:#9ca3af">Legacy</div>
+      <ul style="margin:0;padding-left:18px;color:#9ca3af">
+        <li>connection_status</li>
+        <li>sync_status</li>
+      </ul>
+    </div>
+  </div>
+</div>
+"""
+
+
 def _session_evidence_filters(
     *,
     providers: list[str],
     selected_provider: str | None,
     include_cached_data: bool,
+    include_legacy: bool,
 ) -> str:
     provider_options = '<option value="">All providers</option>' + "".join(
         f'<option value="{_he(p)}"{" selected" if p == selected_provider else ""}>{_he(p)}</option>'
         for p in providers
     )
-    session_selected = "" if include_cached_data else " selected"
-    include_selected = " selected" if include_cached_data else ""
+    cached_checked = " checked" if include_cached_data else ""
+    legacy_checked = " checked" if include_legacy else ""
     return f"""
-<form class="source-picker" method="get" action="/admin/session-evidence" style="flex-wrap:wrap">
+<form class="source-picker" method="get" action="/admin/session-evidence" style="flex-wrap:wrap;align-items:center">
   <label>Provider</label>
   <select name="provider" onchange="this.form.submit()">{provider_options}</select>
-  <label>Evidence</label>
-  <select name="include_cached" onchange="this.form.submit()">
-    <option value="0"{session_selected}>Session evidence only</option>
-    <option value="1"{include_selected}>Include cached data</option>
-  </select>
+  <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">
+    <input type="checkbox" name="include_cached" value="1"{cached_checked}
+           onchange="this.form.submit()" />
+    Include cached data
+  </label>
+  <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:#9ca3af">
+    <input type="checkbox" name="include_legacy" value="1"{legacy_checked}
+           onchange="this.form.submit()" />
+    Show legacy compatibility events
+  </label>
 </form>
 """
+
+
+def _render_winner_explanation(section: Any) -> str:
+    explanation = getattr(section, "winner_explanation", None)
+    if explanation is None:
+        from mighty.login_truth import format_current_winner_line
+
+        return (
+            f'<p style="font-size:13px;color:#e5e7eb;margin:0 0 12px">'
+            f"{_he(format_current_winner_line(section))}</p>"
+        )
+
+    reason_body = ""
+    if explanation.evidence_type:
+        reason_body = (
+            f'<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'
+            f'font-size:13px;color:#e5e7eb">{_he(explanation.evidence_type)}</div>'
+            f'<div class="muted" style="font-size:12px;margin-top:2px">'
+            f"{_he(explanation.observed_at or '—')}</div>"
+        )
+    else:
+        reason_body = (
+            f'<div class="muted" style="font-size:13px">'
+            f"{_he(explanation.reason_headline)}</div>"
+        )
+
+    ignored_html = ""
+    if explanation.ignored:
+        items = "".join(
+            f'<div style="margin-bottom:10px">'
+            f'<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'
+            f'font-size:12px;color:#9ca3af">{_he(item.label)}</div>'
+            f'<div class="muted" style="font-size:11px;margin-top:2px">'
+            f"Ignored because: {_he(item.reason)}</div>"
+            f"</div>"
+            for item in explanation.ignored
+        )
+        ignored_html = (
+            '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #374151">'
+            '<div class="muted" style="font-size:11px;text-transform:uppercase;'
+            'letter-spacing:.04em;margin-bottom:8px">Ignored evidence</div>'
+            f"{items}</div>"
+        )
+
+    reason_header = (
+        f'<div class="muted" style="font-size:11px;margin-bottom:4px">'
+        f"Reason</div>"
+        f'<div style="font-size:12px;color:#d1d5db;margin-bottom:4px">'
+        f"{_he(explanation.reason_headline) if explanation.evidence_type else ''}</div>"
+    )
+    if not explanation.evidence_type:
+        reason_header = (
+            '<div class="muted" style="font-size:11px;margin-bottom:4px">Reason</div>'
+        )
+
+    return (
+        '<div style="margin-bottom:14px;padding:12px 14px;border:1px solid #374151;'
+        'border-radius:8px;background:#111827">'
+        '<div class="muted" style="font-size:11px;text-transform:uppercase;'
+        'letter-spacing:.04em;margin-bottom:6px">Current winner</div>'
+        f'<div style="font-size:18px;font-weight:700;color:#f9fafb;margin-bottom:10px">'
+        f"{_he(explanation.state_label)}</div>"
+        f"{reason_header}{reason_body}{ignored_html}"
+        "</div>"
+    )
 
 
 def render_session_evidence_timeline_page(
@@ -2139,23 +2259,23 @@ def render_session_evidence_timeline_page(
     *,
     providers: list[str],
     selected_provider: str | None = None,
-    include_cached_data: bool = True,
+    include_cached_data: bool = False,
+    include_legacy: bool = False,
 ) -> str:
-    from mighty.login_truth import (
-        format_current_winner_line,
-        friendly_source_label,
-    )
+    from mighty.login_truth import friendly_source_label
 
     filters = _session_evidence_filters(
         providers=providers,
         selected_provider=selected_provider,
         include_cached_data=include_cached_data,
+        include_legacy=include_legacy,
     )
 
     body = (
         '<p class="lede">Session evidence explains why Mighty currently treats a provider as '
-        "connected, signed out, or unknown. Cached data (balances and private fields) is shown "
-        "separately and never counts as current login proof.</p>"
+        "connected, signed out, or unknown. Canonical session evidence determines Current Access. "
+        "Cached data and legacy compatibility signals are optional and never count as login proof.</p>"
+        f"{_evidence_precedence_card()}"
         f"{filters}"
     )
 
@@ -2165,7 +2285,7 @@ def render_session_evidence_timeline_page(
 
     for section in sections:
         current = section.current
-        winner = format_current_winner_line(section)
+        winner_block = _render_winner_explanation(section)
 
         if current is None:
             current_table = (
@@ -2189,16 +2309,18 @@ def render_session_evidence_timeline_page(
             )
 
         def _event_row(ev: Any) -> str:
-            cached_badge = (
-                ' <span class="badge badge-muted">cached</span>'
-                if ev.category == "cached_data"
-                else ""
-            )
+            row_style = ""
+            type_badge = ""
+            if ev.category == "cached_data":
+                type_badge = ' <span class="badge badge-muted">cached</span>'
+            elif ev.category == "legacy":
+                type_badge = ' <span class="badge badge-muted">legacy</span>'
+                row_style = ' style="opacity:0.55;color:#9ca3af"'
             return (
-                "<tr>"
+                f"<tr{row_style}>"
                 f"<td class='muted'>{_fmt_iso(ev.observed_at.isoformat())}</td>"
                 f"<td>{_he(ev.provider)}</td>"
-                f"<td>{_he(ev.evidence_type)}{cached_badge}</td>"
+                f"<td>{_he(ev.evidence_type)}{type_badge}</td>"
                 f"<td>{_session_result_badge(ev.result, category=ev.category)}</td>"
                 f"<td>{_he(friendly_source_label(ev.source)[0])}</td>"
                 f"<td>{_he(ev.summary)}</td>"
@@ -2212,7 +2334,7 @@ def render_session_evidence_timeline_page(
         body += (
             f'<div class="card">'
             f"<h3 style=\"text-transform:capitalize;margin:0 0 8px\">{_he(section.provider)}</h3>"
-            f'<p style="font-size:13px;color:#e5e7eb;margin:0 0 12px">{_he(winner)}</p>'
+            f"{winner_block}"
             f'<div style="margin-bottom:14px"><div class="muted" style="font-size:11px;'
             f'text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Current state</div>'
             f"{current_table}</div>"
