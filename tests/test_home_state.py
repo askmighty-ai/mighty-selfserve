@@ -12,10 +12,20 @@ def _acct(
     *,
     action_url: str = "https://example.com/login",
 ) -> AccountStatus:
+    presentation_key = {
+        "needs_login": "needs_sign_in",
+        "updating": "updating",
+        "checking": "checking",
+        "up_to_date": "ready",
+        "waiting_for_extension": "updating",
+        "error": "needs_attention",
+    }.get(status, "ready")
     return AccountStatus(
         source=source,
         display_name=display_name,
         status=status,
+        presentation_key=presentation_key,
+        presentation_label=presentation_key.replace("_", " ").title(),
         last_successful_sync_at=None,
         current_attempt_at=None,
         last_error=None,

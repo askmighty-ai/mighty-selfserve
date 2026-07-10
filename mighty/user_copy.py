@@ -29,15 +29,17 @@ MANUAL_STEP_LINE = "Login is the only thing you do manually. Everything else is 
 NEEDS_LOGIN_EXPLAINER = "Needs login means: open the provider in Chrome and sign in."
 
 # ── Account Access Loop (Account Center + extension popup) ───────────────────
-# Four user-facing states only — one label and one CTA each.
+# Session/login presentation comes from provider_session_state (via session_access).
 ACCOUNT_STATE_NEEDS_SIGN_IN = "needs_sign_in"
 ACCOUNT_STATE_UPDATING = "updating"
+ACCOUNT_STATE_CHECKING = "checking"
 ACCOUNT_STATE_READY = "ready"
 ACCOUNT_STATE_NEEDS_ATTENTION = "needs_attention"
 
 ACCOUNT_STATE_LABELS: dict[str, str] = {
     ACCOUNT_STATE_NEEDS_SIGN_IN: "Needs sign in",
     ACCOUNT_STATE_UPDATING: "Updating",
+    ACCOUNT_STATE_CHECKING: "Checking...",
     ACCOUNT_STATE_READY: "Ready",
     ACCOUNT_STATE_NEEDS_ATTENTION: "Needs attention",
 }
@@ -45,6 +47,7 @@ ACCOUNT_STATE_LABELS: dict[str, str] = {
 ACCOUNT_STATE_CTAS: dict[str, str] = {
     ACCOUNT_STATE_NEEDS_SIGN_IN: "Sign in",
     ACCOUNT_STATE_UPDATING: "Updating…",
+    ACCOUNT_STATE_CHECKING: "Checking…",
     ACCOUNT_STATE_READY: "View",
     ACCOUNT_STATE_NEEDS_ATTENTION: "Fix",
 }
@@ -90,6 +93,7 @@ STATUS_LABEL_ERROR = ACTIVITY_LABELS[ACTIVITY_ERROR]
 STATUS_LABELS: dict[str, str] = {
     "up_to_date": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY],
     "updating": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
+    "checking": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING],
     "needs_login": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN],
     "waiting_for_extension": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
     "error": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],

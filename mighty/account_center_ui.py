@@ -143,12 +143,11 @@ class AccountCenterCardView:
     status_line: str
 
 
-def status_tone(state: AccountState) -> str:
-    presentation = resolve_account_presentation(state)
-    key = presentation.key
+def status_tone(state: AccountState, *, presentation_key: str | None = None) -> str:
+    key = presentation_key or resolve_account_presentation(state).key
     if key == ACCOUNT_STATE_NEEDS_SIGN_IN:
         return TONE_LOGIN
-    if key == ACCOUNT_STATE_UPDATING:
+    if key in (ACCOUNT_STATE_UPDATING, "checking"):
         return TONE_ATTENTION
     if key == ACCOUNT_STATE_NEEDS_ATTENTION:
         return TONE_ATTENTION
@@ -159,7 +158,13 @@ def status_tone(state: AccountState) -> str:
     return TONE_ATTENTION
 
 
-def status_label(state: AccountState) -> str:
+def status_label(
+    state: AccountState,
+    *,
+    presentation_label: str | None = None,
+) -> str:
+    if presentation_label is not None:
+        return presentation_label
     return resolve_account_presentation(state).label
 
 
@@ -194,12 +199,16 @@ def data_refreshed_label(
     return f"{DATA_REFRESHED_PREFIX} · {fmt_relative(state.last_data_refresh)}"
 
 
-def primary_action(state: AccountState) -> tuple[str, str, bool]:
+def primary_action(
+    state: AccountState,
+    *,
+    presentation=None,
+) -> tuple[str, str, bool]:
     """Return (button label, action kind, disabled) for the card CTA."""
-    presentation = resolve_account_presentation(state)
+    presentation = presentation or resolve_account_presentation(state)
     if presentation.key == ACCOUNT_STATE_NEEDS_SIGN_IN:
         return presentation.cta_label, PRIMARY_LOGIN, False
-    if presentation.key == ACCOUNT_STATE_UPDATING:
+    if presentation.key in (ACCOUNT_STATE_UPDATING, "checking"):
         return presentation.cta_label, PRIMARY_CHECKING, True
     if presentation.key == ACCOUNT_STATE_READY:
         return presentation.cta_label, PRIMARY_VIEW, False
@@ -229,8 +238,26 @@ def build_card_view(
     color: str = "#f3f4f6",
     fmt_relative: Callable[[str], str],
     provider_login_url: str | None = None,
+    session_access=None,
 ) -> AccountCenterCardView:
-    label, kind, disabled = primary_action(state)
+    presentation = None
+    if session_access is not None:
+        from mighty.account_presentation import AccountPresentation
+        from mighty.session_access import resolve_session_access_presentation
+
+        sess = resolve_session_access_presentation(
+            session_access, display_name=state.display_name,
+        )
+        if sess.session_state in ("signed_out", "checking", "connected"):
+            presentation = AccountPresentation(
+                key=sess.presentation_key,
+                label=sess.presentation_label,
+                cta_label=sess.cta_label or "",
+                cta_disabled=sess.session_state == "checking",
+                extension_hint=sess.extension_hint,
+            )
+    presentation = presentation or resolve_account_presentation(state)
+    label, kind, disabled = primary_action(state, presentation=presentation)
     href, external = resolve_primary_action_href(
         kind, state.provider, provider_login_url=provider_login_url,
     )
@@ -239,8 +266,8 @@ def build_card_view(
         display_name=state.display_name,
         icon=icon,
         color=color,
-        status_tone=status_tone(state),
-        status_label=status_label(state),
+        status_tone=status_tone(state, presentation_key=presentation.key),
+        status_label=status_label(state, presentation_label=presentation.label),
         data_freshness=data_freshness_label(state, fmt_relative),
         session_label=SESSION_LABELS.get(state.session_health, state.session_health.title()),
         access_label=ACCESS_LABELS.get(state.access_method, state.access_method.replace("_", " ").title()),

@@ -29,6 +29,8 @@ from mighty.account_state import (
 )
 from mighty.provider_account import EXTRACTION_PENDING
 from mighty.user_copy import (
+    ACCOUNT_STATE_CHECKING,
+    ACCOUNT_STATE_CTAS,
     ACCOUNT_STATE_LABELS,
     ACCOUNT_STATE_NEEDS_ATTENTION,
     ACCOUNT_STATE_NEEDS_SIGN_IN,
@@ -193,6 +195,14 @@ def _presentation_for_key(key: str) -> AccountPresentation:
             cta_label=CTA_SIGN_IN,
             cta_disabled=False,
             extension_hint=EXT_ACCOUNT_NEEDS_SIGN_IN_HINT,
+        )
+    if key == ACCOUNT_STATE_CHECKING:
+        return AccountPresentation(
+            key=key,
+            label=ACCOUNT_STATE_LABELS[key],
+            cta_label=ACCOUNT_STATE_CTAS[ACCOUNT_STATE_CHECKING],
+            cta_disabled=True,
+            extension_hint="Mighty is verifying this account now",
         )
     if key == ACCOUNT_STATE_UPDATING:
         return AccountPresentation(
@@ -552,17 +562,21 @@ def build_access_loop_summary(
     counts = {
         ACCOUNT_STATE_NEEDS_SIGN_IN: 0,
         ACCOUNT_STATE_UPDATING: 0,
+        ACCOUNT_STATE_CHECKING: 0,
         ACCOUNT_STATE_READY: 0,
         ACCOUNT_STATE_NEEDS_ATTENTION: 0,
     }
     for presentation in presentations:
         counts[presentation.key] = counts.get(presentation.key, 0) + 1
 
+    # Checking is session verification in progress — never "needs sign in".
+    updating_like = counts[ACCOUNT_STATE_UPDATING] + counts[ACCOUNT_STATE_CHECKING]
+
     detail_lines: list[str] = []
     if counts[ACCOUNT_STATE_NEEDS_SIGN_IN]:
         detail_lines.append(access_loop_count_needs_sign_in(counts[ACCOUNT_STATE_NEEDS_SIGN_IN]))
-    if counts[ACCOUNT_STATE_UPDATING]:
-        detail_lines.append(access_loop_count_updating(counts[ACCOUNT_STATE_UPDATING]))
+    if updating_like:
+        detail_lines.append(access_loop_count_updating(updating_like))
     if counts[ACCOUNT_STATE_READY]:
         detail_lines.append(access_loop_count_ready(counts[ACCOUNT_STATE_READY]))
     if counts[ACCOUNT_STATE_NEEDS_ATTENTION]:
@@ -570,7 +584,7 @@ def build_access_loop_summary(
             access_loop_count_needs_attention(counts[ACCOUNT_STATE_NEEDS_ATTENTION])
         )
 
-    if counts[ACCOUNT_STATE_UPDATING]:
+    if updating_like:
         headline = WORKER_ACCESS_LOOP_UPDATING
     elif counts[ACCOUNT_STATE_NEEDS_SIGN_IN]:
         headline = access_loop_count_needs_sign_in(counts[ACCOUNT_STATE_NEEDS_SIGN_IN])
@@ -584,13 +598,13 @@ def build_access_loop_summary(
     return AccessLoopSummary(
         total=len(presentations),
         needs_sign_in=counts[ACCOUNT_STATE_NEEDS_SIGN_IN],
-        updating=counts[ACCOUNT_STATE_UPDATING],
+        updating=updating_like,
         ready=counts[ACCOUNT_STATE_READY],
         needs_attention=counts[ACCOUNT_STATE_NEEDS_ATTENTION],
         headline=headline,
         detail_lines=detail_lines,
         open_account_center_label=WORKER_OPEN_ACCOUNT_CENTER,
-        is_updating=counts[ACCOUNT_STATE_UPDATING] > 0,
+        is_updating=updating_like > 0,
     )
 
 

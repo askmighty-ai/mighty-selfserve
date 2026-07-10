@@ -6671,11 +6671,16 @@ function updateSyncTimes() {
   document.querySelectorAll('[data-synced]').forEach(function(el) {
     var ts = el.dataset.synced;
     if (!ts) return;
-    // Login-required accounts carry a data-sync-status on the parent card
-    var card = el.closest('[data-sync-status]');
+    // Login-required / checking accounts carry session state on the parent card
+    var card = el.closest('[data-sync-status], [data-session-state]');
     var syncStatus = card ? card.dataset.syncStatus : '';
-    if (syncStatus === 'login_required') {
+    var sessionState = card ? card.dataset.sessionState : '';
+    if (sessionState === 'signed_out' || syncStatus === 'login_required') {
       el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">{user_copy.NEEDS_LOGIN_BADGE}</span>';
+      return;
+    }
+    if (sessionState === 'checking' || syncStatus === 'checking') {
+      el.innerHTML = '<span style="font-size:11px;color:#6366f1;font-weight:600">Checking...</span>';
       return;
     }
     var rel = fmtRelative(ts);
@@ -6711,8 +6716,15 @@ function _pollAccountStatus() {
       var acct = bySource[src];
       if (!acct) return;
       card.dataset.accountStatus = acct.status;
+      if (acct.session_state) {
+        card.dataset.sessionState = acct.session_state;
+      }
       if (acct.status === 'needs_login') {
         card.dataset.syncStatus = 'login_required';
+      } else if (acct.status === 'checking') {
+        card.dataset.syncStatus = 'checking';
+      } else if (card.dataset.syncStatus === 'login_required' || card.dataset.syncStatus === 'checking') {
+        card.dataset.syncStatus = 'ok';
       }
       var el = card.querySelector('.acct-sync-time[data-synced]');
       if (!el) return;
@@ -6722,6 +6734,9 @@ function _pollAccountStatus() {
       }
       if (acct.status === 'needs_login') {
         el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">' + acct.status_label + '</span>';
+      } else if (acct.status === 'checking') {
+        var checkMsg = acct.verification_message || acct.status_label || 'Checking...';
+        el.innerHTML = '<span style="font-size:11px;color:#6366f1;font-weight:600">' + checkMsg + '</span>';
       } else if (acct.status === 'updating') {
         el.innerHTML = '<span style="font-size:11px;color:#6366f1;font-weight:600">' + acct.status_label + '</span>';
       } else if (acct.status !== 'up_to_date') {
@@ -9009,6 +9024,12 @@ def dashboard():
     _updating_source = _user_sync["sync_current_source"] if _user_sync else None
     _sync_started_at = _user_sync["sync_started_at"] if _user_sync else None
 
+    from mighty.session_access import load_session_access_by_provider
+
+    _session_by_provider = load_session_access_by_provider(
+        db, uid, decrypt_fn=_decrypt_acct,
+    )
+
     for cat in _cat_order:
         for src, display_name, icon, color in _cat_map[cat]:
             row   = synced_map.get(src)
@@ -9081,12 +9102,14 @@ def dashboard():
                 sync_started_at=_sync_started_at,
                 login_url=_provider_login_url(src),
                 connect_url=f"/credentials?connect={src}",
+                session_access=_session_by_provider.get(src),
             )
             _home_account_statuses.append(_acct_canon)
             _card_url = SITE_ENTRY_URL.get(src) or (row or {}).get("entry_url", "") or _provider_login_url(src)
             if _card_url:
                 _home_provider_urls[src] = _card_url
-            if sync_status == "login_required" and _acct_canon.status == CANON_NEEDS_LOGIN:
+            # Login banner/counts come only from Current Access (session_state).
+            if _acct_canon.status == CANON_NEEDS_LOGIN:
                 login_required_accounts.append(display_name)
             for _item in items:
                 if _classify_alert(_item.get("label", ""), _item.get("value", "")):
@@ -9193,7 +9216,7 @@ def dashboard():
         or _email_suggestion_count > 0
     )
 
-    # ── Action items: persistent, from action_items table + login_required accounts ──
+    # ── Action items: persistent + session-access needs-login accounts ──
     _open_items = []
     try:
         _open_items = _open_action_items(uid)
@@ -9201,11 +9224,12 @@ def dashboard():
         pass
     # Inject login-required accounts as top-priority (transient — not persisted)
     _lr_items = []
-    for _src, _dname, _ic, _cl in [
-        item for cat in _cat_order for item in _cat_map[cat]
-        if synced_map.get(item[0]) and
-           (synced_map[item[0]].get("sync_status") or "") == "login_required"
-    ]:
+    _needs_login_by_source = {
+        a.source: a.display_name
+        for a in _home_account_statuses
+        if a.status == CANON_NEEDS_LOGIN
+    }
+    for _src, _dname in _needs_login_by_source.items():
         _lr_items.append({
             "id": None, "source": _src, "label": user_copy.NEEDS_LOGIN_ACTION_LABEL,
             "value": user_copy.login_required_action_value(_dname),
@@ -14225,10 +14249,12 @@ def _accounts_collect_rows(
     sync_status_by_source: dict,
     failure_reason_by_source: dict,
     fmt_sync: Callable[[str], str],
+    session_state_by_source: dict | None = None,
 ) -> list[AccountsRow]:
     rows: list[AccountsRow] = []
     site_map = {k: (n, ic, col, cat) for k, n, ic, col, cat in SUPPORTED_SITES}
     seen: set[str] = set()
+    session_state_by_source = session_state_by_source or {}
 
     def _append(
         source: str,
@@ -14243,10 +14269,12 @@ def _accounts_collect_rows(
             return
         seen.add(source)
         sync_status = sync_status_by_source.get(source, "ok")
+        session_state = session_state_by_source.get(source)
         section = resolve_accounts_section(
             lifecycle,
             sync_status,
             source=source,
+            session_state=session_state,
         )
         synced_raw = synced_at_by_source.get(source, "")
         synced_fmt = fmt_sync(synced_raw) if synced_raw else ""
@@ -14339,6 +14367,7 @@ def _build_credentials_page(
     sync_status_by_source: dict = None,
     failure_reason_by_source: dict = None,
     last_checked_label: str = "",
+    session_state_by_source: dict = None,
 ) -> str:
     """Generate the Accounts maintenance page HTML."""
     extra_by_source = extra_by_source or {}
@@ -14351,6 +14380,7 @@ def _build_credentials_page(
     debug_by_source = debug_by_source or {}
     sync_status_by_source = sync_status_by_source or {}
     failure_reason_by_source = failure_reason_by_source or {}
+    session_state_by_source = session_state_by_source or {}
     active_filter = normalize_filter(filter_key)
     csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
@@ -14364,6 +14394,7 @@ def _build_credentials_page(
         sync_status_by_source=sync_status_by_source,
         failure_reason_by_source=failure_reason_by_source,
         fmt_sync=_fmt_sync,
+        session_state_by_source=session_state_by_source,
     )
     last_checked = last_checked_label or user_copy.ACCOUNTS_NOT_CHECKED_YET
     portfolio = build_portfolio(account_rows, last_checked)
@@ -15060,6 +15091,15 @@ def credentials_page():
             }
     _rt.step("lifecycle")
     last_checked_label = portfolio_last_checked(all_synced_at, _fmt_sync)
+    from mighty.session_access import load_session_access_by_provider, to_product_session_state
+
+    _session_access = load_session_access_by_provider(
+        db, uid, decrypt_fn=_decrypt_acct,
+    )
+    session_state_by_source = {
+        provider: to_product_session_state(row.current_access)
+        for provider, row in _session_access.items()
+    }
     page_html = _build_credentials_page(
         user, configured, extra_by_source, synced_at_by_source,
         connection_status_by_source, extraction_status_by_source,
@@ -15071,6 +15111,7 @@ def credentials_page():
         sync_status_by_source=sync_status_by_source,
         failure_reason_by_source=failure_reason_by_source,
         last_checked_label=last_checked_label,
+        session_state_by_source=session_state_by_source,
     )
     _rt.step("build_html")
     _rt.finish()
@@ -15120,11 +15161,17 @@ def _load_user_account_states(uid: str, db):
 
 
 def _build_account_center_page(user, states) -> str:
-    """Account Connection Center — consumer UI driven by AccountState only."""
+    """Account Connection Center — login status from provider_session_state."""
     csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts("account-center", user["email"], csrf)
     _styles = BASE_CSS + ACCOUNT_CENTER_CSS
     _site_meta = {k: (icon, color) for k, _n, icon, color, _cat in SUPPORTED_SITES}
+    from mighty.session_access import load_session_access_by_provider
+
+    db = get_db()
+    session_by_provider = load_session_access_by_provider(
+        db, user["id"], decrypt_fn=decrypt_account_data,
+    )
     cards = []
     for state in states:
         icon, color = _site_meta.get(state.provider, ("🔗", "#f3f4f6"))
@@ -15135,6 +15182,7 @@ def _build_account_center_page(user, states) -> str:
                 color=color,
                 fmt_relative=_fmt_sync,
                 provider_login_url=_provider_login_url(state.provider) or None,
+                session_access=session_by_provider.get(state.provider),
             )
         )
     cards = sort_cards(cards)
@@ -17896,6 +17944,7 @@ def api_account_status():
         WAITING_FOR_EXTENSION,
         load_all_account_statuses,
     )
+    from mighty.session_access import CHECKING
     from mighty.session_verification import ensure_stale_session_verifications_for_user
 
     uid = get_current_user_id()
@@ -17916,7 +17965,6 @@ def api_account_status():
     updating_source = user_row["sync_current_source"] if user_row else None
 
     display_names = {key: name for key, name, *_ in SUPPORTED_SITES}
-    account_states = _load_user_account_states(uid, db)
     accounts, summary = load_all_account_statuses(
         uid,
         db,
@@ -17927,7 +17975,6 @@ def api_account_status():
         sync_running=sync_running,
         sync_started_at=sync_started_at,
         updating_source=updating_source,
-        account_states=account_states,
     )
     return jsonify({
         "ok": True,
@@ -17939,6 +17986,7 @@ def api_account_status():
         "status_values": {
             "up_to_date": UP_TO_DATE,
             "updating": UPDATING,
+            "checking": CHECKING,
             "needs_login": NEEDS_LOGIN,
             "waiting_for_extension": WAITING_FOR_EXTENSION,
             "error": ERROR,
@@ -18064,6 +18112,14 @@ def api_sync_failure():
     db.commit()
     print(f"[SyncFailure] uid={uid} source={source} reason={reason}", flush=True)
 
+    if reason == "login_required":
+        try:
+            from mighty.provider_session_state import record_extension_login_required
+
+            record_extension_login_required(db, uid, source, observed_at=now)
+        except Exception:
+            pass
+
     from mighty.pipeline_inspector import (
         map_sync_failure_reason,
         new_run_id,
@@ -18137,16 +18193,28 @@ def api_sync_login_cleared():
     db.commit()
     # Only write connected session state when the request carries explicit
     # authenticated/session_verified evidence — not merely because login_required cleared.
-    if source == "amex" and (body or {}).get("session_verified"):
-        from mighty.provider_session_state import record_amex_extension_connected
-        record_amex_extension_connected(
-            db,
-            uid,
-            observed_at=now,
-            evidence_type="session_verified",
-            evidence_summary="Amex extension reported verified authenticated session",
-            source="extension_amex_login_cleared",
-        )
+    if (body or {}).get("session_verified"):
+        try:
+            from mighty.provider_session_state import (
+                record_amex_extension_connected,
+                record_extension_session_connected,
+            )
+
+            if source == "amex":
+                record_amex_extension_connected(
+                    db,
+                    uid,
+                    observed_at=now,
+                    evidence_type="session_verified",
+                    evidence_summary="Amex extension reported verified authenticated session",
+                    source="extension_amex_login_cleared",
+                )
+            else:
+                record_extension_session_connected(
+                    db, uid, source, observed_at=now,
+                )
+        except Exception:
+            pass
     print(f"[LoginCleared] uid={uid} source={source} — status reset to ok, synced_at={now}", flush=True)
     return jsonify({"ok": True, "updated": True})
 
