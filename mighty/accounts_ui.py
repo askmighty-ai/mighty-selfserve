@@ -21,6 +21,7 @@ from mighty.account_lifecycle import (
     WAITING_FOR_EXTENSION as LC_WAITING,
 )
 from mighty.account_status import (
+    CHECKING,
     ERROR,
     NEEDS_LOGIN,
     UPDATING,
@@ -46,14 +47,14 @@ SECTION_ORDER = (
 SECTION_HEADERS: dict[str, str] = {
     SECTION_NEEDS_LOGIN: "Needs login",
     SECTION_NEEDS_ATTENTION: "Needs attention",
-    SECTION_WAITING: "Waiting",
+    SECTION_WAITING: "Still setting up",
     SECTION_UP_TO_DATE: "Up to date",
 }
 
 STATUS_LABELS: dict[str, str] = {
     SECTION_NEEDS_LOGIN: "Needs login",
     SECTION_NEEDS_ATTENTION: "Needs attention",
-    SECTION_WAITING: "Waiting",
+    SECTION_WAITING: user_copy.ACCOUNTS_STATUS_SETTING_UP,
     SECTION_UP_TO_DATE: "Up to date",
 }
 
@@ -101,6 +102,13 @@ def resolve_accounts_section(
     """Map lifecycle + session access to a maintenance list section.
 
     Login section comes only from session_state (provider_session_state).
+
+    Bucket alignment with Dashboard `_health_counts`:
+    - NEEDS_LOGIN → needs_login
+    - ERROR → needs_attention
+    - UP_TO_DATE → up_to_date
+    - UPDATING / CHECKING / WAITING_FOR_EXTENSION / other incomplete → waiting
+      (customer-facing: "Still setting up")
     """
     canonical = resolve_canonical_status(
         lifecycle,
@@ -126,7 +134,11 @@ def waiting_subline(
     source: str = "",
     session_state: str | None = None,
 ) -> str:
-    """Secondary line for Waiting rows; internal cases only."""
+    """Secondary line for Still setting up rows; internal cases only."""
+    if session_state == "checking":
+        return user_copy.ACCOUNTS_SUBLINE_CHECKING
+    if session_state == "unknown":
+        return user_copy.ACCOUNTS_SUBLINE_UNKNOWN
     canonical = resolve_canonical_status(
         lifecycle,
         sync_status or "ok",
@@ -136,18 +148,47 @@ def waiting_subline(
     )
     if canonical == UPDATING:
         return user_copy.ACCOUNTS_SUBLINE_UPDATING
+    if canonical == CHECKING:
+        return user_copy.ACCOUNTS_SUBLINE_CHECKING
     if lifecycle.state == CONNECTED:
         return user_copy.ACCOUNTS_SUBLINE_CONNECTED
     return user_copy.ACCOUNTS_SUBLINE_FIRST_VISIT
 
 
-def row_status_label(section: str, lifecycle: AccountLifecycle) -> str:
+def row_status_label(
+    section: str,
+    lifecycle: AccountLifecycle,
+    *,
+    session_state: str | None = None,
+    sync_status: str = "ok",
+    updating_source: str | None = None,
+    source: str = "",
+) -> str:
     if section == SECTION_UP_TO_DATE:
         return STATUS_LABELS[SECTION_UP_TO_DATE]
     if section == SECTION_NEEDS_LOGIN:
         return STATUS_LABELS[SECTION_NEEDS_LOGIN]
     if section == SECTION_NEEDS_ATTENTION:
         return STATUS_LABELS[SECTION_NEEDS_ATTENTION]
+    if session_state == "unknown":
+        return user_copy.ACCOUNTS_STATUS_NOT_VERIFIED
+    if session_state == "checking":
+        return user_copy.ACCOUNTS_STATUS_CHECKING
+    if session_state == "signed_out":
+        return STATUS_LABELS[SECTION_NEEDS_LOGIN]
+    canonical = resolve_canonical_status(
+        lifecycle,
+        sync_status or "ok",
+        source=source,
+        updating_source=updating_source,
+        session_state=session_state,
+    )
+    if canonical == UPDATING:
+        return user_copy.STATUS_LABEL_UPDATING
+    if canonical == CHECKING:
+        return user_copy.ACCOUNTS_STATUS_CHECKING
+    if canonical == WAITING_FOR_EXTENSION:
+        return user_copy.ACCOUNTS_STATUS_AWAITING_FIRST
     return STATUS_LABELS[SECTION_WAITING]
 
 
@@ -160,6 +201,7 @@ def row_subline(
     source: str = "",
     synced_fmt: str = "",
     failure_hint: str = "",
+    session_state: str | None = None,
 ) -> str:
     if section == SECTION_UP_TO_DATE and synced_fmt:
         return f"Updated {synced_fmt}"
@@ -171,6 +213,7 @@ def row_subline(
             sync_status,
             updating_source=updating_source,
             source=source,
+            session_state=session_state,
         )
     if section == SECTION_NEEDS_LOGIN:
         return user_copy.NEEDS_LOGIN_EXPLAINER
@@ -251,7 +294,7 @@ def portfolio_summary_line(portfolio: AccountsPortfolio) -> str:
     if portfolio.up_to_date:
         parts.append(f"{portfolio.up_to_date} up to date")
     if portfolio.waiting:
-        parts.append(f"{portfolio.waiting} waiting")
+        parts.append(f"{portfolio.waiting} still setting up")
     if portfolio.needs_login:
         parts.append(f"{_count_phrase(portfolio.needs_login, 'need')} login")
     if portfolio.needs_attention:

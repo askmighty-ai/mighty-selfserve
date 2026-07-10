@@ -24,8 +24,14 @@ from mighty.accounts_ui import (
     portfolio_summary_line,
     render_portfolio_summary,
     resolve_accounts_section,
+    row_status_label,
+    row_subline,
     sort_rows,
+    waiting_subline,
 )
+from mighty.home_state import resolve_home_state
+from mighty.account_status import AccountStatus
+from mighty import user_copy
 
 
 def _lifecycle(state: str, **kwargs) -> AccountLifecycle:
@@ -146,6 +152,7 @@ class TestAccountsPortfolio:
         summary = portfolio_summary_line(portfolio)
         assert "1 account" in summary
         assert "1 up to date" in summary
+        assert "still setting up" not in summary
         assert "waiting" not in summary
         assert "login" not in summary
 
@@ -193,3 +200,88 @@ class TestAccountsFilterNormalization:
     def test_unknown_filter_defaults_to_all(self):
         assert normalize_filter("bogus") == "all"
         assert normalize_filter(None) == "all"
+
+
+class TestSetupSemanticsCopy:
+    def test_summary_still_setting_up(self):
+        portfolio = AccountsPortfolio(
+            total=8, needs_login=0, needs_attention=0, waiting=6,
+            up_to_date=2, last_checked_label="",
+        )
+        summary = portfolio_summary_line(portfolio)
+        assert "2 up to date" in summary
+        assert "6 still setting up" in summary
+        assert "waiting" not in summary
+
+    def test_section_header_still_setting_up(self):
+        from mighty.accounts_ui import SECTION_HEADERS
+        assert SECTION_HEADERS[SECTION_WAITING] == "Still setting up"
+
+    def test_unknown_row_copy(self):
+        lc = _lifecycle(LC_WAITING)
+        assert row_status_label(
+            SECTION_WAITING, lc, session_state="unknown",
+        ) == user_copy.ACCOUNTS_STATUS_NOT_VERIFIED
+        assert waiting_subline(
+            lc, session_state="unknown",
+        ) == user_copy.ACCOUNTS_SUBLINE_UNKNOWN
+
+    def test_checking_row_copy(self):
+        lc = _lifecycle(LC_WAITING)
+        assert row_status_label(
+            SECTION_WAITING, lc, session_state="checking",
+        ) == user_copy.ACCOUNTS_STATUS_CHECKING
+        assert waiting_subline(
+            lc, session_state="checking",
+        ) == user_copy.ACCOUNTS_SUBLINE_CHECKING
+
+    def test_first_visit_row_copy(self):
+        lc = _lifecycle(LC_WAITING)
+        assert row_status_label(
+            SECTION_WAITING, lc, sync_status="needs_first_visit", source="delta",
+        ) == user_copy.ACCOUNTS_STATUS_AWAITING_FIRST
+        assert waiting_subline(
+            lc, "needs_first_visit", source="delta",
+        ) == user_copy.ACCOUNTS_SUBLINE_FIRST_VISIT
+
+    def test_checking_unknown_waiting_not_needs_login(self):
+        for session_state in ("checking", "unknown", None):
+            lc = _lifecycle(LC_WAITING)
+            section = resolve_accounts_section(
+                lc, "needs_first_visit", source="amex", session_state=session_state,
+            )
+            assert section == SECTION_WAITING
+            assert section != SECTION_NEEDS_LOGIN
+
+    def test_updating_and_error_match_dashboard_buckets(self):
+        """UPDATING → still setting up; ERROR → needs attention on both surfaces."""
+        updating_lc = _lifecycle(CONNECTED)
+        error_lc = _lifecycle(LC_WAITING)
+        assert resolve_accounts_section(
+            updating_lc, "ok", source="amex", updating_source="amex",
+        ) == SECTION_WAITING
+        assert resolve_accounts_section(
+            error_lc, "no_data", source="delta",
+        ) == SECTION_NEEDS_ATTENTION
+
+        def _acct(source, name, status):
+            return AccountStatus(
+                source=source,
+                display_name=name,
+                status=status,
+                presentation_key=status,
+                presentation_label=status,
+                last_successful_sync_at=None,
+                current_attempt_at=None,
+                last_error=None,
+                user_action_label=None,
+                user_action_url=None,
+            )
+
+        home = resolve_home_state(accounts=[
+            _acct("amex", "Amex", "updating"),
+            _acct("delta", "Delta", "error"),
+        ])
+        assert home.health.waiting == 1
+        assert home.health.needs_attention == 1
+        assert home.health.needs_login == 0

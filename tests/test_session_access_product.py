@@ -437,9 +437,8 @@ def test_accounts_cta_unknown_no_login(client):
     html = mighty._accounts_primary_cta_html(
         lc, "amex", "American Express", "login_required", session_state="unknown",
     )
-    assert "login" not in html.lower() or "Unable to verify" in html
+    assert html == ""
     assert "acct-maint-cta--urgent" not in html
-    assert "Unable to verify" in html
 
 
 def test_accounts_cta_checking_no_login(client):
@@ -460,7 +459,7 @@ def test_accounts_cta_checking_no_login(client):
         lc, "amex", "American Express", "login_required", session_state="checking",
     )
     assert "acct-maint-cta--urgent" not in html
-    assert "Checking" in html
+    assert "Checking now" in html
 
 
 def test_accounts_cta_signed_out_login(client):

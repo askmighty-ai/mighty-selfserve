@@ -14187,13 +14187,11 @@ def _accounts_primary_cta_html(
     if session_state == "checking":
         return (
             f'<span class="acct-maint-cta acct-maint-cta--disabled" style="{btn};'
-            f'opacity:.7;cursor:default">Checking…</span>'
+            f'opacity:.7;cursor:default">{he(user_copy.ACCOUNTS_STATUS_CHECKING)}</span>'
         )
     if session_state == "unknown":
-        return (
-            f'<span class="acct-maint-cta acct-maint-cta--disabled" style="{btn};'
-            f'opacity:.7;cursor:default">Unable to verify</span>'
-        )
+        # No login CTA for unknown — status/subline carry "Not yet verified".
+        return ""
     if session_state == "connected":
         return ""
 
@@ -14304,13 +14302,13 @@ def _accounts_collect_rows(
         failure = failure_reason_by_source.get(source, "")
         if section == SECTION_NEEDS_ATTENTION and not failure:
             failure = user_copy.FAILURE_HINTS.get(sync_status, sync_status or "Update error")
-        status_label = row_status_label(section, lifecycle)
-        if session_state == "unknown":
-            status_label = "Unable to verify"
-        elif session_state == "checking":
-            status_label = "Checking..."
-        elif session_state == "signed_out":
-            status_label = "Needs login"
+        status_label = row_status_label(
+            section,
+            lifecycle,
+            session_state=session_state,
+            sync_status=sync_status,
+            source=source,
+        )
         rows.append(
             AccountsRow(
                 source=source,
@@ -14326,6 +14324,7 @@ def _accounts_collect_rows(
                     source=source,
                     synced_fmt=synced_fmt,
                     failure_hint=failure,
+                    session_state=session_state,
                 ),
                 source_label=lifecycle.source_label,
                 lifecycle=lifecycle,
