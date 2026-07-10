@@ -29,12 +29,13 @@ from mighty.provider_session_state import (
     get_provider_session_states,
 )
 from mighty.session_verification import (
+    CURRENT_SESSION_FRESHNESS_SECONDS,
     SessionVerification,
     ensure_session_verification_tables,
     get_session_verifications,
+    is_session_evidence_fresh,
     is_verification_active,
-    request_session_verification,
-    verification_entry_url,
+    session_state_needs_verification,
 )
 
 LoginVerdict = Literal["YES", "NO", "UNKNOWN"]
@@ -59,9 +60,6 @@ NextActionType = Literal[
 
 PRIVATE_DATA_WINDOW_HOURS = 24
 CACHED_DATA_FRESH_HOURS = PRIVATE_DATA_WINDOW_HOURS
-# Live-session freshness for Current Access. Stale connected evidence must not
-# render as connected_now; request background re-verification instead.
-CURRENT_SESSION_FRESHNESS_SECONDS = 120
 
 LOGIN_AUTH_STATES = frozenset({
     AUTH_LOGIN_PAGE,
@@ -342,34 +340,6 @@ SESSION_STATE_TO_CURRENT_ACCESS: dict[str, CurrentAccess] = {
 }
 
 
-def session_evidence_age_seconds(
-    session_state: ProviderSessionState | None,
-    *,
-    now: datetime | None = None,
-) -> float | None:
-    """Seconds since session evidence was observed, or None if unknown."""
-    if session_state is None or not session_state.observed_at:
-        return None
-    observed = _parse_iso(session_state.observed_at)
-    if observed is None:
-        return None
-    now = now or datetime.now(timezone.utc)
-    return (now - observed).total_seconds()
-
-
-def is_session_evidence_fresh(
-    session_state: ProviderSessionState | None,
-    *,
-    now: datetime | None = None,
-    freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
-) -> bool:
-    """True when explicit session evidence is within the live-session window."""
-    age = session_evidence_age_seconds(session_state, now=now)
-    if age is None:
-        return False
-    return age <= freshness_seconds
-
-
 def needs_session_verification(
     session_state: ProviderSessionState | None,
     provider: str,
@@ -377,20 +347,12 @@ def needs_session_verification(
     now: datetime | None = None,
     freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
 ) -> bool:
-    """True when Current Access should request background re-verification.
-
-    Stale connected/signed_out/error evidence for a provider with an automatic
-    verification entry URL triggers a check. Missing evidence does not — there
-    is nothing to refresh until the user connects once.
-    """
-    if verification_entry_url(provider) is None:
-        return False
-    if session_state is None or session_state.state == "unknown":
-        return False
-    if session_state.state not in {"connected", "signed_out", "error"}:
-        return False
-    return not is_session_evidence_fresh(
-        session_state, now=now, freshness_seconds=freshness_seconds
+    """Compatibility wrapper — scheduling ownership is in session_verification."""
+    return session_state_needs_verification(
+        session_state,
+        provider,
+        now=now,
+        freshness_seconds=freshness_seconds,
     )
 
 
@@ -945,13 +907,12 @@ def compute_current_account_access_rows(
     decrypt_account_fn: Callable[[str, str], dict[str, Any]],
     providers: tuple[str, ...] | list[str] | None = None,
     now: datetime | None = None,
-    request_verification: bool = False,
 ) -> list[CurrentAccountAccess]:
-    """Build Current Access / Cached Data rows for each configured probe provider.
+    """Build Current Access / Cached Data rows (read-only).
 
-    When request_verification is True, stale session evidence enqueues a
-    background verification job. That writes only the verification lifecycle
-    table — never provider_session_state.
+    Never enqueues verification. Product surfaces that need background
+    re-verification must call ensure_stale_session_verifications_for_user
+    (or ensure_provider_session_verification_if_stale) separately.
     """
     now = now or datetime.now(timezone.utc)
     provider_list, observations_by_provider, session_by_provider = (
@@ -966,17 +927,6 @@ def compute_current_account_access_rows(
     verifications = get_session_verifications(
         db, user_id, providers=provider_list, now=now
     )
-
-    if request_verification:
-        for provider in provider_list:
-            session_state = session_by_provider.get(provider)
-            if not needs_session_verification(session_state, provider, now=now):
-                continue
-            if is_verification_active(verifications.get(provider)):
-                continue
-            created = request_session_verification(db, user_id, provider, now=now)
-            if created is not None:
-                verifications[provider] = created
 
     return [
         resolve_current_account_access(

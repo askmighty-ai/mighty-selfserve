@@ -1,9 +1,12 @@
 """Background session verification lifecycle — separate from provider_session_state.
 
 Freshness of Current Access is a read-model concern. When session evidence is
-stale, surfaces may request a background verification through the extension.
+stale, product surfaces and the extension may request a background verification.
 That request is recorded here; it must not rewrite provider_session_state by
 itself. Only explicit session evidence from the verifier may update PSS.
+
+Enqueue ownership lives here via ensure_provider_session_verification_if_stale —
+callers must not duplicate staleness / throttle / timeout rules.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from mighty.provider_access_probe import PROBE_PROVIDERS
+from mighty.provider_session_state import ProviderSessionState, get_provider_session_states
 
 VerificationLifecycle = Literal[
     "requested",
@@ -26,6 +30,8 @@ VerificationLifecycle = Literal[
 ACTIVE_VERIFICATION_LIFECYCLES = frozenset({"requested", "running"})
 TERMINAL_VERIFICATION_LIFECYCLES = frozenset({"completed", "failed", "timed_out"})
 
+# Live-session freshness for Current Access / verification scheduling.
+CURRENT_SESSION_FRESHNESS_SECONDS = 120
 # Do not enqueue another verification for the same provider within this window.
 VERIFICATION_THROTTLE_SECONDS = 60
 # Mark requested/running jobs as timed_out after this period.
@@ -122,6 +128,53 @@ def is_verification_active(verification: SessionVerification | None) -> bool:
     return verification is not None and verification.lifecycle in ACTIVE_VERIFICATION_LIFECYCLES
 
 
+def session_evidence_age_seconds(
+    session_state: ProviderSessionState | None,
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    """Seconds since session evidence was observed, or None if unknown."""
+    if session_state is None or not session_state.observed_at:
+        return None
+    observed = _parse_iso(session_state.observed_at)
+    if observed is None:
+        return None
+    now = now or utc_now()
+    return (now - observed).total_seconds()
+
+
+def is_session_evidence_fresh(
+    session_state: ProviderSessionState | None,
+    *,
+    now: datetime | None = None,
+    freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+) -> bool:
+    """True when explicit session evidence is within the live-session window."""
+    age = session_evidence_age_seconds(session_state, now=now)
+    if age is None:
+        return False
+    return age <= freshness_seconds
+
+
+def session_state_needs_verification(
+    session_state: ProviderSessionState | None,
+    provider: str,
+    *,
+    now: datetime | None = None,
+    freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+) -> bool:
+    """True when stale connected/signed_out/error evidence should be re-checked."""
+    if verification_entry_url(provider) is None:
+        return False
+    if session_state is None or session_state.state == "unknown":
+        return False
+    if session_state.state not in {"connected", "signed_out", "error"}:
+        return False
+    return not is_session_evidence_fresh(
+        session_state, now=now, freshness_seconds=freshness_seconds
+    )
+
+
 def expire_timed_out_verifications(
     db: Any,
     user_id: str,
@@ -129,7 +182,10 @@ def expire_timed_out_verifications(
     now: datetime | None = None,
     timeout_seconds: int = VERIFICATION_TIMEOUT_SECONDS,
 ) -> int:
-    """Mark overdue requested/running jobs as timed_out. Returns count updated."""
+    """Mark overdue requested/running jobs as timed_out. Returns count updated.
+
+    Does not mutate provider_session_state — timeouts never imply signed_out.
+    """
     ensure_session_verification_tables(db)
     now = now or utc_now()
     cutoff = (now - timedelta(seconds=timeout_seconds)).isoformat()
@@ -191,10 +247,21 @@ def get_session_verifications(
 def get_pending_session_verification(
     db: Any,
     user_id: str,
+    *,
+    ensure_stale: bool = False,
+    now: datetime | None = None,
 ) -> SessionVerification | None:
-    """Oldest active verification for the extension to execute."""
+    """Oldest active verification for the extension to execute.
+
+    When ensure_stale is True, enqueue verification for stale providers first
+    (extension lifecycle trigger). Does not write provider_session_state.
+    """
     ensure_session_verification_tables(db)
-    expire_timed_out_verifications(db, user_id)
+    now = now or utc_now()
+    if ensure_stale:
+        ensure_stale_session_verifications_for_user(db, user_id, now=now)
+    else:
+        expire_timed_out_verifications(db, user_id, now=now)
     row = db.execute(
         """
         SELECT verification_id, user_id, provider, lifecycle, entry_url,
@@ -256,7 +323,8 @@ def request_session_verification(
     """Enqueue a background verification if not already active / throttled.
 
     Returns the active or newly created verification, or None when the provider
-    has no verification entry URL (unsupported).
+    has no verification entry URL (unsupported). Prefer
+    ensure_provider_session_verification_if_stale for product callers.
     """
     provider = provider.strip().lower()
     entry_url = verification_entry_url(provider)
@@ -292,6 +360,82 @@ def request_session_verification(
         requested_at=requested_at,
         entry_url=entry_url,
     )
+
+
+def ensure_provider_session_verification_if_stale(
+    db: Any,
+    user_id: str,
+    provider: str,
+    *,
+    session_state: ProviderSessionState | None = None,
+    now: datetime | None = None,
+    freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+) -> SessionVerification | None:
+    """Enqueue verification when session evidence is stale; otherwise no-op.
+
+    Owns: staleness check, active-job reuse, 60s throttle, 25s timeout,
+    duplicate prevention. Never writes provider_session_state.
+    """
+    provider = provider.strip().lower()
+    ensure_session_verification_tables(db)
+    now = now or utc_now()
+    expire_timed_out_verifications(db, user_id, now=now)
+
+    if session_state is None:
+        states = get_provider_session_states(db, user_id, providers=[provider])
+        session_state = states.get(provider)
+
+    if not session_state_needs_verification(
+        session_state,
+        provider,
+        now=now,
+        freshness_seconds=freshness_seconds,
+    ):
+        return None
+
+    return request_session_verification(db, user_id, provider, now=now)
+
+
+def ensure_stale_session_verifications_for_user(
+    db: Any,
+    user_id: str,
+    *,
+    providers: list[str] | tuple[str, ...] | None = None,
+    now: datetime | None = None,
+    freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+) -> dict[str, SessionVerification]:
+    """Ensure verification jobs for all stale providers with an entry URL.
+
+    Returns the active/created verification keyed by provider (empty when none).
+    """
+    ensure_session_verification_tables(db)
+    now = now or utc_now()
+    expire_timed_out_verifications(db, user_id, now=now)
+
+    if providers is None:
+        provider_list = [
+            p for p in sorted(PROBE_PROVIDERS) if verification_entry_url(p) is not None
+        ]
+    else:
+        provider_list = [p for p in providers if verification_entry_url(p) is not None]
+
+    if not provider_list:
+        return {}
+
+    states = get_provider_session_states(db, user_id, providers=provider_list)
+    result: dict[str, SessionVerification] = {}
+    for provider in provider_list:
+        created = ensure_provider_session_verification_if_stale(
+            db,
+            user_id,
+            provider,
+            session_state=states.get(provider),
+            now=now,
+            freshness_seconds=freshness_seconds,
+        )
+        if created is not None:
+            result[provider] = created
+    return result
 
 
 def mark_session_verification_running(

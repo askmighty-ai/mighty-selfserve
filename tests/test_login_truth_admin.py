@@ -1635,15 +1635,96 @@ def test_stale_connected_plus_new_session_verified_is_connected_now():
     assert result.current_access == "connected_now"
 
 
-def test_repeated_page_loads_do_not_enqueue_duplicate_verification(admin_client):
-    import app as mighty
-    from mighty.session_verification import (
-        get_latest_session_verification,
-        request_session_verification,
+
+def _verification_count(db, uid, provider="amex") -> int:
+    return db.execute(
+        "SELECT COUNT(*) AS n FROM provider_session_verification "
+        "WHERE user_id=? AND provider=?",
+        (uid, provider),
+    ).fetchone()["n"]
+
+
+def _seed_stale_amex_connected(db, uid, *, minutes_ago: float = 53):
+    when = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    upsert_provider_session_state(
+        db,
+        uid,
+        SessionEvidence(
+            provider="amex",
+            state="connected",
+            evidence_type="session_verified",
+            evidence_summary="Amex extension reported verified authenticated session",
+            observed_at=when,
+            source="extension_amex_connected",
+            confidence="high",
+        ),
     )
+    return when
+
+
+def test_admin_login_truth_and_session_evidence_are_passive(admin_client):
+    """Admin diagnostic pages must not enqueue or mutate verification jobs."""
+    import app as mighty
+    from mighty.session_verification import get_latest_session_verification
 
     uid = _uid(admin_client)
-    when = datetime.now(timezone.utc) - timedelta(minutes=53)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_stale_amex_connected(db, uid)
+        before_pss = _pss_snapshot(db, uid)
+        before_count = _verification_count(db, uid)
+
+    for _ in range(3):
+        assert admin_client.get("/admin/login-truth").status_code == 200
+        assert admin_client.get("/admin/session-evidence").status_code == 200
+        assert admin_client.get("/admin/session-evidence?provider=amex").status_code == 200
+
+    r = admin_client.get("/admin/login-truth")
+    assert r.status_code == 200
+    amex_idx = r.data.find(b"<strong>amex</strong>")
+    assert amex_idx != -1
+    next_row = r.data.find(b"<strong>", amex_idx + 1)
+    amex_row = r.data[amex_idx: next_row if next_row != -1 else None]
+    assert b"Connected now" not in amex_row
+    assert b"Unknown" in amex_row
+    assert b"Checking" not in amex_row
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        assert _pss_snapshot(db, uid) == before_pss
+        assert _verification_count(db, uid) == before_count == 0
+        assert get_latest_session_verification(db, uid, "amex") is None
+
+
+def test_account_status_creates_one_stale_verification_job(client):
+    import app as mighty
+    from mighty.session_verification import get_latest_session_verification
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        _seed_stale_amex_connected(mighty.get_db(), uid)
+
+    assert client.get("/api/account-status").status_code == 200
+    assert client.get("/api/account-status").status_code == 200
+    assert client.get("/api/account-status").status_code == 200
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        latest = get_latest_session_verification(db, uid, "amex")
+        assert latest is not None
+        assert latest.lifecycle == "requested"
+        assert latest.entry_url == "https://global.americanexpress.com/overview"
+        assert _verification_count(db, uid) == 1
+
+
+def test_fresh_evidence_creates_no_verification_job(client):
+    import app as mighty
+    from mighty.session_verification import (
+        ensure_provider_session_verification_if_stale,
+        get_latest_session_verification,
+    )
+
+    uid = _uid(client)
     with mighty.app.app_context():
         db = mighty.get_db()
         upsert_provider_session_state(
@@ -1654,37 +1735,276 @@ def test_repeated_page_loads_do_not_enqueue_duplicate_verification(admin_client)
                 state="connected",
                 evidence_type="session_verified",
                 evidence_summary="Amex extension reported verified authenticated session",
-                observed_at=when,
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=30),
                 source="extension_amex_connected",
                 confidence="high",
             ),
         )
+        created = ensure_provider_session_verification_if_stale(db, uid, "amex")
+        assert created is None
+        assert get_latest_session_verification(db, uid, "amex") is None
 
-    assert admin_client.get("/admin/login-truth").status_code == 200
-    assert admin_client.get("/admin/login-truth").status_code == 200
-    assert admin_client.get("/admin/login-truth").status_code == 200
+    assert client.get("/api/account-status").status_code == 200
+    with mighty.app.app_context():
+        assert get_latest_session_verification(mighty.get_db(), uid, "amex") is None
+        assert _verification_count(mighty.get_db(), uid) == 0
+
+
+def test_active_verification_job_is_reused(client):
+    import app as mighty
+    from mighty.session_verification import (
+        ensure_provider_session_verification_if_stale,
+        get_latest_session_verification,
+    )
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_stale_amex_connected(db, uid)
+        first = ensure_provider_session_verification_if_stale(db, uid, "amex")
+        second = ensure_provider_session_verification_if_stale(db, uid, "amex")
+        assert first is not None and second is not None
+        assert first.verification_id == second.verification_id
+        assert _verification_count(db, uid) == 1
+        assert get_latest_session_verification(db, uid, "amex").verification_id == first.verification_id
+
+
+def test_extension_pending_poll_sees_queued_job(client):
+    import app as mighty
+
+    uid = _uid(client)
+    api_key = _api_key(mighty, client)
+    with mighty.app.app_context():
+        _seed_stale_amex_connected(mighty.get_db(), uid)
+
+    assert client.get("/api/account-status").status_code == 200
+
+    pending = client.get(
+        "/api/extension/session-verification/pending",
+        headers={"X-Mighty-Key": api_key},
+    )
+    assert pending.status_code == 200
+    data = pending.get_json()
+    assert data["lifecycle"] == "requested"
+    assert data["provider"] == "amex"
+    assert data["entry_url"] == "https://global.americanexpress.com/overview"
+    assert data["verification_id"]
+
+
+def test_extension_pending_ensure_stale_enqueues_without_account_status(client):
+    """Extension lifecycle poll can enqueue stale work without a webpage view."""
+    import app as mighty
+
+    uid = _uid(client)
+    api_key = _api_key(mighty, client)
+    with mighty.app.app_context():
+        _seed_stale_amex_connected(mighty.get_db(), uid)
+        assert _verification_count(mighty.get_db(), uid) == 0
+
+    pending = client.get(
+        "/api/extension/session-verification/pending",
+        headers={"X-Mighty-Key": api_key},
+    )
+    assert pending.status_code == 200
+    data = pending.get_json()
+    assert data["lifecycle"] == "requested"
+    assert data["provider"] == "amex"
+
+    pending2 = client.get(
+        "/api/extension/session-verification/pending",
+        headers={"X-Mighty-Key": api_key},
+    )
+    assert pending2.get_json()["verification_id"] == data["verification_id"]
+    with mighty.app.app_context():
+        assert _verification_count(mighty.get_db(), uid) == 1
+
+
+def test_timeout_does_not_mark_signed_out(client):
+    import app as mighty
+    from mighty.session_verification import (
+        ensure_provider_session_verification_if_stale,
+        expire_timed_out_verifications,
+        get_latest_session_verification,
+    )
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        when = _seed_stale_amex_connected(db, uid)
+        before = get_provider_session_state(db, uid, "amex")
+        job = ensure_provider_session_verification_if_stale(db, uid, "amex")
+        assert job is not None
+        old = (datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat()
+        db.execute(
+            "UPDATE provider_session_verification SET requested_at=? WHERE verification_id=?",
+            (old, job.verification_id),
+        )
+        db.commit()
+        n = expire_timed_out_verifications(db, uid)
+        assert n == 1
+        latest = get_latest_session_verification(db, uid, "amex")
+        assert latest is not None
+        assert latest.lifecycle == "timed_out"
+        after = get_provider_session_state(db, uid, "amex")
+        assert after is not None
+        assert after.state == "connected"
+        assert after.observed_at == before.observed_at == when.isoformat()
+
+
+def test_inconclusive_verification_does_not_overwrite_pss(client):
+    import app as mighty
+    from mighty.session_verification import (
+        ensure_provider_session_verification_if_stale,
+        get_latest_session_verification,
+        mark_session_verification_running,
+    )
+
+    uid = _uid(client)
+    api_key = _api_key(mighty, client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_stale_amex_connected(db, uid)
+        before = _pss_snapshot(db, uid)
+        job = ensure_provider_session_verification_if_stale(db, uid, "amex")
+        assert job is not None
+        mark_session_verification_running(db, uid, job.verification_id)
+        verification_id = job.verification_id
+
+    r = client.post(
+        "/api/extension/provider-access-probe",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "provider": "amex",
+            "url_visited": "https://global.americanexpress.com/overview",
+            "final_url": "https://global.americanexpress.com/overview",
+            "signed_in_detected": False,
+            "private_data_detected": False,
+            "error": "network_timeout",
+            "verification_id": verification_id,
+        },
+    )
+    assert r.status_code == 200
 
     with mighty.app.app_context():
         db = mighty.get_db()
+        assert _pss_snapshot(db, uid) == before
         latest = get_latest_session_verification(db, uid, "amex")
         assert latest is not None
-        assert latest.lifecycle in {"requested", "running"}
-        count = db.execute(
-            "SELECT COUNT(*) AS n FROM provider_session_verification "
-            "WHERE user_id=? AND provider=?",
-            (uid, "amex"),
-        ).fetchone()["n"]
-        assert count == 1
-        # Explicit second request while active must not create another row.
-        again = request_session_verification(db, uid, "amex")
-        assert again is not None
-        assert again.verification_id == latest.verification_id
-        count2 = db.execute(
-            "SELECT COUNT(*) AS n FROM provider_session_verification "
-            "WHERE user_id=? AND provider=?",
-            (uid, "amex"),
-        ).fetchone()["n"]
-        assert count2 == 1
+        assert latest.lifecycle == "failed"
+        assert get_provider_session_state(db, uid, "amex").state == "connected"
+
+
+def test_definitive_login_evidence_marks_signed_out(client):
+    import app as mighty
+    from mighty.session_verification import (
+        ensure_provider_session_verification_if_stale,
+        mark_session_verification_running,
+    )
+
+    uid = _uid(client)
+    api_key = _api_key(mighty, client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_stale_amex_connected(db, uid)
+        job = ensure_provider_session_verification_if_stale(db, uid, "amex")
+        mark_session_verification_running(db, uid, job.verification_id)
+        verification_id = job.verification_id
+
+    r = client.post(
+        "/api/extension/provider-access-probe",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "provider": "amex",
+            "url_visited": "https://global.americanexpress.com/overview",
+            "final_url": "https://www.americanexpress.com/en-us/account/log-in",
+            "dom_text": "Log in to your account User ID Password Remember me",
+            "signed_in_detected": False,
+            "private_data_detected": False,
+            "auth_state": AUTH_LOGIN_PAGE,
+            "status": "needs_sign_in",
+            "failure_reason": "login_required",
+            "verification_id": verification_id,
+            "probed_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    assert r.status_code == 200
+
+    with mighty.app.app_context():
+        session = get_provider_session_state(mighty.get_db(), uid, "amex")
+        assert session is not None
+        assert session.state == "signed_out"
+        rows = compute_current_account_access_rows(
+            mighty.get_db(), uid, decrypt_account_fn=mighty.decrypt_account_data
+        )
+        amex = next(row for row in rows if row.provider == "amex")
+        assert amex.current_access == "signed_out"
+
+
+def test_definitive_authenticated_evidence_marks_connected(client):
+    import app as mighty
+    from mighty.session_verification import (
+        ensure_provider_session_verification_if_stale,
+        mark_session_verification_running,
+    )
+
+    uid = _uid(client)
+    api_key = _api_key(mighty, client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="signed_out",
+                evidence_type="login_required",
+                evidence_summary="login required",
+                observed_at=datetime.now(timezone.utc) - timedelta(minutes=53),
+                source="extension_amex_needs_login",
+                confidence="high",
+            ),
+        )
+        job = ensure_provider_session_verification_if_stale(db, uid, "amex")
+        mark_session_verification_running(db, uid, job.verification_id)
+        verification_id = job.verification_id
+
+    now = datetime.now(timezone.utc).isoformat()
+    r = client.post(
+        "/api/extension/provider-access-probe",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "provider": "amex",
+            "url_visited": "https://global.americanexpress.com/overview",
+            "final_url": "https://global.americanexpress.com/overview",
+            "signed_in_detected": True,
+            "private_data_detected": True,
+            "auth_state": AUTH_PRIVATE_DATA_VISIBLE,
+            "status": "signed_in_data",
+            "verification_id": verification_id,
+            "probed_at": now,
+            "deep_inspect": {
+                "auth_network_trace": {
+                    "highlighted_requests": [
+                        {
+                            "url": "https://global.americanexpress.com/api/servicing/v1/ReadUserSession.v1",
+                            "status_code": 200,
+                        }
+                    ]
+                }
+            },
+        },
+    )
+    assert r.status_code == 200
+
+    with mighty.app.app_context():
+        session = get_provider_session_state(mighty.get_db(), uid, "amex")
+        assert session is not None
+        assert session.state == "connected"
+        rows = compute_current_account_access_rows(
+            mighty.get_db(), uid, decrypt_account_fn=mighty.decrypt_account_data
+        )
+        amex = next(row for row in rows if row.provider == "amex")
+        assert amex.current_access == "connected_now"
 
 
 def test_cached_data_fresh_while_current_access_checking_or_signed_out():
@@ -1734,52 +2054,6 @@ def test_cached_data_fresh_while_current_access_checking_or_signed_out():
     assert signed_out.cached_data_state == "fresh"
 
 
-def test_admin_login_truth_requests_verification_without_writing_pss(admin_client):
-    """Admin page may enqueue verification but must not mutate provider_session_state."""
-    import app as mighty
-    from mighty.session_verification import get_latest_session_verification
-
-    uid = _uid(admin_client)
-    when = datetime.now(timezone.utc) - timedelta(minutes=53)
-    with mighty.app.app_context():
-        db = mighty.get_db()
-        upsert_provider_session_state(
-            db,
-            uid,
-            SessionEvidence(
-                provider="amex",
-                state="connected",
-                evidence_type="session_verified",
-                evidence_summary="Amex extension reported verified authenticated session",
-                observed_at=when,
-                source="extension_amex_connected",
-                confidence="high",
-            ),
-        )
-        before = _pss_snapshot(db, uid)
-
-    r = admin_client.get("/admin/login-truth")
-    assert r.status_code == 200
-    assert b"Checking" in r.data
-    assert b"Mighty is verifying this account now." in r.data
-    assert b"Verification status:" in r.data
-    # Amex row must not claim Connected now for 53-minute-old evidence.
-    amex_idx = r.data.find(b"<strong>amex</strong>")
-    assert amex_idx != -1
-    next_row = r.data.find(b"<strong>", amex_idx + 1)
-    amex_row = r.data[amex_idx: next_row if next_row != -1 else None]
-    assert b"Connected now" not in amex_row
-    assert b"Checking" in amex_row
-
-    with mighty.app.app_context():
-        db = mighty.get_db()
-        assert _pss_snapshot(db, uid) == before
-        latest = get_latest_session_verification(db, uid, "amex")
-        assert latest is not None
-        assert latest.lifecycle == "requested"
-        assert latest.entry_url == "https://global.americanexpress.com/overview"
-
-
 def test_amex_automatic_verification_uses_global_overview_entry():
     from mighty.session_verification import (
         AMEX_SESSION_VERIFICATION_ENTRY_URL,
@@ -1792,35 +2066,3 @@ def test_amex_automatic_verification_uses_global_overview_entry():
     )
     assert verification_entry_url("amex") == AMEX_SESSION_VERIFICATION_ENTRY_URL
     assert verification_entry_url("delta") is None
-
-
-def test_account_status_triggers_stale_session_verification(client):
-    import app as mighty
-    from mighty.session_verification import get_latest_session_verification
-
-    uid = _uid(client)
-    when = datetime.now(timezone.utc) - timedelta(minutes=53)
-    with mighty.app.app_context():
-        db = mighty.get_db()
-        upsert_provider_session_state(
-            db,
-            uid,
-            SessionEvidence(
-                provider="amex",
-                state="connected",
-                evidence_type="session_verified",
-                evidence_summary="Amex extension reported verified authenticated session",
-                observed_at=when,
-                source="extension_amex_connected",
-                confidence="high",
-            ),
-        )
-
-    r = client.get("/api/account-status")
-    assert r.status_code == 200
-
-    with mighty.app.app_context():
-        latest = get_latest_session_verification(mighty.get_db(), uid, "amex")
-        assert latest is not None
-        assert latest.lifecycle == "requested"
-        assert latest.entry_url == "https://global.americanexpress.com/overview"

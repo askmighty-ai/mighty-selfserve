@@ -1343,7 +1343,13 @@ def ensure_probe_tables(db: Any) -> None:
     db.commit()
 
 
-def record_probe_run(db: Any, user_id: str, result: dict[str, Any]) -> str:
+def record_probe_run(
+    db: Any,
+    user_id: str,
+    result: dict[str, Any],
+    *,
+    write_session_state: bool = True,
+) -> str:
     ensure_probe_tables(db)
     run_id = str(uuid.uuid4())
     now = utc_now_iso()
@@ -1393,12 +1399,13 @@ def record_probe_run(db: Any, user_id: str, result: dict[str, Any]) -> str:
         ),
     )
     db.commit()
-    try:
-        from mighty.provider_session_state import record_session_evidence_from_probe
+    if write_session_state:
+        try:
+            from mighty.provider_session_state import record_session_evidence_from_probe
 
-        record_session_evidence_from_probe(db, user_id, result)
-    except Exception:
-        pass
+            record_session_evidence_from_probe(db, user_id, result)
+        except Exception:
+            pass
     return run_id
 
 

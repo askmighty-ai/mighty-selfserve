@@ -17896,19 +17896,15 @@ def api_account_status():
         WAITING_FOR_EXTENSION,
         load_all_account_statuses,
     )
-    from mighty.login_truth import compute_current_account_access_rows
+    from mighty.session_verification import ensure_stale_session_verifications_for_user
 
     uid = get_current_user_id()
     db = get_db()
-    # Request background session re-verification for stale Current Access
-    # evidence. Does not write provider_session_state from this surface.
+    # Primary on-demand product trigger: dashboard poll + extension popup.
+    # Enqueues background session re-verification for stale evidence only.
+    # Does not write provider_session_state from this surface.
     try:
-        compute_current_account_access_rows(
-            db,
-            uid,
-            decrypt_account_fn=decrypt_account_data,
-            request_verification=True,
-        )
+        ensure_stale_session_verifications_for_user(db, uid)
     except Exception:
         pass
     user_row = db.execute(
@@ -21200,11 +21196,11 @@ def admin_login_truth_page():
     from mighty.login_truth import compute_current_account_access_rows
 
     uid = session["user_id"]
+    # Passive diagnostic: never enqueue session verification from admin pages.
     rows = compute_current_account_access_rows(
         get_db(),
         uid,
         decrypt_account_fn=decrypt_account_data,
-        request_verification=True,
     )
     return _admin_debug.render_login_truth_page(rows)
 
@@ -21345,7 +21341,11 @@ def api_extension_provider_access_probe_manual():
 
 @app.route("/api/extension/session-verification/pending")
 def api_extension_session_verification_pending():
-    """Return the next background session verification for the extension."""
+    """Return the next background session verification for the extension.
+
+    Also ensures stale providers are enqueued so verification is driven by
+    extension lifecycle (startup / keepalive poll), not admin page views.
+    """
     from mighty.session_verification import (
         get_pending_session_verification,
         session_verification_to_json,
@@ -21354,7 +21354,9 @@ def api_extension_session_verification_pending():
     user = api_user()[0]
     if not user:
         return jsonify({"error": "invalid api key"}), 401
-    pending = get_pending_session_verification(get_db(), user["id"])
+    pending = get_pending_session_verification(
+        get_db(), user["id"], ensure_stale=True
+    )
     return jsonify(session_verification_to_json(pending))
 
 
@@ -21422,6 +21424,7 @@ def api_extension_provider_access_probe():
         complete_manual_probe,
         row_to_json,
     )
+    from mighty.provider_session_state import derive_session_evidence_from_probe
     from mighty.session_verification import complete_session_verification
 
     if provider not in PROBE_PROVIDERS:
@@ -21451,7 +21454,18 @@ def api_extension_provider_access_probe():
             )
         return jsonify({"error": str(exc)}), 400
 
-    run_id = record_probe_run(get_db(), user["id"], result)
+    # Session verification may only update PSS on definitive connected/signed_out
+    # evidence. Timeouts, network failures, and inconclusive probes preserve PSS.
+    write_session_state = True
+    if verification_id:
+        evidence = derive_session_evidence_from_probe(result)
+        write_session_state = bool(
+            evidence is not None and evidence.state in {"connected", "signed_out"}
+        )
+
+    run_id = record_probe_run(
+        get_db(), user["id"], result, write_session_state=write_session_state
+    )
     result["run_id"] = run_id
 
     if manual_run_id:
@@ -21466,7 +21480,7 @@ def api_extension_provider_access_probe():
         )
 
     if verification_id:
-        if result.get("status") == "error":
+        if result.get("status") == "error" and not write_session_state:
             complete_session_verification(
                 get_db(),
                 user["id"],
