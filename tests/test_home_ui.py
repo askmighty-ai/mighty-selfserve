@@ -11,6 +11,30 @@ def _escape(value):
     return html.escape(str(value)) if value is not None else ""
 
 
+def _status(source, display_name, status, **kwargs):
+    presentation_key = {
+        "needs_login": "needs_sign_in",
+        "up_to_date": "ready",
+        "updating": "updating",
+        "waiting_for_extension": "updating",
+        "error": "needs_attention",
+    }.get(status, "ready")
+    defaults = dict(
+        source=source,
+        display_name=display_name,
+        status=status,
+        presentation_key=presentation_key,
+        presentation_label=presentation_key.replace("_", " ").title(),
+        last_successful_sync_at=None,
+        current_attempt_at=None,
+        last_error=None,
+        user_action_label=None,
+        user_action_url=None,
+    )
+    defaults.update(kwargs)
+    return AccountStatus(**defaults)
+
+
 class TestHomeUi:
     def test_empty_state_single_primary_cta(self):
         result = resolve_home_state(accounts=[])
@@ -28,15 +52,11 @@ class TestHomeUi:
 
     def test_all_clear_shows_health_strip(self):
         accounts = [
-            AccountStatus(
-                source="amex",
-                display_name="American Express",
-                status="up_to_date",
+            _status(
+                "amex",
+                "American Express",
+                "up_to_date",
                 last_successful_sync_at="2026-07-03T12:00:00",
-                current_attempt_at=None,
-                last_error=None,
-                user_action_label=None,
-                user_action_url=None,
             )
         ]
         result = resolve_home_state(accounts=accounts, actions=[])
@@ -70,25 +90,18 @@ class TestHomeUi:
 
     def test_health_strip_needs_attention_copy(self):
         accounts = [
-            AccountStatus(
-                source="amex",
-                display_name="American Express",
-                status="needs_login",
-                last_successful_sync_at=None,
-                current_attempt_at=None,
-                last_error=None,
+            _status(
+                "amex",
+                "American Express",
+                "needs_login",
                 user_action_label="Log in to American Express",
                 user_action_url="https://example.com/login",
             ),
-            AccountStatus(
-                source="delta",
-                display_name="Delta",
-                status="up_to_date",
+            _status(
+                "delta",
+                "Delta",
+                "up_to_date",
                 last_successful_sync_at="2026-07-03T12:00:00",
-                current_attempt_at=None,
-                last_error=None,
-                user_action_label=None,
-                user_action_url=None,
             ),
         ]
         result = resolve_home_state(accounts=accounts)

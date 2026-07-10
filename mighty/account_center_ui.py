@@ -37,10 +37,12 @@ from mighty.account_state import (
 )
 
 from mighty.user_copy import (
+    ACCOUNT_STATE_CHECKING,
     ACCOUNT_STATE_LABELS,
     ACCOUNT_STATE_NEEDS_ATTENTION,
     ACCOUNT_STATE_NEEDS_SIGN_IN,
     ACCOUNT_STATE_READY,
+    ACCOUNT_STATE_UNKNOWN,
     ACCOUNT_STATE_UPDATING,
     CTA_FIX,
     CTA_SIGN_IN,
@@ -143,12 +145,13 @@ class AccountCenterCardView:
     status_line: str
 
 
-def status_tone(state: AccountState) -> str:
-    presentation = resolve_account_presentation(state)
-    key = presentation.key
+def status_tone(state: AccountState, *, presentation_key: str | None = None) -> str:
+    key = presentation_key or resolve_account_presentation(state).key
     if key == ACCOUNT_STATE_NEEDS_SIGN_IN:
         return TONE_LOGIN
-    if key == ACCOUNT_STATE_UPDATING:
+    if key in (ACCOUNT_STATE_UPDATING, ACCOUNT_STATE_CHECKING, "checking"):
+        return TONE_ATTENTION
+    if key == ACCOUNT_STATE_UNKNOWN or key == "unknown":
         return TONE_ATTENTION
     if key == ACCOUNT_STATE_NEEDS_ATTENTION:
         return TONE_ATTENTION
@@ -159,7 +162,13 @@ def status_tone(state: AccountState) -> str:
     return TONE_ATTENTION
 
 
-def status_label(state: AccountState) -> str:
+def status_label(
+    state: AccountState,
+    *,
+    presentation_label: str | None = None,
+) -> str:
+    if presentation_label is not None:
+        return presentation_label
     return resolve_account_presentation(state).label
 
 
@@ -194,13 +203,23 @@ def data_refreshed_label(
     return f"{DATA_REFRESHED_PREFIX} · {fmt_relative(state.last_data_refresh)}"
 
 
-def primary_action(state: AccountState) -> tuple[str, str, bool]:
+def primary_action(
+    state: AccountState,
+    *,
+    presentation=None,
+) -> tuple[str, str, bool]:
     """Return (button label, action kind, disabled) for the card CTA."""
-    presentation = resolve_account_presentation(state)
+    presentation = presentation or resolve_account_presentation(state)
     if presentation.key == ACCOUNT_STATE_NEEDS_SIGN_IN:
         return presentation.cta_label, PRIMARY_LOGIN, False
-    if presentation.key == ACCOUNT_STATE_UPDATING:
-        return presentation.cta_label, PRIMARY_CHECKING, True
+    if presentation.key in (ACCOUNT_STATE_UPDATING, ACCOUNT_STATE_CHECKING, "checking"):
+        return presentation.cta_label or ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING], PRIMARY_CHECKING, True
+    if presentation.key in (ACCOUNT_STATE_UNKNOWN, "unknown"):
+        return (
+            presentation.cta_label or ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UNKNOWN],
+            PRIMARY_CHECKING,
+            True,
+        )
     if presentation.key == ACCOUNT_STATE_READY:
         return presentation.cta_label, PRIMARY_VIEW, False
     if presentation.key == ACCOUNT_STATE_NEEDS_ATTENTION:
@@ -229,8 +248,47 @@ def build_card_view(
     color: str = "#f3f4f6",
     fmt_relative: Callable[[str], str],
     provider_login_url: str | None = None,
+    session_access=None,
 ) -> AccountCenterCardView:
-    label, kind, disabled = primary_action(state)
+    """Build card view. Login/access presentation comes only from session_access."""
+    from mighty.account_presentation import AccountPresentation
+    from mighty.session_access import (
+        SESSION_STATUS_LABELS,
+        resolve_session_access_presentation,
+    )
+
+    presentation = None
+    session_state = None
+    if session_access is not None:
+        sess = resolve_session_access_presentation(
+            session_access, display_name=state.display_name,
+        )
+        session_state = sess.session_state
+        # All four canonical states — never fall back to legacy login presentation.
+        presentation = AccountPresentation(
+            key=sess.presentation_key,
+            label=SESSION_STATUS_LABELS[sess.session_state],
+            cta_label=sess.cta_label or "",
+            cta_disabled=sess.session_state in ("checking", "unknown"),
+            extension_hint=sess.extension_hint,
+        )
+    else:
+        # No Current Access row (non-probe): treat login as unknown — never legacy needs_login.
+        session_state = "unknown"
+        presentation = AccountPresentation(
+            key=ACCOUNT_STATE_UNKNOWN,
+            label=SESSION_STATUS_LABELS["unknown"],
+            cta_label="",
+            cta_disabled=True,
+            extension_hint="Mighty could not verify this account automatically.",
+        )
+
+    label, kind, disabled = primary_action(state, presentation=presentation)
+    # Only signed_out may emit a login CTA.
+    if session_state != "signed_out" and kind == PRIMARY_LOGIN:
+        label = SESSION_STATUS_LABELS.get(session_state or "unknown", "Unable to verify")
+        kind = PRIMARY_CHECKING
+        disabled = True
     href, external = resolve_primary_action_href(
         kind, state.provider, provider_login_url=provider_login_url,
     )
@@ -239,8 +297,8 @@ def build_card_view(
         display_name=state.display_name,
         icon=icon,
         color=color,
-        status_tone=status_tone(state),
-        status_label=status_label(state),
+        status_tone=status_tone(state, presentation_key=presentation.key),
+        status_label=presentation.label,
         data_freshness=data_freshness_label(state, fmt_relative),
         session_label=SESSION_LABELS.get(state.session_health, state.session_health.title()),
         access_label=ACCESS_LABELS.get(state.access_method, state.access_method.replace("_", " ").title()),

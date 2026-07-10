@@ -96,13 +96,18 @@ def resolve_accounts_section(
     *,
     updating_source: str | None = None,
     source: str = "",
+    session_state: str | None = None,
 ) -> str:
-    """Map lifecycle + sync signals to a maintenance list section."""
+    """Map lifecycle + session access to a maintenance list section.
+
+    Login section comes only from session_state (provider_session_state).
+    """
     canonical = resolve_canonical_status(
         lifecycle,
         sync_status or "ok",
         source=source,
         updating_source=updating_source,
+        session_state=session_state,
     )
     if canonical == NEEDS_LOGIN:
         return SECTION_NEEDS_LOGIN
@@ -119,6 +124,7 @@ def waiting_subline(
     *,
     updating_source: str | None = None,
     source: str = "",
+    session_state: str | None = None,
 ) -> str:
     """Secondary line for Waiting rows; internal cases only."""
     canonical = resolve_canonical_status(
@@ -126,6 +132,7 @@ def waiting_subline(
         sync_status or "ok",
         source=source,
         updating_source=updating_source,
+        session_state=session_state,
     )
     if canonical == UPDATING:
         return user_copy.ACCOUNTS_SUBLINE_UPDATING

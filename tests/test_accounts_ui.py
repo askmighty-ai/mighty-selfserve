@@ -51,7 +51,15 @@ class TestAccountsSectionResolution:
 
     def test_needs_login_section(self):
         lc = _lifecycle(LC_NEEDS_LOGIN)
-        assert resolve_accounts_section(lc, "login_required", source="amex") == SECTION_NEEDS_LOGIN
+        assert resolve_accounts_section(
+            lc, "ok", source="amex", session_state="signed_out",
+        ) == SECTION_NEEDS_LOGIN
+
+    def test_legacy_login_required_without_session_not_needs_login(self):
+        lc = _lifecycle(LC_NEEDS_LOGIN)
+        assert resolve_accounts_section(
+            lc, "login_required", source="amex",
+        ) != SECTION_NEEDS_LOGIN
 
     def test_error_maps_to_needs_attention(self):
         lc = _lifecycle(LC_WAITING)

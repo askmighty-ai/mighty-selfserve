@@ -364,6 +364,67 @@ def record_amex_extension_needs_login(
     )
 
 
+def record_extension_login_required(
+    db: Any,
+    user_id: str,
+    provider: str,
+    *,
+    observed_at: datetime | str | None = None,
+    source: str = "extension_sync_failure",
+) -> ProviderSessionState | None:
+    """Persist signed_out evidence when the extension reports login_required.
+
+    Only probe providers participate in provider_session_state. Legacy sync_status
+    is still written separately for compatibility.
+    """
+    if provider not in PROBE_PROVIDERS:
+        return None
+    when = _parse_iso(observed_at) if isinstance(observed_at, str) else observed_at
+    return upsert_provider_session_state(
+        db,
+        user_id,
+        SessionEvidence(
+            provider=provider,
+            state="signed_out",
+            evidence_type="login_required",
+            evidence_summary=f"{provider} extension reported login required",
+            observed_at=when or datetime.now(timezone.utc),
+            source=source,
+            confidence="high",
+        ),
+    )
+
+
+def record_extension_session_connected(
+    db: Any,
+    user_id: str,
+    provider: str,
+    *,
+    observed_at: datetime | str | None = None,
+    evidence_type: str = "session_verified",
+    evidence_summary: str | None = None,
+    source: str = "extension_login_cleared",
+) -> ProviderSessionState | None:
+    """Persist connected evidence when the extension verifies an authenticated session."""
+    if provider not in PROBE_PROVIDERS:
+        return None
+    when = _parse_iso(observed_at) if isinstance(observed_at, str) else observed_at
+    return upsert_provider_session_state(
+        db,
+        user_id,
+        SessionEvidence(
+            provider=provider,
+            state="connected",
+            evidence_type=evidence_type,
+            evidence_summary=evidence_summary
+            or f"{provider} extension reported verified authenticated session",
+            observed_at=when or datetime.now(timezone.utc),
+            source=source,
+            confidence="high",
+        ),
+    )
+
+
 def upsert_provider_session_state(
     db: Any,
     user_id: str,

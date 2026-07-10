@@ -3,10 +3,16 @@ mighty.account_status
 ─────────────────────
 Canonical per-account update state shared by the dashboard and Chrome extension.
 
+Login / session status comes only from provider_session_state via
+mighty.session_access (Current Access resolver). Legacy sync_status and
+connection_status remain written for compatibility but must not decide
+needs-login banners, counts, or messaging.
+
 Statuses (priority when resolving):
-  needs_login           — session expired or provider login wall detected
+  needs_login           — Current Access signed_out (or verification error)
+  checking              — Current Access checking (verification queued/running)
   updating              — extension is actively syncing this account right now
-  up_to_date            — meaningful fields synced recently
+  up_to_date            — connected session and/or meaningful fields synced
   waiting_for_extension — registered but not yet connected / first visit pending
   error                 — sync failed for a non-login reason
 """
@@ -24,11 +30,16 @@ from mighty.account_lifecycle import (
     resolve_account_lifecycle,
 )
 from mighty.account_presentation import (
+    AccountPresentation,
     build_access_loop_summary,
-    resolve_account_presentation,
     resolve_presentation_from_status_signals,
 )
-from mighty.provider_account import ProviderAccount, infer_extraction_status, load_provider_account, has_normalized_data
+from mighty.provider_account import ProviderAccount, infer_extraction_status, has_normalized_data
+from mighty.session_access import (
+    CHECKING,
+    load_session_access_by_provider,
+    resolve_session_access_presentation,
+)
 from mighty.user_copy import (
     ACCOUNT_STATE_CTAS,
     CTA_SIGN_IN,
@@ -46,16 +57,16 @@ ERROR = "error"
 ALL_CANONICAL = (
     UP_TO_DATE,
     UPDATING,
+    CHECKING,
     NEEDS_LOGIN,
     WAITING_FOR_EXTENSION,
     ERROR,
 )
 
-# STATUS_LABELS imported from user_copy (shared with dashboard + worker popup)
-
 _STATUS_COLORS: dict[str, str] = {
     UP_TO_DATE: "#16a34a",
     UPDATING: "#6366f1",
+    CHECKING: "#6366f1",
     NEEDS_LOGIN: "#dc2626",
     WAITING_FOR_EXTENSION: "#6366f1",
     ERROR: "#dc2626",
@@ -78,9 +89,12 @@ class AccountStatus:
     last_error: str | None
     user_action_label: str | None
     user_action_url: str | None
+    session_state: str | None = None
+    current_access: str | None = None
+    verification_message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "source": self.source,
             "display_name": self.display_name,
             "status": self.status,
@@ -94,6 +108,13 @@ class AccountStatus:
             "user_action_label": self.user_action_label,
             "user_action_url": self.user_action_url,
         }
+        if self.session_state is not None:
+            payload["session_state"] = self.session_state
+        if self.current_access is not None:
+            payload["current_access"] = self.current_access
+        if self.verification_message is not None:
+            payload["verification_message"] = self.verification_message
+        return payload
 
 
 @dataclass
@@ -142,24 +163,37 @@ def resolve_canonical_status(
     source: str,
     updating_source: str | None,
     connection_status: str | None = None,
+    session_state: str | None = None,
 ) -> str:
     """Map lifecycle + sync signals to a canonical status.
 
-    needs_login always wins over updating for the same account so a login wall
-    is never masked by an in-progress sync queue — unless the extension already
-    verified an active browser session.
+    When session_state is provided (from provider_session_state Current Access),
+    it alone decides needs_login / checking / connected. Legacy sync_status and
+    connection_status never decide login in that path.
     """
-    conn = connection_status or ""
-    if conn == "connected":
-        if lifecycle.state == LC_SYNCED:
-            return UP_TO_DATE
+    if session_state == "signed_out":
+        return NEEDS_LOGIN
+    if session_state == "checking":
+        return CHECKING
+    if session_state == "connected":
         if updating_source and updating_source == source:
             return UPDATING
-        if sync_status == "no_data":
+        if sync_status == "no_data" and lifecycle.state != LC_SYNCED:
             return ERROR
         return UP_TO_DATE
-    if lifecycle.state == LC_NEEDS_LOGIN or sync_status == "login_required":
-        return NEEDS_LOGIN
+    if session_state == "unknown":
+        # No fresh session evidence — never treat legacy login_required as needs_login.
+        if updating_source and updating_source == source:
+            return UPDATING
+        if lifecycle.state == LC_SYNCED:
+            return UP_TO_DATE
+        if sync_status == "no_data":
+            return ERROR
+        if lifecycle.state == LC_WAITING or sync_status in ("needs_first_visit",):
+            return WAITING_FOR_EXTENSION
+        return WAITING_FOR_EXTENSION
+
+    # Non-probe providers: resolve without login signals from legacy fields.
     if updating_source and updating_source == source:
         return UPDATING
     if lifecycle.state == LC_SYNCED:
@@ -167,6 +201,9 @@ def resolve_canonical_status(
     if sync_status == "no_data":
         return ERROR
     if lifecycle.state == LC_WAITING or sync_status in ("needs_first_visit",):
+        return WAITING_FOR_EXTENSION
+    # Ignore legacy login_required / connection needs_login for product status.
+    if lifecycle.state == LC_NEEDS_LOGIN:
         return WAITING_FOR_EXTENSION
     return WAITING_FOR_EXTENSION
 
@@ -179,8 +216,12 @@ def _user_action_for_status(
     connect_url: str,
     presentation_cta: str | None = None,
 ) -> tuple[str | None, str | None]:
-    if presentation_cta == CTA_SIGN_IN or status == NEEDS_LOGIN:
+    # Login CTA only when status is needs_login (from signed_out session_state).
+    if status == NEEDS_LOGIN:
         return presentation_cta or lifecycle.cta_label or CTA_SIGN_IN, login_url or None
+    if presentation_cta == CTA_SIGN_IN:
+        # Never promote a Sign in CTA unless status is needs_login.
+        return None, None
     if status == WAITING_FOR_EXTENSION:
         return lifecycle.cta_label or LIFECYCLE_CTAS["waiting_for_extension"], connect_url
     if status == ERROR:
@@ -188,30 +229,52 @@ def _user_action_for_status(
     return None, None
 
 
-def     build_account_status(
-        source: str,
-        display_name: str,
-        lifecycle: AccountLifecycle,
-        account: ProviderAccount | None,
-        *,
-        sync_status: str,
-        updating_source: str | None,
-        sync_started_at: str | None = None,
-        login_url: str = "",
-        connect_url: str = "",
-        failure_reason: str | None = None,
-        connection_status: str | None = None,
-        last_verified_at: str | None = None,
-        extraction_status: str | None = None,
-        last_data_refresh: str | None = None,
-    ) -> AccountStatus:
+def build_account_status(
+    source: str,
+    display_name: str,
+    lifecycle: AccountLifecycle,
+    account: ProviderAccount | None,
+    *,
+    sync_status: str,
+    updating_source: str | None,
+    sync_started_at: str | None = None,
+    login_url: str = "",
+    connect_url: str = "",
+    failure_reason: str | None = None,
+    connection_status: str | None = None,
+    last_verified_at: str | None = None,
+    extraction_status: str | None = None,
+    last_data_refresh: str | None = None,
+    session_access=None,
+) -> AccountStatus:
+    session_state = None
+    current_access = None
+    verification_message = None
+    session_presentation = None
+    if session_access is not None:
+        session_presentation = resolve_session_access_presentation(
+            session_access, display_name=display_name,
+        )
+        session_state = session_presentation.session_state
+        current_access = session_presentation.current_access
+        verification_message = session_presentation.verification_message
+
     canonical = resolve_canonical_status(
         lifecycle,
         sync_status,
         source=source,
         updating_source=updating_source,
         connection_status=connection_status,
+        session_state=session_state,
     )
+    # Active sync still shows updating unless session says signed_out/checking.
+    if (
+        session_state not in ("signed_out", "checking")
+        and updating_source
+        and updating_source == source
+    ):
+        canonical = UPDATING
+
     synced_at = account.synced_at if account else None
     last_error = None
     if canonical == ERROR:
@@ -220,19 +283,77 @@ def     build_account_status(
     elif canonical == NEEDS_LOGIN:
         last_error = _FAILURE_MESSAGES.get("login_required")
 
-    has_meaningful = has_normalized_data(account.normalized_fields if account else None)
-    presentation = resolve_presentation_from_status_signals(
-        provider=source,
-        connection_status=connection_status,
-        sync_status=sync_status,
-        lifecycle_state=lifecycle.state,
-        has_meaningful_data=has_meaningful,
-        last_verified_at=last_verified_at,
-        is_updating=canonical == UPDATING,
-        sync_status_error=failure_reason,
-        extraction_status=extraction_status,
-        last_data_refresh=last_data_refresh,
-    )
+    if session_presentation is not None and session_state is not None:
+        if session_state == "connected" and canonical == UPDATING:
+            presentation = AccountPresentation(
+                key="updating",
+                label=STATUS_LABELS["updating"],
+                cta_label=ACCOUNT_STATE_CTAS["updating"],
+                cta_disabled=True,
+            )
+        elif session_state == "unknown" and canonical == UPDATING:
+            presentation = AccountPresentation(
+                key="updating",
+                label=STATUS_LABELS["updating"],
+                cta_label=ACCOUNT_STATE_CTAS["updating"],
+                cta_disabled=True,
+            )
+        elif session_state in ("signed_out", "checking", "connected", "unknown"):
+            presentation = AccountPresentation(
+                key=session_presentation.presentation_key,
+                label=session_presentation.presentation_label,
+                cta_label=session_presentation.cta_label or "",
+                cta_disabled=session_state in ("checking", "unknown"),
+                extension_hint=session_presentation.extension_hint,
+            )
+            if session_state in ("signed_out", "checking"):
+                canonical = session_presentation.status
+            # unknown keeps non-login canonical from resolve_canonical_status
+        elif canonical == WAITING_FOR_EXTENSION:
+            presentation = AccountPresentation(
+                key="updating",
+                label=STATUS_LABELS["waiting_for_extension"],
+                cta_label=ACCOUNT_STATE_CTAS["updating"],
+                cta_disabled=True,
+            )
+        elif canonical == ERROR:
+            presentation = AccountPresentation(
+                key="needs_attention",
+                label=STATUS_LABELS["error"],
+                cta_label=ACCOUNT_STATE_CTAS["needs_attention"],
+                cta_disabled=False,
+                extension_hint=last_error,
+            )
+        else:
+            presentation = AccountPresentation(
+                key=session_presentation.presentation_key,
+                label=session_presentation.presentation_label,
+                cta_label=session_presentation.cta_label or "",
+                cta_disabled=session_state == "unknown",
+                extension_hint=session_presentation.extension_hint,
+            )
+    else:
+        has_meaningful = has_normalized_data(account.normalized_fields if account else None)
+        # Strip legacy login signals so presentation never invents needs_sign_in.
+        safe_sync = sync_status if sync_status != "login_required" else "ok"
+        safe_conn = (
+            None
+            if (connection_status or "") in ("needs_login", "login_required")
+            else connection_status
+        )
+        safe_lifecycle = lifecycle.state if lifecycle.state != LC_NEEDS_LOGIN else LC_WAITING
+        presentation = resolve_presentation_from_status_signals(
+            provider=source,
+            connection_status=safe_conn,
+            sync_status=safe_sync,
+            lifecycle_state=safe_lifecycle,
+            has_meaningful_data=has_meaningful,
+            last_verified_at=last_verified_at,
+            is_updating=canonical == UPDATING,
+            sync_status_error=failure_reason if failure_reason != "login_required" else None,
+            extraction_status=extraction_status,
+            last_data_refresh=last_data_refresh,
+        )
 
     action_label, action_url = _user_action_for_status(
         canonical,
@@ -253,6 +374,9 @@ def     build_account_status(
         last_error=last_error or presentation.extension_hint,
         user_action_label=action_label,
         user_action_url=action_url,
+        session_state=session_state,
+        current_access=current_access,
+        verification_message=verification_message,
     )
 
 
@@ -262,8 +386,6 @@ def build_status_summary(
     access_loop_presentations=None,
 ) -> AccountStatusSummary:
     """Headline/subline for extension popup and dashboard sync header."""
-    from mighty.account_presentation import AccountPresentation
-
     if access_loop_presentations is not None:
         loop = build_access_loop_summary(access_loop_presentations)
         needs_sign_in_accounts = [
@@ -272,7 +394,9 @@ def build_status_summary(
             if a.presentation_key == "needs_sign_in"
         ]
         updating_accounts = [
-            a.display_name for a in accounts if a.presentation_key == "updating"
+            a.display_name
+            for a in accounts
+            if a.presentation_key in ("updating", "checking")
         ]
         return AccountStatusSummary(
             headline=loop.headline,
@@ -290,7 +414,7 @@ def build_status_summary(
             key=a.presentation_key,
             label=a.presentation_label,
             cta_label=ACCOUNT_STATE_CTAS.get(a.presentation_key, ""),
-            cta_disabled=a.presentation_key == "updating",
+            cta_disabled=a.presentation_key in ("updating", "checking"),
         )
         for a in accounts
     ]
@@ -299,7 +423,7 @@ def build_status_summary(
         a.display_name for a in accounts if a.presentation_key == "needs_sign_in"
     ]
     updating_accounts = [
-        a.display_name for a in accounts if a.presentation_key == "updating"
+        a.display_name for a in accounts if a.presentation_key in ("updating", "checking")
     ]
     return AccountStatusSummary(
         headline=loop.headline,
@@ -332,9 +456,16 @@ def load_all_account_statuses(
     updating_source: str | None = None,
     account_states: list | None = None,
 ) -> tuple[list[AccountStatus], AccountStatusSummary]:
-    """Load canonical status for every connected account."""
+    """Load canonical status for every connected account.
+
+    Login/session fields come from provider_session_state Current Access.
+    """
     if lifecycle_signals is None:
         lifecycle_signals = _load_lifecycle_signals(uid, db)
+
+    session_by_provider = load_session_access_by_provider(
+        db, uid, decrypt_fn=decrypt_fn,
+    )
 
     cred_rows = db.execute(
         "SELECT source FROM account_credentials WHERE user_id=? AND source != '_email'",
@@ -342,9 +473,6 @@ def load_all_account_statuses(
     ).fetchall()
 
     effective_updating = updating_source if sync_running else None
-    states_by_provider = {}
-    if account_states:
-        states_by_provider = {s.provider: s for s in account_states}
 
     accounts: list[AccountStatus] = []
     for row in cred_rows:
@@ -410,75 +538,34 @@ def load_all_account_statuses(
             except (KeyError, IndexError):
                 failure_reason = data.get("sync_failure_reason")
 
-        canonical = resolve_canonical_status(
-            lifecycle,
-            sync_status,
-            source=source,
-            updating_source=effective_updating,
-            connection_status=connection_status or None,
-        )
-
-        state = states_by_provider.get(source)
-        if state is not None:
-            presentation = resolve_account_presentation(
-                state,
-                sync_running=sync_running,
-                updating_source=effective_updating,
-            )
-        else:
-            presentation = resolve_presentation_from_status_signals(
-                provider=source,
-                connection_status=connection_status,
+        session_access = session_by_provider.get(source)
+        accounts.append(
+            build_account_status(
+                source,
+                display_name,
+                lifecycle,
+                provider_acct,
                 sync_status=sync_status,
-                lifecycle_state=lifecycle.state,
-                has_meaningful_data=has_normalized_data(provider_acct.normalized_fields if provider_acct else None),
+                updating_source=effective_updating,
+                sync_started_at=sync_started_at,
+                login_url=login_url,
+                connect_url=connect_url,
+                failure_reason=failure_reason,
+                connection_status=connection_status or None,
                 last_verified_at=_latest_connection_verification(db, uid, source),
-                is_updating=canonical == UPDATING,
-                sync_status_error=failure_reason,
                 extraction_status=extraction_st or None,
                 last_data_refresh=ad_row["synced_at"] if ad_row else None,
-            )
-
-        synced_at = provider_acct.synced_at if provider_acct else None
-        last_error = None
-        if canonical == ERROR:
-            reason = failure_reason or sync_status
-            last_error = _FAILURE_MESSAGES.get(reason, reason or "Sync failed")
-        elif presentation.key == "needs_sign_in":
-            last_error = _FAILURE_MESSAGES.get("login_required")
-
-        action_label, action_url = _user_action_for_status(
-            canonical,
-            lifecycle,
-            login_url=login_url,
-            connect_url=connect_url,
-            presentation_cta=presentation.cta_label,
-        )
-
-        accounts.append(
-            AccountStatus(
-                source=source,
-                display_name=display_name,
-                status=canonical,
-                presentation_key=presentation.key,
-                presentation_label=presentation.label,
-                last_successful_sync_at=synced_at if lifecycle.state == LC_SYNCED else None,
-                current_attempt_at=sync_started_at if canonical == UPDATING else None,
-                last_error=last_error or presentation.extension_hint,
-                user_action_label=action_label,
-                user_action_url=action_url,
+                session_access=session_access,
             )
         )
 
     accounts.sort(key=lambda a: a.display_name.lower())
-    from mighty.account_presentation import AccountPresentation
-
     summary_presentations = [
         AccountPresentation(
             key=a.presentation_key,
             label=a.presentation_label,
             cta_label=ACCOUNT_STATE_CTAS.get(a.presentation_key, ""),
-            cta_disabled=a.presentation_key == "updating",
+            cta_disabled=a.presentation_key in ("updating", "checking"),
         )
         for a in accounts
     ]

@@ -137,6 +137,11 @@ function render(data) {
     return;
   }
 
+  if (data.account_status && data.account_status.summary) {
+    renderAccessLoop(data.account_status);
+    return;
+  }
+
   const worker = w();
   const needsAttention = _summaryNeedsUserAction(data.account_status);
   const statusLine = needsAttention
