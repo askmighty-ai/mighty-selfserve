@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.4.8-amex-operational-global-overview-entry" in src
+    assert "1.4.11-passive-admin-session-verify" in src
     assert "background.js loaded — version" in src
 
 
@@ -141,6 +141,29 @@ def test_amex_operational_account_entry_uses_global_overview():
     src = _read_background_js()
     assert "amex:         'https://global.americanexpress.com/overview'" in src
 
+
+def test_amex_session_verification_uses_global_overview():
+    src = _read_background_js()
+    assert "AMEX_SESSION_VERIFICATION_ENTRY" in src
+    assert "https://global.americanexpress.com/overview" in src
+    assert "runSessionVerification" in src
+    assert "session-verification/pending" in src
+    assert "SESSION_VERIFICATION_TAB_REASON" in src
+    assert "if (reason === SESSION_VERIFICATION_TAB_REASON) return false;" in src
+    assert "createProviderTab(entry, { active: false }, SESSION_VERIFICATION_TAB_REASON)" in src
+
+
+def test_session_verification_reuses_existing_manual_probe_poll_loop():
+    """No second setInterval for session verification — same keepalive poll."""
+    src = _read_background_js()
+    assert "pollManualProbeTrigger" in src
+    assert src.count("session-verification/pending") == 1
+    assert "_manualProbePollTimer = setInterval" in src
+    # Session verification must not introduce a separate poll timer.
+    assert "_sessionVerificationPollTimer" not in src
+    assert "setInterval(() => {\n    pollManualProbeTrigger()" in src or (
+        "setInterval(() => {\n    pollManualProbeTrigger().catch(console.error);" in src
+    )
 
 def test_amex_live_session_comparator_present():
     src = _read_background_js()

@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.9-popup-cta-syntax-fix';
+const MIGHTY_EXT_VERSION = '1.4.11-passive-admin-session-verify';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 const AMEX_BOOTSTRAP_TRACE_MS = 20000;
@@ -71,6 +71,7 @@ const _SKIP_PATH_RE = /\/(book|search|flight-search|find-flights|deals|shop|cart
 // ── Provider tab instrumentation (Phase 1A.5) ─────────────────────────────────
 
 const MANUAL_PROBE_TAB_REASON = 'manual_probe';
+const SESSION_VERIFICATION_TAB_REASON = 'session_verification';
 
 function logProviderTabAction(action, url, reason, extra = {}) {
   console.log(`[Mighty Tab] ${action} reason=${reason} url=${url || '(none)'}`, extra);
@@ -85,6 +86,7 @@ function _logAutomaticNavigationDisabled(context) {
 
 async function _providerTabBlocked(apiKey, reason) {
   if (reason === MANUAL_PROBE_TAB_REASON) return false;
+  if (reason === SESSION_VERIFICATION_TAB_REASON) return false;
   if (!apiKey) return false;
   return shouldDeferAutomaticProviderNavigation(apiKey);
 }
@@ -2212,6 +2214,10 @@ let _lastProcessedBootstrapTraceId = null;
 let _liveSessionComparisonInProgress = false;
 let _lastProcessedLiveSessionComparisonId = null;
 let _manualProbePollTimer = null;
+let _sessionVerificationInProgress = false;
+let _lastProcessedSessionVerificationId = null;
+const AMEX_SESSION_VERIFICATION_ENTRY =
+  'https://global.americanexpress.com/overview';
 
 async function fetchAutomaticProbesEnabled(apiKey) {
   if (!apiKey) return true;
@@ -3537,10 +3543,28 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
 }
 
 async function pollManualProbeTrigger() {
-  if (_manualProbeInProgress || _bootstrapTraceInProgress || _liveSessionComparisonInProgress) return;
+  if (_manualProbeInProgress || _bootstrapTraceInProgress || _liveSessionComparisonInProgress
+      || _sessionVerificationInProgress) return;
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
   try {
+    const svResp = await fetch(`${MIGHTY_URL}/api/extension/session-verification/pending`, {
+      headers: { 'X-Mighty-Key': api_key },
+    });
+    if (svResp.ok) {
+      const svData = await svResp.json();
+      if ((svData.lifecycle === 'requested' || svData.lifecycle === 'running')
+          && svData.provider && svData.verification_id
+          && svData.verification_id !== _lastProcessedSessionVerificationId) {
+        await runSessionVerification(
+          api_key,
+          svData.provider,
+          svData.verification_id,
+          svData.entry_url || null,
+        );
+        return;
+      }
+    }
     const resp = await fetch(`${MIGHTY_URL}/api/extension/provider-access-probe/manual`, {
       headers: { 'X-Mighty-Key': api_key },
     });
@@ -3570,6 +3594,115 @@ async function pollManualProbeTrigger() {
     await runAmexLiveSessionComparison(api_key, lscData.comparison_run_id, lscData.entry_url);
   } catch (e) {
     console.warn('[Mighty Probe] manual poll failed:', e.message);
+  }
+}
+
+async function _completeSessionVerification(apiKey, verificationId, lifecycle, errorMessage) {
+  try {
+    await fetch(`${MIGHTY_URL}/api/extension/session-verification/complete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Mighty-Key': apiKey,
+      },
+      body: JSON.stringify({
+        verification_id: verificationId,
+        lifecycle,
+        error_message: errorMessage || undefined,
+      }),
+    });
+  } catch (e) {
+    console.warn('[Mighty] session verification complete failed:', e.message);
+  }
+}
+
+/**
+ * Background Current Access re-verification.
+ * Amex uses the operational overview entry and existing session signals
+ * (session API / login wall / authenticated page) via the access probe path.
+ */
+async function runSessionVerification(apiKey, provider, verificationId, entryUrl) {
+  if (_sessionVerificationInProgress || _manualProbeInProgress
+      || _bootstrapTraceInProgress || _liveSessionComparisonInProgress) {
+    console.log('[Mighty] session verification already in progress — skipping');
+    return;
+  }
+  if (verificationId && verificationId === _lastProcessedSessionVerificationId) {
+    return;
+  }
+
+  const entry = entryUrl
+    || (provider === 'amex' ? AMEX_SESSION_VERIFICATION_ENTRY : ACCOUNT_ENTRY[provider]);
+  if (!entry) {
+    console.warn(`[Mighty] no session verification entry for ${provider}`);
+    await _completeSessionVerification(apiKey, verificationId, 'failed', 'no_entry_url');
+    _lastProcessedSessionVerificationId = verificationId;
+    return;
+  }
+
+  _sessionVerificationInProgress = true;
+  console.log(`[Mighty] session verification for ${provider} via ${entry}`);
+  try {
+    await fetch(`${MIGHTY_URL}/api/extension/session-verification/running`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Mighty-Key': apiKey,
+      },
+      body: JSON.stringify({ verification_id: verificationId }),
+    });
+  } catch (e) {
+    console.warn('[Mighty] session verification running mark failed:', e.message);
+  }
+
+  const deepInspect = provider === 'amex' || DEEP_INSPECT_PROVIDERS.has(provider);
+  let tab;
+  const classifierStartedAt = new Date().toISOString();
+  try {
+    tab = await createProviderTab(entry, { active: false }, SESSION_VERIFICATION_TAB_REASON);
+    if (!tab?.id) {
+      await _completeSessionVerification(apiKey, verificationId, 'failed', 'tab_creation_blocked');
+      _lastProcessedSessionVerificationId = verificationId;
+      return;
+    }
+    if (deepInspect) {
+      await injectDeepInspectObservers(tab.id);
+    }
+    const domWaitStart = Date.now();
+    await waitForProbePageStability(tab.id, {
+      observationMs: deepInspect ? AMEX_MANUAL_PROBE_OBSERVATION_MS : 5000,
+    });
+    const domWaitMs = Date.now() - domWaitStart;
+    const result = await runProviderAccessProbeInTab(tab.id, provider, {
+      classifierStartedAt,
+      domWaitMs,
+      deepInspect,
+    });
+    const payload = result || {
+      provider,
+      url_visited: entry,
+      signed_in_detected: false,
+      private_data_detected: false,
+      error: 'probe_no_result',
+      failure_reason: 'probe_no_result',
+    };
+    payload.verification_id = verificationId;
+    await _postProviderAccessProbe(apiKey, payload, { skipDedup: true });
+    _lastProcessedSessionVerificationId = verificationId;
+  } catch (e) {
+    await _postProviderAccessProbe(apiKey, {
+      provider,
+      url_visited: entry,
+      signed_in_detected: false,
+      private_data_detected: false,
+      error: e.message,
+      failure_reason: 'probe_navigation_error',
+      verification_id: verificationId,
+    }, { skipDedup: true });
+    _lastProcessedSessionVerificationId = verificationId;
+  } finally {
+    if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+    _sessionVerificationInProgress = false;
   }
 }
 
