@@ -67,6 +67,8 @@ from mighty.provider_access_probe import (
     get_latest_live_session_comparison,
     get_pending_live_session_comparison,
     live_session_comparison_state_to_json,
+    sanitize_operational_redirect_diagnostic,
+    extract_operational_redirect_diagnostic,
     PROVIDER_PROBE_CONFIG,
 )
 
@@ -851,6 +853,91 @@ class TestAuthNetworkTrace:
         result = sanitize_deep_inspect(payload["deep_inspect"])
         assert result["auth_network_trace"]["request_count"] == 1
         assert "401" in result["auth_network_trace"]["diagnostic_summary"]
+
+
+class TestOperationalRedirectDiagnostic:
+    ENTRY = "https://global.americanexpress.com/overview"
+    LOGIN = "https://www.americanexpress.com/en-us/account/login?DestPage=https%3A%2F%2Fglobal.americanexpress.com%2Foverview"
+
+    def test_sanitize_operational_redirect_diagnostic_records_urls_and_login_flag(self):
+        raw = {
+            "requested_entry_url": self.ENTRY,
+            "first_observed_tab_url": self.ENTRY,
+            "final_url": self.LOGIN,
+            "final_url_is_login": True,
+            "url_transitions": [
+                {"observed_at_ms": 0, "url": self.ENTRY, "source": "requested_entry"},
+                {
+                    "observed_at_ms": 120,
+                    "url": self.LOGIN,
+                    "source": "tabs.onUpdated",
+                    "transition_type": "link",
+                },
+            ],
+            "cookie_names_before": {
+                "americanexpress.com": ["session=secret"],
+                "global.americanexpress.com": ["gpv_pagename"],
+                "www.americanexpress.com": [],
+            },
+            "cookie_names_after": {
+                "americanexpress.com": [],
+                "global.americanexpress.com": ["gpv_pagename"],
+                "www.americanexpress.com": ["s_sess"],
+            },
+            "first_navigation_response": {
+                "available": False,
+                "reason": "webRequest permission not declared",
+            },
+            "request_body": "must drop",
+            "cookie_value": "must drop",
+        }
+        result = sanitize_operational_redirect_diagnostic(raw)
+        assert result["requested_entry_url"] == self.ENTRY
+        assert result["first_observed_tab_url"] == self.ENTRY
+        assert "DestPage=" in result["final_url"]
+        assert result["final_url_is_login"] is True
+        assert len(result["url_transitions"]) == 2
+        assert result["url_transitions"][1]["url"].startswith(
+            "https://www.americanexpress.com/en-us/account/login"
+        )
+        assert result["cookie_names_before"]["americanexpress.com"] == ["session"]
+        assert "secret" not in str(result)
+        assert "request_body" not in result
+        assert "cookie_value" not in result
+
+    def test_evaluate_probe_payload_includes_operational_redirect_diagnostic(self):
+        payload = {
+            "url_visited": self.LOGIN,
+            "dom_text": "Sign in to your account\nUser ID\nPassword",
+            "operational_redirect_diagnostic": {
+                "requested_entry_url": self.ENTRY,
+                "first_observed_tab_url": self.ENTRY,
+                "final_url": self.LOGIN,
+                "final_url_is_login": True,
+                "url_transitions": [
+                    {"observed_at_ms": 0, "url": self.ENTRY, "source": "requested_entry"},
+                    {"observed_at_ms": 50, "url": self.LOGIN, "source": "tabs.onUpdated"},
+                ],
+                "cookie_names_before": {"americanexpress.com": ["a"]},
+                "cookie_names_after": {"americanexpress.com": ["a", "b"]},
+            },
+        }
+        result = evaluate_probe_payload("amex", payload)
+        redirect = result["deep_inspect"]["operational_redirect_diagnostic"]
+        assert redirect["requested_entry_url"] == self.ENTRY
+        assert redirect["final_url_is_login"] is True
+        assert redirect["cookie_names_before"]["americanexpress.com"] == ["a"]
+
+    def test_extract_operational_redirect_diagnostic_ignored_for_delta(self):
+        payload = {
+            "operational_redirect_diagnostic": {
+                "requested_entry_url": self.ENTRY,
+                "final_url": self.LOGIN,
+            },
+        }
+        assert extract_operational_redirect_diagnostic(payload)["requested_entry_url"] == self.ENTRY
+        result = evaluate_probe_payload("delta", payload)
+        assert "operational_redirect_diagnostic" not in (result.get("deep_inspect") or {})
 
 
 class TestStoredProbeRun:

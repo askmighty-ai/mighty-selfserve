@@ -1004,6 +1004,134 @@ def extract_deep_inspect(payload: dict[str, Any] | None) -> dict[str, Any]:
     return {}
 
 
+def _sanitize_operational_redirect_transition(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in OPERATIONAL_REDIRECT_TRANSITION_KEYS:
+        if key not in entry or entry.get(key) is None:
+            continue
+        if key == "url":
+            out[key] = sanitize_probe_url(str(entry[key]))
+        elif key == "observed_at_ms":
+            try:
+                out[key] = int(entry[key])
+            except (TypeError, ValueError):
+                pass
+        elif key == "transition_qualifiers":
+            qualifiers = entry.get(key)
+            if isinstance(qualifiers, list):
+                out[key] = [str(q) for q in qualifiers[:10]]
+        else:
+            out[key] = str(entry[key])
+    return out
+
+
+def _sanitize_operational_redirect_history(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in OPERATIONAL_REDIRECT_HISTORY_KEYS:
+        if key not in entry or entry.get(key) is None:
+            continue
+        if key == "href":
+            out[key] = sanitize_probe_url(str(entry[key]))
+        elif key == "observed_at_ms":
+            try:
+                out[key] = int(entry[key])
+            except (TypeError, ValueError):
+                pass
+        else:
+            out[key] = str(entry[key])
+    return out
+
+
+def _sanitize_cookie_names_by_domain(raw: Any) -> dict[str, list[str]]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for domain, names in raw.items():
+        if not isinstance(names, list):
+            continue
+        cleaned: list[str] = []
+        for name in names[:100]:
+            cookie_name = _cookie_name_only(str(name))
+            if cookie_name and "=" not in cookie_name:
+                cleaned.append(cookie_name)
+        out[str(domain)] = cleaned
+    return out
+
+
+def sanitize_operational_redirect_diagnostic(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize Amex manual probe redirect diagnostic; names/metadata only."""
+    raw = raw or {}
+    out: dict[str, Any] = {}
+
+    for key in (
+        "requested_entry_url",
+        "first_observed_tab_url",
+        "final_url",
+    ):
+        if raw.get(key):
+            out[key] = sanitize_probe_url(str(raw[key]))
+
+    if raw.get("final_url_is_login") is not None:
+        out["final_url_is_login"] = bool(raw["final_url_is_login"])
+
+    transitions = raw.get("url_transitions")
+    if isinstance(transitions, list):
+        sanitized = [_sanitize_operational_redirect_transition(e) for e in transitions[:100]]
+        sanitized.sort(key=lambda e: e.get("observed_at_ms") or 0)
+        out["url_transitions"] = [e for e in sanitized if e]
+
+    for key in ("cookie_names_before", "cookie_names_after"):
+        domain_names = _sanitize_cookie_names_by_domain(raw.get(key))
+        if domain_names:
+            out[key] = domain_names
+
+    first_nav = raw.get("first_navigation_response")
+    if isinstance(first_nav, dict):
+        nav_out: dict[str, Any] = {}
+        for nav_key in OPERATIONAL_REDIRECT_FIRST_NAV_KEYS:
+            if nav_key not in first_nav or first_nav.get(nav_key) is None:
+                continue
+            if nav_key in ("url", "redirect_url"):
+                nav_out[nav_key] = sanitize_probe_url(str(first_nav[nav_key]))
+            elif nav_key == "available":
+                nav_out[nav_key] = bool(first_nav[nav_key])
+            elif nav_key in ("status_code", "redirect_count"):
+                try:
+                    nav_out[nav_key] = int(first_nav[nav_key])
+                except (TypeError, ValueError):
+                    pass
+            else:
+                nav_out[nav_key] = str(first_nav[nav_key])
+        if nav_out:
+            out["first_navigation_response"] = nav_out
+
+    history = raw.get("client_history_events")
+    if isinstance(history, list):
+        out["client_history_events"] = [
+            e for e in (_sanitize_operational_redirect_history(h) for h in history[:50]) if e
+        ]
+
+    if raw.get("error"):
+        out["error"] = str(raw["error"])[:500]
+
+    for forbidden in FORBIDDEN_OPERATIONAL_REDIRECT_KEYS:
+        out.pop(forbidden, None)
+
+    return out
+
+
+def extract_operational_redirect_diagnostic(payload: dict[str, Any] | None) -> dict[str, Any]:
+    payload = payload or {}
+    nested = payload.get("operational_redirect_diagnostic")
+    if not isinstance(nested, dict):
+        return {}
+    return sanitize_operational_redirect_diagnostic(nested)
+
+
 def is_blank_or_unloaded_page(
     dom_text: str = "",
     *,
@@ -1194,6 +1322,10 @@ def evaluate_probe_payload(provider: str, payload: dict[str, Any]) -> dict[str, 
 
     page_diagnostics = extract_page_diagnostics(payload)
     deep_inspect = extract_deep_inspect(payload)
+    if provider == "amex":
+        redirect_diag = extract_operational_redirect_diagnostic(payload)
+        if redirect_diag:
+            deep_inspect = {**deep_inspect, "operational_redirect_diagnostic": redirect_diag}
     if not page_title and page_diagnostics.get("page_title"):
         page_title = str(page_diagnostics["page_title"]).strip() or None
 
@@ -1696,6 +1828,23 @@ BOOTSTRAP_NAV_EVENT_KEYS: frozenset[str] = frozenset({
 
 BOOTSTRAP_HISTORY_EVENT_KEYS: frozenset[str] = frozenset({
     "observed_at_ms", "type", "href", "path", "hash", "state_type",
+})
+
+OPERATIONAL_REDIRECT_TRANSITION_KEYS: frozenset[str] = frozenset({
+    "observed_at_ms", "url", "status", "transition_type", "transition_qualifiers", "source", "type",
+})
+
+OPERATIONAL_REDIRECT_HISTORY_KEYS: frozenset[str] = frozenset({
+    "observed_at_ms", "type", "href", "path",
+})
+
+OPERATIONAL_REDIRECT_FIRST_NAV_KEYS: frozenset[str] = frozenset({
+    "available", "reason", "source", "url", "status_code", "redirect_url", "redirect_count", "type",
+})
+
+FORBIDDEN_OPERATIONAL_REDIRECT_KEYS: frozenset[str] = frozenset({
+    "cookie", "set-cookie", "request_body", "response_body", "body", "authorization", "token",
+    "value", "cookie_value", "cookie_values",
 })
 
 

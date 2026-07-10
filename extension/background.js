@@ -1,6 +1,6 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.8-amex-operational-global-overview-entry';
+const MIGHTY_EXT_VERSION = '1.4.9-amex-operational-redirect-diagnostic';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 const AMEX_BOOTSTRAP_TRACE_MS = 20000;
@@ -2824,6 +2824,125 @@ async function injectBootstrapTraceObservers(tabId) {
   }
 }
 
+async function getAmexOperationalCookieNamesByDomain() {
+  const domains = [
+    'americanexpress.com',
+    'global.americanexpress.com',
+    'www.americanexpress.com',
+  ];
+  const out = {};
+  for (const domain of domains) {
+    try {
+      const cookies = await chrome.cookies.getAll({ domain });
+      out[domain] = [...new Set(cookies.map((c) => c.name).filter(Boolean))].sort();
+    } catch (_) {
+      out[domain] = [];
+    }
+  }
+  return out;
+}
+
+function isAmexLoginUrlForOperationalRedirect(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    const path = u.pathname || '';
+    const host = u.hostname.toLowerCase();
+    const cfg = SITE_LOGIN_CONFIG.amex;
+    if (cfg?.loginPathRe?.test(path) || cfg?.loginPathRe?.test(rawUrl)) return true;
+    if (/\/(log-?in|sign-?in)(\/|$|\?)/i.test(path)) return true;
+    if (host === 'global.americanexpress.com' && /^\/login(\/|$|\?)/i.test(path)) return true;
+    return false;
+  } catch (_) {
+    return /\/log-?in/i.test(String(rawUrl || ''));
+  }
+}
+
+async function injectOperationalRedirectObservers(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      injectImmediately: true,
+      func: () => {
+        if (window.__mightyOperationalRedirectTrace) return;
+        const SENSITIVE_PARAM_RE = /^(token|auth|session|key|secret|password|csrf|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|code|signature|sig)$/i;
+        function sanitizeUrl(rawUrl) {
+          try {
+            const u = new URL(rawUrl, location.href);
+            u.searchParams.forEach((_, name) => {
+              if (SENSITIVE_PARAM_RE.test(name)) u.searchParams.set(name, '[REDACTED]');
+            });
+            return u.origin + u.pathname + (u.search ? u.search : '');
+          } catch (_) {
+            return String(rawUrl || '').split('?')[0];
+          }
+        }
+        window.__mightyOperationalRedirectTrace = {
+          url_transitions: [],
+          history_events: [],
+        };
+        const trace = window.__mightyOperationalRedirectTrace;
+        function recordTransition(type) {
+          trace.url_transitions.push({
+            observed_at_ms: Date.now() - (window.__mightyOperationalRedirectStartedAt || Date.now()),
+            url: sanitizeUrl(location.href),
+            type,
+            source: 'page.location',
+          });
+        }
+        window.__mightyOperationalRedirectStartedAt = Date.now();
+        recordTransition('initial');
+        const origPush = history.pushState;
+        const origReplace = history.replaceState;
+        history.pushState = function pushStateRedirect(state, title, url) {
+          trace.history_events.push({
+            observed_at_ms: Date.now() - window.__mightyOperationalRedirectStartedAt,
+            type: 'pushState',
+            href: sanitizeUrl(url ? new URL(url, location.href).href : location.href),
+            path: url ? String(url) : location.pathname,
+          });
+          recordTransition('pushState');
+          return origPush.apply(this, arguments);
+        };
+        history.replaceState = function replaceStateRedirect(state, title, url) {
+          trace.history_events.push({
+            observed_at_ms: Date.now() - window.__mightyOperationalRedirectStartedAt,
+            type: 'replaceState',
+            href: sanitizeUrl(url ? new URL(url, location.href).href : location.href),
+            path: url ? String(url) : location.pathname,
+          });
+          recordTransition('replaceState');
+          return origReplace.apply(this, arguments);
+        };
+        window.addEventListener('hashchange', () => recordTransition('hashchange'));
+        window.addEventListener('popstate', () => recordTransition('popstate'));
+      },
+    });
+    return true;
+  } catch (e) {
+    console.warn('[Mighty Probe] operational redirect observers failed:', e.message);
+    return false;
+  }
+}
+
+function collectOperationalRedirectFromPage() {
+  const trace = window.__mightyOperationalRedirectTrace || {};
+  const nav = performance.getEntriesByType('navigation')[0];
+  let firstNavigation = { available: false, reason: 'performance.navigation unavailable' };
+  if (nav) {
+    firstNavigation = {
+      available: true,
+      source: 'performance.navigation',
+      redirect_count: nav.redirectCount ?? null,
+      type: nav.type || null,
+    };
+  }
+  return {
+    url_transitions: trace.url_transitions || [],
+    history_events: trace.history_events || [],
+    first_navigation_response: firstNavigation,
+  };
+}
+
 async function getAmexCookieNamesOnly() {
   const domains = [
     'www.americanexpress.com',
@@ -3487,13 +3606,106 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
   _manualProbeInProgress = true;
   console.log(`[Mighty Probe] manual run for ${provider} (${manualRunId || 'no-id'})`);
   const deepInspect = DEEP_INSPECT_PROVIDERS.has(provider);
+  const captureAmexRedirect = provider === 'amex';
   let tab;
+  let probeTabId = null;
   const classifierStartedAt = new Date().toISOString();
+  const wallStart = Date.now();
+  let navigationEvents = [];
+  let cookieNamesBefore = null;
+  let firstNavResponse = { available: false, reason: 'webRequest permission not declared' };
+  let firstNavCaptured = false;
+  let onTabUpdated = null;
+  let onWebNavCommitted = null;
+  let onWebRequestHeaders = null;
+
+  const cleanupRedirectListeners = () => {
+    if (onTabUpdated) chrome.tabs.onUpdated.removeListener(onTabUpdated);
+    if (onWebNavCommitted && chrome.webNavigation?.onCommitted) {
+      chrome.webNavigation.onCommitted.removeListener(onWebNavCommitted);
+    }
+    if (onWebRequestHeaders && chrome.webRequest?.onHeadersReceived) {
+      try {
+        chrome.webRequest.onHeadersReceived.removeListener(onWebRequestHeaders);
+      } catch (_) {}
+    }
+  };
+
+  if (captureAmexRedirect) {
+    cookieNamesBefore = await getAmexOperationalCookieNamesByDomain();
+    onTabUpdated = (tabId, changeInfo) => {
+      if (!probeTabId || tabId !== probeTabId) return;
+      if (changeInfo.url) {
+        navigationEvents.push({
+          observed_at_ms: Date.now() - wallStart,
+          url: changeInfo.url,
+          status: changeInfo.status || null,
+          transition_type: null,
+          transition_qualifiers: null,
+          source: 'tabs.onUpdated',
+        });
+      }
+    };
+    chrome.tabs.onUpdated.addListener(onTabUpdated);
+
+    if (chrome.webNavigation?.onCommitted) {
+      onWebNavCommitted = (details) => {
+        if (!probeTabId || details.tabId !== probeTabId || details.frameId !== 0) return;
+        navigationEvents.push({
+          observed_at_ms: Date.now() - wallStart,
+          url: details.url,
+          status: null,
+          transition_type: details.transitionType || null,
+          transition_qualifiers: Array.isArray(details.transitionQualifiers)
+            ? details.transitionQualifiers.slice(0, 5)
+            : null,
+          source: 'webNavigation.onCommitted',
+        });
+      };
+      chrome.webNavigation.onCommitted.addListener(onWebNavCommitted);
+    }
+
+    if (chrome.webRequest?.onHeadersReceived) {
+      onWebRequestHeaders = (details) => {
+        if (!probeTabId || details.tabId !== probeTabId || details.type !== 'main_frame') return;
+        if (firstNavCaptured) return;
+        firstNavCaptured = true;
+        firstNavResponse = {
+          available: true,
+          source: 'webRequest.onHeadersReceived',
+          url: details.url,
+          status_code: details.statusCode ?? null,
+          redirect_url: details.redirectUrl || null,
+        };
+      };
+      try {
+        chrome.webRequest.onHeadersReceived.addListener(
+          onWebRequestHeaders,
+          { urls: ['*://*.americanexpress.com/*', '*://global.americanexpress.com/*'], types: ['main_frame'] },
+          ['responseHeaders'],
+        );
+      } catch (_) {
+        firstNavResponse = { available: false, reason: 'webRequest listener registration failed' };
+      }
+    }
+  }
+
   try {
     tab = await createProviderTab(entry, { active: false }, MANUAL_PROBE_TAB_REASON);
     if (!tab?.id) {
       console.warn('[Mighty Probe] manual tab creation blocked');
       return;
+    }
+    probeTabId = tab.id;
+
+    if (captureAmexRedirect) {
+      navigationEvents.push({
+        observed_at_ms: 0,
+        url: entry,
+        status: 'requested',
+        source: 'requested_entry',
+      });
+      await injectOperationalRedirectObservers(tab.id);
     }
     if (deepInspect) {
       await injectDeepInspectObservers(tab.id);
@@ -3516,11 +3728,50 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
       error: 'probe_no_result',
       failure_reason: 'probe_no_result',
     };
+
+    if (captureAmexRedirect) {
+      const tabNow = await chrome.tabs.get(tab.id).catch(() => null);
+      const finalUrl = tabNow?.url || payload.url_visited || entry;
+      let pageTrace = {};
+      try {
+        const [pageR] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: collectOperationalRedirectFromPage,
+        });
+        pageTrace = pageR?.result || {};
+      } catch (_) {}
+
+      const cookieNamesAfter = await getAmexOperationalCookieNamesByDomain();
+      const mergedTransitions = [
+        ...navigationEvents,
+        ...(pageTrace.url_transitions || []),
+      ].sort((a, b) => (a.observed_at_ms || 0) - (b.observed_at_ms || 0));
+      const firstObserved = mergedTransitions.find((e) => e.source !== 'requested_entry')?.url
+        || mergedTransitions[0]?.url
+        || entry;
+      const pageFirstNav = pageTrace.first_navigation_response || {};
+      const combinedFirstNav = firstNavResponse?.available
+        ? firstNavResponse
+        : (pageFirstNav.available ? pageFirstNav : firstNavResponse);
+
+      payload.operational_redirect_diagnostic = {
+        requested_entry_url: entry,
+        first_observed_tab_url: firstObserved,
+        final_url: finalUrl,
+        final_url_is_login: isAmexLoginUrlForOperationalRedirect(finalUrl),
+        url_transitions: mergedTransitions.slice(0, 100),
+        cookie_names_before: cookieNamesBefore,
+        cookie_names_after: cookieNamesAfter,
+        first_navigation_response: combinedFirstNav,
+        client_history_events: pageTrace.history_events || [],
+      };
+    }
+
     if (manualRunId) payload.manual_run_id = manualRunId;
     await _postProviderAccessProbe(apiKey, payload, { skipDedup: true });
     if (manualRunId) _lastProcessedManualRunId = manualRunId;
   } catch (e) {
-    await _postProviderAccessProbe(apiKey, {
+    const errorPayload = {
       provider,
       url_visited: entry,
       signed_in_detected: false,
@@ -3528,9 +3779,24 @@ async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
       error: e.message,
       failure_reason: 'probe_navigation_error',
       manual_run_id: manualRunId || undefined,
-    }, { skipDedup: true });
+    };
+    if (captureAmexRedirect && cookieNamesBefore) {
+      errorPayload.operational_redirect_diagnostic = {
+        requested_entry_url: entry,
+        first_observed_tab_url: navigationEvents.find((ev) => ev.source !== 'requested_entry')?.url || entry,
+        final_url: entry,
+        final_url_is_login: isAmexLoginUrlForOperationalRedirect(entry),
+        url_transitions: navigationEvents.slice(0, 100),
+        cookie_names_before: cookieNamesBefore,
+        cookie_names_after: await getAmexOperationalCookieNamesByDomain(),
+        first_navigation_response: firstNavResponse,
+        error: e.message,
+      };
+    }
+    await _postProviderAccessProbe(apiKey, errorPayload, { skipDedup: true });
     if (manualRunId) _lastProcessedManualRunId = manualRunId;
   } finally {
+    cleanupRedirectListeners();
     if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
     _manualProbeInProgress = false;
   }
