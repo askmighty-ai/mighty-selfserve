@@ -54,6 +54,11 @@ class AccountHealthCounts:
     needs_login: int = 0
     needs_attention: int = 0  # ERROR and other non-login user-actionable issues
 
+    @property
+    def attention_required(self) -> int:
+        """Accounts that need customer action — same total as the health chip."""
+        return self.needs_login + self.needs_attention
+
 
 # Canonical statuses that mean Mighty is still setting up / verifying.
 # Aligned with Accounts SECTION_WAITING (see resolve_accounts_section).
@@ -404,6 +409,27 @@ def resolve_home_state(
     if enrolled == 1 and accounts[0].status == UP_TO_DATE:
         cta_label = user_copy.home_view_provider_cta(accounts[0].display_name)
     setup_incomplete = health.waiting
+    attention = health.attention_required
+    if attention:
+        # Hero must agree with Account Health chips when action is required.
+        return HomeStateResult(
+            state=HomeState.ALL_CLEAR,
+            priority_summary=user_copy.HOME_PRIORITY_LOGIN,
+            featured=HomeFeatured(
+                headline=user_copy.home_attention_headline(attention),
+                body=user_copy.home_attention_body(setup_incomplete),
+                cta_label=user_copy.HOME_VIEW_ACCOUNTS_LABEL,
+                cta_url="/credentials?filter=needs_attention",
+            ),
+            health=health,
+            show_health=True,
+            show_metrics=bool(benefit_count or tracked_value_label),
+            metrics_accounts=enrolled,
+            metrics_benefits=benefit_count,
+            metrics_value=tracked_value_label,
+            activity_pending_count=pending_activity_count,
+            freshness_label=freshness_label,
+        )
     return HomeStateResult(
         state=HomeState.ALL_CLEAR,
         priority_summary=user_copy.HOME_PRIORITY_ALL_CLEAR,

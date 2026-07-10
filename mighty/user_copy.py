@@ -593,6 +593,20 @@ def home_all_clear_body(account_count: int, setup_incomplete_count: int = 0) -> 
     )
 
 
+def home_attention_headline(attention_count: int) -> str:
+    if attention_count == 1:
+        return "One account needs your attention."
+    return f"{attention_count} accounts need your attention."
+
+
+def home_attention_body(setup_incomplete_count: int = 0) -> str:
+    if setup_incomplete_count > 0:
+        n = setup_incomplete_count
+        word = "account" if n == 1 else "accounts"
+        return f"Mighty is also still setting up {n} {word} in the background."
+    return "Open Accounts to see what needs you — Mighty will keep monitoring everything else."
+
+
 def home_recommendation_priority(total: int) -> str:
     if total <= 1:
         return HOME_PRIORITY_RECOMMENDATION

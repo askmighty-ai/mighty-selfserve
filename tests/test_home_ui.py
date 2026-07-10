@@ -136,10 +136,60 @@ class TestHomeUi:
             escape=_escape,
         )
         assert "You&#x27;re all set for now." in rendered or "You're all set for now." in rendered
+        assert "Nothing needs your attention right now." in rendered
         assert "still setting up 2 accounts" in rendered
         assert "2 still setting up" in rendered
         assert "watching" not in rendered.lower()
         assert "Log in" not in rendered
+
+    def test_hero_agrees_with_health_when_attention_required(self):
+        accounts = [
+            _status(
+                "amex",
+                "American Express",
+                "up_to_date",
+                last_successful_sync_at="2026-07-03T12:00:00",
+            ),
+            _status("hilton", "Hilton", "waiting_for_extension"),
+            _status("delta", "Delta", "error"),
+        ]
+        result = resolve_home_state(accounts=accounts, actions=[])
+        rendered = render_home_page(
+            result,
+            first_name="Alex",
+            today_label="Friday, July 3",
+            escape=_escape,
+        )
+        assert result.health.attention_required == 1
+        assert "One account needs your attention." in rendered
+        assert "1 needs attention" in rendered
+        assert "Nothing needs your attention" not in rendered
+        assert "still setting up 1 account" in rendered
+        assert "1 still setting up" in rendered
+
+    def test_zero_attention_hero_says_nothing_needs_attention(self):
+        accounts = [
+            _status(
+                "amex",
+                "American Express",
+                "up_to_date",
+                last_successful_sync_at="2026-07-03T12:00:00",
+            ),
+            _status("hilton", "Hilton", "waiting_for_extension"),
+        ]
+        result = resolve_home_state(accounts=accounts, actions=[])
+        rendered = render_home_page(
+            result,
+            first_name="Alex",
+            today_label="Friday, July 3",
+            escape=_escape,
+        )
+        assert result.health.attention_required == 0
+        assert "Nothing needs your attention right now." in rendered
+        assert "1 needs attention" not in rendered
+        assert "needs attention" not in rendered.replace(
+            "Nothing needs your attention right now.", ""
+        )
 
     def test_all_up_to_date_monitoring_copy(self):
         accounts = [
