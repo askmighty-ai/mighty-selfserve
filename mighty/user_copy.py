@@ -35,6 +35,7 @@ ACCOUNT_STATE_UPDATING = "updating"
 ACCOUNT_STATE_CHECKING = "checking"
 ACCOUNT_STATE_READY = "ready"
 ACCOUNT_STATE_NEEDS_ATTENTION = "needs_attention"
+ACCOUNT_STATE_UNKNOWN = "unknown"
 
 ACCOUNT_STATE_LABELS: dict[str, str] = {
     ACCOUNT_STATE_NEEDS_SIGN_IN: "Needs sign in",
@@ -42,6 +43,7 @@ ACCOUNT_STATE_LABELS: dict[str, str] = {
     ACCOUNT_STATE_CHECKING: "Checking...",
     ACCOUNT_STATE_READY: "Ready",
     ACCOUNT_STATE_NEEDS_ATTENTION: "Needs attention",
+    ACCOUNT_STATE_UNKNOWN: "Unable to verify",
 }
 
 ACCOUNT_STATE_CTAS: dict[str, str] = {
@@ -50,6 +52,7 @@ ACCOUNT_STATE_CTAS: dict[str, str] = {
     ACCOUNT_STATE_CHECKING: "Checking…",
     ACCOUNT_STATE_READY: "View",
     ACCOUNT_STATE_NEEDS_ATTENTION: "Fix",
+    ACCOUNT_STATE_UNKNOWN: "Unable to verify",
 }
 
 CTA_SIGN_IN = ACCOUNT_STATE_CTAS[ACCOUNT_STATE_NEEDS_SIGN_IN]
@@ -97,6 +100,7 @@ STATUS_LABELS: dict[str, str] = {
     "needs_login": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN],
     "waiting_for_extension": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
     "error": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],
+    "unknown": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UNKNOWN],
 }
 
 # ── Worker popup copy ─────────────────────────────────────────────────────────

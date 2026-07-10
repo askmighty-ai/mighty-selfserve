@@ -216,8 +216,12 @@ def _user_action_for_status(
     connect_url: str,
     presentation_cta: str | None = None,
 ) -> tuple[str | None, str | None]:
-    if presentation_cta == CTA_SIGN_IN or status == NEEDS_LOGIN:
+    # Login CTA only when status is needs_login (from signed_out session_state).
+    if status == NEEDS_LOGIN:
         return presentation_cta or lifecycle.cta_label or CTA_SIGN_IN, login_url or None
+    if presentation_cta == CTA_SIGN_IN:
+        # Never promote a Sign in CTA unless status is needs_login.
+        return None, None
     if status == WAITING_FOR_EXTENSION:
         return lifecycle.cta_label or LIFECYCLE_CTAS["waiting_for_extension"], connect_url
     if status == ERROR:
@@ -294,16 +298,17 @@ def build_account_status(
                 cta_label=ACCOUNT_STATE_CTAS["updating"],
                 cta_disabled=True,
             )
-        elif session_state in ("signed_out", "checking", "connected"):
+        elif session_state in ("signed_out", "checking", "connected", "unknown"):
             presentation = AccountPresentation(
                 key=session_presentation.presentation_key,
                 label=session_presentation.presentation_label,
                 cta_label=session_presentation.cta_label or "",
-                cta_disabled=session_state == "checking",
+                cta_disabled=session_state in ("checking", "unknown"),
                 extension_hint=session_presentation.extension_hint,
             )
             if session_state in ("signed_out", "checking"):
                 canonical = session_presentation.status
+            # unknown keeps non-login canonical from resolve_canonical_status
         elif canonical == WAITING_FOR_EXTENSION:
             presentation = AccountPresentation(
                 key="updating",
@@ -324,7 +329,7 @@ def build_account_status(
                 key=session_presentation.presentation_key,
                 label=session_presentation.presentation_label,
                 cta_label=session_presentation.cta_label or "",
-                cta_disabled=False,
+                cta_disabled=session_state == "unknown",
                 extension_hint=session_presentation.extension_hint,
             )
     else:

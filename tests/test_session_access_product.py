@@ -337,3 +337,207 @@ def test_dashboard_and_current_access_agree(client):
             if access.current_access == "checking":
                 assert acct.status == CHECKING
                 assert acct.status != NEEDS_LOGIN
+
+
+def _access(current_access: str, *, cached: str = "none"):
+    from mighty.login_truth import CurrentAccountAccess
+
+    return CurrentAccountAccess(
+        provider="amex",
+        current_access=current_access,  # type: ignore[arg-type]
+        cached_data_state=cached,  # type: ignore[arg-type]
+        last_verified=None,
+        last_private_data=None,
+        evidence="test",
+        source="test",
+        next_action_type="none",
+        next_action_text="",
+    )
+
+
+def _legacy_needs_login_state():
+    from mighty.account_state import (
+        ACCESS_BROWSER_SESSION,
+        CONN_NEEDS_LOGIN,
+        DATA_NONE,
+        AccountState,
+        Confidence,
+        ConfidenceFactors,
+    )
+
+    return AccountState(
+        user_id="u",
+        provider="amex",
+        display_name="American Express",
+        category=None,
+        access_method=ACCESS_BROWSER_SESSION,
+        connection_state=CONN_NEEDS_LOGIN,
+        session_health="unknown",
+        last_verified_at=None,
+        data_status=DATA_NONE,
+        last_data_refresh=None,
+        observations_available=[],
+        field_count=0,
+        next_recommended_action=None,
+        confidence=Confidence(level="low", score=10, factors=ConfidenceFactors()),
+        status_line="",
+        is_actionable=True,
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        sync_status="login_required",
+    )
+
+
+def test_account_center_unknown_never_login_cta():
+    """unknown PSS + legacy needs_login → Unable to verify, no login CTA."""
+    from mighty.account_center_ui import PRIMARY_LOGIN, build_card_view
+
+    card = build_card_view(
+        _legacy_needs_login_state(),
+        fmt_relative=lambda _x: "now",
+        session_access=_access("unknown"),
+        provider_login_url="https://example.com/login",
+    )
+    assert card.status_label == "Unable to verify"
+    assert card.primary_action_kind != PRIMARY_LOGIN
+    assert card.primary_action_disabled is True
+    assert "sign in" not in card.status_label.lower()
+    assert card.primary_action_href is None
+
+
+def test_account_center_signed_out_login_cta():
+    """signed_out PSS → Needs sign in + login CTA."""
+    from mighty.account_center_ui import PRIMARY_LOGIN, build_card_view
+
+    card = build_card_view(
+        _legacy_needs_login_state(),
+        fmt_relative=lambda _x: "now",
+        session_access=_access("signed_out"),
+        provider_login_url="https://example.com/login",
+    )
+    assert card.status_label == "Needs sign in"
+    assert card.primary_action_kind == PRIMARY_LOGIN
+    assert card.primary_action_disabled is False
+    assert card.primary_action_href == "https://example.com/login"
+
+
+def test_accounts_cta_unknown_no_login(client):
+    """unknown PSS + LC_NEEDS_LOGIN → no login CTA."""
+    import app as mighty
+    from mighty.account_lifecycle import NEEDS_LOGIN as LC_NEEDS_LOGIN, resolve_account_lifecycle
+    from mighty.provider_account import ProviderAccount
+
+    acct = ProviderAccount(
+        source="amex",
+        sync_status="login_required",
+        connection_status="needs_login",
+        normalized_fields=[],
+    )
+    lc = resolve_account_lifecycle("amex", in_credentials=True, account=acct)
+    assert lc.state == LC_NEEDS_LOGIN
+    html = mighty._accounts_primary_cta_html(
+        lc, "amex", "American Express", "login_required", session_state="unknown",
+    )
+    assert "login" not in html.lower() or "Unable to verify" in html
+    assert "acct-maint-cta--urgent" not in html
+    assert "Unable to verify" in html
+
+
+def test_accounts_cta_checking_no_login(client):
+    """checking PSS + LC_NEEDS_LOGIN → no login CTA."""
+    import app as mighty
+    from mighty.account_lifecycle import NEEDS_LOGIN as LC_NEEDS_LOGIN, resolve_account_lifecycle
+    from mighty.provider_account import ProviderAccount
+
+    acct = ProviderAccount(
+        source="amex",
+        sync_status="login_required",
+        connection_status="needs_login",
+        normalized_fields=[],
+    )
+    lc = resolve_account_lifecycle("amex", in_credentials=True, account=acct)
+    assert lc.state == LC_NEEDS_LOGIN
+    html = mighty._accounts_primary_cta_html(
+        lc, "amex", "American Express", "login_required", session_state="checking",
+    )
+    assert "acct-maint-cta--urgent" not in html
+    assert "Checking" in html
+
+
+def test_accounts_cta_signed_out_login(client):
+    """signed_out PSS → login CTA."""
+    import app as mighty
+    from mighty.account_lifecycle import resolve_account_lifecycle
+    from mighty.provider_account import ProviderAccount
+
+    acct = ProviderAccount(source="amex", sync_status="ok", normalized_fields=[])
+    lc = resolve_account_lifecycle("amex", in_credentials=True, account=acct)
+    html = mighty._accounts_primary_cta_html(
+        lc, "amex", "American Express", "ok", session_state="signed_out",
+    )
+    assert "acct-maint-cta--urgent" in html
+    assert "Log in" in html or "Sign in" in html or "login" in html.lower()
+
+
+def test_unknown_consistent_across_product_surfaces(client):
+    """unknown PSS + legacy needs_login → never needs-login across surfaces."""
+    import app as mighty
+    from mighty.account_center_ui import PRIMARY_LOGIN, build_card_view
+    from mighty.accounts_ui import SECTION_NEEDS_LOGIN, resolve_accounts_section
+    from mighty.account_lifecycle import resolve_account_lifecycle
+    from mighty.provider_account import ProviderAccount
+
+    uid = _insert_amex(client, sync_status="login_required", connection_status="needs_login")
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        accounts, summary = load_all_account_statuses(
+            uid,
+            db,
+            decrypt_fn=mighty.decrypt_account_data,
+            display_names={"amex": "American Express"},
+            login_url_fn=lambda _s: "https://example.com/login",
+        )
+        by_source = {a.source: a for a in accounts}
+        amex = by_source["amex"]
+        assert amex.session_state == "unknown"
+        assert amex.status != NEEDS_LOGIN
+        assert amex.presentation_key != "needs_sign_in"
+        assert summary.needs_login_count == 0
+        assert "American Express" not in summary.needs_login_accounts
+
+        # API payload
+        resp = client.get("/api/account-status")
+        payload = resp.get_json()
+        api_amex = {a["source"]: a for a in payload["accounts"]}["amex"]
+        assert api_amex["session_state"] == "unknown"
+        assert api_amex["status"] != NEEDS_LOGIN
+        assert payload["summary"]["needs_login_count"] == 0
+
+        # Accounts section
+        acct = ProviderAccount(
+            source="amex",
+            sync_status="login_required",
+            connection_status="needs_login",
+            normalized_fields=[],
+        )
+        lc = resolve_account_lifecycle("amex", in_credentials=True, account=acct)
+        section = resolve_accounts_section(
+            lc, "login_required", source="amex", session_state="unknown",
+        )
+        assert section != SECTION_NEEDS_LOGIN
+        cta = mighty._accounts_primary_cta_html(
+            lc, "amex", "American Express", "login_required", session_state="unknown",
+        )
+        assert "acct-maint-cta--urgent" not in cta
+
+        # Account Center
+        card = build_card_view(
+            _legacy_needs_login_state(),
+            fmt_relative=lambda _x: "now",
+            session_access=_access("unknown"),
+            provider_login_url="https://example.com/login",
+        )
+        assert card.primary_action_kind != PRIMARY_LOGIN
+        assert card.status_label == "Unable to verify"
+
+        # Popup payload uses same summary
+        assert payload["summary"]["access_loop"]["needs_sign_in"] == 0

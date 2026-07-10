@@ -1893,12 +1893,13 @@ def _fmt_sync(ts):
 def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
     """Return a (label, color, icon) tuple for display on cards.
 
-    Stale (3+ days) and login-required states use red + bold to draw attention.
-    Returns (label, color, icon) — callers that need font-weight should check
-    whether the color is '#dc2626' and apply font-weight:600 accordingly.
+    Stale (3+ days) uses red + bold to draw attention.
+    Legacy sync_status=login_required must not emit a Needs login badge —
+    login presentation comes from session_access / Current Access only.
     """
+    # Ignore legacy login_required for product freshness display.
     if sync_status == "login_required":
-        return (user_copy.NEEDS_LOGIN_BADGE, "#dc2626", "")
+        sync_status = "ok"
     if sync_status == "no_data" or not synced_at:
         return ("No data", "#9ca3af", "—")
     try:
@@ -14160,17 +14161,48 @@ def _accounts_primary_cta_html(
     source: str,
     display_name: str,
     sync_status: str = "ok",
+    *,
+    session_state: str | None = None,
 ) -> str:
-    """Primary CTA for Accounts maintenance rows — blocked states only."""
+    """Primary CTA for Accounts maintenance rows — blocked states only.
+
+    Login CTAs come only from canonical session_state (signed_out).
+    Legacy lifecycle must not independently create a login CTA.
+    """
     btn = (
         "display:inline-block;padding:6px 12px;border-radius:7px;font-size:12px;"
         "font-weight:600;text-decoration:none;font-family:inherit"
     )
+    # Canonical session access owns all login-related actions.
+    if session_state == "signed_out":
+        login_url = _provider_login_url(source)
+        if not login_url:
+            return ""
+        label = user_copy.home_login_cta(display_name)
+        return (
+            f'<a href="{he(login_url)}" target="_blank" rel="noopener" '
+            f'class="acct-maint-cta acct-maint-cta--urgent" style="{btn}">'
+            f'{he(label)}</a>'
+        )
+    if session_state == "checking":
+        return (
+            f'<span class="acct-maint-cta acct-maint-cta--disabled" style="{btn};'
+            f'opacity:.7;cursor:default">Checking…</span>'
+        )
+    if session_state == "unknown":
+        return (
+            f'<span class="acct-maint-cta acct-maint-cta--disabled" style="{btn};'
+            f'opacity:.7;cursor:default">Unable to verify</span>'
+        )
+    if session_state == "connected":
+        return ""
+
     canonical = resolve_canonical_status(
         lifecycle,
         sync_status or "ok",
         source=source,
         updating_source=None,
+        session_state=session_state,
     )
     if canonical == ERROR:
         open_url = _provider_login_url(source) or SITE_ENTRY_URL.get(source, "")
@@ -14181,16 +14213,7 @@ def _accounts_primary_cta_html(
             f'class="acct-maint-cta" style="{btn}">'
             f'{he(user_copy.CTA_OPEN_PROVIDER)}</a>'
         )
-    if lifecycle.state == LC_NEEDS_LOGIN or canonical == CANON_NEEDS_LOGIN:
-        login_url = _provider_login_url(source)
-        if not login_url:
-            return ""
-        label = user_copy.home_login_cta(display_name)
-        return (
-            f'<a href="{he(login_url)}" target="_blank" rel="noopener" '
-            f'class="acct-maint-cta acct-maint-cta--urgent" style="{btn}">'
-            f'{he(label)}</a>'
-        )
+    # Non-login lifecycle actions only — never LC_NEEDS_LOGIN → login CTA.
     if lifecycle.state in (LC_WAITING, LC_CONNECTED, LC_ADDED):
         open_url = _provider_login_url(source) or SITE_ENTRY_URL.get(source, "")
         if not open_url:
@@ -14281,6 +14304,13 @@ def _accounts_collect_rows(
         failure = failure_reason_by_source.get(source, "")
         if section == SECTION_NEEDS_ATTENTION and not failure:
             failure = user_copy.FAILURE_HINTS.get(sync_status, sync_status or "Update error")
+        status_label = row_status_label(section, lifecycle)
+        if session_state == "unknown":
+            status_label = "Unable to verify"
+        elif session_state == "checking":
+            status_label = "Checking..."
+        elif session_state == "signed_out":
+            status_label = "Needs login"
         rows.append(
             AccountsRow(
                 source=source,
@@ -14288,7 +14318,7 @@ def _accounts_collect_rows(
                 icon=icon,
                 color=color,
                 section=section,
-                status_label=row_status_label(section, lifecycle),
+                status_label=status_label,
                 subline=row_subline(
                     section,
                     lifecycle,
@@ -14416,6 +14446,7 @@ def _build_credentials_page(
                         row.source,
                         row.display_name,
                         sync_status_by_source.get(row.source, "ok"),
+                        session_state=session_state_by_source.get(row.source),
                     )
                 debug_html = ""
                 if show_debug and row.source in debug_by_source:
@@ -19547,13 +19578,9 @@ def _lifecycle_primary_cta_html(
         "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca"
     )
     if lifecycle.state == LC_NEEDS_LOGIN:
-        login_url = _provider_login_url(source)
-        if login_url:
-            return (
-                f'<a href="{he(login_url)}" target="_blank" rel="noopener" '
-                f'style="{btn_style};background:#fef2f2;color:#dc2626;border-color:#fecaca">'
-                f'{he(cta)}</a>'
-            )
+        # Login CTAs are owned by session_access / _accounts_primary_cta_html.
+        # Legacy lifecycle must not independently emit a Sign in button.
+        return ""
     if lifecycle.state == LC_WAITING:
         if surface == "dashboard":
             return (

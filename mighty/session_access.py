@@ -21,6 +21,7 @@ from mighty.user_copy import (
     ACCOUNT_STATE_NEEDS_ATTENTION,
     ACCOUNT_STATE_NEEDS_SIGN_IN,
     ACCOUNT_STATE_READY,
+    ACCOUNT_STATE_UNKNOWN,
     CTA_SIGN_IN,
     CTA_UPDATING,
     CTA_VIEW,
@@ -47,8 +48,8 @@ PRODUCT_SESSION_FROM_CURRENT_ACCESS: dict[CurrentAccess, ProductSessionState] = 
 SESSION_STATUS_LABELS: dict[ProductSessionState, str] = {
     "connected": "Connected",
     "checking": "Checking...",
-    "signed_out": "Needs login",
-    "unknown": "Unknown",
+    "signed_out": "Needs sign in",
+    "unknown": "Unable to verify",
 }
 
 
@@ -91,7 +92,7 @@ def resolve_session_access_presentation(
             session_state=session_state,
             current_access=access.current_access,
             presentation_key=ACCOUNT_STATE_NEEDS_SIGN_IN,
-            presentation_label="Needs sign in",
+            presentation_label=SESSION_STATUS_LABELS["signed_out"],
             status=NEEDS_LOGIN,
             status_color="#dc2626",
             cta_label=CTA_SIGN_IN,
@@ -103,7 +104,7 @@ def resolve_session_access_presentation(
             session_state=session_state,
             current_access=access.current_access,
             presentation_key=ACCOUNT_STATE_CHECKING,
-            presentation_label="Checking...",
+            presentation_label=SESSION_STATUS_LABELS["checking"],
             status=CHECKING,
             status_color="#6366f1",
             cta_label=CTA_UPDATING,
@@ -115,23 +116,23 @@ def resolve_session_access_presentation(
             session_state=session_state,
             current_access=access.current_access,
             presentation_key=ACCOUNT_STATE_READY,
-            presentation_label="Ready",
+            presentation_label=SESSION_STATUS_LABELS["connected"],
             status=UP_TO_DATE,
             status_color="#16a34a",
             cta_label=CTA_VIEW,
             extension_hint=None,
             verification_message=None,
         )
-    # unknown — never "needs login"; no fresh signed-out evidence
+    # unknown — never "needs login"; no fresh signed-out evidence; no login CTA
     return SessionAccessPresentation(
         session_state=session_state,
         current_access=access.current_access,
-        presentation_key=ACCOUNT_STATE_READY if access.cached_data_state != "none" else ACCOUNT_STATE_NEEDS_ATTENTION,
-        presentation_label="Ready" if access.cached_data_state != "none" else "Needs attention",
-        status=UP_TO_DATE if access.cached_data_state != "none" else WAITING_FOR_EXTENSION,
-        status_color="#16a34a" if access.cached_data_state != "none" else "#6366f1",
-        cta_label=CTA_VIEW if access.cached_data_state != "none" else None,
-        extension_hint=None,
+        presentation_key=ACCOUNT_STATE_UNKNOWN,
+        presentation_label=SESSION_STATUS_LABELS["unknown"],
+        status="unknown",
+        status_color="#6b7280",
+        cta_label=None,
+        extension_hint="Mighty could not verify this account automatically.",
         verification_message=None,
     )
 
