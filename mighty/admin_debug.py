@@ -2014,7 +2014,9 @@ def _current_access_badge(access_label: str, *, current_access: str) -> str:
     colors = {
         "connected_now": ("#065f46", "#d1fae5"),
         "signed_out": ("#991b1b", "#fee2e2"),
+        "checking": ("#1e3a5f", "#dbeafe"),
         "unknown": ("#374151", "#f3f4f6"),
+        "error": ("#9a3412", "#ffedd5"),
     }
     fg, bg = colors.get(current_access, colors["unknown"])
     return (
@@ -2063,10 +2065,20 @@ def render_login_truth_page(rows: list[Any]) -> str:
     summary = current_account_access_summary(sorted_rows)
     display_rows = [format_current_account_access_display_row(row) for row in sorted_rows]
 
+    def _verification_note(r: Any) -> str:
+        if r.current_access != "checking":
+            return ""
+        lifecycle = r.verification_lifecycle or "requested"
+        return (
+            f'<div class="muted" style="font-size:11px;margin-top:4px">'
+            f"Verification status: {_he(lifecycle.replace('_', ' '))}</div>"
+        )
+
     table = "".join(
         f"<tr>"
         f"<td><strong>{_he(r.provider)}</strong></td>"
         f"<td>{_current_access_badge(r.current_access_label, current_access=r.current_access)}"
+        f"{_verification_note(r)}"
         f"{_current_access_source_detail(r.evidence, r.source_label, r.source_internal)}</td>"
         f"<td>{_cached_data_badge(r.cached_data_label, cached_data_state=r.cached_data_state)}</td>"
         f"<td class='muted'>{_fmt_iso(r.last_verified)}</td>"
@@ -2080,6 +2092,8 @@ def render_login_truth_page(rows: list[Any]) -> str:
         '<div style="display:flex;gap:24px;flex-wrap:wrap">'
         f'<div><div class="muted" style="font-size:11px">Connected now</div>'
         f'<div style="font-size:24px;font-weight:700;color:#6ee7b7">{summary["connected_now"]}</div></div>'
+        f'<div><div class="muted" style="font-size:11px">Checking</div>'
+        f'<div style="font-size:24px;font-weight:700;color:#93c5fd">{summary["checking"]}</div></div>'
         f'<div><div class="muted" style="font-size:11px">Signed out</div>'
         f'<div style="font-size:24px;font-weight:700;color:#fca5a5">{summary["signed_out"]}</div></div>'
         f'<div><div class="muted" style="font-size:11px">Unknown</div>'
@@ -2088,10 +2102,10 @@ def render_login_truth_page(rows: list[Any]) -> str:
     )
 
     body = (
-        '<p class="lede">Current Access comes from explicit session evidence '
-        "(login page, session API, authenticated page) — not from cached private fields. "
-        "Cached Data is independent: Mighty may still hold a fresh Membership Rewards balance "
-        "even when the user is signed out.</p>"
+        '<p class="lede">Current Access means recently verified session evidence '
+        "within a short live-session freshness window — not historical connected "
+        "state. Cached Data is independent: Mighty may still hold a fresh Membership "
+        "Rewards balance even when the user is signed out or access is being checked.</p>"
         f"{timezone_note_html()}"
         f"{summary_card}"
         '<div class="card"><table><thead><tr>'
@@ -2100,7 +2114,8 @@ def render_login_truth_page(rows: list[Any]) -> str:
         f"</tr></thead><tbody>{table}</tbody></table></div>"
         '<p class="muted" style="font-size:12px;margin-top:16px">'
         "<strong>Why this matters:</strong> Current Access and Cached Data answer different "
-        "questions. A signed-out session can still leave fresh Membership Rewards data on file.</p>"
+        "questions. Stale connected evidence is re-verified automatically; it is never "
+        "shown as Connected now indefinitely.</p>"
     )
     return _admin_shell("login-truth", "Current Account Access", body)
 

@@ -28,10 +28,18 @@ from mighty.provider_session_state import (
     ensure_provider_session_state_tables,
     get_provider_session_states,
 )
+from mighty.session_verification import (
+    SessionVerification,
+    ensure_session_verification_tables,
+    get_session_verifications,
+    is_verification_active,
+    request_session_verification,
+    verification_entry_url,
+)
 
 LoginVerdict = Literal["YES", "NO", "UNKNOWN"]
 ObservationKind = Literal["private", "login"]
-CurrentAccess = Literal["connected_now", "signed_out", "unknown"]
+CurrentAccess = Literal["connected_now", "signed_out", "checking", "unknown", "error"]
 CachedDataState = Literal["fresh", "stale", "none"]
 AccessState = Literal[
     "accessible",
@@ -46,10 +54,14 @@ NextActionType = Literal[
     "reauthenticate",
     "wait_for_observation",
     "report_problem",
+    "verifying",
 ]
 
 PRIVATE_DATA_WINDOW_HOURS = 24
 CACHED_DATA_FRESH_HOURS = PRIVATE_DATA_WINDOW_HOURS
+# Live-session freshness for Current Access. Stale connected evidence must not
+# render as connected_now; request background re-verification instead.
+CURRENT_SESSION_FRESHNESS_SECONDS = 120
 
 LOGIN_AUTH_STATES = frozenset({
     AUTH_LOGIN_PAGE,
@@ -133,6 +145,7 @@ class CurrentAccountAccess:
     source: str
     next_action_type: NextActionType
     next_action_text: str
+    verification_lifecycle: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +160,7 @@ class CurrentAccountAccessDisplayRow:
     evidence: str
     source_label: str
     source_internal: str | None = None
+    verification_lifecycle: str | None = None
 
 
 STATUS_LABELS: dict[LoginVerdict, str] = {
@@ -164,13 +178,17 @@ STATUS_SORT_ORDER: dict[LoginVerdict, int] = {
 CURRENT_ACCESS_LABELS: dict[CurrentAccess, str] = {
     "connected_now": "Connected now",
     "signed_out": "Signed out",
+    "checking": "Checking",
     "unknown": "Unknown",
+    "error": "Error",
 }
 
 CURRENT_ACCESS_SORT_ORDER: dict[CurrentAccess, int] = {
     "connected_now": 0,
-    "signed_out": 1,
-    "unknown": 2,
+    "checking": 1,
+    "signed_out": 2,
+    "unknown": 3,
+    "error": 4,
 }
 
 CACHED_DATA_LABELS: dict[CachedDataState, str] = {
@@ -204,11 +222,24 @@ NEXT_ACTION_BY_CURRENT_ACCESS: dict[CurrentAccess, tuple[NextActionType, str]] =
         "reauthenticate",
         "Sign into this account again.",
     ),
+    "checking": (
+        "verifying",
+        "Mighty is verifying this account now.",
+    ),
     "unknown": (
         "connect_account",
         "Sign into this account once. Mighty will detect it automatically.",
     ),
+    "error": (
+        "report_problem",
+        "Mighty could not verify this account automatically.",
+    ),
 }
+
+NEXT_ACTION_UNKNOWN_INCONCLUSIVE = (
+    "wait_for_observation",
+    "Mighty could not verify this account automatically.",
+)
 
 NEXT_ACTION_BY_STATE: dict[AccessState, tuple[NextActionType, str]] = {
     "accessible": (
@@ -307,8 +338,60 @@ SESSION_STATE_TO_CURRENT_ACCESS: dict[str, CurrentAccess] = {
     "connected": "connected_now",
     "signed_out": "signed_out",
     "unknown": "unknown",
-    "error": "unknown",
+    "error": "error",
 }
+
+
+def session_evidence_age_seconds(
+    session_state: ProviderSessionState | None,
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    """Seconds since session evidence was observed, or None if unknown."""
+    if session_state is None or not session_state.observed_at:
+        return None
+    observed = _parse_iso(session_state.observed_at)
+    if observed is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return (now - observed).total_seconds()
+
+
+def is_session_evidence_fresh(
+    session_state: ProviderSessionState | None,
+    *,
+    now: datetime | None = None,
+    freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+) -> bool:
+    """True when explicit session evidence is within the live-session window."""
+    age = session_evidence_age_seconds(session_state, now=now)
+    if age is None:
+        return False
+    return age <= freshness_seconds
+
+
+def needs_session_verification(
+    session_state: ProviderSessionState | None,
+    provider: str,
+    *,
+    now: datetime | None = None,
+    freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+) -> bool:
+    """True when Current Access should request background re-verification.
+
+    Stale connected/signed_out/error evidence for a provider with an automatic
+    verification entry URL triggers a check. Missing evidence does not — there
+    is nothing to refresh until the user connects once.
+    """
+    if verification_entry_url(provider) is None:
+        return False
+    if session_state is None or session_state.state == "unknown":
+        return False
+    if session_state.state not in {"connected", "signed_out", "error"}:
+        return False
+    return not is_session_evidence_fresh(
+        session_state, now=now, freshness_seconds=freshness_seconds
+    )
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -597,10 +680,17 @@ def resolve_current_account_access(
     observations: list[TruthObservation],
     *,
     session_state: ProviderSessionState | None = None,
+    verification: SessionVerification | None = None,
     now: datetime | None = None,
+    freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
     fresh_hours: int = CACHED_DATA_FRESH_HOURS,
 ) -> CurrentAccountAccess:
-    """Current access from session state; cached data from private observations only."""
+    """Current access from fresh session evidence; cached data stays independent.
+
+    Stored provider_session_state may still say connected while displayed
+    current access becomes checking/unknown once evidence is outside the
+    live-session freshness window. Verification lifecycle is read-only here.
+    """
     now = now or datetime.now(timezone.utc)
     cached_data_state, last_private_data = resolve_cached_data_state(
         observations,
@@ -608,20 +698,50 @@ def resolve_current_account_access(
         fresh_hours=fresh_hours,
     )
 
+    verification_lifecycle = verification.lifecycle if verification else None
+    verifying = is_verification_active(verification)
+    fresh = is_session_evidence_fresh(
+        session_state, now=now, freshness_seconds=freshness_seconds
+    )
+
     if session_state is None or session_state.state == "unknown":
-        current_access: CurrentAccess = "unknown"
         evidence = "—"
         source = "—"
         last_verified = None
+        if verifying:
+            current_access: CurrentAccess = "checking"
+        elif verification is not None and verification.lifecycle == "failed":
+            current_access = "error"
+        else:
+            current_access = "unknown"
     else:
-        current_access = SESSION_STATE_TO_CURRENT_ACCESS.get(
-            session_state.state, "unknown"
-        )
         evidence = session_state.evidence_summary or "—"
         source = session_state.source or "provider_session_state"
         last_verified = session_state.observed_at
+        if fresh:
+            current_access = SESSION_STATE_TO_CURRENT_ACCESS.get(
+                session_state.state, "unknown"
+            )
+        elif verifying:
+            current_access = "checking"
+        elif verification is not None and verification.lifecycle == "failed":
+            current_access = "error"
+        else:
+            # Stale historical evidence must not render as connected_now.
+            current_access = "unknown"
 
-    next_action_type, next_action_text = NEXT_ACTION_BY_CURRENT_ACCESS[current_access]
+    if current_access == "unknown" and (
+        (session_state is not None and session_state.state != "unknown" and not fresh)
+        or (
+            verification is not None
+            and verification.lifecycle in {"completed", "timed_out"}
+            and not fresh
+        )
+    ):
+        next_action_type, next_action_text = NEXT_ACTION_UNKNOWN_INCONCLUSIVE
+    else:
+        next_action_type, next_action_text = NEXT_ACTION_BY_CURRENT_ACCESS[current_access]
+
     return CurrentAccountAccess(
         provider=provider,
         current_access=current_access,
@@ -632,6 +752,7 @@ def resolve_current_account_access(
         source=source,
         next_action_type=next_action_type,
         next_action_text=next_action_text,
+        verification_lifecycle=verification_lifecycle,
     )
 
 
@@ -824,8 +945,15 @@ def compute_current_account_access_rows(
     decrypt_account_fn: Callable[[str, str], dict[str, Any]],
     providers: tuple[str, ...] | list[str] | None = None,
     now: datetime | None = None,
+    request_verification: bool = False,
 ) -> list[CurrentAccountAccess]:
-    """Build Current Access / Cached Data rows for each configured probe provider."""
+    """Build Current Access / Cached Data rows for each configured probe provider.
+
+    When request_verification is True, stale session evidence enqueues a
+    background verification job. That writes only the verification lifecycle
+    table — never provider_session_state.
+    """
+    now = now or datetime.now(timezone.utc)
     provider_list, observations_by_provider, session_by_provider = (
         _load_provider_observation_context(
             db,
@@ -834,11 +962,28 @@ def compute_current_account_access_rows(
             providers=providers,
         )
     )
+    ensure_session_verification_tables(db)
+    verifications = get_session_verifications(
+        db, user_id, providers=provider_list, now=now
+    )
+
+    if request_verification:
+        for provider in provider_list:
+            session_state = session_by_provider.get(provider)
+            if not needs_session_verification(session_state, provider, now=now):
+                continue
+            if is_verification_active(verifications.get(provider)):
+                continue
+            created = request_session_verification(db, user_id, provider, now=now)
+            if created is not None:
+                verifications[provider] = created
+
     return [
         resolve_current_account_access(
             provider,
             observations_by_provider[provider],
             session_state=session_by_provider.get(provider),
+            verification=verifications.get(provider),
             now=now,
         )
         for provider in provider_list
@@ -1370,7 +1515,9 @@ def current_account_access_summary(rows: list[CurrentAccountAccess]) -> dict[str
     return {
         "connected_now": sum(1 for row in rows if row.current_access == "connected_now"),
         "signed_out": sum(1 for row in rows if row.current_access == "signed_out"),
+        "checking": sum(1 for row in rows if row.current_access == "checking"),
         "unknown": sum(1 for row in rows if row.current_access == "unknown"),
+        "error": sum(1 for row in rows if row.current_access == "error"),
     }
 
 
@@ -1389,4 +1536,5 @@ def format_current_account_access_display_row(
         evidence=row.evidence,
         source_label=source_label,
         source_internal=source_internal,
+        verification_lifecycle=row.verification_lifecycle,
     )

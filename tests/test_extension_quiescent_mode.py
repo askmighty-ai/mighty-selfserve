@@ -12,7 +12,7 @@ def _read_background_js() -> str:
 
 def test_extension_build_identifier_in_logs():
     src = _read_background_js()
-    assert "1.4.8-amex-operational-global-overview-entry" in src
+    assert "1.4.10-session-freshness-verification" in src
     assert "background.js loaded — version" in src
 
 
@@ -140,6 +140,17 @@ def test_amex_bootstrap_trace_runner_present():
 def test_amex_operational_account_entry_uses_global_overview():
     src = _read_background_js()
     assert "amex:         'https://global.americanexpress.com/overview'" in src
+
+
+def test_amex_session_verification_uses_global_overview():
+    src = _read_background_js()
+    assert "AMEX_SESSION_VERIFICATION_ENTRY" in src
+    assert "https://global.americanexpress.com/overview" in src
+    assert "runSessionVerification" in src
+    assert "session-verification/pending" in src
+    assert "SESSION_VERIFICATION_TAB_REASON" in src
+    assert "if (reason === SESSION_VERIFICATION_TAB_REASON) return false;" in src
+    assert "createProviderTab(entry, { active: false }, SESSION_VERIFICATION_TAB_REASON)" in src
 
 
 def test_amex_live_session_comparator_present():
