@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Mighty Worker",
   "description": "Mighty's Chrome worker — runs continuously and updates your accounts automatically. Login is the only manual step.",
-  "version": "1.3.13",
+  "version": "1.3.14",
   "permissions": [
     "tabs",
     "windows",

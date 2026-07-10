@@ -33,17 +33,14 @@ function applyStaticCopy() {
   const title = document.getElementById('header-title');
   const headerSub = document.getElementById('header-sub');
   const dashBtn = document.getElementById('dashboard-btn');
-  const setupBox = document.getElementById('setup-box');
   if (title && worker.name) title.textContent = worker.name;
   if (headerSub) {
     headerSub.textContent = worker.subtitle_background || 'Working in the background';
   }
-  const ctaLabel = worker.open_account_center || 'Open Account Center';
-  if (dashBtn) {
-    dashBtn.textContent = ctaLabel;
-    dashBtn.href = MIGHTY_URL + '/account-center';
-  }
-  const ctaLabel = loop.open_account_center || worker.open_account_center || 'Open Account Center';
+  const ctaLabel =
+    (loop && loop.open_account_center) ||
+    worker.open_account_center ||
+    'Open Account Center';
   if (dashBtn) {
     dashBtn.textContent = ctaLabel;
     dashBtn.href = MIGHTY_URL + '/account-center';
@@ -60,6 +57,7 @@ const label        = document.getElementById('status-label');
 const detail       = document.getElementById('status-detail');
 const headerSub    = document.getElementById('header-sub');
 const progressWrap = document.getElementById('progress-wrap');
+const setupBox     = document.getElementById('setup-box');
 
 function showBackgroundStatus(statusLine) {
   detail.classList.add('hidden');
