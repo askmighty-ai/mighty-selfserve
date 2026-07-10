@@ -79,12 +79,12 @@ def _account_health_strip(result: HomeStateResult, escape: Callable[[Any], str])
         label = f"{health.up_to_date} up to date"
         chips.append(_health_chip(label, health.up_to_date, "up_to_date", escape))
     if health.waiting:
-        label = f"{health.waiting} waiting"
+        label = f"{health.waiting} {user_copy.HOME_HEALTH_STILL_SETTING_UP}"
         chips.append(_health_chip(label, health.waiting, "waiting", escape))
-    if health.needs_login:
-        n = health.needs_login
-        label = f"{n} need{'s' if n == 1 else ''} attention"
-        chips.append(_health_chip(label, health.needs_login, "needs_attention", escape))
+    attention = health.needs_login + health.needs_attention
+    if attention:
+        label = f"{attention} need{'s' if attention == 1 else ''} attention"
+        chips.append(_health_chip(label, attention, "needs_attention", escape))
 
     freshness = escape(result.freshness_label or "")
     freshness_html = (

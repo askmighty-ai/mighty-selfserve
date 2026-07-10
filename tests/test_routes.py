@@ -294,7 +294,7 @@ def test_credentials_page_filter_waiting(client):
         db.commit()
     r = client.get("/credentials?filter=waiting")
     assert r.status_code == 200
-    assert b"Waiting" in r.data
+    assert b"Still setting up" in r.data
     assert b"acct-portfolio-chip--active" in r.data
 
 
@@ -330,7 +330,7 @@ def test_credentials_page_section_headers(client):
     r = client.get("/credentials")
     assert r.status_code == 200
     assert b"Up to date" in r.data
-    assert b"Waiting" in r.data
+    assert b"Still setting up" in r.data
     assert b"Edit login" not in r.data
     assert b"fields-panel" not in r.data
 

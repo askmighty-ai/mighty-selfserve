@@ -114,3 +114,59 @@ class TestHomeStatePriority:
         result = resolve_home_state(accounts=accounts, actions=[])
         assert result.state == HomeState.ALL_CLEAR
         assert result.health.up_to_date == 2
+        assert result.featured.headline == "You're all set."
+        assert "monitoring all 2 accounts" in result.featured.body
+
+    def test_all_clear_for_now_when_still_setting_up(self):
+        """2 up to date + 6 still setting up + 0 user actions."""
+        accounts = [
+            _acct("amex", "American Express", "up_to_date"),
+            _acct("delta", "Delta", "up_to_date"),
+            _acct("hilton", "Hilton", "waiting_for_extension"),
+            _acct("united", "United", "waiting_for_extension"),
+            _acct("marriott", "Marriott", "checking"),
+            _acct("chase", "Chase", "waiting_for_extension"),
+            _acct("citi", "Citi", "waiting_for_extension"),
+            _acct("capitalone", "Capital One", "waiting_for_extension"),
+        ]
+        result = resolve_home_state(accounts=accounts, actions=[])
+        assert result.state == HomeState.ALL_CLEAR
+        assert result.health.up_to_date == 2
+        assert result.health.waiting == 6
+        assert result.health.needs_login == 0
+        assert result.featured.headline == "You're all set for now."
+        assert "still setting up 6 accounts" in result.featured.body
+        assert result.featured.cta_label
+        assert "Log in" not in (result.featured.cta_label or "")
+
+    def test_signed_out_shows_login_hero(self):
+        accounts = [
+            _acct("amex", "American Express", "needs_login"),
+            _acct("delta", "Delta", "up_to_date"),
+            _acct("hilton", "Hilton", "waiting_for_extension"),
+        ]
+        result = resolve_home_state(accounts=accounts)
+        assert result.state == HomeState.LOGIN
+        assert result.health.needs_login == 1
+        assert result.health.waiting == 1
+        assert "Log in" in (result.featured.cta_label or "")
+
+    def test_setup_states_never_counted_as_needs_login(self):
+        for status in ("checking", "waiting_for_extension", "updating"):
+            accounts = [_acct("amex", "American Express", status)]
+            result = resolve_home_state(accounts=accounts)
+            assert result.health.needs_login == 0
+            assert result.health.waiting == 1
+            assert result.state != HomeState.LOGIN
+
+    def test_updating_and_error_align_with_accounts_buckets(self):
+        accounts = [
+            _acct("amex", "American Express", "updating"),
+            _acct("delta", "Delta", "error"),
+        ]
+        result = resolve_home_state(accounts=accounts)
+        assert result.health.waiting == 1  # updating → still setting up
+        assert result.health.needs_attention == 1  # error → needs attention
+        assert result.health.needs_login == 0
+        # ERROR is user-actionable attention, not a login hero by itself
+        assert result.state != HomeState.LOGIN

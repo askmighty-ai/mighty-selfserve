@@ -490,6 +490,7 @@ HOME_UPDATE_BODY = (
 )
 
 HOME_ALL_CLEAR_HEADLINE = "You're all set."
+HOME_ALL_CLEAR_FOR_NOW_HEADLINE = "You're all set for now."
 
 HOME_PRIORITY_WAITING = "Getting your first update."
 HOME_PRIORITY_LOGIN = "One thing needs you."
@@ -500,6 +501,7 @@ HOME_PRIORITY_RECOMMENDATION = "1 thing worth your attention."
 HOME_FOOTER_WORKER = "Mighty runs in Chrome"
 HOME_FOOTER_LAST_CHECKED = "Last checked {time}"
 HOME_ACTIVITY_LINK = "{count} awaiting decision"
+HOME_HEALTH_STILL_SETTING_UP = "still setting up"
 
 # ── Accounts maintenance page (/credentials) ─────────────────────────────────
 ACCOUNTS_PAGE_TITLE = "Accounts"
@@ -511,12 +513,18 @@ ACCOUNTS_EMPTY_CTA_MANUAL = "Add account manually"
 ACCOUNTS_ADD_COVERAGE_NOTE = "Add accounts from Gmail or pick a provider manually."
 ACCOUNTS_FILTER_ALL = "All"
 ACCOUNTS_FILTER_NEEDS_ATTENTION = "Needs attention"
-ACCOUNTS_FILTER_WAITING = "Waiting"
+ACCOUNTS_FILTER_WAITING = "Still setting up"
 ACCOUNTS_FILTER_UP_TO_DATE = "Up to date"
 ACCOUNTS_NOT_CHECKED_YET = "Not checked yet"
-ACCOUNTS_SUBLINE_FIRST_VISIT = "Waiting for first visit"
+ACCOUNTS_STATUS_SETTING_UP = "Setting up"
+ACCOUNTS_STATUS_AWAITING_FIRST = "Awaiting first check"
+ACCOUNTS_STATUS_CHECKING = "Checking now"
+ACCOUNTS_STATUS_NOT_VERIFIED = "Not yet verified"
+ACCOUNTS_SUBLINE_FIRST_VISIT = "Mighty will check this account automatically."
 ACCOUNTS_SUBLINE_CONNECTED = "Connected — awaiting data"
 ACCOUNTS_SUBLINE_UPDATING = "Updating…"
+ACCOUNTS_SUBLINE_CHECKING = "Mighty is verifying this account."
+ACCOUNTS_SUBLINE_UNKNOWN = "Mighty hasn't confirmed access yet."
 ACCOUNTS_DISCONNECT = "Disconnect"
 ACCOUNTS_VIEW_ACCOUNT = CTA_VIEW_ACCOUNT
 ACCOUNTS_FILTER_EMPTY = "No accounts in this view."
@@ -563,12 +571,25 @@ def home_update_headline(provider_name: str) -> str:
     return f"Updating {provider_name}…"
 
 
-def home_all_clear_body(account_count: int) -> str:
+def home_all_clear_headline(setup_incomplete_count: int = 0) -> str:
+    if setup_incomplete_count > 0:
+        return HOME_ALL_CLEAR_FOR_NOW_HEADLINE
+    return HOME_ALL_CLEAR_HEADLINE
+
+
+def home_all_clear_body(account_count: int, setup_incomplete_count: int = 0) -> str:
+    if setup_incomplete_count > 0:
+        n = setup_incomplete_count
+        word = "account" if n == 1 else "accounts"
+        return (
+            f"Nothing needs your attention right now. Mighty is still setting up {n} {word} "
+            "and will keep working in the background."
+        )
     n = account_count
     word = "account" if n == 1 else "accounts"
     return (
-        f"Mighty is watching {n} {word}. No expiring perks or logins need you right now. "
-        "Check back anytime — we'll speak up when something matters."
+        f"Mighty is monitoring all {n} {word}. "
+        "We'll let you know when something needs your attention."
     )
 
 

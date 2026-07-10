@@ -16,6 +16,7 @@ def _status(source, display_name, status, **kwargs):
         "needs_login": "needs_sign_in",
         "up_to_date": "ready",
         "updating": "updating",
+        "checking": "checking",
         "waiting_for_extension": "updating",
         "error": "needs_attention",
     }.get(status, "ready")
@@ -115,3 +116,54 @@ class TestHomeUi:
         assert 'filter=needs_attention' in rendered
         assert "need login" not in rendered.lower()
         assert "Dismiss for now" not in rendered
+
+    def test_mixed_setup_all_clear_copy(self):
+        accounts = [
+            _status(
+                "amex",
+                "American Express",
+                "up_to_date",
+                last_successful_sync_at="2026-07-03T12:00:00",
+            ),
+            _status("hilton", "Hilton", "waiting_for_extension"),
+            _status("united", "United", "checking"),
+        ]
+        result = resolve_home_state(accounts=accounts, actions=[])
+        rendered = render_home_page(
+            result,
+            first_name="Alex",
+            today_label="Friday, July 3",
+            escape=_escape,
+        )
+        assert "You&#x27;re all set for now." in rendered or "You're all set for now." in rendered
+        assert "still setting up 2 accounts" in rendered
+        assert "2 still setting up" in rendered
+        assert "watching" not in rendered.lower()
+        assert "Log in" not in rendered
+
+    def test_all_up_to_date_monitoring_copy(self):
+        accounts = [
+            _status(
+                "amex",
+                "American Express",
+                "up_to_date",
+                last_successful_sync_at="2026-07-03T12:00:00",
+            ),
+            _status(
+                "delta",
+                "Delta",
+                "up_to_date",
+                last_successful_sync_at="2026-07-03T12:00:00",
+            ),
+        ]
+        result = resolve_home_state(accounts=accounts, actions=[])
+        rendered = render_home_page(
+            result,
+            first_name="Alex",
+            today_label="Friday, July 3",
+            escape=_escape,
+        )
+        assert "You&#x27;re all set." in rendered or "You're all set." in rendered
+        assert "all set for now" not in rendered
+        assert "monitoring all 2 accounts" in rendered
+        assert "watching" not in rendered.lower()

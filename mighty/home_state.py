@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Sequence
 
 from mighty.account_status import (
+    CHECKING,
     ERROR,
     NEEDS_LOGIN,
     UPDATING,
@@ -49,8 +50,20 @@ class HomeFeatured:
 @dataclass
 class AccountHealthCounts:
     up_to_date: int = 0
-    waiting: int = 0
+    waiting: int = 0  # still setting up / verifying (not user-actionable)
     needs_login: int = 0
+    needs_attention: int = 0  # ERROR and other non-login user-actionable issues
+
+
+# Canonical statuses that mean Mighty is still setting up / verifying.
+# Aligned with Accounts SECTION_WAITING (see resolve_accounts_section).
+# Exception documented: ERROR maps to needs_attention on both surfaces
+# (Accounts SECTION_NEEDS_ATTENTION), not still-setting-up.
+_STILL_SETTING_UP = frozenset({
+    WAITING_FOR_EXTENSION,
+    UPDATING,
+    CHECKING,
+})
 
 
 @dataclass
@@ -85,17 +98,26 @@ _PRIORITY_ORDER = {
 
 
 def _health_counts(accounts: Sequence[AccountStatus]) -> AccountHealthCounts:
+    """Bucket accounts for Dashboard health chips.
+
+    Same product buckets as Accounts portfolio:
+    - UP_TO_DATE → up to date
+    - NEEDS_LOGIN → needs login (user attention)
+    - ERROR → needs attention (user-actionable sync/setup issue)
+    - UPDATING / CHECKING / WAITING_FOR_EXTENSION / other incomplete → still setting up
+    """
     counts = AccountHealthCounts()
     for acct in accounts:
         if acct.status == UP_TO_DATE:
             counts.up_to_date += 1
         elif acct.status == NEEDS_LOGIN:
             counts.needs_login += 1
-        elif acct.status in (WAITING_FOR_EXTENSION, ERROR):
+        elif acct.status == ERROR:
+            counts.needs_attention += 1
+        elif acct.status in _STILL_SETTING_UP:
             counts.waiting += 1
-        elif acct.status == UPDATING:
-            pass
-        elif acct.status != UPDATING:
+        else:
+            # Unknown / unexpected incomplete statuses → still setting up
             counts.waiting += 1
     return counts
 
@@ -118,9 +140,13 @@ def _pick_waiting_account(accounts: Sequence[AccountStatus]) -> AccountStatus | 
 def _waiting_row_label(acct: AccountStatus) -> str:
     if acct.status == NEEDS_LOGIN:
         return user_copy.STATUS_LABEL_NEEDS_LOGIN
+    if acct.status == CHECKING:
+        return user_copy.ACCOUNTS_STATUS_CHECKING
+    if acct.status == UPDATING:
+        return user_copy.STATUS_LABEL_UPDATING
     if acct.last_successful_sync_at:
         return user_copy.CONNECTION_STATUS_LINES.get("connected", "Connected — awaiting data")
-    return user_copy.WORKER_WAITING_FIRST_UPDATE.replace("…", "").strip() or "Waiting for first visit"
+    return user_copy.ACCOUNTS_STATUS_AWAITING_FIRST
 
 
 def _is_recommendation_action(action: Action) -> bool:
@@ -377,12 +403,13 @@ def resolve_home_state(
     cta_url = "/credentials"
     if enrolled == 1 and accounts[0].status == UP_TO_DATE:
         cta_label = user_copy.home_view_provider_cta(accounts[0].display_name)
+    setup_incomplete = health.waiting
     return HomeStateResult(
         state=HomeState.ALL_CLEAR,
         priority_summary=user_copy.HOME_PRIORITY_ALL_CLEAR,
         featured=HomeFeatured(
-            headline=user_copy.HOME_ALL_CLEAR_HEADLINE,
-            body=user_copy.home_all_clear_body(enrolled),
+            headline=user_copy.home_all_clear_headline(setup_incomplete),
+            body=user_copy.home_all_clear_body(enrolled, setup_incomplete),
             cta_label=cta_label,
             cta_url=cta_url,
         ),
