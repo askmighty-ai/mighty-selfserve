@@ -330,6 +330,7 @@ def test_surfaces_agree_on_product_session_contract(client, provider, pss_state)
             DISPLAY_NAMES[provider],
             "login_required",
             session_state=product.session_state,
+            login_required=product.login_required,
         )
         if product.login_required:
             assert "acct-maint-cta--urgent" in cta

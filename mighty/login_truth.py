@@ -211,39 +211,21 @@ ACCESS_STATE_SORT_ORDER: dict[AccessState, int] = {
     "unexpected_problem": 4,
 }
 
-# Recommended user actions must agree with mighty.session_access.PRODUCT_NEXT_ACTION
-# for the matching product session_state (error → signed_out, unknown → unknown).
-NEXT_ACTION_BY_CURRENT_ACCESS: dict[CurrentAccess, tuple[NextActionType, str]] = {
-    "connected_now": (
-        "none",
-        "Nothing. Mighty can monitor this account automatically.",
-    ),
-    "signed_out": (
-        "reauthenticate",
-        "Sign into this account again.",
-    ),
-    "checking": (
-        "verifying",
-        "Mighty is verifying this account now.",
-    ),
-    # unknown is not login-required — no fresh signed-out evidence.
-    "unknown": (
-        "none",
-        "Mighty could not verify this account automatically.",
-    ),
-    # Product maps verification error → signed_out / reauthenticate.
-    "error": (
-        "reauthenticate",
-        "Sign into this account again.",
-    ),
-}
+# Session next-action policy lives in mighty.session_access.PRODUCT_NEXT_ACTION.
+# Admin Current Access resolves through to_product_session_state so there is one
+# canonical mapping (error → signed_out, unknown → none / unable to verify).
 
-# Same recommended action as product unknown (not login-required).
-NEXT_ACTION_UNKNOWN_INCONCLUSIVE = (
-    "none",
-    "Mighty could not verify this account automatically.",
-)
 
+def next_action_for_current_access(
+    current_access: CurrentAccess,
+) -> tuple[NextActionType, str]:
+    """Canonical session next-action for a Current Access value."""
+    from mighty.session_access import PRODUCT_NEXT_ACTION, to_product_session_state
+
+    return PRODUCT_NEXT_ACTION[to_product_session_state(current_access)]
+
+
+# Legacy Access State model (older diagnostic path) — not Current Access.
 NEXT_ACTION_BY_STATE: dict[AccessState, tuple[NextActionType, str]] = {
     "accessible": (
         "none",
@@ -705,9 +687,10 @@ def resolve_current_account_access(
             and not fresh
         )
     ):
-        next_action_type, next_action_text = NEXT_ACTION_UNKNOWN_INCONCLUSIVE
+        # Inconclusive/stale unknown uses the same product unknown next-action.
+        next_action_type, next_action_text = next_action_for_current_access("unknown")
     else:
-        next_action_type, next_action_text = NEXT_ACTION_BY_CURRENT_ACCESS[current_access]
+        next_action_type, next_action_text = next_action_for_current_access(current_access)
 
     return CurrentAccountAccess(
         provider=provider,

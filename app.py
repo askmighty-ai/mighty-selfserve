@@ -6639,8 +6639,12 @@ if (document.querySelector('[data-discovering="1"]') && !window._syncPoll) {
       var card = el.closest('.acct-card');
       var cardName = card ? (card.getAttribute('data-name') || '') : '';
       var syncStatus = card ? (card.getAttribute('data-sync-status') || '') : '';
+      var sessionState = card ? (card.getAttribute('data-session-state') || '') : '';
+      var loginRequired = card ? (card.getAttribute('data-login-required') || '') : '';
       var msg;
-      if (syncStatus === 'login_required') {
+      // Login messaging comes only from ProductAccountState (session_state /
+      // login_required). Legacy sync_status=login_required must not invent Needs login.
+      if (sessionState === 'signed_out' || loginRequired === 'true') {
         msg = '<div style="color:#92400e;background:#fef3c7;border-radius:6px;padding:10px 12px;font-size:13px;margin:0">⚠️ Log in to ' + (cardName || 'this site') + ' in Chrome to restore updates</div>';
       } else if (syncStatus === 'no_data') {
         msg = '<div style="color:#6b7280;font-size:13px;font-style:italic">Visit ' + (cardName || 'this site') + ' in Chrome to capture your account data</div>';
@@ -6672,15 +6676,22 @@ function updateSyncTimes() {
   document.querySelectorAll('[data-synced]').forEach(function(el) {
     var ts = el.dataset.synced;
     if (!ts) return;
-    // Login-required / checking accounts carry session state on the parent card
-    var card = el.closest('[data-sync-status], [data-session-state]');
-    var syncStatus = card ? card.dataset.syncStatus : '';
+    // Login / checking badges come only from canonical session fields.
+    // Legacy data-sync-status=login_required must not override connected/unknown/checking.
+    var card = el.closest('[data-session-state], [data-login-required], [data-sync-status]');
     var sessionState = card ? card.dataset.sessionState : '';
-    if (sessionState === 'signed_out' || syncStatus === 'login_required') {
+    var loginRequired = card ? (card.dataset.loginRequired === 'true') : false;
+    if (sessionState === 'signed_out' || loginRequired) {
       el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">{user_copy.NEEDS_LOGIN_BADGE}</span>';
       return;
     }
-    if (sessionState === 'checking' || syncStatus === 'checking') {
+    if (sessionState === 'checking') {
+      el.innerHTML = '<span style="font-size:11px;color:#6366f1;font-weight:600">Checking...</span>';
+      return;
+    }
+    // Compatibility: stale sync_status alone never shows Needs login when a
+    // canonical session_state is present (connected / unknown / checking).
+    if (!sessionState && card && card.dataset.syncStatus === 'checking') {
       el.innerHTML = '<span style="font-size:11px;color:#6366f1;font-weight:600">Checking...</span>';
       return;
     }
@@ -6707,6 +6718,9 @@ setInterval(updateSyncTimes, 30000);
 
 // ── Canonical account-status poll ───────────────────────────────────────────
 // Keeps card labels and sync header aligned with extension popup via /api/account-status.
+// Live Dashboard no longer renders [data-account-source] account cards; this poll
+// still updates the global header and remains safe if cards are reintroduced.
+// Login badges must use session_state / login_required — never legacy sync_status alone.
 function _pollAccountStatus() {
   fetch('/api/account-status').then(function(r){return r.json();}).then(function(d){
     if (!d.ok) return;
@@ -6720,9 +6734,14 @@ function _pollAccountStatus() {
       if (acct.session_state) {
         card.dataset.sessionState = acct.session_state;
       }
-      if (acct.status === 'needs_login') {
-        card.dataset.syncStatus = 'login_required';
-      } else if (acct.status === 'checking') {
+      if (typeof acct.login_required === 'boolean') {
+        card.dataset.loginRequired = acct.login_required ? 'true' : 'false';
+      }
+      // Keep syncStatus for non-login setup signals only. Never write
+      // login_required from legacy sync_status when session says otherwise.
+      if (acct.login_required === true || acct.session_state === 'signed_out') {
+        card.dataset.syncStatus = 'ok'; // login UI uses session/login_required
+      } else if (acct.status === 'checking' || acct.session_state === 'checking') {
         card.dataset.syncStatus = 'checking';
       } else if (card.dataset.syncStatus === 'login_required' || card.dataset.syncStatus === 'checking') {
         card.dataset.syncStatus = 'ok';
@@ -6733,9 +6752,9 @@ function _pollAccountStatus() {
         el.dataset.synced = acct.last_successful_sync_at;
         return;
       }
-      if (acct.status === 'needs_login') {
+      if (acct.login_required === true || acct.session_state === 'signed_out') {
         el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">' + acct.status_label + '</span>';
-      } else if (acct.status === 'checking') {
+      } else if (acct.status === 'checking' || acct.session_state === 'checking') {
         var checkMsg = acct.verification_message || acct.status_label || 'Checking...';
         el.innerHTML = '<span style="font-size:11px;color:#6366f1;font-weight:600">' + checkMsg + '</span>';
       } else if (acct.status === 'updating') {
@@ -14174,18 +14193,26 @@ def _accounts_primary_cta_html(
     sync_status: str = "ok",
     *,
     session_state: str | None = None,
+    login_required: bool | None = None,
 ) -> str:
     """Primary CTA for Accounts maintenance rows — blocked states only.
 
-    Login CTAs come only from canonical session_state (signed_out).
+    Login CTAs come only from ProductAccountState.login_required.
     Legacy lifecycle must not independently create a login CTA.
     """
+    from mighty.session_access import product_state_for_session
+
     btn = (
         "display:inline-block;padding:6px 12px;border-radius:7px;font-size:12px;"
         "font-weight:600;text-decoration:none;font-family:inherit"
     )
-    # Canonical session access owns all login-related actions.
-    if session_state == "signed_out":
+    # Prefer explicit login_required from ProductAccountState; otherwise derive
+    # from session_state via the shared product contract (never ad-hoc).
+    if login_required is None and session_state is not None:
+        login_required = product_state_for_session(session_state).login_required
+    login_required = bool(login_required)
+
+    if login_required:
         login_url = _provider_login_url(source)
         if not login_url:
             return ""
@@ -14200,10 +14227,8 @@ def _accounts_primary_cta_html(
             f'<span class="acct-maint-cta acct-maint-cta--disabled" style="{btn};'
             f'opacity:.7;cursor:default">{he(user_copy.ACCOUNTS_STATUS_CHECKING)}</span>'
         )
-    if session_state == "unknown":
-        # No login CTA for unknown — status/subline carry "Not yet verified".
-        return ""
-    if session_state == "connected":
+    if session_state in ("unknown", "connected"):
+        # No sign-in CTA — status/subline carry verification / connected copy.
         return ""
 
     canonical = resolve_canonical_status(
@@ -14408,6 +14433,7 @@ def _build_credentials_page(
     failure_reason_by_source: dict = None,
     last_checked_label: str = "",
     session_state_by_source: dict = None,
+    login_required_by_source: dict = None,
 ) -> str:
     """Generate the Accounts maintenance page HTML."""
     extra_by_source = extra_by_source or {}
@@ -14421,6 +14447,7 @@ def _build_credentials_page(
     sync_status_by_source = sync_status_by_source or {}
     failure_reason_by_source = failure_reason_by_source or {}
     session_state_by_source = session_state_by_source or {}
+    login_required_by_source = login_required_by_source or {}
     active_filter = normalize_filter(filter_key)
     csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
@@ -14457,6 +14484,7 @@ def _build_credentials_page(
                         row.display_name,
                         sync_status_by_source.get(row.source, "ok"),
                         session_state=session_state_by_source.get(row.source),
+                        login_required=login_required_by_source.get(row.source),
                     )
                 debug_html = ""
                 if show_debug and row.source in debug_by_source:
@@ -15144,7 +15172,10 @@ def credentials_page():
             }
     _rt.step("lifecycle")
     last_checked_label = portfolio_last_checked(all_synced_at, _fmt_sync)
-    from mighty.session_access import load_session_access_by_provider, to_product_session_state
+    from mighty.session_access import (
+        load_session_access_by_provider,
+        resolve_product_account_state,
+    )
     from mighty.provider_access_probe import PROBE_PROVIDERS
 
     _session_access = load_session_access_by_provider(
@@ -15153,9 +15184,17 @@ def credentials_page():
         decrypt_fn=_decrypt_acct,
         providers=sorted(set(configured) | set(PROBE_PROVIDERS)),
     )
-    session_state_by_source = {
-        provider: to_product_session_state(row.current_access)
+    product_by_source = {
+        provider: resolve_product_account_state(row)
         for provider, row in _session_access.items()
+    }
+    session_state_by_source = {
+        provider: product.session_state
+        for provider, product in product_by_source.items()
+    }
+    login_required_by_source = {
+        provider: product.login_required
+        for provider, product in product_by_source.items()
     }
     page_html = _build_credentials_page(
         user, configured, extra_by_source, synced_at_by_source,
@@ -15169,6 +15208,7 @@ def credentials_page():
         failure_reason_by_source=failure_reason_by_source,
         last_checked_label=last_checked_label,
         session_state_by_source=session_state_by_source,
+        login_required_by_source=login_required_by_source,
     )
     _rt.step("build_html")
     _rt.finish()
