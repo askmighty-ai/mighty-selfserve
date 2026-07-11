@@ -3,6 +3,11 @@
 Cached private fields (e.g. Membership Rewards balance) must not by themselves mark a
 provider as currently connected. Explicit session evidence wins, and newer evidence
 replaces older evidence.
+
+Production writers: do **not** call ``upsert_provider_session_state`` from new code.
+Route active verification and definitive session evidence through
+``mighty.provider_access_manager`` (the Provider Access Manager boundary).
+The ``record_*`` helpers below are compatibility wrappers that delegate to PAM.
 """
 
 from __future__ import annotations
@@ -324,20 +329,21 @@ def record_amex_extension_connected(
     evidence_summary: str = "Amex extension reported verified authenticated session",
     source: str = "extension_amex_connected",
 ) -> ProviderSessionState:
-    """Persist connected session state from an Amex extension verified-session report."""
-    when = _parse_iso(observed_at) if isinstance(observed_at, str) else observed_at
-    return upsert_provider_session_state(
+    """Compatibility wrapper — routes through Provider Access Manager.
+
+    Prefer ``mighty.provider_access_manager.record_amex_extension_connected``.
+    """
+    from mighty.provider_access_manager import (
+        record_amex_extension_connected as _pam_record,
+    )
+
+    return _pam_record(
         db,
         user_id,
-        SessionEvidence(
-            provider="amex",
-            state="connected",
-            evidence_type=evidence_type,
-            evidence_summary=evidence_summary,
-            observed_at=when or datetime.now(timezone.utc),
-            source=source,
-            confidence="high",
-        ),
+        observed_at=observed_at,
+        evidence_type=evidence_type,
+        evidence_summary=evidence_summary,
+        source=source,
     )
 
 
@@ -347,21 +353,15 @@ def record_amex_extension_needs_login(
     *,
     observed_at: datetime | str | None = None,
 ) -> ProviderSessionState:
-    """Persist signed_out session state from an Amex extension needs-login report."""
-    when = _parse_iso(observed_at) if isinstance(observed_at, str) else observed_at
-    return upsert_provider_session_state(
-        db,
-        user_id,
-        SessionEvidence(
-            provider="amex",
-            state="signed_out",
-            evidence_type="login_required",
-            evidence_summary="Amex extension reported login required",
-            observed_at=when or datetime.now(timezone.utc),
-            source="extension_amex_needs_login",
-            confidence="high",
-        ),
+    """Compatibility wrapper — routes through Provider Access Manager.
+
+    Prefer ``mighty.provider_access_manager.record_amex_extension_needs_login``.
+    """
+    from mighty.provider_access_manager import (
+        record_amex_extension_needs_login as _pam_record,
     )
+
+    return _pam_record(db, user_id, observed_at=observed_at)
 
 
 def record_extension_login_required(
@@ -372,26 +372,18 @@ def record_extension_login_required(
     observed_at: datetime | str | None = None,
     source: str = "extension_sync_failure",
 ) -> ProviderSessionState | None:
-    """Persist signed_out evidence when the extension reports login_required.
+    """Compatibility wrapper — routes through Provider Access Manager.
 
+    Prefer ``mighty.provider_access_manager.record_extension_login_required``.
     Only probe providers participate in provider_session_state. Legacy sync_status
     is still written separately for compatibility.
     """
-    if provider not in PROBE_PROVIDERS:
-        return None
-    when = _parse_iso(observed_at) if isinstance(observed_at, str) else observed_at
-    return upsert_provider_session_state(
-        db,
-        user_id,
-        SessionEvidence(
-            provider=provider,
-            state="signed_out",
-            evidence_type="login_required",
-            evidence_summary=f"{provider} extension reported login required",
-            observed_at=when or datetime.now(timezone.utc),
-            source=source,
-            confidence="high",
-        ),
+    from mighty.provider_access_manager import (
+        record_extension_login_required as _pam_record,
+    )
+
+    return _pam_record(
+        db, user_id, provider, observed_at=observed_at, source=source
     )
 
 
@@ -405,23 +397,22 @@ def record_extension_session_connected(
     evidence_summary: str | None = None,
     source: str = "extension_login_cleared",
 ) -> ProviderSessionState | None:
-    """Persist connected evidence when the extension verifies an authenticated session."""
-    if provider not in PROBE_PROVIDERS:
-        return None
-    when = _parse_iso(observed_at) if isinstance(observed_at, str) else observed_at
-    return upsert_provider_session_state(
+    """Compatibility wrapper — routes through Provider Access Manager.
+
+    Prefer ``mighty.provider_access_manager.record_extension_session_connected``.
+    """
+    from mighty.provider_access_manager import (
+        record_extension_session_connected as _pam_record,
+    )
+
+    return _pam_record(
         db,
         user_id,
-        SessionEvidence(
-            provider=provider,
-            state="connected",
-            evidence_type=evidence_type,
-            evidence_summary=evidence_summary
-            or f"{provider} extension reported verified authenticated session",
-            observed_at=when or datetime.now(timezone.utc),
-            source=source,
-            confidence="high",
-        ),
+        provider,
+        observed_at=observed_at,
+        evidence_type=evidence_type,
+        evidence_summary=evidence_summary,
+        source=source,
     )
 
 
@@ -430,7 +421,12 @@ def upsert_provider_session_state(
     user_id: str,
     evidence: SessionEvidence,
 ) -> ProviderSessionState:
-    """Persist session evidence using observed_at, confidence, then evidence priority."""
+    """Persist session evidence using observed_at, confidence, then evidence priority.
+
+    **Do not call from new production code.** Use Provider Access Manager
+    (``record_provider_access_evidence`` / evidence helpers). Approved callers:
+    ``mighty.provider_access_manager`` and this module's storage implementation.
+    """
     ensure_provider_session_state_tables(db)
     existing = get_provider_session_state(db, user_id, evidence.provider)
     if not should_replace_session_evidence(existing, evidence):
@@ -483,10 +479,12 @@ def record_session_evidence_from_probe(
     user_id: str,
     result: dict[str, Any],
 ) -> ProviderSessionState | None:
-    evidence = derive_session_evidence_from_probe(result)
-    if evidence is None:
-        return None
-    return upsert_provider_session_state(db, user_id, evidence)
+    """Compatibility wrapper — routes through Provider Access Manager."""
+    from mighty.provider_access_manager import (
+        record_session_evidence_from_probe as _pam_record,
+    )
+
+    return _pam_record(db, user_id, result)
 
 
 def get_provider_session_state(

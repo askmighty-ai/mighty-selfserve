@@ -2172,7 +2172,13 @@ async function _postAmexConnected(apiKey) {
   }
 }
 
-/** Update provider connection state via the extension adapter (session probe). */
+/** Update provider connection state via the extension adapter (session probe).
+ *
+ * LEGACY ACCESS PATH — DO NOT EXTEND
+ * Scheduled for redirect/removal in Phase 2/3.
+ * Production re-verify owns: session_verification → runSessionVerification →
+ * provider_access_probe → provider_session_state (via Provider Access Manager).
+ */
 async function probeAmexConnectionState(apiKey, accounts) {
   if (!apiKey || !Array.isArray(accounts)) return;
   const navigationBlocked = await shouldDeferAutomaticProviderNavigation(apiKey);
@@ -3471,6 +3477,10 @@ async function waitForProbePageStability(tabId, { observationMs = 5000 } = {}) {
   await sleep(observationMs);
 }
 
+/**
+ * DEBUG-ONLY manual provider access probe — not a product access trigger.
+ * Production re-verify: session_verification → runSessionVerification → PAM.
+ */
 async function runManualProviderAccessProbe(apiKey, provider, manualRunId) {
   if (_manualProbeInProgress || _bootstrapTraceInProgress || _liveSessionComparisonInProgress) {
     console.log('[Mighty Probe] manual probe already in progress — skipping');
@@ -3760,6 +3770,13 @@ async function runProviderAccessProbe(apiKey, provider) {
   }
 }
 
+/**
+ * LEGACY ACCESS PATH — DO NOT EXTEND
+ * Scheduled for redirect/removal in Phase 2/3.
+ * Sync-time automatic probes duplicate session verification. Prefer the
+ * Provider Access Manager path (session_verification queue) for production
+ * access checks. Gated by DISABLE_AUTOMATIC_PROVIDER_PROBES / server config.
+ */
 async function runProviderAccessProbes(apiKey, accounts) {
   if (!apiKey || !Array.isArray(accounts)) return;
   if (!(await fetchAutomaticProbesEnabled(apiKey))) {
