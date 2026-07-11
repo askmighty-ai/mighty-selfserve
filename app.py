@@ -18082,15 +18082,16 @@ def api_account_status():
         load_all_account_statuses,
     )
     from mighty.session_access import CHECKING
-    from mighty.session_verification import ensure_stale_session_verifications_for_user
+    from mighty.provider_access_manager import ensure_stale_provider_access_checks
 
     uid = get_current_user_id()
     db = get_db()
     # Primary on-demand product trigger: dashboard poll + extension popup.
     # Enqueues background session re-verification for stale evidence only.
     # Does not write provider_session_state from this surface.
+    # Routes through Provider Access Manager (canonical access boundary).
     try:
-        ensure_stale_session_verifications_for_user(db, uid)
+        ensure_stale_provider_access_checks(db, uid)
     except Exception:
         pass
     user_row = db.execute(
@@ -18251,7 +18252,7 @@ def api_sync_failure():
 
     if reason == "login_required":
         try:
-            from mighty.provider_session_state import record_extension_login_required
+            from mighty.provider_access_manager import record_extension_login_required
 
             record_extension_login_required(db, uid, source, observed_at=now)
         except Exception:
@@ -18332,7 +18333,7 @@ def api_sync_login_cleared():
     # authenticated/session_verified evidence — not merely because login_required cleared.
     if (body or {}).get("session_verified"):
         try:
-            from mighty.provider_session_state import (
+            from mighty.provider_access_manager import (
                 record_amex_extension_connected,
                 record_extension_session_connected,
             )
@@ -20810,7 +20811,7 @@ def api_extension_amex_needs_login():
         }), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    from mighty.provider_session_state import record_amex_extension_needs_login
+    from mighty.provider_access_manager import record_amex_extension_needs_login
     record_amex_extension_needs_login(db, uid, observed_at=iso())
     from mighty.account_state import safe_recompute_account_state
     safe_recompute_account_state(db, uid, AMEX_SOURCE)
@@ -20846,7 +20847,7 @@ def api_extension_amex_connected():
         }), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    from mighty.provider_session_state import record_amex_extension_connected
+    from mighty.provider_access_manager import record_amex_extension_connected
     record_amex_extension_connected(db, uid, observed_at=iso())
     from mighty.account_state import safe_recompute_account_state
     safe_recompute_account_state(db, uid, AMEX_SOURCE)
@@ -20887,7 +20888,7 @@ def api_extension_amex_extract():
         return jsonify({"ok": False, "error": str(e)}), 500
 
     # Session verified flag on this request updates session state; MR value does not.
-    from mighty.provider_session_state import record_amex_extension_connected
+    from mighty.provider_access_manager import record_amex_extension_connected
     record_amex_extension_connected(
         db,
         uid,
@@ -21547,6 +21548,7 @@ def api_extension_session_verification_pending():
     Also ensures stale providers are enqueued so verification is driven by
     extension lifecycle (startup / keepalive poll), not admin page views.
     """
+    from mighty.provider_access_manager import ensure_stale_provider_access_checks
     from mighty.session_verification import (
         get_pending_session_verification,
         session_verification_to_json,
@@ -21555,18 +21557,17 @@ def api_extension_session_verification_pending():
     user = api_user()[0]
     if not user:
         return jsonify({"error": "invalid api key"}), 401
-    pending = get_pending_session_verification(
-        get_db(), user["id"], ensure_stale=True
-    )
+    db = get_db()
+    # Schedule through Provider Access Manager, then claim the next pending job.
+    ensure_stale_provider_access_checks(db, user["id"])
+    pending = get_pending_session_verification(db, user["id"], ensure_stale=False)
     return jsonify(session_verification_to_json(pending))
 
 
 @app.route("/api/extension/session-verification/running", methods=["POST"])
 def api_extension_session_verification_running():
-    from mighty.session_verification import (
-        mark_session_verification_running,
-        session_verification_to_json,
-    )
+    from mighty.provider_access_manager import mark_provider_access_check_running
+    from mighty.session_verification import session_verification_to_json
 
     user, body = api_user()
     if not user:
@@ -21575,7 +21576,7 @@ def api_extension_session_verification_running():
     verification_id = str(verification_id).strip()
     if not verification_id:
         return jsonify({"error": "verification_id required"}), 400
-    state = mark_session_verification_running(get_db(), user["id"], verification_id)
+    state = mark_provider_access_check_running(get_db(), user["id"], verification_id)
     if state is None:
         return jsonify({"error": "verification not found"}), 404
     return jsonify(session_verification_to_json(state))
@@ -21583,7 +21584,7 @@ def api_extension_session_verification_running():
 
 @app.route("/api/extension/session-verification/complete", methods=["POST"])
 def api_extension_session_verification_complete():
-    from mighty.session_verification import complete_session_verification
+    from mighty.provider_access_manager import finish_provider_access_check
 
     user, body = api_user()
     if not user:
@@ -21595,7 +21596,7 @@ def api_extension_session_verification_complete():
     lifecycle = str(body.get("lifecycle") or "completed").strip().lower()
     if lifecycle not in {"completed", "failed", "timed_out"}:
         return jsonify({"error": "invalid lifecycle"}), 400
-    complete_session_verification(
+    finish_provider_access_check(
         get_db(),
         user["id"],
         verification_id,
@@ -21607,7 +21608,11 @@ def api_extension_session_verification_complete():
 
 @app.route("/api/extension/provider-access-probe", methods=["POST"])
 def api_extension_provider_access_probe():
-    """Extension diagnostic: record provider access probe result."""
+    """Extension diagnostic: record provider access probe result.
+
+    Active session verification completions route through Provider Access Manager.
+    Manual probe remains debug-only (still accepted here for admin tooling).
+    """
     user, body = api_user()
     if not user:
         return jsonify({"error": "invalid api key"}), 401
@@ -21616,17 +21621,15 @@ def api_extension_provider_access_probe():
     if not provider:
         return jsonify({"error": "provider required"}), 400
 
+    from mighty.provider_access_manager import (
+        complete_provider_access_check,
+        fail_provider_access_check,
+    )
     from mighty.provider_access_probe import (
         PROBE_PROVIDERS,
-        PROBE_LIFECYCLE_DONE,
-        PROBE_LIFECYCLE_ERROR,
         evaluate_probe_payload,
-        record_probe_run,
-        complete_manual_probe,
         row_to_json,
     )
-    from mighty.provider_session_state import derive_session_evidence_from_probe
-    from mighty.session_verification import complete_session_verification
 
     if provider not in PROBE_PROVIDERS:
         return jsonify({"error": f"unsupported provider: {provider}"}), 400
@@ -21637,66 +21640,22 @@ def api_extension_provider_access_probe():
     try:
         result = evaluate_probe_payload(provider, body)
     except ValueError as exc:
-        if manual_run_id:
-            complete_manual_probe(
-                get_db(),
-                user["id"],
-                manual_run_id,
-                lifecycle=PROBE_LIFECYCLE_ERROR,
-                error_message=str(exc),
-            )
-        if verification_id:
-            complete_session_verification(
-                get_db(),
-                user["id"],
-                verification_id,
-                lifecycle="failed",
-                error_message=str(exc),
-            )
-        return jsonify({"error": str(exc)}), 400
-
-    # Session verification may only update PSS on definitive connected/signed_out
-    # evidence. Timeouts, network failures, and inconclusive probes preserve PSS.
-    write_session_state = True
-    if verification_id:
-        evidence = derive_session_evidence_from_probe(result)
-        write_session_state = bool(
-            evidence is not None and evidence.state in {"connected", "signed_out"}
-        )
-
-    run_id = record_probe_run(
-        get_db(), user["id"], result, write_session_state=write_session_state
-    )
-    result["run_id"] = run_id
-
-    if manual_run_id:
-        lifecycle = PROBE_LIFECYCLE_ERROR if result.get("status") == "error" else PROBE_LIFECYCLE_DONE
-        complete_manual_probe(
+        fail_provider_access_check(
             get_db(),
             user["id"],
-            manual_run_id,
-            lifecycle=lifecycle,
-            probe_run_id=run_id,
-            error_message=result.get("failure_reason") if lifecycle == PROBE_LIFECYCLE_ERROR else None,
+            error_message=str(exc),
+            verification_id=verification_id,
+            manual_run_id=manual_run_id,
         )
+        return jsonify({"error": str(exc)}), 400
 
-    if verification_id:
-        if result.get("status") == "error" and not write_session_state:
-            complete_session_verification(
-                get_db(),
-                user["id"],
-                verification_id,
-                lifecycle="failed",
-                error_message=result.get("failure_reason") or "probe error",
-            )
-        else:
-            complete_session_verification(
-                get_db(),
-                user["id"],
-                verification_id,
-                lifecycle="completed",
-            )
-
+    result = complete_provider_access_check(
+        get_db(),
+        user["id"],
+        result,
+        verification_id=verification_id,
+        manual_run_id=manual_run_id,
+    )
     return jsonify(row_to_json(result))
 
 

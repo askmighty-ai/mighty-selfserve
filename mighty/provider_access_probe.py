@@ -1401,7 +1401,8 @@ def record_probe_run(
     db.commit()
     if write_session_state:
         try:
-            from mighty.provider_session_state import record_session_evidence_from_probe
+            # PSS writes go through Provider Access Manager (canonical boundary).
+            from mighty.provider_access_manager import record_session_evidence_from_probe
 
             record_session_evidence_from_probe(db, user_id, result)
         except Exception:
@@ -1596,7 +1597,12 @@ def _has_running_manual_probe(db: Any, user_id: str) -> bool:
 
 
 def start_manual_probe(db: Any, user_id: str, provider: str) -> dict[str, Any]:
-    """Queue a single-provider manual probe. Rejects concurrent runs."""
+    """Queue a single-provider manual probe. Rejects concurrent runs.
+
+    DEBUG-ONLY — not a product access trigger. Production re-verify uses
+    Provider Access Manager / session_verification. Do not wire dashboard
+    customer flows to this entry point.
+    """
     provider = provider.strip().lower()
     if provider not in MANUAL_PROBE_PROVIDERS:
         raise ValueError(

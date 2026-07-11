@@ -10,6 +10,12 @@ Flow:
 
 Connection is separate from extraction. Synced means normalized fields exist
 (from any adapter) — see mighty.provider_account.
+
+LEGACY ACCESS PATH — DO NOT EXTEND (session-truth role)
+Scheduled for redirect/removal in Phase 2/3.
+Product Current Access must read ``provider_session_state`` via Provider Access
+Manager evidence, not ``connection_status``. Keep this FSM for Amex onboarding
+UX (waiting_for_extension) only; do not add new session-truth writers here.
 """
 
 from __future__ import annotations

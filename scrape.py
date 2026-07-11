@@ -921,6 +921,11 @@ def scrape_southwest(page, c, ctx):
 
 
 # ── Account scrapers ──────────────────────────────────────────────────────────
+# LEGACY ACCESS PATH — DO NOT EXTEND (Amex cloud access check)
+# Scheduled for redirect/removal in Phase 2/3.
+# Cloud Playwright login does not write provider_session_state and must not be
+# used as the product Current Access path. Prefer extension session verification
+# via Provider Access Manager.
 def scrape_amex(page, c, ctx):
     r = _base("American Express","💳","#e8f0fe",
                "https://www.americanexpress.com/en-us/account/login")

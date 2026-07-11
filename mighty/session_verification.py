@@ -7,6 +7,10 @@ itself. Only explicit session evidence from the verifier may update PSS.
 
 Enqueue ownership lives here via ensure_provider_session_verification_if_stale —
 callers must not duplicate staleness / throttle / timeout rules.
+
+Production scheduling entry point: ``mighty.provider_access_manager``
+(``request_provider_access_check`` / ``ensure_stale_provider_access_checks``).
+Prefer those wrappers over calling this module directly from new product code.
 """
 
 from __future__ import annotations
