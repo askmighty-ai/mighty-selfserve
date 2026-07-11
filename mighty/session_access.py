@@ -287,3 +287,26 @@ def load_session_access_by_provider(
 
 def is_probe_session_provider(source: str) -> bool:
     return source in PROBE_PROVIDERS
+
+
+def client_login_badge_kind(
+    *,
+    session_state: str | None = None,
+    login_required: bool = False,
+    sync_status: str | None = None,
+) -> Literal["needs_login", "checking"] | None:
+    """Dashboard client login-badge decision mirrored from updateSyncTimes.
+
+    Legacy sync_status=login_required must never invent Needs login when a
+    canonical session_state is present (connected / unknown / checking).
+    """
+    if login_required or session_state == "signed_out":
+        return "needs_login"
+    if session_state == "checking":
+        return "checking"
+    if session_state in ("connected", "unknown"):
+        return None
+    # No session_state: checking sync_status is a non-login setup signal only.
+    if not session_state and sync_status == "checking":
+        return "checking"
+    return None

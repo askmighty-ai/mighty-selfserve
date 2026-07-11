@@ -435,7 +435,8 @@ def test_accounts_cta_unknown_no_login(client):
     lc = resolve_account_lifecycle("amex", in_credentials=True, account=acct)
     assert lc.state == LC_NEEDS_LOGIN
     html = mighty._accounts_primary_cta_html(
-        lc, "amex", "American Express", "login_required", session_state="unknown",
+        lc, "amex", "American Express", "login_required",
+        session_state="unknown", login_required=False,
     )
     assert html == ""
     assert "acct-maint-cta--urgent" not in html
@@ -456,7 +457,8 @@ def test_accounts_cta_checking_no_login(client):
     lc = resolve_account_lifecycle("amex", in_credentials=True, account=acct)
     assert lc.state == LC_NEEDS_LOGIN
     html = mighty._accounts_primary_cta_html(
-        lc, "amex", "American Express", "login_required", session_state="checking",
+        lc, "amex", "American Express", "login_required",
+        session_state="checking", login_required=False,
     )
     assert "acct-maint-cta--urgent" not in html
     assert "Checking now" in html
@@ -471,7 +473,8 @@ def test_accounts_cta_signed_out_login(client):
     acct = ProviderAccount(source="amex", sync_status="ok", normalized_fields=[])
     lc = resolve_account_lifecycle("amex", in_credentials=True, account=acct)
     html = mighty._accounts_primary_cta_html(
-        lc, "amex", "American Express", "ok", session_state="signed_out",
+        lc, "amex", "American Express", "ok",
+        session_state="signed_out", login_required=True,
     )
     assert "acct-maint-cta--urgent" in html
     assert "Log in" in html or "Sign in" in html or "login" in html.lower()
@@ -524,7 +527,8 @@ def test_unknown_consistent_across_product_surfaces(client):
         )
         assert section != SECTION_NEEDS_LOGIN
         cta = mighty._accounts_primary_cta_html(
-            lc, "amex", "American Express", "login_required", session_state="unknown",
+            lc, "amex", "American Express", "login_required",
+            session_state="unknown", login_required=False,
         )
         assert "acct-maint-cta--urgent" not in cta
 

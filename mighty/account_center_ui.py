@@ -254,27 +254,29 @@ def build_card_view(
     from mighty.account_presentation import AccountPresentation
     from mighty.session_access import (
         SESSION_STATUS_LABELS,
+        product_state_for_session,
+        resolve_product_account_state,
         resolve_session_access_presentation,
     )
 
     presentation = None
-    session_state = None
+    product = None
     if session_access is not None:
+        product = resolve_product_account_state(session_access)
         sess = resolve_session_access_presentation(
             session_access, display_name=state.display_name,
         )
-        session_state = sess.session_state
         # All four canonical states — never fall back to legacy login presentation.
         presentation = AccountPresentation(
             key=sess.presentation_key,
-            label=SESSION_STATUS_LABELS[sess.session_state],
+            label=SESSION_STATUS_LABELS[product.session_state],
             cta_label=sess.cta_label or "",
-            cta_disabled=sess.session_state in ("checking", "unknown"),
+            cta_disabled=product.session_state in ("checking", "unknown"),
             extension_hint=sess.extension_hint,
         )
     else:
-        # No Current Access row (non-probe): treat login as unknown — never legacy needs_login.
-        session_state = "unknown"
+        # No Current Access row: treat login as unknown — never legacy needs_login.
+        product = product_state_for_session("unknown", provider=state.provider)
         presentation = AccountPresentation(
             key=ACCOUNT_STATE_UNKNOWN,
             label=SESSION_STATUS_LABELS["unknown"],
@@ -284,9 +286,9 @@ def build_card_view(
         )
 
     label, kind, disabled = primary_action(state, presentation=presentation)
-    # Only signed_out may emit a login CTA.
-    if session_state != "signed_out" and kind == PRIMARY_LOGIN:
-        label = SESSION_STATUS_LABELS.get(session_state or "unknown", "Unable to verify")
+    # Login CTA only when ProductAccountState.login_required is true.
+    if not product.login_required and kind == PRIMARY_LOGIN:
+        label = SESSION_STATUS_LABELS.get(product.session_state, "Unable to verify")
         kind = PRIMARY_CHECKING
         disabled = True
     href, external = resolve_primary_action_href(
