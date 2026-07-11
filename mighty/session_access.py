@@ -1,8 +1,17 @@
 """Product session access — single bridge from provider_session_state to UI.
 
-All customer-facing login decisions must go through compute_current_account_access_rows
-(resolve_current_account_access). Legacy sync_status / connection_status must not
-decide banners, counts, badges, or /api/account-status login messaging.
+Architecture:
+  provider_session_state
+    → login_truth.compute_current_account_access_rows
+    → session_access.resolve_product_account_state
+    → Dashboard / Accounts / Account Center / Popup / /api/account-status / Admin
+
+All customer-facing login decisions must go through this bridge. Legacy
+sync_status / connection_status must not decide banners, counts, badges, or
+/api/account-status login messaging.
+
+Surfaces may choose wording and detail level, but must never reinterpret
+session_state, login_required, user_attention_required, or next_action.
 """
 
 from __future__ import annotations
@@ -13,12 +22,12 @@ from typing import Any, Callable, Literal
 from mighty.login_truth import (
     CurrentAccess,
     CurrentAccountAccess,
+    NextActionType,
     compute_current_account_access_rows,
 )
 from mighty.provider_access_probe import PROBE_PROVIDERS
 from mighty.user_copy import (
     ACCOUNT_STATE_CHECKING,
-    ACCOUNT_STATE_NEEDS_ATTENTION,
     ACCOUNT_STATE_NEEDS_SIGN_IN,
     ACCOUNT_STATE_READY,
     ACCOUNT_STATE_UNKNOWN,
@@ -27,7 +36,7 @@ from mighty.user_copy import (
     CTA_VIEW,
 )
 
-# Product-facing session vocabulary (PR contract).
+# Product-facing session vocabulary (shared across admin + customer surfaces).
 ProductSessionState = Literal["connected", "checking", "signed_out", "unknown"]
 
 CHECKING = "checking"
@@ -52,6 +61,60 @@ SESSION_STATUS_LABELS: dict[ProductSessionState, str] = {
     "unknown": "Unable to verify",
 }
 
+# Recommended user action for the product session vocabulary.
+# Admin Current Access may show more diagnostic detail, but the recommended
+# user action for a given product session_state must match these values.
+PRODUCT_NEXT_ACTION: dict[ProductSessionState, tuple[NextActionType, str]] = {
+    "connected": (
+        "none",
+        "Nothing. Mighty can monitor this account automatically.",
+    ),
+    "checking": (
+        "verifying",
+        "Mighty is verifying this account now.",
+    ),
+    "signed_out": (
+        "reauthenticate",
+        "Sign into this account again.",
+    ),
+    # unknown is not login-required — no fresh signed-out evidence.
+    "unknown": (
+        "none",
+        "Mighty could not verify this account automatically.",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class ProductAccountState:
+    """Canonical product projection of Current Access.
+
+    Every status consumer should derive session/login/next-action from this
+    object (or an equivalent resolve_product_account_state call) rather than
+    re-mapping Current Access locally.
+    """
+
+    provider: str
+    session_state: ProductSessionState
+    current_access: CurrentAccess
+    login_required: bool
+    user_attention_required: bool
+    next_action_type: NextActionType
+    next_action_text: str
+    status_label: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "session_state": self.session_state,
+            "current_access": self.current_access,
+            "login_required": self.login_required,
+            "user_attention_required": self.user_attention_required,
+            "next_action_type": self.next_action_type,
+            "next_action_text": self.next_action_text,
+            "status_label": self.status_label,
+        }
+
 
 @dataclass(frozen=True)
 class SessionAccessPresentation:
@@ -66,10 +129,61 @@ class SessionAccessPresentation:
     cta_label: str | None
     extension_hint: str | None
     verification_message: str | None = None
+    login_required: bool = False
+    user_attention_required: bool = False
+    next_action_type: NextActionType | None = None
+    next_action_text: str | None = None
 
 
 def to_product_session_state(current_access: CurrentAccess) -> ProductSessionState:
     return PRODUCT_SESSION_FROM_CURRENT_ACCESS[current_access]
+
+
+def resolve_product_account_state(access: CurrentAccountAccess) -> ProductAccountState:
+    """Project Current Access into the shared product account state contract."""
+    session_state = to_product_session_state(access.current_access)
+    login_required = session_state == "signed_out"
+    next_action_type, next_action_text = PRODUCT_NEXT_ACTION[session_state]
+    return ProductAccountState(
+        provider=access.provider,
+        session_state=session_state,
+        current_access=access.current_access,
+        login_required=login_required,
+        user_attention_required=login_required,
+        next_action_type=next_action_type,
+        next_action_text=next_action_text,
+        status_label=SESSION_STATUS_LABELS[session_state],
+    )
+
+
+def product_state_for_session(
+    session_state: ProductSessionState,
+    *,
+    provider: str = "",
+    current_access: CurrentAccess | None = None,
+) -> ProductAccountState:
+    """Build ProductAccountState from an already-resolved product session_state."""
+    login_required = session_state == "signed_out"
+    next_action_type, next_action_text = PRODUCT_NEXT_ACTION[session_state]
+    if current_access is None:
+        # Inverse of PRODUCT_SESSION_FROM_CURRENT_ACCESS for the common cases.
+        inverse: dict[ProductSessionState, CurrentAccess] = {
+            "connected": "connected_now",
+            "checking": "checking",
+            "signed_out": "signed_out",
+            "unknown": "unknown",
+        }
+        current_access = inverse[session_state]
+    return ProductAccountState(
+        provider=provider,
+        session_state=session_state,
+        current_access=current_access,
+        login_required=login_required,
+        user_attention_required=login_required,
+        next_action_type=next_action_type,
+        next_action_text=next_action_text,
+        status_label=SESSION_STATUS_LABELS[session_state],
+    )
 
 
 def verification_message_for(display_name: str, session_state: ProductSessionState) -> str | None:
@@ -84,7 +198,8 @@ def resolve_session_access_presentation(
     display_name: str,
 ) -> SessionAccessPresentation:
     """Map canonical Current Access to product status + Access Loop presentation."""
-    session_state = to_product_session_state(access.current_access)
+    product = resolve_product_account_state(access)
+    session_state = product.session_state
     verify_msg = verification_message_for(display_name, session_state)
 
     if session_state == "signed_out":
@@ -98,6 +213,10 @@ def resolve_session_access_presentation(
             cta_label=CTA_SIGN_IN,
             extension_hint="Sign in to refresh this account",
             verification_message=None,
+            login_required=product.login_required,
+            user_attention_required=product.user_attention_required,
+            next_action_type=product.next_action_type,
+            next_action_text=product.next_action_text,
         )
     if session_state == "checking":
         return SessionAccessPresentation(
@@ -110,6 +229,10 @@ def resolve_session_access_presentation(
             cta_label=CTA_UPDATING,
             extension_hint=verify_msg,
             verification_message=verify_msg,
+            login_required=product.login_required,
+            user_attention_required=product.user_attention_required,
+            next_action_type=product.next_action_type,
+            next_action_text=product.next_action_text,
         )
     if session_state == "connected":
         return SessionAccessPresentation(
@@ -122,6 +245,10 @@ def resolve_session_access_presentation(
             cta_label=CTA_VIEW,
             extension_hint=None,
             verification_message=None,
+            login_required=product.login_required,
+            user_attention_required=product.user_attention_required,
+            next_action_type=product.next_action_type,
+            next_action_text=product.next_action_text,
         )
     # unknown — never "needs login"; no fresh signed-out evidence; no login CTA
     return SessionAccessPresentation(
@@ -134,6 +261,10 @@ def resolve_session_access_presentation(
         cta_label=None,
         extension_hint="Mighty could not verify this account automatically.",
         verification_message=None,
+        login_required=product.login_required,
+        user_attention_required=product.user_attention_required,
+        next_action_type=product.next_action_type,
+        next_action_text=product.next_action_text,
     )
 
 

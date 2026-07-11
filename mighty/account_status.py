@@ -38,6 +38,8 @@ from mighty.provider_account import ProviderAccount, infer_extraction_status, ha
 from mighty.session_access import (
     CHECKING,
     load_session_access_by_provider,
+    product_state_for_session,
+    resolve_product_account_state,
     resolve_session_access_presentation,
 )
 from mighty.user_copy import (
@@ -92,6 +94,10 @@ class AccountStatus:
     session_state: str | None = None
     current_access: str | None = None
     verification_message: str | None = None
+    login_required: bool | None = None
+    user_attention_required: bool | None = None
+    next_action_type: str | None = None
+    next_action_text: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -114,6 +120,14 @@ class AccountStatus:
             payload["current_access"] = self.current_access
         if self.verification_message is not None:
             payload["verification_message"] = self.verification_message
+        if self.login_required is not None:
+            payload["login_required"] = self.login_required
+        if self.user_attention_required is not None:
+            payload["user_attention_required"] = self.user_attention_required
+        if self.next_action_type is not None:
+            payload["next_action_type"] = self.next_action_type
+        if self.next_action_text is not None:
+            payload["next_action_text"] = self.next_action_text
         return payload
 
 
@@ -251,13 +265,31 @@ def build_account_status(
     current_access = None
     verification_message = None
     session_presentation = None
+    login_required = None
+    user_attention_required = None
+    next_action_type = None
+    next_action_text = None
     if session_access is not None:
         session_presentation = resolve_session_access_presentation(
             session_access, display_name=display_name,
         )
-        session_state = session_presentation.session_state
-        current_access = session_presentation.current_access
+        product = resolve_product_account_state(session_access)
+        session_state = product.session_state
+        current_access = product.current_access
         verification_message = session_presentation.verification_message
+        login_required = product.login_required
+        user_attention_required = product.user_attention_required
+        next_action_type = product.next_action_type
+        next_action_text = product.next_action_text
+    else:
+        # Non-probe / no Current Access row → unknown product session.
+        product = product_state_for_session("unknown", provider=source)
+        session_state = product.session_state
+        current_access = product.current_access
+        login_required = product.login_required
+        user_attention_required = product.user_attention_required
+        next_action_type = product.next_action_type
+        next_action_text = product.next_action_text
 
     canonical = resolve_canonical_status(
         lifecycle,
@@ -377,6 +409,10 @@ def build_account_status(
         session_state=session_state,
         current_access=current_access,
         verification_message=verification_message,
+        login_required=login_required,
+        user_attention_required=user_attention_required,
+        next_action_type=next_action_type,
+        next_action_text=next_action_text,
     )
 
 
@@ -463,14 +499,18 @@ def load_all_account_statuses(
     if lifecycle_signals is None:
         lifecycle_signals = _load_lifecycle_signals(uid, db)
 
-    session_by_provider = load_session_access_by_provider(
-        db, uid, decrypt_fn=decrypt_fn,
-    )
-
     cred_rows = db.execute(
         "SELECT source FROM account_credentials WHERE user_id=? AND source != '_email'",
         (uid,),
     ).fetchall()
+    # Provider-independent: load Current Access for every credentialed source
+    # (not only probe providers). Probe providers stay included for completeness.
+    from mighty.provider_access_probe import PROBE_PROVIDERS
+
+    session_providers = sorted({row["source"] for row in cred_rows} | set(PROBE_PROVIDERS))
+    session_by_provider = load_session_access_by_provider(
+        db, uid, decrypt_fn=decrypt_fn, providers=session_providers,
+    )
 
     effective_updating = updating_source if sync_running else None
 
