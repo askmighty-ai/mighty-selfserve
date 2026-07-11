@@ -265,6 +265,132 @@ def test_legacy_fields_cannot_produce_ready():
     assert readiness.state == UNVERIFIED
 
 
+def test_session_evidence_alone_cannot_produce_ready():
+    now = _now()
+    session_at = _iso(now - timedelta(seconds=10))
+    product = resolve_product_account_state(
+        _session("delta", "connected_now", last_verified=session_at)
+    )
+    readiness = resolve_account_readiness(
+        provider="delta",
+        product=product,
+        session_evidence_at=session_at,
+        account=None,
+        extraction_at=None,
+        now=now,
+    )
+    assert readiness.state != READY
+    assert readiness.status_label != "Connected"
+
+
+def test_naive_and_missing_timestamps_cannot_accidentally_ready():
+    now = _now()
+    # Missing extraction timestamp.
+    assert not extraction_correlates_with_access(
+        session_evidence_at=_iso(now),
+        extraction_at=None,
+    )
+    # Missing session timestamp.
+    assert not extraction_correlates_with_access(
+        session_evidence_at=None,
+        extraction_at=_iso(now),
+    )
+    # Naive timestamps normalize to UTC and still compare safely.
+    session_naive = (now - timedelta(seconds=30)).replace(tzinfo=None).isoformat()
+    extraction_naive = (now - timedelta(seconds=5)).replace(tzinfo=None).isoformat()
+    assert extraction_correlates_with_access(
+        session_evidence_at=session_naive,
+        extraction_at=extraction_naive,
+    )
+    # Extraction before session (naive) must not correlate.
+    assert not extraction_correlates_with_access(
+        session_evidence_at=(now - timedelta(seconds=5)).replace(tzinfo=None).isoformat(),
+        extraction_at=(now - timedelta(seconds=30)).replace(tzinfo=None).isoformat(),
+    )
+
+
+def test_partial_or_empty_extraction_cannot_produce_ready():
+    now = _now()
+    session_at = _iso(now - timedelta(seconds=20))
+    product = resolve_product_account_state(
+        _session("delta", "connected_now", last_verified=session_at)
+    )
+    readiness = resolve_account_readiness(
+        provider="delta",
+        product=product,
+        session_evidence_at=session_at,
+        account=_acct(
+            extraction_status=EXTRACTION_COMPLETE,
+            normalized_fields=[{"label": "miles", "value": "—"}],
+            synced_at=_iso(now),
+        ),
+        extraction_at=_iso(now),
+        now=now,
+    )
+    assert readiness.state != READY
+
+
+def test_stale_session_is_unverified_not_checking():
+    """Checking requires active verification/extraction — not mere staleness."""
+    now = _now()
+    product = resolve_product_account_state(_session("delta", "unknown"))
+    readiness = resolve_account_readiness(
+        provider="delta",
+        product=product,
+        session_evidence_at=_iso(now - timedelta(hours=1)),
+        verification_lifecycle="completed",
+        account=_acct(synced_at=_iso(now - timedelta(minutes=2))),
+        extraction_at=_iso(now - timedelta(minutes=2)),
+        now=now,
+    )
+    assert readiness.state == UNVERIFIED
+    assert readiness.state != CHECKING
+
+
+def test_verification_error_is_unverified_not_sign_in_required():
+    """Network/verification failure must not ask the user to sign in."""
+    product = resolve_product_account_state(_session("delta", "error"))
+    assert product.session_state == "signed_out"  # product maps error → signed_out
+    readiness = resolve_account_readiness(
+        provider="delta",
+        product=product,
+        verification_lifecycle="failed",
+    )
+    assert readiness.state == UNVERIFIED
+    assert readiness.status_label == "Unable to verify"
+    assert readiness.login_required is False
+
+
+def test_timed_out_verification_is_unverified():
+    product = resolve_product_account_state(_session("delta", "unknown"))
+    readiness = resolve_account_readiness(
+        provider="delta",
+        product=product,
+        verification_lifecycle="timed_out",
+    )
+    assert readiness.state == UNVERIFIED
+    assert readiness.login_required is False
+
+
+def test_legacy_payload_without_access_cycle_id_uses_timestamp_correlation():
+    now = _now()
+    session_at = _iso(now - timedelta(seconds=40))
+    extraction_at = _iso(now - timedelta(seconds=10))
+    product = resolve_product_account_state(
+        _session("delta", "connected_now", last_verified=session_at)
+    )
+    readiness = resolve_account_readiness(
+        provider="delta",
+        product=product,
+        session_evidence_at=session_at,
+        account=_acct(synced_at=extraction_at),
+        extraction_at=extraction_at,
+        extraction_access_cycle_id=None,  # legacy rows
+        now=now,
+    )
+    assert readiness.state == READY
+
+
 def test_build_account_status_maps_readiness_to_surfaces():
     now = _now()
     session_at = _iso(now - timedelta(seconds=30))
@@ -498,4 +624,140 @@ def test_signed_out_with_cached_data_never_connected_on_api(client):
     row = next(a for a in payload["accounts"] if a["source"] == "delta")
     assert row["readiness"] == SIGNED_OUT
     assert row["status_label"] == "Sign in required"
+    assert row["status"] != UP_TO_DATE
+
+
+def test_delta_cached_data_with_signed_out_agrees_on_every_surface(client):
+    """Regression: recent Delta cache + fresh signed_out never shows Connected.
+
+    Expected on Dashboard, Accounts, Account Center, popup, and /api/account-status:
+    readiness=signed_out, Sign in required, optional secondary cached-data copy.
+    """
+    import app as mighty
+    from mighty.account_center_ui import build_card_view
+    from mighty.account_state import (
+        ACCESS_BROWSER_SESSION,
+        CONN_CONNECTED,
+        DATA_COMPLETE,
+        SESSION_EXPIRED,
+        AccountState,
+        Confidence,
+        ConfidenceFactors,
+    )
+    from mighty.accounts_ui import SECTION_NEEDS_LOGIN, resolve_accounts_section
+    from mighty.home_state import resolve_home_state
+    from mighty.login_truth import compute_current_account_access_rows
+    from mighty.session_access import resolve_product_account_state
+
+    uid = _uid(client)
+    now = _now()
+    cached_at = now - timedelta(minutes=2)
+    _seed_provider(client, "delta", synced_at=_iso(cached_at))
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="delta",
+                state="signed_out",
+                evidence_type="login_page",
+                evidence_summary="login wall",
+                observed_at=now - timedelta(seconds=8),
+                source="test",
+                confidence="high",
+            ),
+        )
+        access = next(
+            r
+            for r in compute_current_account_access_rows(
+                db, uid, decrypt_account_fn=mighty.decrypt_account_data, providers=["delta"],
+            )
+            if r.provider == "delta"
+        )
+        product = resolve_product_account_state(access)
+        assert product.session_state == "signed_out"
+
+        accounts, summary = load_all_account_statuses(
+            uid,
+            db,
+            decrypt_fn=mighty.decrypt_account_data,
+            display_names={"delta": "Delta"},
+            login_url_fn=lambda s: "https://example.com/delta",
+        )
+
+    delta = next(a for a in accounts if a.source == "delta")
+    assert delta.readiness == SIGNED_OUT
+    assert delta.presentation_label == "Sign in required"
+    assert delta.status == NEEDS_LOGIN
+    assert delta.cached_data_label and "Last saved data" in delta.cached_data_label
+    assert "Connected" not in delta.presentation_label
+    assert "Up to date" not in (delta.presentation_label or "")
+
+    # Dashboard health
+    home = resolve_home_state(accounts=accounts, actions=[])
+    assert home.health.needs_login >= 1
+    assert home.health.up_to_date == 0
+
+    # Accounts section
+    section = resolve_accounts_section(
+        delta_lifecycle := resolve_account_lifecycle(
+            "delta",
+            in_credentials=True,
+            account=_acct(source="delta", synced_at=_iso(cached_at)),
+        ),
+        "ok",
+        source="delta",
+        session_state="signed_out",
+        readiness=SIGNED_OUT,
+    )
+    assert section == SECTION_NEEDS_LOGIN
+    del delta_lifecycle
+
+    # Account Center card
+    state = AccountState(
+        user_id=uid,
+        provider="delta",
+        display_name="Delta",
+        category="travel_loyalty",
+        access_method=ACCESS_BROWSER_SESSION,
+        connection_state=CONN_CONNECTED,  # legacy must not win
+        session_health=SESSION_EXPIRED,
+        last_verified_at=None,
+        data_status=DATA_COMPLETE,
+        last_data_refresh=_iso(cached_at),
+        observations_available=["miles"],
+        field_count=1,
+        next_recommended_action=None,
+        confidence=Confidence(level="high", score=90, factors=ConfidenceFactors()),
+        status_line="legacy up to date",
+        is_actionable=False,
+        updated_at=_iso(cached_at),
+        extraction_status=EXTRACTION_COMPLETE,
+        sync_status="ok",
+    )
+    card = build_card_view(
+        state,
+        fmt_relative=lambda _x: "2 minutes ago",
+        session_access=access,
+        account=_acct(source="delta", synced_at=_iso(cached_at)),
+    )
+    assert card.status_label == "Sign in required"
+    assert "Connected" not in card.status_label
+    assert "Last saved data" in (card.data_freshness or "") or "2 minutes ago" in (
+        card.data_freshness or ""
+    )
+
+    # /api/account-status (popup + dashboard poll)
+    resp = client.get("/api/account-status")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    row = next(a for a in payload["accounts"] if a["source"] == "delta")
+    assert row["readiness"] == SIGNED_OUT
+    assert row["status_label"] == "Sign in required"
+    assert row["status"] == NEEDS_LOGIN
+    assert row.get("cached_data_label")
+    assert summary.needs_login_count >= 1
+    assert "Connected" not in row["status_label"]
     assert row["status"] != UP_TO_DATE

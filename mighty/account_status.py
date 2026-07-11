@@ -379,6 +379,10 @@ def build_account_status(
         updating_this_source=updating_this,
     )
 
+    # Customer login CTA follows readiness, not product error→signed_out mapping.
+    login_required = readiness.login_required
+    user_attention_required = readiness.login_required
+
     canonical = resolve_canonical_status(
         lifecycle,
         sync_status,

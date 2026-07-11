@@ -242,7 +242,7 @@ def resolve_account_readiness(
         provider = product.provider or provider
 
     session_state = session_state or "unknown"
-    login_required = session_state == "signed_out"
+    current_access = product.current_access if product is not None else None
 
     access_cycle_id = make_access_cycle_id(
         provider=provider,
@@ -279,8 +279,16 @@ def resolve_account_readiness(
         updating_this_source=updating_this_source,
     )
 
-    if session_state == "signed_out":
+    if session_state == "signed_out" and current_access != "error":
+        # Definitive signed-out evidence only. Product maps verification
+        # ``error`` → session signed_out; readiness must not ask the user to
+        # sign in for inconclusive verification failures.
         state: ReadinessState = SIGNED_OUT
+    elif current_access == "error" or (
+        verification_lifecycle in {"failed", "timed_out"}
+        and session_state not in {"signed_out", "connected", "checking"}
+    ):
+        state = UNVERIFIED
     elif session_state == "checking" or verifying:
         state = CHECKING
     elif session_state == "connected" and extraction_correlated:
@@ -293,6 +301,8 @@ def resolve_account_readiness(
         # extraction failure, or incomplete evidence → unverified.
         # Do not ask the user to sign in unless session is definitively signed_out.
         state = UNVERIFIED
+
+    login_required = state == SIGNED_OUT
 
     return AccountReadiness(
         provider=provider,
