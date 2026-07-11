@@ -211,6 +211,8 @@ ACCESS_STATE_SORT_ORDER: dict[AccessState, int] = {
     "unexpected_problem": 4,
 }
 
+# Recommended user actions must agree with mighty.session_access.PRODUCT_NEXT_ACTION
+# for the matching product session_state (error → signed_out, unknown → unknown).
 NEXT_ACTION_BY_CURRENT_ACCESS: dict[CurrentAccess, tuple[NextActionType, str]] = {
     "connected_now": (
         "none",
@@ -224,18 +226,21 @@ NEXT_ACTION_BY_CURRENT_ACCESS: dict[CurrentAccess, tuple[NextActionType, str]] =
         "verifying",
         "Mighty is verifying this account now.",
     ),
+    # unknown is not login-required — no fresh signed-out evidence.
     "unknown": (
-        "connect_account",
-        "Sign into this account once. Mighty will detect it automatically.",
-    ),
-    "error": (
-        "report_problem",
+        "none",
         "Mighty could not verify this account automatically.",
+    ),
+    # Product maps verification error → signed_out / reauthenticate.
+    "error": (
+        "reauthenticate",
+        "Sign into this account again.",
     ),
 }
 
+# Same recommended action as product unknown (not login-required).
 NEXT_ACTION_UNKNOWN_INCONCLUSIVE = (
-    "wait_for_observation",
+    "none",
     "Mighty could not verify this account automatically.",
 )
 

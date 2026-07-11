@@ -9026,9 +9026,20 @@ def dashboard():
     _sync_started_at = _user_sync["sync_started_at"] if _user_sync else None
 
     from mighty.session_access import load_session_access_by_provider
+    from mighty.provider_access_probe import PROBE_PROVIDERS
 
+    _cred_sources = {
+        r["source"]
+        for r in db.execute(
+            "SELECT source FROM account_credentials WHERE user_id=? AND source != '_email'",
+            (uid,),
+        ).fetchall()
+    }
     _session_by_provider = load_session_access_by_provider(
-        db, uid, decrypt_fn=_decrypt_acct,
+        db,
+        uid,
+        decrypt_fn=_decrypt_acct,
+        providers=sorted(_cred_sources | set(PROBE_PROVIDERS)),
     )
 
     for cat in _cat_order:
@@ -14825,21 +14836,33 @@ function _applyLifecyclePoll(d) {{
   var connected = document.getElementById('modal-ext-connected');
   var retry = document.getElementById('modal-ext-retry');
   var waitText = document.getElementById('modal-ext-waiting-text');
-  if (lc.state === 'needs_login') {{
+  // Canonical product session owns login — never reinterpret lifecycle needs_login.
+  var sessionState = d.session_state || (d.product && d.product.session_state) || null;
+  var loginRequired = d.login_required === true || (d.product && d.product.login_required === true);
+  if (sessionState === 'signed_out' || loginRequired) {{
     if (waiting) waiting.style.display = 'none';
     if (needsLogin) needsLogin.style.display = 'block';
     if (waitText) waitText.textContent = 'Needs login';
     return 'needs_login';
   }}
-  if (lc.state === 'connected') {{
+  if (sessionState === 'checking') {{
+    if (waiting) waiting.style.display = 'block';
+    if (needsLogin) needsLogin.style.display = 'none';
+    if (waitText) waitText.textContent = 'Checking now';
+    return 'checking';
+  }}
+  if (sessionState === 'connected' || lc.state === 'connected') {{
     if (waiting) waiting.style.display = 'none';
+    if (needsLogin) needsLogin.style.display = 'none';
     if (connected) connected.style.display = 'block';
     return 'connected';
   }}
   if (lc.state === 'synced' || d.is_synced) {{
     return 'synced';
   }}
+  // Legacy lifecycle needs_login without signed_out session → still setting up.
   if (waiting) waiting.style.display = 'block';
+  if (needsLogin) needsLogin.style.display = 'none';
   if (waitText) waitText.textContent = lc.label || '{user_copy.CONNECT_MODAL_WAITING}';
   if (retry && lc.state === 'waiting_for_extension') retry.style.display = 'inline-block';
   return 'waiting';
@@ -15122,9 +15145,13 @@ def credentials_page():
     _rt.step("lifecycle")
     last_checked_label = portfolio_last_checked(all_synced_at, _fmt_sync)
     from mighty.session_access import load_session_access_by_provider, to_product_session_state
+    from mighty.provider_access_probe import PROBE_PROVIDERS
 
     _session_access = load_session_access_by_provider(
-        db, uid, decrypt_fn=_decrypt_acct,
+        db,
+        uid,
+        decrypt_fn=_decrypt_acct,
+        providers=sorted(set(configured) | set(PROBE_PROVIDERS)),
     )
     session_state_by_source = {
         provider: to_product_session_state(row.current_access)
@@ -15197,10 +15224,14 @@ def _build_account_center_page(user, states) -> str:
     _styles = BASE_CSS + ACCOUNT_CENTER_CSS
     _site_meta = {k: (icon, color) for k, _n, icon, color, _cat in SUPPORTED_SITES}
     from mighty.session_access import load_session_access_by_provider
+    from mighty.provider_access_probe import PROBE_PROVIDERS
 
     db = get_db()
     session_by_provider = load_session_access_by_provider(
-        db, user["id"], decrypt_fn=decrypt_account_data,
+        db,
+        user["id"],
+        decrypt_fn=decrypt_account_data,
+        providers=sorted({s.provider for s in states} | set(PROBE_PROVIDERS)),
     )
     cards = []
     for state in states:
@@ -15272,9 +15303,23 @@ def account_center_page():
 def extension_poll(source):
     """Poll whether the extension has captured data for a given source.
     Used by the connect-account modal to detect when the extension has synced.
+
+    Session/login presentation comes from provider_session_state Current Access.
+    Legacy lifecycle needs_login must not independently drive the modal.
     """
     uid = session["user_id"]
     db  = get_db()
+    from mighty.session_access import (
+        load_session_access_by_provider,
+        resolve_product_account_state,
+    )
+    session_by_provider = load_session_access_by_provider(
+        db, uid, decrypt_fn=decrypt_account_data, providers=[source],
+    )
+    product = None
+    access = session_by_provider.get(source)
+    if access is not None:
+        product = resolve_product_account_state(access)
     row = db.execute(
         "SELECT source, synced_at, connection_status, data_enc, extraction_status FROM account_data "
         "WHERE user_id=? AND source=? ORDER BY synced_at DESC LIMIT 1",
@@ -15283,16 +15328,38 @@ def extension_poll(source):
     if row:
         account = load_provider_account(uid, dict(row), decrypt_fn=decrypt_account_data)
         lifecycle = _lifecycle_for_user_source(uid, source, db)
+        # Prefer connected/synced capture signals; never treat legacy needs_login
+        # as a product login gate when session_state disagrees.
         captured = lifecycle.state in (LC_CONNECTED, LC_SYNCED)
-        return jsonify({
+        if product is not None and product.session_state == "connected":
+            captured = True
+        payload = {
             "captured": captured,
             "synced_at": row["synced_at"],
             "connection_status": row["connection_status"],
             "extraction_status": row["extraction_status"],
             "is_synced": account.is_synced if account else False,
             "lifecycle": lifecycle.to_dict(),
-        })
-    return jsonify({"captured": False})
+        }
+        if product is not None:
+            payload["session_state"] = product.session_state
+            payload["current_access"] = product.current_access
+            payload["login_required"] = product.login_required
+            payload["product"] = product.to_dict()
+        elif source not in session_by_provider:
+            # Non-probe providers: unknown product session (never invent needs_login).
+            from mighty.session_access import product_state_for_session
+            unknown = product_state_for_session("unknown", provider=source)
+            payload["session_state"] = unknown.session_state
+            payload["login_required"] = unknown.login_required
+            payload["product"] = unknown.to_dict()
+        return jsonify(payload)
+    payload = {"captured": False}
+    if product is not None:
+        payload["session_state"] = product.session_state
+        payload["login_required"] = product.login_required
+        payload["product"] = product.to_dict()
+    return jsonify(payload)
 
 
 @app.route("/api/benefits/archive", methods=["POST"])

@@ -1,4 +1,8 @@
-"""Unit tests for Account Connection Center presentation layer."""
+"""Unit tests for Account Connection Center presentation layer.
+
+Login/session presentation comes from session_access (provider_session_state).
+Legacy AccountState connection_state must not independently invent Needs sign in.
+"""
 
 from datetime import datetime, timedelta, timezone
 
@@ -21,24 +25,29 @@ from mighty.account_center_ui import (
     status_tone,
     summary_headline,
 )
+from mighty.account_presentation import AccountPresentation
 from mighty.account_state import (
     ACCESS_BROWSER_SESSION,
     ACCESS_MIGHTY_LOGIN,
     CONN_CONNECTED,
     CONN_CONNECTING,
     CONN_NEEDS_LOGIN,
-    CONN_NOT_CONNECTED,
     DATA_COMPLETE,
     DATA_NONE,
-    DATA_PARTIAL,
     SESSION_EXPIRED,
     SESSION_HEALTHY,
-    SESSION_UNKNOWN,
     AccountState,
     Confidence,
     ConfidenceFactors,
 )
+from mighty.login_truth import CurrentAccountAccess
 from mighty.user_copy import (
+    ACCOUNT_STATE_CHECKING,
+    ACCOUNT_STATE_NEEDS_ATTENTION,
+    ACCOUNT_STATE_NEEDS_SIGN_IN,
+    ACCOUNT_STATE_READY,
+    ACCOUNT_STATE_UNKNOWN,
+    ACCOUNT_STATE_UPDATING,
     CTA_FIX,
     CTA_SIGN_IN,
     CTA_UPDATING,
@@ -87,43 +96,35 @@ def _login_state(**kwargs) -> AccountState:
     )
 
 
-def _not_connected_state(**kwargs) -> AccountState:
-    return _state(
-        connection_state=CONN_NOT_CONNECTED,
-        session_health=SESSION_UNKNOWN,
-        last_verified_at=None,
-        last_data_refresh=None,
-        observations_available=[],
-        field_count=0,
-        data_status=DATA_NONE,
-        **kwargs,
+def _access(current_access: str, *, provider: str = "delta") -> CurrentAccountAccess:
+    # Tests may pass product session shorthand; map to Current Access vocabulary.
+    mapped = {
+        "connected": "connected_now",
+        "signed_out": "signed_out",
+        "checking": "checking",
+        "unknown": "unknown",
+        "error": "error",
+        "connected_now": "connected_now",
+    }.get(current_access, current_access)
+    return CurrentAccountAccess(
+        provider=provider,
+        current_access=mapped,  # type: ignore[arg-type]
+        cached_data_state="none",
+        last_verified=None,
+        last_private_data=None,
+        evidence="test",
+        source="test",
+        next_action_type="none",
+        next_action_text="",
     )
 
 
-def _connecting_state(**kwargs) -> AccountState:
-    return _state(
-        connection_state=CONN_CONNECTING,
-        session_health=SESSION_UNKNOWN,
-        last_verified_at=None,
-        last_data_refresh=None,
-        observations_available=[],
-        field_count=0,
-        data_status=DATA_NONE,
-        updated_at=(datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),
-        **kwargs,
-    )
-
-
-def _attention_state(**kwargs) -> AccountState:
-    return _state(
-        session_health=SESSION_EXPIRED,
-        connection_state=CONN_CONNECTED,
-        last_verified_at=None,
-        last_data_refresh=None,
-        observations_available=[],
-        field_count=0,
-        data_status=DATA_NONE,
-        **kwargs,
+def _pres(*, key: str, label: str, cta: str = "", disabled: bool = False) -> AccountPresentation:
+    return AccountPresentation(
+        key=key,
+        label=label,
+        cta_label=cta,
+        cta_disabled=disabled,
     )
 
 
@@ -133,65 +134,57 @@ def _fmt(ts: str) -> str:
 
 class TestStatusTone:
     def test_needs_sign_in_is_red_tone(self):
-        s = _state(connection_state=CONN_NEEDS_LOGIN, session_health=SESSION_EXPIRED, last_verified_at=None)
-        assert status_tone(s) == TONE_LOGIN
-        assert status_label(s) == "Needs sign in"
+        s = _login_state()
+        assert status_tone(s, presentation_key=ACCOUNT_STATE_NEEDS_SIGN_IN) == TONE_LOGIN
+        assert status_label(s, presentation_label="Needs sign in") == "Needs sign in"
 
-    def test_not_connected_is_needs_sign_in_tone(self):
-        s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE, last_verified_at=None)
-        assert status_tone(s) == TONE_LOGIN
-        assert status_label(s) == "Needs sign in"
+    def test_unknown_session_is_attention_tone(self):
+        s = _login_state()
+        assert status_tone(s, presentation_key=ACCOUNT_STATE_UNKNOWN) == TONE_ATTENTION
+        assert status_label(s, presentation_label="Unable to verify") == "Unable to verify"
 
     def test_ready_is_green(self):
         s = _state()
-        assert status_tone(s) == TONE_CONNECTED
-        assert status_label(s) == "Ready"
+        assert status_tone(s, presentation_key=ACCOUNT_STATE_READY) == TONE_CONNECTED
+        assert status_label(s, presentation_label="Ready") == "Ready"
 
-    def test_connecting_is_updating(self):
-        s = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None)
-        assert status_tone(s) == TONE_ATTENTION
-        assert status_label(s) == "Updating"
+    def test_checking_is_attention(self):
+        s = _state()
+        assert status_tone(s, presentation_key=ACCOUNT_STATE_CHECKING) == TONE_ATTENTION
 
-    def test_expired_session_on_connected_is_attention(self):
-        s = _attention_state()
-        assert status_tone(s) == TONE_ATTENTION
-        assert status_label(s) == "Needs attention"
+    def test_needs_attention_tone(self):
+        s = _state()
+        assert status_tone(s, presentation_key=ACCOUNT_STATE_NEEDS_ATTENTION) == TONE_ATTENTION
+        assert status_label(s, presentation_label="Needs attention") == "Needs attention"
 
 
 class TestPrimaryAction:
     def test_sign_in_action(self):
         s = _login_state()
-        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
+        pres = _pres(key=ACCOUNT_STATE_NEEDS_SIGN_IN, label="Needs sign in", cta=CTA_SIGN_IN)
+        assert primary_action(s, presentation=pres) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
 
-    def test_sign_in_when_not_connected(self):
-        s = _not_connected_state()
-        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
-
-    def test_updating_is_disabled(self):
-        s = _connecting_state()
-        s = _state(
-            connection_state=CONN_NEEDS_LOGIN,
-            last_verified_at=None,
-            data_status=DATA_NONE,
-            last_data_refresh=None,
-        )
-        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
-
-    def test_sign_in_when_not_connected(self):
-        s = _state(connection_state=CONN_NOT_CONNECTED, data_status=DATA_NONE, last_verified_at=None)
-        assert primary_action(s) == (CTA_SIGN_IN, PRIMARY_LOGIN, False)
+    def test_unknown_disables_login(self):
+        s = _login_state()
+        pres = _pres(key=ACCOUNT_STATE_UNKNOWN, label="Unable to verify", disabled=True)
+        label, kind, disabled = primary_action(s, presentation=pres)
+        assert kind != PRIMARY_LOGIN
+        assert disabled is True
 
     def test_updating_is_disabled(self):
-        s = _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None)
-        assert primary_action(s) == (CTA_UPDATING, "checking", True)
+        s = _state()
+        pres = _pres(key=ACCOUNT_STATE_UPDATING, label="Updating", cta=CTA_UPDATING, disabled=True)
+        assert primary_action(s, presentation=pres) == (CTA_UPDATING, "checking", True)
 
     def test_view_when_ready(self):
         s = _state(data_status=DATA_COMPLETE)
-        assert primary_action(s) == (CTA_VIEW, PRIMARY_VIEW, False)
+        pres = _pres(key=ACCOUNT_STATE_READY, label="Ready", cta=CTA_VIEW)
+        assert primary_action(s, presentation=pres) == (CTA_VIEW, PRIMARY_VIEW, False)
 
     def test_fix_when_needs_attention(self):
-        s = _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED)
-        assert primary_action(s) == (CTA_FIX, PRIMARY_FIX, False)
+        s = _state()
+        pres = _pres(key=ACCOUNT_STATE_NEEDS_ATTENTION, label="Needs attention", cta=CTA_FIX)
+        assert primary_action(s, presentation=pres) == (CTA_FIX, PRIMARY_FIX, False)
 
 
 class TestCardView:
@@ -201,12 +194,16 @@ class TestCardView:
 
     def test_access_method_cloud(self):
         s = _state(access_method=ACCESS_MIGHTY_LOGIN)
-        card = build_card_view(s, icon="✈️", color="#eee", fmt_relative=_fmt)
+        card = build_card_view(
+            s, icon="✈️", color="#eee", fmt_relative=_fmt, session_access=_access("connected"),
+        )
         assert card.access_label == "Cloud"
         assert card.observation_count == 2
 
     def test_timestamps_are_distinct(self):
-        card = build_card_view(_state(), fmt_relative=_fmt)
+        card = build_card_view(
+            _state(), fmt_relative=_fmt, session_access=_access("connected"),
+        )
         assert card.session_verified_label.startswith(SESSION_VERIFIED_PREFIX)
         assert card.data_refreshed_label.startswith(DATA_REFRESHED_PREFIX)
 
@@ -214,10 +211,12 @@ class TestCardView:
         login = build_card_view(
             _state(provider="a", display_name="Amex", connection_state=CONN_NEEDS_LOGIN, last_verified_at=None),
             fmt_relative=_fmt,
+            session_access=_access("signed_out", provider="a"),
         )
         ok = build_card_view(
             _state(provider="b", display_name="Delta"),
             fmt_relative=_fmt,
+            session_access=_access("connected", provider="b"),
         )
         ordered = sort_cards([ok, login])
         assert ordered[0].provider == "a"
@@ -226,8 +225,16 @@ class TestCardView:
 class TestSummary:
     def test_summary_headline(self):
         cards = [
-            build_card_view(_state(provider="a", display_name="A"), fmt_relative=_fmt),
-            build_card_view(_login_state(provider="b", display_name="B"), fmt_relative=_fmt),
+            build_card_view(
+                _state(provider="a", display_name="A"),
+                fmt_relative=_fmt,
+                session_access=_access("connected", provider="a"),
+            ),
+            build_card_view(
+                _login_state(provider="b", display_name="B"),
+                fmt_relative=_fmt,
+                session_access=_access("signed_out", provider="b"),
+            ),
         ]
         summary = build_summary(cards)
         assert summary.total == 2
@@ -256,6 +263,7 @@ class TestActionLinks:
             ),
             fmt_relative=_fmt,
             provider_login_url="https://www.americanexpress.com/login",
+            session_access=_access("signed_out", provider="amex"),
         )
         html = render_card(card, lambda x: str(x))
         assert 'href="https://www.americanexpress.com/login"' in html
@@ -267,18 +275,22 @@ class TestActionLinks:
         card = build_card_view(
             _state(connection_state=CONN_CONNECTING, data_status=DATA_NONE, last_verified_at=None),
             fmt_relative=_fmt,
+            session_access=_access("checking"),
         )
         html = render_card(card, lambda x: str(x))
-        assert ">Updating…</button>" in html
+        assert "Checking" in html or "Updating" in html
         assert "disabled" in html
 
-    def test_render_fix_as_button(self):
+    def test_render_unknown_without_login_cta(self):
         card = build_card_view(
-            _state(session_health=SESSION_EXPIRED, connection_state=CONN_CONNECTED),
+            _login_state(provider="delta"),
             fmt_relative=_fmt,
+            session_access=_access("unknown"),
+            provider_login_url="https://example.com/login",
         )
         html = render_card(card, lambda x: str(x))
-        assert ">Fix</button>" in html
+        assert "Unable to verify" in html
+        assert 'href="https://example.com/login"' not in html
 
 
 class TestScrollContainer:

@@ -145,7 +145,7 @@ def test_mr_balance_only_unknown_current_access_with_fresh_cache(client):
         assert amex.last_private_data is not None
         assert amex.last_verified is None
         assert amex.next_action_text == (
-            "Sign into this account once. Mighty will detect it automatically."
+            "Mighty could not verify this account automatically."
         )
 
 
@@ -340,7 +340,7 @@ def test_no_evidence_unknown_with_no_cached_data(client):
         assert all(r.last_private_data is None for r in rows)
         assert all(
             r.next_action_text
-            == "Sign into this account once. Mighty will detect it automatically."
+            == "Mighty could not verify this account automatically."
             for r in rows
         )
 
