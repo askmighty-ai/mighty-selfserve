@@ -38,10 +38,10 @@ ACCOUNT_STATE_NEEDS_ATTENTION = "needs_attention"
 ACCOUNT_STATE_UNKNOWN = "unknown"
 
 ACCOUNT_STATE_LABELS: dict[str, str] = {
-    ACCOUNT_STATE_NEEDS_SIGN_IN: "Needs sign in",
+    ACCOUNT_STATE_NEEDS_SIGN_IN: "Sign in required",
     ACCOUNT_STATE_UPDATING: "Updating",
-    ACCOUNT_STATE_CHECKING: "Checking...",
-    ACCOUNT_STATE_READY: "Ready",
+    ACCOUNT_STATE_CHECKING: "Checking",
+    ACCOUNT_STATE_READY: "Connected",
     ACCOUNT_STATE_NEEDS_ATTENTION: "Needs attention",
     ACCOUNT_STATE_UNKNOWN: "Unable to verify",
 }
@@ -101,7 +101,18 @@ STATUS_LABELS: dict[str, str] = {
     "waiting_for_extension": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
     "error": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_ATTENTION],
     "unknown": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UNKNOWN],
+    "unverified": ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UNKNOWN],
 }
+
+# Readiness copy — canonical “Connected” requires access + private data.
+READINESS_COPY_READY = (
+    "Mighty is connected to your logged-in account and can see your data."
+)
+READINESS_COPY_CHECKING = "Mighty is verifying access and account data."
+READINESS_COPY_SIGNED_OUT = "Sign in so Mighty can access your account data."
+READINESS_COPY_UNVERIFIED = (
+    "Mighty could not confirm both account access and data."
+)
 
 # ── Worker popup copy ─────────────────────────────────────────────────────────
 WORKER_NAME = "Mighty"
@@ -518,8 +529,8 @@ ACCOUNTS_FILTER_UP_TO_DATE = "Up to date"
 ACCOUNTS_NOT_CHECKED_YET = "Not checked yet"
 ACCOUNTS_STATUS_SETTING_UP = "Setting up"
 ACCOUNTS_STATUS_AWAITING_FIRST = "Awaiting first check"
-ACCOUNTS_STATUS_CHECKING = "Checking now"
-ACCOUNTS_STATUS_NOT_VERIFIED = "Not yet verified"
+ACCOUNTS_STATUS_CHECKING = "Checking"
+ACCOUNTS_STATUS_NOT_VERIFIED = "Unable to verify"
 ACCOUNTS_SUBLINE_FIRST_VISIT = "Mighty will check this account automatically."
 ACCOUNTS_SUBLINE_CONNECTED = "Connected — awaiting data"
 ACCOUNTS_SUBLINE_UPDATING = "Updating…"

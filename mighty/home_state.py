@@ -68,6 +68,7 @@ _STILL_SETTING_UP = frozenset({
     WAITING_FOR_EXTENSION,
     UPDATING,
     CHECKING,
+    "unverified",
 })
 
 
@@ -106,11 +107,13 @@ def _health_counts(accounts: Sequence[AccountStatus]) -> AccountHealthCounts:
     """Bucket accounts for Dashboard health chips.
 
     Same product buckets as Accounts portfolio:
-    - UP_TO_DATE → up to date
-    - NEEDS_LOGIN → needs login (user attention)
-    - ERROR → needs attention (user-actionable sync/setup issue)
-    - UPDATING / CHECKING / WAITING_FOR_EXTENSION / other incomplete → still setting up
+    - UP_TO_DATE → Connected (ready)
+    - NEEDS_LOGIN → Sign in required
+    - ERROR → needs attention
+    - UPDATING / CHECKING / UNVERIFIED / WAITING_FOR_EXTENSION → still setting up
     """
+    from mighty.account_status import UNVERIFIED
+
     counts = AccountHealthCounts()
     for acct in accounts:
         if acct.status == UP_TO_DATE:
@@ -119,7 +122,7 @@ def _health_counts(accounts: Sequence[AccountStatus]) -> AccountHealthCounts:
             counts.needs_login += 1
         elif acct.status == ERROR:
             counts.needs_attention += 1
-        elif acct.status in _STILL_SETTING_UP:
+        elif acct.status in _STILL_SETTING_UP or acct.status == UNVERIFIED:
             counts.waiting += 1
         else:
             # Unknown / unexpected incomplete statuses → still setting up

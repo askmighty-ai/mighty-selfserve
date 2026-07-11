@@ -26,6 +26,7 @@ from mighty.account_status import (
     NEEDS_LOGIN,
     UPDATING,
     UP_TO_DATE,
+    UNVERIFIED,
     WAITING_FOR_EXTENSION,
     resolve_canonical_status,
 )
@@ -45,17 +46,17 @@ SECTION_ORDER = (
 )
 
 SECTION_HEADERS: dict[str, str] = {
-    SECTION_NEEDS_LOGIN: "Needs login",
+    SECTION_NEEDS_LOGIN: "Sign in required",
     SECTION_NEEDS_ATTENTION: "Needs attention",
     SECTION_WAITING: "Still setting up",
-    SECTION_UP_TO_DATE: "Up to date",
+    SECTION_UP_TO_DATE: "Connected",
 }
 
 STATUS_LABELS: dict[str, str] = {
-    SECTION_NEEDS_LOGIN: "Needs login",
+    SECTION_NEEDS_LOGIN: "Sign in required",
     SECTION_NEEDS_ATTENTION: "Needs attention",
     SECTION_WAITING: user_copy.ACCOUNTS_STATUS_SETTING_UP,
-    SECTION_UP_TO_DATE: "Up to date",
+    SECTION_UP_TO_DATE: "Connected",
 }
 
 VALID_FILTERS = frozenset({"all", "needs_attention", "waiting", "up_to_date", "needs_login"})
@@ -98,17 +99,18 @@ def resolve_accounts_section(
     updating_source: str | None = None,
     source: str = "",
     session_state: str | None = None,
+    readiness: str | None = None,
 ) -> str:
     """Map lifecycle + session access to a maintenance list section.
 
-    Login section comes only from session_state (provider_session_state).
+    Login section comes only from session_state / readiness signed_out.
+    Connected section requires readiness ready (access + correlated extraction).
 
     Bucket alignment with Dashboard `_health_counts`:
     - NEEDS_LOGIN → needs_login
     - ERROR → needs_attention
-    - UP_TO_DATE → up_to_date
-    - UPDATING / CHECKING / WAITING_FOR_EXTENSION / other incomplete → waiting
-      (customer-facing: "Still setting up")
+    - UP_TO_DATE → up_to_date (Connected)
+    - UPDATING / CHECKING / UNVERIFIED / WAITING_FOR_EXTENSION / other → waiting
     """
     canonical = resolve_canonical_status(
         lifecycle,
@@ -116,6 +118,7 @@ def resolve_accounts_section(
         source=source,
         updating_source=updating_source,
         session_state=session_state,
+        readiness=readiness,
     )
     if canonical == NEEDS_LOGIN:
         return SECTION_NEEDS_LOGIN
@@ -133,23 +136,30 @@ def waiting_subline(
     updating_source: str | None = None,
     source: str = "",
     session_state: str | None = None,
+    readiness: str | None = None,
+    cached_data_label: str | None = None,
 ) -> str:
     """Secondary line for Still setting up rows; internal cases only."""
-    if session_state == "checking":
-        return user_copy.ACCOUNTS_SUBLINE_CHECKING
-    if session_state == "unknown":
-        return user_copy.ACCOUNTS_SUBLINE_UNKNOWN
+    if readiness == "signed_out" or session_state == "signed_out":
+        return cached_data_label or user_copy.READINESS_COPY_SIGNED_OUT
+    if readiness == "checking" or session_state == "checking":
+        return user_copy.READINESS_COPY_CHECKING
+    if readiness == "unverified" or session_state == "unknown":
+        return cached_data_label or user_copy.READINESS_COPY_UNVERIFIED
     canonical = resolve_canonical_status(
         lifecycle,
         sync_status or "ok",
         source=source,
         updating_source=updating_source,
         session_state=session_state,
+        readiness=readiness,
     )
     if canonical == UPDATING:
         return user_copy.ACCOUNTS_SUBLINE_UPDATING
     if canonical == CHECKING:
-        return user_copy.ACCOUNTS_SUBLINE_CHECKING
+        return user_copy.READINESS_COPY_CHECKING
+    if canonical == UNVERIFIED:
+        return cached_data_label or user_copy.READINESS_COPY_UNVERIFIED
     if lifecycle.state == CONNECTED:
         return user_copy.ACCOUNTS_SUBLINE_CONNECTED
     return user_copy.ACCOUNTS_SUBLINE_FIRST_VISIT
@@ -163,16 +173,17 @@ def row_status_label(
     sync_status: str = "ok",
     updating_source: str | None = None,
     source: str = "",
+    readiness: str | None = None,
 ) -> str:
-    if section == SECTION_UP_TO_DATE:
+    if readiness == "ready" or section == SECTION_UP_TO_DATE:
         return STATUS_LABELS[SECTION_UP_TO_DATE]
-    if section == SECTION_NEEDS_LOGIN:
+    if readiness == "signed_out" or section == SECTION_NEEDS_LOGIN:
         return STATUS_LABELS[SECTION_NEEDS_LOGIN]
     if section == SECTION_NEEDS_ATTENTION:
         return STATUS_LABELS[SECTION_NEEDS_ATTENTION]
-    if session_state == "unknown":
+    if readiness == "unverified" or session_state == "unknown":
         return user_copy.ACCOUNTS_STATUS_NOT_VERIFIED
-    if session_state == "checking":
+    if readiness == "checking" or session_state == "checking":
         return user_copy.ACCOUNTS_STATUS_CHECKING
     if session_state == "signed_out":
         return STATUS_LABELS[SECTION_NEEDS_LOGIN]
@@ -182,14 +193,17 @@ def row_status_label(
         source=source,
         updating_source=updating_source,
         session_state=session_state,
+        readiness=readiness,
     )
-    if canonical == UPDATING:
-        return user_copy.STATUS_LABEL_UPDATING
+    if canonical == UNVERIFIED:
+        return user_copy.ACCOUNTS_STATUS_NOT_VERIFIED
     if canonical == CHECKING:
         return user_copy.ACCOUNTS_STATUS_CHECKING
+    if canonical == UPDATING:
+        return user_copy.ACCOUNTS_STATUS_SETTING_UP
     if canonical == WAITING_FOR_EXTENSION:
         return user_copy.ACCOUNTS_STATUS_AWAITING_FIRST
-    return STATUS_LABELS[SECTION_WAITING]
+    return STATUS_LABELS.get(section, user_copy.ACCOUNTS_STATUS_SETTING_UP)
 
 
 def row_subline(
@@ -202,9 +216,13 @@ def row_subline(
     synced_fmt: str = "",
     failure_hint: str = "",
     session_state: str | None = None,
+    readiness: str | None = None,
+    cached_data_label: str | None = None,
 ) -> str:
     if section == SECTION_UP_TO_DATE and synced_fmt:
         return f"Updated {synced_fmt}"
+    if section == SECTION_NEEDS_LOGIN and cached_data_label:
+        return cached_data_label
     if section == SECTION_NEEDS_ATTENTION and failure_hint:
         return failure_hint
     if section == SECTION_WAITING:
@@ -214,9 +232,11 @@ def row_subline(
             updating_source=updating_source,
             source=source,
             session_state=session_state,
+            readiness=readiness,
+            cached_data_label=cached_data_label,
         )
     if section == SECTION_NEEDS_LOGIN:
-        return user_copy.NEEDS_LOGIN_EXPLAINER
+        return cached_data_label or user_copy.NEEDS_LOGIN_EXPLAINER
     return ""
 
 
@@ -292,7 +312,7 @@ def _count_phrase(count: int, verb: str) -> str:
 def portfolio_summary_line(portfolio: AccountsPortfolio) -> str:
     parts: list[str] = [f"{portfolio.total} account{'s' if portfolio.total != 1 else ''}"]
     if portfolio.up_to_date:
-        parts.append(f"{portfolio.up_to_date} up to date")
+        parts.append(f"{portfolio.up_to_date} connected")
     if portfolio.waiting:
         parts.append(f"{portfolio.waiting} still setting up")
     if portfolio.needs_login:

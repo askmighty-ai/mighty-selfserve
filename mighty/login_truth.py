@@ -144,6 +144,8 @@ class CurrentAccountAccess:
     next_action_type: NextActionType
     next_action_text: str
     verification_lifecycle: str | None = None
+    verification_id: str | None = None
+    evidence_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -648,6 +650,8 @@ def resolve_current_account_access(
     )
 
     verification_lifecycle = verification.lifecycle if verification else None
+    verification_id = verification.verification_id if verification else None
+    evidence_type = session_state.evidence_type if session_state else None
     verifying = is_verification_active(verification)
     fresh = is_session_evidence_fresh(
         session_state, now=now, freshness_seconds=freshness_seconds
@@ -703,6 +707,8 @@ def resolve_current_account_access(
         next_action_type=next_action_type,
         next_action_text=next_action_text,
         verification_lifecycle=verification_lifecycle,
+        verification_id=verification_id,
+        evidence_type=evidence_type,
     )
 
 

@@ -129,9 +129,11 @@ def test_connected_pss_never_needs_login_despite_legacy_fields(client):
             login_url_fn=lambda _s: "",
         )
         by_source = {a.source: a for a in accounts}
-        assert by_source["amex"].status == UP_TO_DATE
+        assert by_source["amex"].status in (UP_TO_DATE, "unverified")
         assert by_source["amex"].session_state == "connected"
+        assert by_source["amex"].login_required is False
         assert by_source["amex"].presentation_key != "needs_sign_in"
+        assert by_source["amex"].readiness != "signed_out"
         assert summary.needs_login_count == 0
         assert "American Express" not in summary.needs_login_accounts
 
@@ -414,7 +416,7 @@ def test_account_center_signed_out_login_cta():
         session_access=_access("signed_out"),
         provider_login_url="https://example.com/login",
     )
-    assert card.status_label == "Needs sign in"
+    assert card.status_label == "Sign in required"
     assert card.primary_action_kind == PRIMARY_LOGIN
     assert card.primary_action_disabled is False
     assert card.primary_action_href == "https://example.com/login"
@@ -461,7 +463,7 @@ def test_accounts_cta_checking_no_login(client):
         session_state="checking", login_required=False,
     )
     assert "acct-maint-cta--urgent" not in html
-    assert "Checking now" in html
+    assert "Checking" in html
 
 
 def test_accounts_cta_signed_out_login(client):

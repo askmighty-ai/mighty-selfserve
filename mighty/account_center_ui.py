@@ -38,6 +38,7 @@ from mighty.account_state import (
 
 from mighty.user_copy import (
     ACCOUNT_STATE_CHECKING,
+    ACCOUNT_STATE_CTAS,
     ACCOUNT_STATE_LABELS,
     ACCOUNT_STATE_NEEDS_ATTENTION,
     ACCOUNT_STATE_NEEDS_SIGN_IN,
@@ -147,16 +148,16 @@ class AccountCenterCardView:
 
 def status_tone(state: AccountState, *, presentation_key: str | None = None) -> str:
     key = presentation_key or resolve_account_presentation(state).key
+    if key == ACCOUNT_STATE_READY:
+        return TONE_CONNECTED
     if key == ACCOUNT_STATE_NEEDS_SIGN_IN:
         return TONE_LOGIN
-    if key in (ACCOUNT_STATE_UPDATING, ACCOUNT_STATE_CHECKING, "checking"):
-        return TONE_ATTENTION
-    if key == ACCOUNT_STATE_UNKNOWN or key == "unknown":
+    if key == ACCOUNT_STATE_UNKNOWN:
+        return TONE_NEVER
+    if key in (ACCOUNT_STATE_CHECKING, ACCOUNT_STATE_UPDATING, "checking"):
         return TONE_ATTENTION
     if key == ACCOUNT_STATE_NEEDS_ATTENTION:
         return TONE_ATTENTION
-    if key == ACCOUNT_STATE_READY:
-        return TONE_CONNECTED
     if state.connection_state == CONN_NOT_CONNECTED:
         return TONE_NEVER
     return TONE_ATTENTION
@@ -249,51 +250,74 @@ def build_card_view(
     fmt_relative: Callable[[str], str],
     provider_login_url: str | None = None,
     session_access=None,
+    account=None,
+    extraction_access_cycle_id: str | None = None,
 ) -> AccountCenterCardView:
-    """Build card view. Login/access presentation comes only from session_access."""
+    """Build card view. Status comes from account readiness when session is known."""
     from mighty.account_presentation import AccountPresentation
+    from mighty.account_readiness import resolve_account_readiness
     from mighty.session_access import (
         SESSION_STATUS_LABELS,
         product_state_for_session,
         resolve_product_account_state,
-        resolve_session_access_presentation,
     )
 
     presentation = None
     product = None
+    readiness = None
     if session_access is not None:
         product = resolve_product_account_state(session_access)
-        sess = resolve_session_access_presentation(
-            session_access, display_name=state.display_name,
+        readiness = resolve_account_readiness(
+            provider=state.provider,
+            product=product,
+            session_evidence_at=session_access.last_verified,
+            verification_id=getattr(session_access, "verification_id", None),
+            verification_lifecycle=session_access.verification_lifecycle,
+            account=account,
+            extraction_status=state.extraction_status,
+            extraction_at=state.last_data_refresh or (account.synced_at if account else None),
+            extraction_access_cycle_id=extraction_access_cycle_id,
+            last_private_data_at=session_access.last_private_data,
         )
-        # All four canonical states — never fall back to legacy login presentation.
         presentation = AccountPresentation(
-            key=sess.presentation_key,
-            label=SESSION_STATUS_LABELS[product.session_state],
-            cta_label=sess.cta_label or "",
-            cta_disabled=product.session_state in ("checking", "unknown"),
-            extension_hint=sess.extension_hint,
+            key=readiness.presentation_key,
+            label=readiness.status_label,
+            cta_label=ACCOUNT_STATE_CTAS.get(readiness.presentation_key, ""),
+            cta_disabled=readiness.state in ("checking", "unverified"),
+            extension_hint=readiness.status_copy,
         )
     else:
         # No Current Access row: treat login as unknown — never legacy needs_login.
         product = product_state_for_session("unknown", provider=state.provider)
+        readiness = resolve_account_readiness(
+            provider=state.provider,
+            product=product,
+            account=account,
+            extraction_status=state.extraction_status,
+            extraction_at=state.last_data_refresh,
+        )
         presentation = AccountPresentation(
-            key=ACCOUNT_STATE_UNKNOWN,
-            label=SESSION_STATUS_LABELS["unknown"],
+            key=readiness.presentation_key,
+            label=readiness.status_label,
             cta_label="",
             cta_disabled=True,
-            extension_hint="Mighty could not verify this account automatically.",
+            extension_hint=readiness.status_copy,
         )
 
     label, kind, disabled = primary_action(state, presentation=presentation)
     # Login CTA only when ProductAccountState.login_required is true.
     if not product.login_required and kind == PRIMARY_LOGIN:
-        label = SESSION_STATUS_LABELS.get(product.session_state, "Unable to verify")
+        label = readiness.status_label if readiness else SESSION_STATUS_LABELS.get(
+            product.session_state, "Unable to verify"
+        )
         kind = PRIMARY_CHECKING
         disabled = True
     href, external = resolve_primary_action_href(
         kind, state.provider, provider_login_url=provider_login_url,
     )
+    data_freshness = data_freshness_label(state, fmt_relative)
+    if readiness and readiness.cached_data_label:
+        data_freshness = readiness.cached_data_label
     return AccountCenterCardView(
         provider=state.provider,
         display_name=state.display_name,
@@ -301,7 +325,7 @@ def build_card_view(
         color=color,
         status_tone=status_tone(state, presentation_key=presentation.key),
         status_label=presentation.label,
-        data_freshness=data_freshness_label(state, fmt_relative),
+        data_freshness=data_freshness,
         session_label=SESSION_LABELS.get(state.session_health, state.session_health.title()),
         access_label=ACCESS_LABELS.get(state.access_method, state.access_method.replace("_", " ").title()),
         observation_count=len(state.observations_available),
@@ -312,7 +336,7 @@ def build_card_view(
         primary_action_href=href,
         primary_action_external=external,
         primary_action_disabled=disabled,
-        status_line=state.status_line,
+        status_line=readiness.status_copy if readiness else state.status_line,
     )
 
 
@@ -322,23 +346,33 @@ def build_summary(cards: list[AccountCenterCardView]) -> AccountCenterSummary:
         ACCOUNT_STATE_NEEDS_SIGN_IN: 0,
         ACCOUNT_STATE_UPDATING: 0,
         ACCOUNT_STATE_NEEDS_ATTENTION: 0,
-    }
-    tone_to_key = {
-        TONE_CONNECTED: ACCOUNT_STATE_READY,
-        TONE_LOGIN: ACCOUNT_STATE_NEEDS_SIGN_IN,
-        TONE_ATTENTION: ACCOUNT_STATE_NEEDS_ATTENTION,
-        TONE_NEVER: ACCOUNT_STATE_NEEDS_SIGN_IN,
+        ACCOUNT_STATE_UNKNOWN: 0,
     }
     for card in cards:
-        key = tone_to_key.get(card.status_tone, ACCOUNT_STATE_NEEDS_ATTENTION)
         if card.status_label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING]:
             key = ACCOUNT_STATE_UPDATING
+        elif card.status_label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_CHECKING]:
+            key = ACCOUNT_STATE_UPDATING
+        elif card.status_label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY]:
+            key = ACCOUNT_STATE_READY
+        elif card.status_label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN]:
+            key = ACCOUNT_STATE_NEEDS_SIGN_IN
+        elif card.status_label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UNKNOWN]:
+            key = ACCOUNT_STATE_UNKNOWN
+        elif card.status_tone == TONE_CONNECTED:
+            key = ACCOUNT_STATE_READY
+        elif card.status_tone == TONE_LOGIN:
+            key = ACCOUNT_STATE_NEEDS_SIGN_IN
+        elif card.status_tone == TONE_NEVER:
+            key = ACCOUNT_STATE_UNKNOWN
+        else:
+            key = ACCOUNT_STATE_NEEDS_ATTENTION
         counts[key] = counts.get(key, 0) + 1
     return AccountCenterSummary(
         total=len(cards),
         ready=counts[ACCOUNT_STATE_READY],
         needs_sign_in=counts[ACCOUNT_STATE_NEEDS_SIGN_IN],
-        updating=counts[ACCOUNT_STATE_UPDATING],
+        updating=counts[ACCOUNT_STATE_UPDATING] + counts[ACCOUNT_STATE_UNKNOWN],
         needs_attention=counts[ACCOUNT_STATE_NEEDS_ATTENTION],
     )
 

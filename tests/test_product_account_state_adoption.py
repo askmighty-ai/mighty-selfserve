@@ -126,7 +126,7 @@ def test_accounts_cta_uses_login_required_not_session_string(mighty_app):
         login_required=False,
     )
     assert "acct-maint-cta--urgent" not in html_checking
-    assert "Checking now" in html_checking
+    assert "Checking" in html_checking
 
     html_signed_out = mighty_app._accounts_primary_cta_html(
         lc, "amex", "American Express", "ok",

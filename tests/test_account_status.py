@@ -4,7 +4,7 @@ import json
 import os
 import secrets
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -306,31 +306,49 @@ def test_api_sync_progress_updates_updating_account(client):
 
 def test_synced_account_is_up_to_date(client):
     import app as mighty
+    from mighty.provider_session_state import SessionEvidence, upsert_provider_session_state
 
     uid, api_key = _user_api(client)
     with mighty.app.app_context():
         db = mighty.get_db()
-        now = mighty.iso()
+        now = datetime.now(timezone.utc)
+        session_at = now - timedelta(seconds=30)
+        synced = now - timedelta(seconds=5)
         payload = {
             "items": [{"key": "points", "label": "Points", "value": "50000"}],
             "sync_status": "ok",
+            "extraction_status": "complete",
         }
         stub = mighty.encrypt_account_data(uid, payload)
         db.execute(
             "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
             "VALUES (?,?,?,?,?,?,?)",
-            (uid, "delta", "", "", "", now, now),
+            (uid, "delta", "", "", "", mighty.iso(), mighty.iso()),
         )
         db.execute(
             "INSERT INTO account_data (user_id, source, display_name, icon, color, data_enc, synced_at, sync_status, extraction_status) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
-            (uid, "delta", "Delta", "?", "#eee", stub, now, "ok", "complete"),
+            (uid, "delta", "Delta", "?", "#eee", stub, synced.isoformat(), "ok", "complete"),
+        )
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="delta",
+                state="connected",
+                evidence_type="session_verified",
+                evidence_summary="fresh",
+                observed_at=session_at,
+                source="test",
+                confidence="high",
+            ),
         )
         db.commit()
 
     resp = client.get("/api/account-status", headers={"X-Mighty-Key": api_key})
     by_source = {a["source"]: a for a in resp.get_json()["accounts"]}
     assert by_source["delta"]["status"] == UP_TO_DATE
+    assert by_source["delta"]["readiness"] == "ready"
 
 
 def test_waiting_for_extension_status(client):

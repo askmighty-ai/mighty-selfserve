@@ -56,8 +56,8 @@ PRODUCT_SESSION_FROM_CURRENT_ACCESS: dict[CurrentAccess, ProductSessionState] = 
 
 SESSION_STATUS_LABELS: dict[ProductSessionState, str] = {
     "connected": "Connected",
-    "checking": "Checking...",
-    "signed_out": "Needs sign in",
+    "checking": "Checking",
+    "signed_out": "Sign in required",
     "unknown": "Unable to verify",
 }
 
