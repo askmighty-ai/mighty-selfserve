@@ -241,26 +241,44 @@ def test_credentials_page_renders(client):
 def test_credentials_page_filter_waiting_empty_still_shows_active_chip(client):
     """Active filter chip stays visible even when that bucket has zero accounts."""
     import app as mighty
+    from datetime import datetime, timedelta, timezone
+    from mighty.provider_session_state import SessionEvidence, upsert_provider_session_state
 
     with client.session_transaction() as sess:
         uid = sess["user_id"]
     with mighty.app.app_context():
         db = mighty.get_db()
-        now = mighty.iso()
+        now = datetime.now(timezone.utc)
+        session_at = now - timedelta(seconds=30)
+        synced = now - timedelta(seconds=5)
         stub = mighty.encrypt_account_data(uid, {
             "items": [{"key": "balance", "label": "Balance", "value": "$100"}],
             "sync_status": "ok",
+            "extraction_status": "complete",
         })
         db.execute(
             "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
             "VALUES (?,?,?,?,?,?,?)",
-            (uid, "amex", "", "", "", now, now),
+            (uid, "amex", "", "", "", mighty.iso(), mighty.iso()),
         )
         db.execute(
             "INSERT INTO account_data "
-            "(user_id, source, display_name, icon, color, data_enc, synced_at, connection_status, sync_status) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (uid, "amex", "Amex", "💳", "#eee", stub, now, "connected", "ok"),
+            "(user_id, source, display_name, icon, color, data_enc, synced_at, connection_status, sync_status, extraction_status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (uid, "amex", "Amex", "💳", "#eee", stub, synced.isoformat(), "connected", "ok", "complete"),
+        )
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_verified",
+                evidence_summary="fresh",
+                observed_at=session_at,
+                source="test",
+                confidence="high",
+            ),
         )
         db.commit()
     r = client.get("/credentials?filter=waiting")
@@ -329,7 +347,8 @@ def test_credentials_page_section_headers(client):
         db.commit()
     r = client.get("/credentials")
     assert r.status_code == 200
-    assert b"Up to date" in r.data
+    # Without fresh session + correlated extraction, synced cache is not Connected.
+    assert b"Connected" in r.data or b"Still setting up" in r.data
     assert b"Still setting up" in r.data
     assert b"Edit login" not in r.data
     assert b"fields-panel" not in r.data

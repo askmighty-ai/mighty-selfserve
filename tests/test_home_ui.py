@@ -69,7 +69,7 @@ class TestHomeUi:
             escape=_escape,
         )
         assert "Account health" in rendered
-        assert "1 up to date" in rendered
+        assert "1 connected" in rendered
         assert "need login" not in rendered.lower()
         assert "all set" in rendered or "You&#x27;re all set." in rendered
         assert "Mighty runs in Chrome" in rendered

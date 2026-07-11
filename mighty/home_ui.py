@@ -76,7 +76,7 @@ def _account_health_strip(result: HomeStateResult, escape: Callable[[Any], str])
     chips: list[str] = []
     health = result.health
     if health.up_to_date:
-        label = f"{health.up_to_date} up to date"
+        label = f"{health.up_to_date} connected"
         chips.append(_health_chip(label, health.up_to_date, "up_to_date", escape))
     if health.waiting:
         label = f"{health.waiting} {user_copy.HOME_HEALTH_STILL_SETTING_UP}"

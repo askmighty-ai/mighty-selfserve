@@ -53,7 +53,11 @@ def _lifecycle(state: str, **kwargs) -> AccountLifecycle:
 class TestAccountsSectionResolution:
     def test_synced_maps_to_up_to_date(self):
         lc = _lifecycle(LC_SYNCED)
-        assert resolve_accounts_section(lc, "ok", source="amex") == SECTION_UP_TO_DATE
+        assert resolve_accounts_section(
+            lc, "ok", source="amex", readiness="ready",
+        ) == SECTION_UP_TO_DATE
+        # Synced lifecycle alone (no readiness) is not Connected.
+        assert resolve_accounts_section(lc, "ok", source="amex") != SECTION_UP_TO_DATE
 
     def test_needs_login_section(self):
         lc = _lifecycle(LC_NEEDS_LOGIN)
@@ -151,7 +155,7 @@ class TestAccountsPortfolio:
         portfolio = build_portfolio(rows, "Last checked 1 hour ago")
         summary = portfolio_summary_line(portfolio)
         assert "1 account" in summary
-        assert "1 up to date" in summary
+        assert "1 connected" in summary
         assert "still setting up" not in summary
         assert "waiting" not in summary
         assert "login" not in summary
@@ -209,7 +213,7 @@ class TestSetupSemanticsCopy:
             up_to_date=2, last_checked_label="",
         )
         summary = portfolio_summary_line(portfolio)
-        assert "2 up to date" in summary
+        assert "2 connected" in summary
         assert "6 still setting up" in summary
         assert "waiting" not in summary
 
@@ -224,7 +228,7 @@ class TestSetupSemanticsCopy:
         ) == user_copy.ACCOUNTS_STATUS_NOT_VERIFIED
         assert waiting_subline(
             lc, session_state="unknown",
-        ) == user_copy.ACCOUNTS_SUBLINE_UNKNOWN
+        ) == user_copy.READINESS_COPY_UNVERIFIED
 
     def test_checking_row_copy(self):
         lc = _lifecycle(LC_WAITING)
@@ -233,7 +237,7 @@ class TestSetupSemanticsCopy:
         ) == user_copy.ACCOUNTS_STATUS_CHECKING
         assert waiting_subline(
             lc, session_state="checking",
-        ) == user_copy.ACCOUNTS_SUBLINE_CHECKING
+        ) == user_copy.READINESS_COPY_CHECKING
 
     def test_first_visit_row_copy(self):
         lc = _lifecycle(LC_WAITING)

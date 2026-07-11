@@ -39,6 +39,30 @@ delegates to that table via `to_product_session_state`. There is no second polic
 Customer UIs must consume `login_required` for sign-in CTAs (not re-check
 `session_state == "signed_out"`). Wording may differ via presentation helpers.
 
+### A2. Readiness layer — `AccountReadiness` (customer “Connected”)
+
+Source: `mighty.account_readiness.resolve_account_readiness()`.
+
+Positive customer status (“Connected”) requires **both**:
+
+1. Fresh authenticated-session evidence (existing 120s live-session window)
+2. Successful private account-data extraction correlated with that access cycle
+
+| State | Status label | Meaning |
+|-------|--------------|---------|
+| `ready` | Connected | Live access + correlated private-data extraction |
+| `checking` | Checking | Verification or extraction in flight |
+| `signed_out` | Sign in required | Fresh signed-out / login_required evidence |
+| `unverified` | Unable to verify | Incomplete/stale/failed evidence — do **not** ask to sign in |
+
+Correlation: extraction timestamp ≥ winning session evidence time, or shared
+`access_cycle_id` / `verification_id`. Cached data, `synced_at` alone,
+`connection_status`, `sync_status`, and `session_verified` alone never produce
+`ready`. Cached data may appear as secondary copy (“Last saved data: …”).
+
+Dashboard, Accounts, Account Center, popup, and `/api/account-status` must use
+this readiness result for Connected / Sign in required / Unable to verify.
+
 ### B. Update / data layer — `AccountStatus.status`
 
 Source: `resolve_canonical_status()` (lifecycle + sync + session).
@@ -68,7 +92,9 @@ login_truth.compute_current_account_access_rows   (Current Access)
         ↓
 session_access.resolve_product_account_state      (session contract)
         ↓
-account_status.build_account_status               (session + update status)
+account_readiness.resolve_account_readiness       (Connected = access + data)
+        ↓
+account_status.build_account_status               (session + readiness + update)
         ↓
 surface presentation (wording / layout only)
 ```

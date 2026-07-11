@@ -174,6 +174,7 @@ def persist_provider_state(
     extraction_status: str | None = None,
     data_source: str | None = None,
     synced_at: str | None = None,
+    access_cycle_id: str | None = None,
     iso_fn: Callable | None = None,
 ) -> None:
     """Write provider account state to encrypted blob + indexed columns."""
@@ -192,6 +193,9 @@ def persist_provider_state(
     if data_source is not None:
         ad_data["data_source"] = data_source
         ad_data["sync_source"] = data_source  # legacy alias for sync pipeline
+    if access_cycle_id:
+        ad_data["access_cycle_id"] = access_cycle_id
+        ad_data["extraction_access_cycle_id"] = access_cycle_id
 
     sets = ["data_enc=?"]
     params: list = [encrypt_fn(uid, ad_data)]
@@ -254,6 +258,7 @@ def apply_adapter_payload(
     synced_at: str,
     encrypt_fn: Callable,
     decrypt_fn: Callable,
+    access_cycle_id: str | None = None,
 ) -> ProviderAccount:
     """Merge an adapter sync payload and update extraction / data_source columns."""
     row = db.execute(
@@ -268,12 +273,31 @@ def apply_adapter_payload(
     extraction = infer_extraction_status(normalized, sync_status=sync_status)
     adapter = normalize_data_source(data_source)
 
+    cycle_id = access_cycle_id
+    if cycle_id is None and extraction == EXTRACTION_COMPLETE:
+        try:
+            from mighty.account_readiness import make_access_cycle_id
+            from mighty.provider_session_state import get_provider_session_states
+            from mighty.session_verification import get_session_verifications
+
+            pss = get_provider_session_states(db, uid, providers=[source]).get(source)
+            verifications = get_session_verifications(db, uid, providers=[source])
+            verification = verifications.get(source)
+            cycle_id = make_access_cycle_id(
+                provider=source,
+                verification_id=verification.verification_id if verification else None,
+                session_evidence_at=pss.observed_at if pss else None,
+            )
+        except Exception:
+            cycle_id = None
+
     persist_provider_state(
         db, uid, source, ad_data,
         encrypt_fn=encrypt_fn,
         extraction_status=extraction,
         data_source=adapter,
         synced_at=synced_at if extraction == EXTRACTION_COMPLETE else None,
+        access_cycle_id=cycle_id if extraction == EXTRACTION_COMPLETE else None,
     )
     db.commit()
 

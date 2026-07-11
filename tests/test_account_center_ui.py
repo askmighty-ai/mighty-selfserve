@@ -14,6 +14,7 @@ from mighty.account_center_ui import (
     TONE_ATTENTION,
     TONE_CONNECTED,
     TONE_LOGIN,
+    TONE_NEVER,
     build_card_view,
     build_summary,
     data_freshness_label,
@@ -140,7 +141,7 @@ class TestStatusTone:
 
     def test_unknown_session_is_attention_tone(self):
         s = _login_state()
-        assert status_tone(s, presentation_key=ACCOUNT_STATE_UNKNOWN) == TONE_ATTENTION
+        assert status_tone(s, presentation_key=ACCOUNT_STATE_UNKNOWN) == TONE_NEVER
         assert status_label(s, presentation_label="Unable to verify") == "Unable to verify"
 
     def test_ready_is_green(self):
@@ -239,6 +240,7 @@ class TestSummary:
         summary = build_summary(cards)
         assert summary.total == 2
         assert summary.needs_sign_in == 1
+        assert summary.ready == 0  # connected session alone is not Connected without data
         assert "needs sign in" in summary_headline(summary)
 
 

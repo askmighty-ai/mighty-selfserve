@@ -14307,11 +14307,15 @@ def _accounts_collect_rows(
     failure_reason_by_source: dict,
     fmt_sync: Callable[[str], str],
     session_state_by_source: dict | None = None,
+    readiness_by_source: dict | None = None,
+    cached_data_label_by_source: dict | None = None,
 ) -> list[AccountsRow]:
     rows: list[AccountsRow] = []
     site_map = {k: (n, ic, col, cat) for k, n, ic, col, cat in SUPPORTED_SITES}
     seen: set[str] = set()
     session_state_by_source = session_state_by_source or {}
+    readiness_by_source = readiness_by_source or {}
+    cached_data_label_by_source = cached_data_label_by_source or {}
 
     def _append(
         source: str,
@@ -14327,11 +14331,14 @@ def _accounts_collect_rows(
         seen.add(source)
         sync_status = sync_status_by_source.get(source, "ok")
         session_state = session_state_by_source.get(source)
+        readiness = readiness_by_source.get(source)
+        cached_data_label = cached_data_label_by_source.get(source)
         section = resolve_accounts_section(
             lifecycle,
             sync_status,
             source=source,
             session_state=session_state,
+            readiness=readiness,
         )
         synced_raw = synced_at_by_source.get(source, "")
         synced_fmt = fmt_sync(synced_raw) if synced_raw else ""
@@ -14344,6 +14351,7 @@ def _accounts_collect_rows(
             session_state=session_state,
             sync_status=sync_status,
             source=source,
+            readiness=readiness,
         )
         rows.append(
             AccountsRow(
@@ -14361,6 +14369,8 @@ def _accounts_collect_rows(
                     synced_fmt=synced_fmt,
                     failure_hint=failure,
                     session_state=session_state,
+                    readiness=readiness,
+                    cached_data_label=cached_data_label,
                 ),
                 source_label=lifecycle.source_label,
                 lifecycle=lifecycle,
@@ -14434,6 +14444,8 @@ def _build_credentials_page(
     last_checked_label: str = "",
     session_state_by_source: dict = None,
     login_required_by_source: dict = None,
+    readiness_by_source: dict = None,
+    cached_data_label_by_source: dict = None,
 ) -> str:
     """Generate the Accounts maintenance page HTML."""
     extra_by_source = extra_by_source or {}
@@ -14448,6 +14460,8 @@ def _build_credentials_page(
     failure_reason_by_source = failure_reason_by_source or {}
     session_state_by_source = session_state_by_source or {}
     login_required_by_source = login_required_by_source or {}
+    readiness_by_source = readiness_by_source or {}
+    cached_data_label_by_source = cached_data_label_by_source or {}
     active_filter = normalize_filter(filter_key)
     csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
@@ -14462,6 +14476,8 @@ def _build_credentials_page(
         failure_reason_by_source=failure_reason_by_source,
         fmt_sync=_fmt_sync,
         session_state_by_source=session_state_by_source,
+        readiness_by_source=readiness_by_source,
+        cached_data_label_by_source=cached_data_label_by_source,
     )
     last_checked = last_checked_label or user_copy.ACCOUNTS_NOT_CHECKED_YET
     portfolio = build_portfolio(account_rows, last_checked)
@@ -14876,7 +14892,7 @@ function _applyLifecyclePoll(d) {{
   if (sessionState === 'checking') {{
     if (waiting) waiting.style.display = 'block';
     if (needsLogin) needsLogin.style.display = 'none';
-    if (waitText) waitText.textContent = 'Checking now';
+    if (waitText) waitText.textContent = 'Checking';
     return 'checking';
   }}
   if (sessionState === 'connected' || lc.state === 'connected') {{
@@ -15177,6 +15193,7 @@ def credentials_page():
         resolve_product_account_state,
     )
     from mighty.provider_access_probe import PROBE_PROVIDERS
+    from mighty.account_readiness import resolve_account_readiness
 
     _session_access = load_session_access_by_provider(
         db,
@@ -15196,6 +15213,42 @@ def credentials_page():
         provider: product.login_required
         for provider, product in product_by_source.items()
     }
+    readiness_by_source: dict[str, str] = {}
+    cached_data_label_by_source: dict[str, str] = {}
+    for provider, access in _session_access.items():
+        product = product_by_source[provider]
+        acct = None
+        extraction_cycle = None
+        ad = db.execute(
+            "SELECT source, data_enc, synced_at, extraction_status, sync_status, "
+            "connection_status FROM account_data WHERE user_id=? AND source=?",
+            (uid, provider),
+        ).fetchone()
+        if ad:
+            acct = load_provider_account(uid, dict(ad), decrypt_fn=_decrypt_acct)
+            blob = _decrypt_acct(uid, ad["data_enc"] or "") or {}
+            extraction_cycle = blob.get("access_cycle_id") or blob.get(
+                "extraction_access_cycle_id"
+            )
+        readiness = resolve_account_readiness(
+            provider=provider,
+            product=product,
+            session_evidence_at=access.last_verified,
+            verification_id=access.verification_id,
+            verification_lifecycle=access.verification_lifecycle,
+            account=acct,
+            extraction_status=extraction_status_by_source.get(provider),
+            extraction_at=synced_at_by_source.get(provider) or (
+                ad["synced_at"] if ad else None
+            ),
+            extraction_access_cycle_id=(
+                str(extraction_cycle) if extraction_cycle else None
+            ),
+            last_private_data_at=access.last_private_data,
+        )
+        readiness_by_source[provider] = readiness.state
+        if readiness.cached_data_label:
+            cached_data_label_by_source[provider] = readiness.cached_data_label
     page_html = _build_credentials_page(
         user, configured, extra_by_source, synced_at_by_source,
         connection_status_by_source, extraction_status_by_source,
@@ -15209,6 +15262,8 @@ def credentials_page():
         last_checked_label=last_checked_label,
         session_state_by_source=session_state_by_source,
         login_required_by_source=login_required_by_source,
+        readiness_by_source=readiness_by_source,
+        cached_data_label_by_source=cached_data_label_by_source,
     )
     _rt.step("build_html")
     _rt.finish()
