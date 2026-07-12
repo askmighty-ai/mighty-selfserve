@@ -92,16 +92,26 @@ def _seed_amex_connected(mighty, uid: str) -> None:
 
 
 def _probe(auth_state: str = AUTH_AUTHENTICATED_NO_PRIVATE_DATA, **extra) -> dict:
+    default_url = (
+        "https://www.americanexpress.com/en-us/account/login"
+        if auth_state == AUTH_LOGIN_PAGE
+        else "https://global.americanexpress.com/overview"
+    )
     return {
         "provider": "amex",
         "status": extra.pop("status", "ok"),
         "auth_state": auth_state,
-        "url_visited": "https://global.americanexpress.com/overview",
+        "url_visited": extra.pop("url_visited", default_url),
+        "final_url": extra.pop("final_url", None),
         "signed_in_detected": auth_state == AUTH_AUTHENTICATED_NO_PRIVATE_DATA,
         "private_data_detected": False,
         "evidence_type": "page",
         "evidence_snippet": "test",
         "failure_reason": extra.pop("failure_reason", None),
+        "login_form_present": extra.pop(
+            "login_form_present",
+            auth_state == AUTH_LOGIN_PAGE,
+        ),
         "probed_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }

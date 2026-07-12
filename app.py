@@ -20848,21 +20848,53 @@ def api_connect_amex_status():
 
 @app.route("/api/extension/amex/needs-login", methods=["POST"])
 def api_extension_amex_needs_login():
-    """Extension adapter: Amex session not verified."""
-    user, _ = api_user()
+    """Extension adapter: Amex session not verified.
+
+    Passive observation only. While an active Amex access-cycle verification is
+    running, defer — the verifier owns connected/signed_out for that cycle.
+    A 409 connection-FSM rejection must not write provider_session_state.
+    """
+    user, body = api_user()
     if not user:
         return jsonify({"error": "unauthorized"}), 401
     uid = user["id"]
     db  = get_db()
+    body = body or {}
+
+    # Active verification owns the decision for its cycle. Uncorrelated passive
+    # needs-login must not override or contaminate that decision.
+    from mighty.session_verification import (
+        get_latest_session_verification,
+        is_verification_active,
+    )
+    latest = get_latest_session_verification(db, uid, "amex")
+    if is_verification_active(latest):
+        report_vid = str(
+            body.get("verification_id") or body.get("access_cycle_id") or ""
+        ).strip()
+        active_vid = latest.verification_id if latest else ""
+        if not report_vid or report_vid != active_vid:
+            return jsonify({
+                "ok": True,
+                "deferred": True,
+                "reason": "active_verification",
+                "verification_id": active_vid,
+                "source": AMEX_SOURCE,
+                "adapter": extension_adapter.ADAPTER_ID,
+            })
+
     try:
         status = extension_adapter.report_needs_login(
             db, uid, AMEX_SOURCE, **_amex_conn_ctx(),
         )
     except InvalidAmexConnectionTransition as e:
+        # Rejected FSM transition must not bias PSS or leave the access cycle stuck.
         return jsonify({
             "ok": False,
             "error": str(e),
             "connection_status": e.current,
+            "deferred": True,
+            "reason": "connection_transition_rejected",
         }), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400

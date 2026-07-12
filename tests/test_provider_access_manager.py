@@ -62,20 +62,36 @@ def _probe_result(
     status: str = "ok",
     deep_inspect: dict | None = None,
     failure_reason: str | None = None,
+    **extra,
 ) -> dict:
-    return {
+    url = extra.pop(
+        "url_visited",
+        (
+            "https://www.americanexpress.com/en-us/account/login"
+            if auth_state == AUTH_LOGIN_PAGE
+            else "https://global.americanexpress.com/overview"
+        ),
+    )
+    payload = {
         "provider": provider,
         "status": status,
         "auth_state": auth_state,
-        "url_visited": "https://example.test/",
+        "url_visited": url,
+        "final_url": extra.pop("final_url", url),
         "signed_in_detected": auth_state == AUTH_AUTHENTICATED_NO_PRIVATE_DATA,
-        "private_data_detected": False,
+        "private_data_detected": extra.pop("private_data_detected", False),
         "evidence_type": "page",
         "evidence_snippet": "test",
         "failure_reason": failure_reason,
+        "login_form_present": extra.pop(
+            "login_form_present",
+            auth_state == AUTH_LOGIN_PAGE,
+        ),
         "probed_at": datetime.now(timezone.utc).isoformat(),
         "deep_inspect": deep_inspect,
     }
+    payload.update(extra)
+    return payload
 
 
 # ── 1. Active session verification writes PSS through PAM ─────────────────────
@@ -541,3 +557,281 @@ def test_extension_verification_triggers_amex_extraction_in_background_js():
     # Production path: session verification owns extraction for Amex.
     assert "Amex session verified — starting access-cycle extraction" in bg
     assert "runAmexExtractionForAccessCycle(apiKey, verificationId, tab?.id)" in bg
+    # Passive needs-login suppressed during active verification.
+    assert "needs-login suppressed during active verification" in bg
+    assert "_activeSessionVerificationTabId" in bg
+
+
+# ── Amex verification decision precedence (false signed_out fix) ───────────────
+
+
+def _session_api_inspect(status: int, *, start_ms: float | None = 100.0) -> dict:
+    entry = {
+        "url": "https://global.americanexpress.com/api/servicing/v1/ReadUserSession.v1",
+        "status_code": status,
+    }
+    if start_ms is not None:
+        entry["start_time_ms"] = start_ms
+    return {"auth_network_trace": {"auth_session_requests": [entry]}}
+
+
+def _static_only_inspect() -> dict:
+    return {
+        "auth_network_trace": {
+            "requests": [
+                {
+                    "url": "https://global.americanexpress.com/header.json",
+                    "status_code": 200,
+                    "start_time_ms": 10,
+                },
+                {
+                    "url": "https://global.americanexpress.com/footer.json",
+                    "status_code": 200,
+                    "start_time_ms": 20,
+                },
+            ]
+        }
+    }
+
+
+def test_amex_verification_session_api_200_connected():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(
+            auth_state="unknown",
+            deep_inspect=_session_api_inspect(200),
+        ),
+        verification_id="v1",
+    )
+    assert decision.final_decision == "connected"
+    assert decision.session_api_200_detected is True
+    assert "200" in decision.decision_reason
+
+
+def test_amex_verification_authenticated_page_connected():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(auth_state=AUTH_AUTHENTICATED_NO_PRIVATE_DATA),
+        verification_id="v1",
+    )
+    assert decision.final_decision == "connected"
+    assert decision.authenticated_page_detected is True
+
+
+def test_amex_verification_login_page_signed_out():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(auth_state=AUTH_LOGIN_PAGE, failure_reason="login_required"),
+        verification_id="v1",
+    )
+    assert decision.final_decision == "signed_out"
+    assert decision.login_url_detected is True
+
+
+def test_amex_verification_session_api_401_signed_out():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(
+            auth_state="unknown",
+            deep_inspect=_session_api_inspect(401),
+        ),
+        verification_id="v1",
+    )
+    assert decision.final_decision == "signed_out"
+    assert decision.session_api_401_or_403_detected is True
+
+
+def test_amex_verification_static_header_footer_inconclusive():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(
+            auth_state="unknown",
+            deep_inspect=_static_only_inspect(),
+        ),
+        verification_id="v1",
+    )
+    assert decision.final_decision == "inconclusive"
+    assert decision.decision_reason == "static_assets_only"
+
+
+def test_amex_verification_passive_needs_login_ignored():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(auth_state="unknown"),
+        verification_id="v1",
+        passive_needs_login_seen=True,
+    )
+    assert decision.final_decision == "inconclusive"
+    assert "passive" in decision.decision_reason
+
+
+def test_amex_verification_newer_login_overrides_connected():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(
+            auth_state=AUTH_LOGIN_PAGE,
+            failure_reason="login_required",
+            deep_inspect=_session_api_inspect(200, start_ms=100),
+            login_url_observed_at_ms=500,
+        ),
+        verification_id="v1",
+    )
+    assert decision.final_decision == "signed_out"
+
+
+def test_amex_verification_newer_connected_overrides_signed_out():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(
+            auth_state=AUTH_LOGIN_PAGE,
+            failure_reason="login_required",
+            deep_inspect=_session_api_inspect(200, start_ms=900),
+            login_url_observed_at_ms=100,
+        ),
+        verification_id="v1",
+    )
+    assert decision.final_decision == "connected"
+
+
+def test_amex_verification_conflicting_unordered_inconclusive():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    # Session API 200 without timestamp + login URL without timestamp.
+    decision = decide_amex_verification_session(
+        _probe_result(
+            auth_state=AUTH_LOGIN_PAGE,
+            failure_reason="login_required",
+            deep_inspect=_session_api_inspect(200, start_ms=None),
+        ),
+        verification_id="v1",
+    )
+    assert decision.final_decision == "inconclusive"
+    assert decision.decision_reason == "conflicting_evidence_unordered"
+
+
+def test_amex_inconclusive_skips_extraction():
+    db = _db()
+    uid = "user-1"
+    verification = request_provider_access_check(db, uid, "amex")
+    assert verification is not None
+    result = complete_provider_access_check(
+        db,
+        uid,
+        _probe_result(
+            auth_state="unknown",
+            deep_inspect=_static_only_inspect(),
+        ),
+        verification_id=verification.verification_id,
+    )
+    assert result.get("extraction_required") is not True
+    assert result.get("verification_decision") == "inconclusive"
+    latest = get_latest_session_verification(db, uid, "amex")
+    assert latest is not None
+    assert latest.lifecycle == "failed"
+    assert get_provider_session_state(db, uid, "amex") is None
+
+
+def test_amex_connected_triggers_same_cycle_extraction():
+    db = _db()
+    uid = "user-1"
+    verification = request_provider_access_check(db, uid, "amex")
+    assert verification is not None
+    result = complete_provider_access_check(
+        db,
+        uid,
+        _probe_result(
+            auth_state="unknown",
+            deep_inspect=_session_api_inspect(200),
+        ),
+        verification_id=verification.verification_id,
+    )
+    assert result.get("extraction_required") is True
+    assert result.get("verification_decision") == "connected"
+    assert get_latest_session_verification(db, uid, "amex").lifecycle == "session_verified"
+    state = get_provider_session_state(db, uid, "amex")
+    assert state is not None
+    assert state.state == "connected"
+
+
+def test_amex_verification_decision_log_has_no_secrets():
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(
+            auth_state=AUTH_AUTHENTICATED_NO_PRIVATE_DATA,
+            deep_inspect={
+                "auth_network_trace": {
+                    "auth_session_requests": [
+                        {
+                            "url": "https://global.americanexpress.com/api/servicing/v1/ReadUserSession.v1",
+                            "status_code": 200,
+                            "start_time_ms": 50,
+                            "request_body": "secret-token=abc",
+                            "response_body": '{"accountNumber":"1234"}',
+                            "cookies": "session=secret",
+                        }
+                    ]
+                }
+            },
+        ),
+        verification_id="v-secret-test",
+    )
+    fields = decision.to_log_fields()
+    blob = str(fields).lower()
+    assert "secret" not in blob
+    assert "accountnumber" not in blob
+    assert "cookie" not in blob
+    assert "request_body" not in blob
+    assert "response_body" not in blob
+    assert fields["final_decision"] == "connected"
+
+
+def test_non_amex_provider_verification_unchanged():
+    db = _db()
+    uid = "user-1"
+    verification = request_provider_access_check(db, uid, "delta")
+    # Delta has no entry URL in SESSION_VERIFICATION_ENTRY_URLS — may be None.
+    # Exercise derive path via complete without Amex decision.
+    result = complete_provider_access_check(
+        db,
+        uid,
+        _probe_result(
+            provider="delta",
+            auth_state=AUTH_AUTHENTICATED_NO_PRIVATE_DATA,
+            url_visited="https://www.delta.com/myprofile/",
+        ),
+        verification_id="delta-vid-1",
+    )
+    assert "verification_decision" not in result or result.get("provider") == "delta"
+    # Non-Amex connected evidence still writes PSS via legacy derive.
+    state = get_provider_session_state(db, uid, "delta")
+    assert state is not None
+    assert state.state == "connected"
+    # Delta is not an extraction-cycle provider.
+    assert result.get("extraction_required") is not True
+
+
+def test_login_chrome_on_amex_overview_not_false_signed_out():
+    """Regression: login form chrome on overview must not force signed_out."""
+    from mighty.provider_session_state import decide_amex_verification_session
+
+    decision = decide_amex_verification_session(
+        _probe_result(
+            auth_state=AUTH_LOGIN_PAGE,
+            failure_reason="login_required",
+            login_form_present=True,
+            url_visited="https://global.americanexpress.com/overview",
+            final_url="https://global.americanexpress.com/overview",
+        ),
+        verification_id="v1",
+    )
+    assert decision.final_decision != "signed_out"
+    assert decision.final_decision == "inconclusive"
