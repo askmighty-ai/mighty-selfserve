@@ -160,7 +160,9 @@ def waiting_subline(
         return user_copy.READINESS_COPY_CHECKING
     if canonical == UNVERIFIED:
         return cached_data_label or user_copy.READINESS_COPY_UNVERIFIED
-    if lifecycle.state == CONNECTED:
+    # Lifecycle “connected” without readiness ready means session verified but
+    # no successful correlated extraction yet — the only valid “awaiting data”.
+    if lifecycle.state == CONNECTED and readiness not in ("ready",):
         return user_copy.ACCOUNTS_SUBLINE_CONNECTED
     return user_copy.ACCOUNTS_SUBLINE_FIRST_VISIT
 

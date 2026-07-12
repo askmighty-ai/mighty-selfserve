@@ -116,6 +116,10 @@ class AccountStatus:
     readiness_copy: str | None = None
     access_cycle_id: str | None = None
     cached_data_label: str | None = None
+    last_confirmed_ready_at: str | None = None
+    last_confirmed_access_cycle_id: str | None = None
+    background_verification: bool = False
+    secondary_label: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -154,6 +158,16 @@ class AccountStatus:
             payload["access_cycle_id"] = self.access_cycle_id
         if self.cached_data_label is not None:
             payload["cached_data_label"] = self.cached_data_label
+        if self.last_confirmed_ready_at is not None:
+            payload["last_confirmed_ready_at"] = self.last_confirmed_ready_at
+        if self.last_confirmed_access_cycle_id is not None:
+            payload["last_confirmed_access_cycle_id"] = (
+                self.last_confirmed_access_cycle_id
+            )
+        if self.background_verification:
+            payload["background_verification"] = True
+        if self.secondary_label is not None:
+            payload["secondary_label"] = self.secondary_label
         return payload
 
 
@@ -427,6 +441,10 @@ def build_account_status(
     elif readiness.state == READINESS_READY:
         presentation = _presentation_from_readiness(readiness)
         verification_message = readiness.status_copy
+        if readiness.secondary_label:
+            verification_message = (
+                f"{readiness.status_copy} {readiness.secondary_label}"
+            )
     elif readiness.state == READINESS_UNVERIFIED:
         if canonical == WAITING_FOR_EXTENSION:
             presentation = AccountPresentation(
@@ -516,6 +534,10 @@ def build_account_status(
         readiness_copy=readiness.status_copy,
         access_cycle_id=readiness.access_cycle_id,
         cached_data_label=readiness.cached_data_label,
+        last_confirmed_ready_at=readiness.last_confirmed_ready_at,
+        last_confirmed_access_cycle_id=readiness.last_confirmed_access_cycle_id,
+        background_verification=readiness.background_verification,
+        secondary_label=readiness.secondary_label,
     )
 
 

@@ -44,6 +44,8 @@ MID_CYCLE_VERIFICATION_LIFECYCLES = frozenset({"session_verified", "extracting"}
 TERMINAL_VERIFICATION_LIFECYCLES = frozenset({"completed", "failed", "timed_out"})
 
 # Live-session freshness for Current Access / verification scheduling.
+# Retain this short window for session-evidence display; ready-result
+# revalidation below gates how often a full access cycle is re-enqueued.
 CURRENT_SESSION_FRESHNESS_SECONDS = 120
 # Do not enqueue another verification for the same provider within this window.
 VERIFICATION_THROTTLE_SECONDS = 60
@@ -51,6 +53,12 @@ VERIFICATION_THROTTLE_SECONDS = 60
 VERIFICATION_TIMEOUT_SECONDS = 25
 # Allow session_verified → extracting → complete enough time for private-data pull.
 VERIFICATION_EXTRACTION_TIMEOUT_SECONDS = 90
+# After a confirmed ready extraction, wait this long before requesting another
+# routine revalidation cycle (prevents ~120s session-freshness churn).
+READY_REVALIDATION_INTERVAL_SECONDS = 15 * 60
+# Preserve customer-facing ready through inconclusive/timeout rechecks, and
+# while a later routine cycle runs, until this grace window elapses.
+READY_RESULT_GRACE_SECONDS = 30 * 60
 
 # Amex operational entry for automatic session verification.
 AMEX_SESSION_VERIFICATION_ENTRY_URL = "https://global.americanexpress.com/overview"
@@ -197,19 +205,75 @@ def is_session_evidence_fresh(
     return age <= freshness_seconds
 
 
+def is_ready_result_within_revalidation_interval(
+    last_ready_at: str | None,
+    *,
+    now: datetime | None = None,
+    interval_seconds: int = READY_REVALIDATION_INTERVAL_SECONDS,
+) -> bool:
+    """True when a confirmed ready extraction is still inside the revalidation interval."""
+    when = _parse_iso(last_ready_at)
+    if when is None:
+        return False
+    now = now or utc_now()
+    return (now - when).total_seconds() <= interval_seconds
+
+
+def get_last_confirmed_ready_at(db: Any, user_id: str, provider: str) -> str | None:
+    """Return synced_at for a completed extraction, if any (scheduling only)."""
+    try:
+        row = db.execute(
+            """
+            SELECT synced_at, extraction_status
+            FROM account_data
+            WHERE user_id = ? AND source = ?
+            """,
+            (user_id, provider),
+        ).fetchone()
+    except Exception as exc:
+        # Unit-test DBs may omit account_data; missing table ≠ ready result.
+        if "account_data" not in str(exc):
+            raise
+        return None
+    if not row:
+        return None
+    if (row["extraction_status"] or "") != "complete":
+        return None
+    synced_at = row["synced_at"]
+    return str(synced_at) if synced_at else None
+
+
 def session_state_needs_verification(
     session_state: ProviderSessionState | None,
     provider: str,
     *,
     now: datetime | None = None,
     freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+    last_ready_at: str | None = None,
+    revalidation_interval_seconds: int = READY_REVALIDATION_INTERVAL_SECONDS,
 ) -> bool:
-    """True when stale connected/signed_out/error evidence should be re-checked."""
+    """True when stale connected/signed_out/error evidence should be re-checked.
+
+    When a confirmed ready result is still within the revalidation interval,
+    do not request another routine cycle solely because live-session evidence
+    aged past CURRENT_SESSION_FRESHNESS_SECONDS.
+    """
     if verification_entry_url(provider) is None:
         return False
     if session_state is None or session_state.state == "unknown":
         return False
     if session_state.state not in {"connected", "signed_out", "error"}:
+        return False
+    # Definitive signed_out / error still revalidate on the short freshness
+    # window — only suppress churn for connected + recent ready.
+    if (
+        session_state.state == "connected"
+        and is_ready_result_within_revalidation_interval(
+            last_ready_at,
+            now=now,
+            interval_seconds=revalidation_interval_seconds,
+        )
+    ):
         return False
     return not is_session_evidence_fresh(
         session_state, now=now, freshness_seconds=freshness_seconds
@@ -435,11 +499,15 @@ def ensure_provider_session_verification_if_stale(
     session_state: ProviderSessionState | None = None,
     now: datetime | None = None,
     freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+    last_ready_at: str | None = None,
+    revalidation_interval_seconds: int = READY_REVALIDATION_INTERVAL_SECONDS,
 ) -> SessionVerification | None:
     """Enqueue verification when session evidence is stale; otherwise no-op.
 
-    Owns: staleness check, active-job reuse, 60s throttle, 25s timeout,
-    duplicate prevention. Never writes provider_session_state.
+    Owns: staleness check, ready-result revalidation interval, active-job reuse,
+    60s throttle, 25s timeout, duplicate prevention. Never writes
+    provider_session_state. Does not enqueue while an active job already exists
+    (request_session_verification reuses it).
     """
     provider = provider.strip().lower()
     ensure_session_verification_tables(db)
@@ -450,11 +518,16 @@ def ensure_provider_session_verification_if_stale(
         states = get_provider_session_states(db, user_id, providers=[provider])
         session_state = states.get(provider)
 
+    if last_ready_at is None:
+        last_ready_at = get_last_confirmed_ready_at(db, user_id, provider)
+
     if not session_state_needs_verification(
         session_state,
         provider,
         now=now,
         freshness_seconds=freshness_seconds,
+        last_ready_at=last_ready_at,
+        revalidation_interval_seconds=revalidation_interval_seconds,
     ):
         return None
 
