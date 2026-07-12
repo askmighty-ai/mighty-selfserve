@@ -102,7 +102,8 @@ def test_active_verification_writes_pss_through_access_manager():
 
     latest = get_latest_session_verification(db, uid, "amex")
     assert latest is not None
-    assert latest.lifecycle == "completed"
+    # Authenticated Amex holds the cycle open for private-data extraction.
+    assert latest.lifecycle == "session_verified"
 
 
 def test_active_verification_inconclusive_preserves_pss():
@@ -437,3 +438,106 @@ def test_compatibility_wrappers_delegate_to_access_manager():
     pss = (REPO_ROOT / "mighty" / "provider_session_state.py").read_text()
     assert "Compatibility wrapper — routes through Provider Access Manager" in pss
     assert "from mighty.provider_access_manager import" in pss
+
+
+# ── Amex access cycle: verification owns extraction ───────────────────────────
+
+
+def test_amex_authenticated_verification_does_not_complete_without_extraction():
+    db = _db()
+    uid = "user-1"
+    verification = request_provider_access_check(db, uid, "amex")
+    assert verification is not None
+    result = complete_provider_access_check(
+        db,
+        uid,
+        _probe_result(auth_state=AUTH_AUTHENTICATED_NO_PRIVATE_DATA),
+        verification_id=verification.verification_id,
+    )
+    assert result.get("extraction_required") is True
+    assert result.get("access_cycle_lifecycle") == "session_verified"
+    latest = get_latest_session_verification(db, uid, "amex")
+    assert latest is not None
+    assert latest.lifecycle == "session_verified"
+    state = get_provider_session_state(db, uid, "amex")
+    assert state is not None
+    assert state.state == "connected"
+
+
+def test_amex_signed_out_verification_skips_extraction_and_completes():
+    db = _db()
+    uid = "user-1"
+    verification = request_provider_access_check(db, uid, "amex")
+    assert verification is not None
+    result = complete_provider_access_check(
+        db,
+        uid,
+        _probe_result(auth_state=AUTH_LOGIN_PAGE, failure_reason="login_required"),
+        verification_id=verification.verification_id,
+    )
+    assert result.get("extraction_required") is not True
+    latest = get_latest_session_verification(db, uid, "amex")
+    assert latest is not None
+    assert latest.lifecycle == "completed"
+    state = get_provider_session_state(db, uid, "amex")
+    assert state is not None
+    assert state.state == "signed_out"
+
+
+def test_amex_network_failure_does_not_become_signed_out():
+    db = _db()
+    uid = "user-1"
+    record_amex_extension_connected(db, uid)
+    verification = request_provider_access_check(db, uid, "amex")
+    assert verification is not None
+    complete_provider_access_check(
+        db,
+        uid,
+        _probe_result(auth_state="unknown", status="error", failure_reason="network_issue"),
+        verification_id=verification.verification_id,
+    )
+    state = get_provider_session_state(db, uid, "amex")
+    assert state is not None
+    assert state.state == "connected"
+    latest = get_latest_session_verification(db, uid, "amex")
+    assert latest is not None
+    assert latest.lifecycle == "failed"
+
+
+def test_amex_extraction_lifecycle_includes_extracting_then_completed():
+    from mighty.provider_access_manager import (
+        complete_access_check_after_extraction,
+        mark_access_check_extracting,
+    )
+    from mighty.session_verification import ACTIVE_VERIFICATION_LIFECYCLES, MID_CYCLE_VERIFICATION_LIFECYCLES
+
+    assert "session_verified" in ACTIVE_VERIFICATION_LIFECYCLES
+    assert "extracting" in ACTIVE_VERIFICATION_LIFECYCLES
+    assert "extracting" in MID_CYCLE_VERIFICATION_LIFECYCLES
+
+    db = _db()
+    uid = "user-1"
+    verification = request_provider_access_check(db, uid, "amex")
+    assert verification is not None
+    vid = verification.verification_id
+    complete_provider_access_check(
+        db,
+        uid,
+        _probe_result(auth_state=AUTH_AUTHENTICATED_NO_PRIVATE_DATA),
+        verification_id=vid,
+    )
+    assert get_latest_session_verification(db, uid, "amex").lifecycle == "session_verified"
+    mark_access_check_extracting(db, uid, vid)
+    assert get_latest_session_verification(db, uid, "amex").lifecycle == "extracting"
+    complete_access_check_after_extraction(db, uid, vid, success=True)
+    assert get_latest_session_verification(db, uid, "amex").lifecycle == "completed"
+
+
+def test_extension_verification_triggers_amex_extraction_in_background_js():
+    bg = (REPO_ROOT / "extension" / "background.js").read_text()
+    assert "runAmexExtractionForAccessCycle" in bg
+    assert "access_cycle_id" in bg
+    assert "verification_id" in bg
+    # Production path: session verification owns extraction for Amex.
+    assert "Amex session verified — starting access-cycle extraction" in bg
+    assert "runAmexExtractionForAccessCycle(apiKey, verificationId, tab?.id)" in bg

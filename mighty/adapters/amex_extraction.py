@@ -50,9 +50,17 @@ def apply_amex_membership_rewards_extraction(
     encrypt_fn,
     decrypt_fn,
     data_source: str = DATA_SOURCE_EXTENSION,
+    access_cycle_id: str | None = None,
+    verification_id: str | None = None,
 ) -> dict:
-    """Persist a single Membership Rewards balance as the normalized provider field."""
+    """Persist a single Membership Rewards balance as the normalized provider field.
+
+    When ``verification_id`` / ``access_cycle_id`` is provided, stores that id on
+    the account_data blob so readiness can require same-cycle correlation.
+    """
     from mighty.pipeline_inspector import record_adapter_extraction_run
+
+    cycle_id = (access_cycle_id or verification_id or "").strip() or None
 
     invalid_value = False
     try:
@@ -95,6 +103,7 @@ def apply_amex_membership_rewards_extraction(
         extraction_status=EXTRACTION_COMPLETE,
         data_source=data_source,
         synced_at=now,
+        access_cycle_id=cycle_id,
         iso_fn=iso_fn,
     )
     db.commit()
@@ -115,4 +124,6 @@ def apply_amex_membership_rewards_extraction(
         "is_synced": has_normalized_data([item]),
         "synced_at": now,
         "data_source": data_source,
+        "access_cycle_id": cycle_id,
+        "verification_id": (verification_id or cycle_id),
     }

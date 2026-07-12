@@ -26,12 +26,21 @@ from mighty.provider_session_state import ProviderSessionState, get_provider_ses
 VerificationLifecycle = Literal[
     "requested",
     "running",
+    "session_verified",
+    "extracting",
     "completed",
     "failed",
     "timed_out",
 ]
 
-ACTIVE_VERIFICATION_LIFECYCLES = frozenset({"requested", "running"})
+# In-flight access-cycle stages (not yet terminal).
+ACTIVE_VERIFICATION_LIFECYCLES = frozenset(
+    {"requested", "running", "session_verified", "extracting"}
+)
+# Claimable by the extension poller.
+CLAIMABLE_VERIFICATION_LIFECYCLES = frozenset({"requested", "running"})
+# Non-terminal mid-cycle stages after session evidence is known.
+MID_CYCLE_VERIFICATION_LIFECYCLES = frozenset({"session_verified", "extracting"})
 TERMINAL_VERIFICATION_LIFECYCLES = frozenset({"completed", "failed", "timed_out"})
 
 # Live-session freshness for Current Access / verification scheduling.
@@ -40,6 +49,8 @@ CURRENT_SESSION_FRESHNESS_SECONDS = 120
 VERIFICATION_THROTTLE_SECONDS = 60
 # Mark requested/running jobs as timed_out after this period.
 VERIFICATION_TIMEOUT_SECONDS = 25
+# Allow session_verified → extracting → complete enough time for private-data pull.
+VERIFICATION_EXTRACTION_TIMEOUT_SECONDS = 90
 
 # Amex operational entry for automatic session verification.
 AMEX_SESSION_VERIFICATION_ENTRY_URL = "https://global.americanexpress.com/overview"
@@ -47,6 +58,32 @@ AMEX_SESSION_VERIFICATION_ENTRY_URL = "https://global.americanexpress.com/overvi
 SESSION_VERIFICATION_ENTRY_URLS: dict[str, str] = {
     "amex": AMEX_SESSION_VERIFICATION_ENTRY_URL,
 }
+
+
+def log_access_cycle_event(
+    event: str,
+    *,
+    provider: str,
+    verification_id: str | None,
+    access_cycle_id: str | None = None,
+    **extra: Any,
+) -> None:
+    """Concise structured log for one access cycle. Never logs secrets/bodies."""
+    cycle_id = access_cycle_id or verification_id or ""
+    parts = [
+        f"[access_cycle] event={event}",
+        f"provider={provider}",
+        f"verification_id={verification_id or ''}",
+        f"access_cycle_id={cycle_id}",
+    ]
+    for key, value in extra.items():
+        if value is None:
+            continue
+        # Never log payloads / tokens / cookie-like values.
+        if key in {"cookies", "token", "body", "password", "authorization"}:
+            continue
+        parts.append(f"{key}={value}")
+    print(" ".join(parts), flush=True)
 
 
 @dataclass(frozen=True)
@@ -185,15 +222,20 @@ def expire_timed_out_verifications(
     *,
     now: datetime | None = None,
     timeout_seconds: int = VERIFICATION_TIMEOUT_SECONDS,
+    extraction_timeout_seconds: int = VERIFICATION_EXTRACTION_TIMEOUT_SECONDS,
 ) -> int:
-    """Mark overdue requested/running jobs as timed_out. Returns count updated.
+    """Mark overdue active jobs as timed_out. Returns count updated.
 
     Does not mutate provider_session_state — timeouts never imply signed_out.
+    requested/running use the short probe timeout; session_verified/extracting
+    use a longer window so private-data extraction can finish.
     """
     ensure_session_verification_tables(db)
     now = now or utc_now()
-    cutoff = (now - timedelta(seconds=timeout_seconds)).isoformat()
-    cur = db.execute(
+    now_iso = now.isoformat()
+    probe_cutoff = (now - timedelta(seconds=timeout_seconds)).isoformat()
+    extract_cutoff = (now - timedelta(seconds=extraction_timeout_seconds)).isoformat()
+    cur_probe = db.execute(
         """
         UPDATE provider_session_verification
         SET lifecycle = 'timed_out',
@@ -203,10 +245,22 @@ def expire_timed_out_verifications(
           AND lifecycle IN ('requested', 'running')
           AND requested_at < ?
         """,
-        (now.isoformat(), user_id, cutoff),
+        (now_iso, user_id, probe_cutoff),
+    )
+    cur_extract = db.execute(
+        """
+        UPDATE provider_session_verification
+        SET lifecycle = 'timed_out',
+            completed_at = ?,
+            error_message = COALESCE(error_message, 'extraction timed out')
+        WHERE user_id = ?
+          AND lifecycle IN ('session_verified', 'extracting')
+          AND requested_at < ?
+        """,
+        (now_iso, user_id, extract_cutoff),
     )
     db.commit()
-    return int(cur.rowcount or 0)
+    return int(cur_probe.rowcount or 0) + int(cur_extract.rowcount or 0)
 
 
 def get_latest_session_verification(
@@ -284,7 +338,8 @@ def _has_active_verification(db: Any, user_id: str, provider: str) -> bool:
     row = db.execute(
         """
         SELECT 1 FROM provider_session_verification
-        WHERE user_id = ? AND provider = ? AND lifecycle IN ('requested', 'running')
+        WHERE user_id = ? AND provider = ?
+          AND lifecycle IN ('requested', 'running', 'session_verified', 'extracting')
         LIMIT 1
         """,
         (user_id, provider),
@@ -357,6 +412,12 @@ def request_session_verification(
         (verification_id, user_id, provider, entry_url, requested_at),
     )
     db.commit()
+    log_access_cycle_event(
+        "access_cycle_created",
+        provider=provider,
+        verification_id=verification_id,
+        access_cycle_id=verification_id,
+    )
     return SessionVerification(
         verification_id=verification_id,
         provider=provider,
@@ -470,6 +531,55 @@ def mark_session_verification_running(
         """,
         (verification_id, user_id),
     ).fetchone()
+    verification = _row_to_verification(dict(row) if row else None)
+    if verification is not None and verification.lifecycle == "running":
+        log_access_cycle_event(
+            "extension_claimed",
+            provider=verification.provider,
+            verification_id=verification.verification_id,
+            access_cycle_id=verification.verification_id,
+        )
+    return verification
+
+
+def advance_session_verification(
+    db: Any,
+    user_id: str,
+    verification_id: str,
+    *,
+    lifecycle: VerificationLifecycle,
+    error_message: str | None = None,
+    now: datetime | None = None,
+) -> SessionVerification | None:
+    """Advance an in-flight access cycle to a non-terminal mid-cycle stage."""
+    if lifecycle not in MID_CYCLE_VERIFICATION_LIFECYCLES:
+        raise ValueError(f"invalid mid-cycle verification lifecycle: {lifecycle!r}")
+    ensure_session_verification_tables(db)
+    now = now or utc_now()
+    if lifecycle == "session_verified":
+        allowed = ("requested", "running", "session_verified")
+    else:
+        allowed = ("requested", "running", "session_verified", "extracting")
+    placeholders = ", ".join("?" for _ in allowed)
+    db.execute(
+        f"""
+        UPDATE provider_session_verification
+        SET lifecycle = ?, error_message = COALESCE(?, error_message)
+        WHERE verification_id = ? AND user_id = ?
+          AND lifecycle IN ({placeholders})
+        """,
+        (lifecycle, error_message, verification_id, user_id, *allowed),
+    )
+    db.commit()
+    row = db.execute(
+        """
+        SELECT verification_id, user_id, provider, lifecycle, entry_url,
+               error_message, requested_at, started_at, completed_at
+        FROM provider_session_verification
+        WHERE verification_id = ? AND user_id = ?
+        """,
+        (verification_id, user_id),
+    ).fetchone()
     return _row_to_verification(dict(row) if row else None)
 
 
@@ -491,7 +601,9 @@ def complete_session_verification(
         UPDATE provider_session_verification
         SET lifecycle = ?, error_message = ?, completed_at = ?
         WHERE verification_id = ? AND user_id = ?
-          AND lifecycle IN ('requested', 'running')
+          AND lifecycle IN (
+              'requested', 'running', 'session_verified', 'extracting'
+          )
         """,
         (lifecycle, error_message, now.isoformat(), verification_id, user_id),
     )

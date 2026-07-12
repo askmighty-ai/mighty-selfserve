@@ -273,7 +273,12 @@ def resolve_account_readiness(
         last_private_data_at or extraction_at, now=now,
     )
 
-    verifying = verification_lifecycle in {"requested", "running"}
+    verifying = verification_lifecycle in {
+        "requested",
+        "running",
+        "session_verified",
+        "extracting",
+    }
     extracting = is_extraction_in_progress(
         extraction_status=status,
         updating_this_source=updating_this_source,
@@ -295,7 +300,12 @@ def resolve_account_readiness(
         state = READY
     elif session_state == "connected" and extracting and not extraction_correlated:
         # Fresh session, private-data pull still in flight for this cycle.
-        state = CHECKING
+        # Once the access cycle is terminal without correlation, do not linger
+        # in checking (e.g. extraction_status=pending after a failed cycle).
+        if verification_lifecycle in {"failed", "timed_out", "completed"}:
+            state = UNVERIFIED
+        else:
+            state = CHECKING
     else:
         # Fresh session without correlated extraction, stale/unknown session,
         # extraction failure, or incomplete evidence → unverified.

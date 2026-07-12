@@ -1993,24 +1993,34 @@ const _AMEX_SESSION_SIGNALS = [
 const _amexConnReportedAt = {};
 const _amexExtractReportedAt = {};
 
-async function _pushAmexExtraction(apiKey, value, source = 'extension') {
+async function _pushAmexExtraction(apiKey, value, source = 'extension', opts = {}) {
   if (!apiKey || !value) return false;
-  const cacheKey = String(value).replace(/\D/g, '');
+  const verificationId = opts.verificationId || opts.accessCycleId || null;
+  const accessCycleId = opts.accessCycleId || opts.verificationId || verificationId;
+  const cacheKey = verificationId
+    ? `${verificationId}:${String(value).replace(/\D/g, '')}`
+    : String(value).replace(/\D/g, '');
   const now = Date.now();
   if (_amexExtractReportedAt[cacheKey] && now - _amexExtractReportedAt[cacheKey] < 300_000) {
     console.log('[Mighty Amex] extract unchanged — skip post', value);
     return true;
   }
-  console.log('[Mighty Amex] posting Membership Rewards →', value, `(${source})`);
+  console.log('[Mighty Amex] posting Membership Rewards →', value, `(${source})`,
+    verificationId ? `cycle=${verificationId}` : '');
   try {
+    const body = {
+      session_verified: true,
+      value,
+      adapter: _EXTENSION_ADAPTER,
+    };
+    if (verificationId) {
+      body.verification_id = verificationId;
+      body.access_cycle_id = accessCycleId;
+    }
     const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
-      body: JSON.stringify({
-        session_verified: true,
-        value,
-        adapter: _EXTENSION_ADAPTER,
-      }),
+      body: JSON.stringify(body),
     });
     const data = await resp.json().catch(() => ({}));
     if (resp.ok) {
@@ -2026,7 +2036,7 @@ async function _pushAmexExtraction(apiKey, value, source = 'extension') {
   return false;
 }
 
-async function extractAmexRewardsInTab(tabId, apiKey) {
+async function extractAmexRewardsInTab(tabId, apiKey, opts = {}) {
   console.log('[Mighty Amex] running DOM extraction in tab', tabId);
   try {
     const [r] = await chrome.scripting.executeScript({
@@ -2036,11 +2046,13 @@ async function extractAmexRewardsInTab(tabId, apiKey) {
     const result = r?.result;
     console.log('[Mighty Amex] tab extract result:', result);
     if (result?.loggedIn && result?.value) {
-      return _pushAmexExtraction(apiKey, result.value, 'tab');
+      return _pushAmexExtraction(apiKey, result.value, 'tab', opts);
     }
     if (result && result.loggedIn === false) {
       console.log('[Mighty Amex] tab not logged in during extraction');
-      await _postAmexNeedsLogin(apiKey);
+      if (!opts.verificationId) {
+        await _postAmexNeedsLogin(apiKey);
+      }
     } else if (result?.loggedIn) {
       console.log('[Mighty Amex] logged in but Membership Rewards balance not found in DOM');
     }
@@ -2048,6 +2060,71 @@ async function extractAmexRewardsInTab(tabId, apiKey) {
     console.warn('[Mighty Amex] tab extraction failed:', e.message);
   }
   return false;
+}
+
+/**
+ * Access-cycle owned Amex private-data extraction.
+ * Always runs after authenticated session verification — ignores is_synced /
+ * automatic-probe gates so correlated extraction can complete the cycle.
+ */
+async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingTabId) {
+  if (!apiKey || !verificationId) return false;
+  const opts = { verificationId, accessCycleId: verificationId };
+  try {
+    await fetch(`${MIGHTY_URL}/api/extension/session-verification/advance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body: JSON.stringify({ verification_id: verificationId, lifecycle: 'extracting' }),
+    });
+  } catch (e) {
+    console.warn('[Mighty Amex] extracting advance failed:', e.message);
+  }
+
+  if (existingTabId) {
+    const ok = await extractAmexRewardsInTab(existingTabId, apiKey, opts);
+    if (ok) return true;
+  }
+
+  const openTabs = await chrome.tabs.query({ url: '*://*.americanexpress.com/*' });
+  for (const tab of openTabs) {
+    if (!tab.id || !tab.url || /\/account\/log-?in/i.test(tab.url)) continue;
+    if (existingTabId && tab.id === existingTabId) continue;
+    const ok = await extractAmexRewardsInTab(tab.id, apiKey, opts);
+    if (ok) return true;
+  }
+
+  console.log('[Mighty Amex] opening account tab for access-cycle extraction');
+  let tab;
+  try {
+    tab = await createProviderTab(
+      ACCOUNT_ENTRY.amex,
+      { active: false },
+      SESSION_VERIFICATION_TAB_REASON,
+    );
+    if (!tab?.id) {
+      await _completeSessionVerification(
+        apiKey, verificationId, 'failed', 'extraction_tab_blocked',
+      );
+      return false;
+    }
+    await waitForTabLoad(tab.id, 25_000);
+    await sleep(6000);
+    const ok = await extractAmexRewardsInTab(tab.id, apiKey, opts);
+    if (!ok) {
+      await _completeSessionVerification(
+        apiKey, verificationId, 'failed', 'extraction_failed',
+      );
+    }
+    return ok;
+  } catch (e) {
+    console.warn('[Mighty Amex] access-cycle extraction failed:', e.message);
+    await _completeSessionVerification(
+      apiKey, verificationId, 'failed', e.message || 'extraction_failed',
+    );
+    return false;
+  } finally {
+    if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+  }
 }
 
 async function runAmexExtraction(apiKey, accounts) {
@@ -3697,8 +3774,16 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
       failure_reason: 'probe_no_result',
     };
     payload.verification_id = verificationId;
-    await _postProviderAccessProbe(apiKey, payload, { skipDedup: true });
+    const posted = await _postProviderAccessProbe(apiKey, payload, { skipDedup: true });
     _lastProcessedSessionVerificationId = verificationId;
+
+    // Amex access cycle owns private-data extraction after definitive auth.
+    const probeData = posted?.data || {};
+    const authenticated = _isAmexAccessCycleAuthenticated(payload, probeData);
+    if (provider === 'amex' && authenticated && verificationId) {
+      console.log('[Mighty] Amex session verified — starting access-cycle extraction', verificationId);
+      await runAmexExtractionForAccessCycle(apiKey, verificationId, tab?.id);
+    }
   } catch (e) {
     await _postProviderAccessProbe(apiKey, {
       provider,
@@ -3714,6 +3799,21 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
     if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
     _sessionVerificationInProgress = false;
   }
+}
+
+function _isAmexAccessCycleAuthenticated(payload, probeData) {
+  const authState = probeData.auth_state || payload.auth_state || '';
+  if (authState === 'authenticated_no_private_data' || authState === 'private_data_visible') {
+    return true;
+  }
+  if (probeData.extraction_required === true || probeData.access_cycle_lifecycle === 'session_verified') {
+    return true;
+  }
+  if (payload.signed_in_detected === true && payload.failure_reason !== 'login_required') {
+    // Prefer server classification when present; fall back to local signed-in signal.
+    if (!authState || authState === 'unknown') return !!payload.signed_in_detected;
+  }
+  return false;
 }
 
 function ensureManualProbePolling() {
