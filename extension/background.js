@@ -440,6 +440,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (isLoginPage) {
     // Amex connect flow: route to connection state, not sync login_required.
     if (source === 'amex') {
+      // Active verification tab owns auth — do not fire passive needs-login.
+      if (
+        _sessionVerificationInProgress
+        && (_activeSessionVerificationTabId == null || tabId === _activeSessionVerificationTabId)
+      ) {
+        _tabLoginPending[tabId] = source;
+        return;
+      }
       const { api_key } = await chrome.storage.local.get('api_key');
       if (api_key) {
         const accounts = await _fetchExtensionAccounts(api_key);
@@ -2210,22 +2218,51 @@ async function _probeAmexLoggedIn() {
   }
 }
 
-async function _postAmexNeedsLogin(apiKey) {
+async function _postAmexNeedsLogin(apiKey, opts = {}) {
+  // Active verification owns auth for its tab/cycle — suppress uncorrelated
+  // passive needs-login so a 409 / race cannot bias the final decision.
+  if (_sessionVerificationInProgress) {
+    const reportVid = opts.verificationId || opts.accessCycleId || null;
+    if (!reportVid || reportVid !== _activeSessionVerificationId) {
+      console.log('[Mighty] Amex needs-login suppressed during active verification');
+      return { deferred: true, reason: 'active_verification' };
+    }
+  }
   const now = Date.now();
-  if (_amexConnReportedAt.needs_login && now - _amexConnReportedAt.needs_login < 60_000) return;
+  if (_amexConnReportedAt.needs_login && now - _amexConnReportedAt.needs_login < 60_000) {
+    return { deferred: true, reason: 'debounced' };
+  }
   _amexConnReportedAt.needs_login = now;
   try {
+    const body = {};
+    if (opts.verificationId || opts.accessCycleId) {
+      body.verification_id = opts.verificationId || opts.accessCycleId;
+      body.access_cycle_id = opts.accessCycleId || opts.verificationId;
+    }
     const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/needs-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body: JSON.stringify(body),
     });
+    const data = await resp.json().catch(() => ({}));
     if (resp.ok) {
+      if (data.deferred) {
+        console.log('[Mighty] Amex needs-login deferred:', data.reason || 'server');
+        return data;
+      }
       console.log('[Mighty] Amex connection state → needs_login');
       chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
+      return data;
     }
+    if (resp.status === 409) {
+      console.log('[Mighty] Amex needs-login rejected (409) — not biasing verification');
+      return { ok: false, deferred: true, reason: 'connection_transition_rejected', status: 409 };
+    }
+    console.warn('[Mighty] Amex needs-login report failed:', resp.status);
   } catch (e) {
     console.warn('[Mighty] Amex needs-login report failed:', e.message);
   }
+  return null;
 }
 
 async function _postAmexConnected(apiKey) {
@@ -2298,6 +2335,8 @@ let _liveSessionComparisonInProgress = false;
 let _lastProcessedLiveSessionComparisonId = null;
 let _manualProbePollTimer = null;
 let _sessionVerificationInProgress = false;
+let _activeSessionVerificationTabId = null;
+let _activeSessionVerificationId = null;
 let _lastProcessedSessionVerificationId = null;
 const AMEX_SESSION_VERIFICATION_ENTRY =
   'https://global.americanexpress.com/overview';
@@ -3728,6 +3767,8 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
   }
 
   _sessionVerificationInProgress = true;
+  _activeSessionVerificationId = verificationId || null;
+  _activeSessionVerificationTabId = null;
   console.log(`[Mighty] session verification for ${provider} via ${entry}`);
   try {
     await fetch(`${MIGHTY_URL}/api/extension/session-verification/running`, {
@@ -3752,6 +3793,7 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
       _lastProcessedSessionVerificationId = verificationId;
       return;
     }
+    _activeSessionVerificationTabId = tab.id;
     if (deepInspect) {
       await injectDeepInspectObservers(tab.id);
     }
@@ -3774,6 +3816,7 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
       failure_reason: 'probe_no_result',
     };
     payload.verification_id = verificationId;
+    payload.access_cycle_id = verificationId;
     const posted = await _postProviderAccessProbe(apiKey, payload, { skipDedup: true });
     _lastProcessedSessionVerificationId = verificationId;
 
@@ -3793,15 +3836,23 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
       error: e.message,
       failure_reason: 'probe_navigation_error',
       verification_id: verificationId,
+      access_cycle_id: verificationId,
     }, { skipDedup: true });
     _lastProcessedSessionVerificationId = verificationId;
   } finally {
     if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
     _sessionVerificationInProgress = false;
+    _activeSessionVerificationTabId = null;
+    _activeSessionVerificationId = null;
   }
 }
 
 function _isAmexAccessCycleAuthenticated(payload, probeData) {
+  // Prefer server verification_decision when present (explicit evidence path).
+  const decision = probeData.verification_decision || payload.verification_decision || '';
+  if (decision === 'connected') return true;
+  if (decision === 'signed_out' || decision === 'inconclusive') return false;
+
   const authState = probeData.auth_state || payload.auth_state || '';
   if (authState === 'authenticated_no_private_data' || authState === 'private_data_visible') {
     return true;

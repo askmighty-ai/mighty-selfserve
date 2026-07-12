@@ -220,3 +220,44 @@ def test_amex_never_show_synced_without_items(client):
             db, uid, decrypt_fn=mighty.decrypt_account_data,
         )
         assert info["show_synced"] is False
+
+
+def test_needs_login_deferred_during_active_verification(client):
+    """Passive needs-login must not write PSS while an access cycle is active."""
+    import app as mighty
+    from mighty.connection_state import (
+        WAITING_FOR_EXTENSION,
+        advance_amex_to_waiting,
+        get_amex_connection_status,
+        start_amex_connect,
+    )
+    from mighty.provider_access_manager import request_provider_access_check
+    from mighty.provider_session_state import get_provider_session_state
+    from mighty.session_verification import ensure_session_verification_tables
+
+    uid, api_key = _user(mighty, client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        ensure_session_verification_tables(db)
+        start_amex_connect(db, uid, **_ctx(mighty))
+        advance_amex_to_waiting(db, uid, **_ctx(mighty))
+        verification = request_provider_access_check(db, uid, "amex")
+        assert verification is not None
+
+    r = client.post(
+        "/api/extension/amex/needs-login",
+        headers={"X-Mighty-Key": api_key},
+        json={},
+    )
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body.get("deferred") is True
+    assert body.get("reason") == "active_verification"
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        assert get_provider_session_state(db, uid, "amex") is None
+        info = get_amex_connection_status(
+            db, uid, decrypt_fn=mighty.decrypt_account_data,
+        )
+        assert info["connection_status"] == WAITING_FOR_EXTENSION

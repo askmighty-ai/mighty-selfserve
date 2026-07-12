@@ -33,8 +33,10 @@ from mighty.provider_access_probe import (
 from mighty.provider_session_state import (
     ProviderSessionState,
     SessionEvidence,
+    decide_amex_verification_session,
     derive_session_evidence_from_probe,
     upsert_provider_session_state,
+    verification_decision_to_evidence,
 )
 from mighty.session_verification import (
     CURRENT_SESSION_FRESHNESS_SECONDS,
@@ -317,15 +319,52 @@ def complete_provider_access_check(
     """
     write_session_state = True
     evidence = None
-    if verification_id:
+    decision = None
+    provider = str(result.get("provider") or "").strip().lower()
+
+    if verification_id and provider == "amex":
+        # Active Amex verification owns classification from explicit cycle evidence.
+        decision = decide_amex_verification_session(
+            result,
+            verification_id=verification_id,
+            access_cycle_id=verification_id,
+            passive_needs_login_seen=bool(result.get("passive_needs_login_seen")),
+        )
+        log_access_cycle_event(
+            "verification_decision",
+            provider="amex",
+            verification_id=verification_id,
+            access_cycle_id=verification_id,
+            **decision.to_log_fields(),
+        )
+        evidence = verification_decision_to_evidence(decision, result)
+        write_session_state = bool(
+            evidence is not None and evidence.state in {"connected", "signed_out"}
+        )
+        # Stash decision on the result for extension / tests (sanitized only).
+        result = dict(result)
+        result["verification_decision"] = decision.final_decision
+        result["verification_decision_reason"] = decision.decision_reason
+        # Do not let record_probe_run re-derive via the legacy probe mapper —
+        # that path can treat login chrome as signed_out and override this decision.
+        run_id = record_probe_run(
+            db, user_id, result, write_session_state=False
+        )
+        if write_session_state and evidence is not None:
+            record_provider_access_evidence(db, user_id, evidence)
+    elif verification_id:
         evidence = derive_session_evidence_from_probe(result)
         write_session_state = bool(
             evidence is not None and evidence.state in {"connected", "signed_out"}
         )
+        run_id = record_probe_run(
+            db, user_id, result, write_session_state=write_session_state
+        )
+    else:
+        run_id = record_probe_run(
+            db, user_id, result, write_session_state=True
+        )
 
-    run_id = record_probe_run(
-        db, user_id, result, write_session_state=write_session_state
-    )
     result = dict(result)
     result["run_id"] = run_id
 
@@ -347,7 +386,6 @@ def complete_provider_access_check(
         )
 
     if verification_id:
-        provider = str(result.get("provider") or "").strip().lower()
         if result.get("status") == "error" and not write_session_state:
             finish_provider_access_check(
                 db,
@@ -355,6 +393,17 @@ def complete_provider_access_check(
                 verification_id,
                 lifecycle="failed",
                 error_message=result.get("failure_reason") or "probe error",
+            )
+        elif (
+            decision is not None
+            and decision.final_decision == "inconclusive"
+        ):
+            finish_provider_access_check(
+                db,
+                user_id,
+                verification_id,
+                lifecycle="failed",
+                error_message=decision.decision_reason or "inconclusive",
             )
         elif (
             evidence is not None
