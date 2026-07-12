@@ -40,12 +40,18 @@ from mighty.session_verification import (
     CURRENT_SESSION_FRESHNESS_SECONDS,
     SessionVerification,
     VerificationLifecycle,
+    advance_session_verification,
     complete_session_verification,
     ensure_provider_session_verification_if_stale,
     ensure_stale_session_verifications_for_user,
+    log_access_cycle_event,
     mark_session_verification_running,
     request_session_verification,
 )
+
+# Providers whose authenticated access cycle must also extract private data
+# before the verification job may complete successfully.
+ACCESS_CYCLE_EXTRACTION_PROVIDERS: frozenset[str] = frozenset({"amex"})
 
 # Modules allowed to call upsert_provider_session_state in production code.
 # Tests may call upsert directly. Do not expand this set without an ACCESS_FLOW update.
@@ -157,6 +163,50 @@ def mark_provider_access_check_running(
     )
 
 
+def advance_provider_access_check(
+    db: Any,
+    user_id: str,
+    verification_id: str,
+    *,
+    lifecycle: VerificationLifecycle,
+    error_message: str | None = None,
+    now: datetime | None = None,
+) -> SessionVerification | None:
+    """Advance an access cycle to session_verified or extracting."""
+    before = db.execute(
+        """
+        SELECT lifecycle FROM provider_session_verification
+        WHERE verification_id = ? AND user_id = ?
+        """,
+        (verification_id, user_id),
+    ).fetchone()
+    before_lifecycle = before["lifecycle"] if before else None
+    verification = advance_session_verification(
+        db,
+        user_id,
+        verification_id,
+        lifecycle=lifecycle,
+        error_message=error_message,
+        now=now,
+    )
+    if verification is not None and verification.lifecycle != before_lifecycle:
+        event = (
+            "session_verified"
+            if lifecycle == "session_verified"
+            else "extraction_started"
+            if lifecycle == "extracting"
+            else f"lifecycle_{lifecycle}"
+        )
+        log_access_cycle_event(
+            event,
+            provider=verification.provider,
+            verification_id=verification.verification_id,
+            access_cycle_id=verification.verification_id,
+            lifecycle=verification.lifecycle,
+        )
+    return verification
+
+
 def finish_provider_access_check(
     db: Any,
     user_id: str,
@@ -177,6 +227,73 @@ def finish_provider_access_check(
     )
 
 
+def mark_access_check_extracting(
+    db: Any,
+    user_id: str,
+    verification_id: str,
+    *,
+    now: datetime | None = None,
+) -> SessionVerification | None:
+    """Mark authenticated access cycle as extracting private data."""
+    return advance_provider_access_check(
+        db,
+        user_id,
+        verification_id,
+        lifecycle="extracting",
+        now=now,
+    )
+
+
+def complete_access_check_after_extraction(
+    db: Any,
+    user_id: str,
+    verification_id: str,
+    *,
+    success: bool,
+    error_message: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Terminal result after correlated private-data extraction attempt."""
+    row = db.execute(
+        """
+        SELECT provider FROM provider_session_verification
+        WHERE verification_id = ? AND user_id = ?
+        """,
+        (verification_id, user_id),
+    ).fetchone()
+    provider = str(row["provider"]) if row else "amex"
+    if success:
+        log_access_cycle_event(
+            "extraction_succeeded",
+            provider=provider,
+            verification_id=verification_id,
+            access_cycle_id=verification_id,
+        )
+        finish_provider_access_check(
+            db,
+            user_id,
+            verification_id,
+            lifecycle="completed",
+            now=now,
+        )
+    else:
+        log_access_cycle_event(
+            "extraction_failed",
+            provider=provider,
+            verification_id=verification_id,
+            access_cycle_id=verification_id,
+            error=error_message or "extraction_failed",
+        )
+        finish_provider_access_check(
+            db,
+            user_id,
+            verification_id,
+            lifecycle="failed",
+            error_message=error_message or "extraction_failed",
+            now=now,
+        )
+
+
 # ── Probe completion (active verification + debug manual probe) ───────────────
 
 
@@ -193,8 +310,13 @@ def complete_provider_access_check(
     Active session verification (``verification_id`` set) writes PSS only on
     definitive ``connected`` / ``signed_out`` evidence. Manual / automatic probes
     keep their existing write behavior (debug / legacy paths).
+
+    For Amex authenticated evidence, the access cycle advances to
+    ``session_verified`` and does **not** complete until correlated private-data
+    extraction succeeds. Signed-out evidence completes the cycle without extraction.
     """
     write_session_state = True
+    evidence = None
     if verification_id:
         evidence = derive_session_evidence_from_probe(result)
         write_session_state = bool(
@@ -225,6 +347,7 @@ def complete_provider_access_check(
         )
 
     if verification_id:
+        provider = str(result.get("provider") or "").strip().lower()
         if result.get("status") == "error" and not write_session_state:
             finish_provider_access_check(
                 db,
@@ -233,13 +356,43 @@ def complete_provider_access_check(
                 lifecycle="failed",
                 error_message=result.get("failure_reason") or "probe error",
             )
+        elif (
+            evidence is not None
+            and evidence.state == "connected"
+            and provider in ACCESS_CYCLE_EXTRACTION_PROVIDERS
+        ):
+            # Authenticated Amex: hold cycle open for private-data extraction.
+            advance_provider_access_check(
+                db,
+                user_id,
+                verification_id,
+                lifecycle="session_verified",
+            )
+            result["access_cycle_lifecycle"] = "session_verified"
+            result["extraction_required"] = True
         else:
+            # Signed-out, non-Amex auth, or definitive terminal without extraction.
             finish_provider_access_check(
                 db,
                 user_id,
                 verification_id,
                 lifecycle="completed",
             )
+            if evidence is not None and evidence.state == "signed_out":
+                log_access_cycle_event(
+                    "session_verified",
+                    provider=provider or "unknown",
+                    verification_id=verification_id,
+                    access_cycle_id=verification_id,
+                    session_state="signed_out",
+                )
+                log_access_cycle_event(
+                    "readiness_result",
+                    provider=provider or "unknown",
+                    verification_id=verification_id,
+                    access_cycle_id=verification_id,
+                    readiness="signed_out",
+                )
 
     return result
 

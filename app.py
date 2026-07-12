@@ -20921,7 +20921,11 @@ def api_extension_amex_connected():
 
 @app.route("/api/extension/amex/extract", methods=["POST"])
 def api_extension_amex_extract():
-    """Extension adapter: store Membership Rewards points as normalized provider data."""
+    """Extension adapter: store Membership Rewards points as normalized provider data.
+
+    When verification_id / access_cycle_id is present, this closes the Amex access
+    cycle: extraction must succeed for the cycle to complete as Connected-capable.
+    """
     user, body = api_user()
     if not user:
         return jsonify({"error": "unauthorized"}), 401
@@ -20933,17 +20937,106 @@ def api_extension_amex_extract():
 
     uid = user["id"]
     db  = get_db()
+    verification_id = (
+        str(body.get("verification_id") or body.get("access_cycle_id") or "").strip()
+        or None
+    )
+    access_cycle_id = (
+        str(body.get("access_cycle_id") or body.get("verification_id") or "").strip()
+        or None
+    )
+
+    from mighty.provider_access_manager import (
+        complete_access_check_after_extraction,
+        log_access_cycle_event,
+        mark_access_check_extracting,
+        record_amex_extension_connected,
+    )
+
+    if verification_id:
+        mark_access_check_extracting(db, uid, verification_id)
+
     try:
         result = apply_amex_membership_rewards_extraction(
-            db, uid, raw_value, **_amex_conn_ctx(),
+            db,
+            uid,
+            raw_value,
+            access_cycle_id=access_cycle_id,
+            verification_id=verification_id,
+            **_amex_conn_ctx(),
         )
     except ValueError as e:
+        if verification_id:
+            from mighty.provider_account import EXTRACTION_FAILED, persist_provider_state
+
+            row = db.execute(
+                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                (uid, AMEX_SOURCE),
+            ).fetchone()
+            if row:
+                ad_data = decrypt_account_data(uid, row["data_enc"] or "")
+                persist_provider_state(
+                    db,
+                    uid,
+                    AMEX_SOURCE,
+                    ad_data,
+                    encrypt_fn=encrypt_account_data,
+                    extraction_status=EXTRACTION_FAILED,
+                    iso_fn=iso,
+                )
+                db.commit()
+            complete_access_check_after_extraction(
+                db,
+                uid,
+                verification_id,
+                success=False,
+                error_message=str(e),
+            )
+            log_access_cycle_event(
+                "readiness_result",
+                provider="amex",
+                verification_id=verification_id,
+                access_cycle_id=access_cycle_id or verification_id,
+                readiness="unverified",
+            )
         return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
+        if verification_id:
+            from mighty.provider_account import EXTRACTION_FAILED, persist_provider_state
+
+            row = db.execute(
+                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+                (uid, AMEX_SOURCE),
+            ).fetchone()
+            if row:
+                ad_data = decrypt_account_data(uid, row["data_enc"] or "")
+                persist_provider_state(
+                    db,
+                    uid,
+                    AMEX_SOURCE,
+                    ad_data,
+                    encrypt_fn=encrypt_account_data,
+                    extraction_status=EXTRACTION_FAILED,
+                    iso_fn=iso,
+                )
+                db.commit()
+            complete_access_check_after_extraction(
+                db,
+                uid,
+                verification_id,
+                success=False,
+                error_message=str(e),
+            )
+            log_access_cycle_event(
+                "readiness_result",
+                provider="amex",
+                verification_id=verification_id,
+                access_cycle_id=access_cycle_id or verification_id,
+                readiness="unverified",
+            )
         return jsonify({"ok": False, "error": str(e)}), 500
 
     # Session verified flag on this request updates session state; MR value does not.
-    from mighty.provider_access_manager import record_amex_extension_connected
     record_amex_extension_connected(
         db,
         uid,
@@ -20953,11 +21046,54 @@ def api_extension_amex_extract():
         source="extension_amex_extract",
     )
 
+    if verification_id:
+        complete_access_check_after_extraction(
+            db,
+            uid,
+            verification_id,
+            success=True,
+        )
+        log_access_cycle_event(
+            "readiness_result",
+            provider="amex",
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id or verification_id,
+            readiness="ready",
+        )
+
     return jsonify({
         "ok": True,
         "adapter": extension_adapter.ADAPTER_ID,
         **result,
     })
+
+
+@app.route("/api/extension/session-verification/advance", methods=["POST"])
+def api_extension_session_verification_advance():
+    """Advance an in-flight access cycle to session_verified or extracting."""
+    from mighty.provider_access_manager import advance_provider_access_check
+    from mighty.session_verification import session_verification_to_json
+
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+    body = body or {}
+    verification_id = str(body.get("verification_id") or "").strip()
+    if not verification_id:
+        return jsonify({"error": "verification_id required"}), 400
+    lifecycle = str(body.get("lifecycle") or "").strip().lower()
+    if lifecycle not in {"session_verified", "extracting"}:
+        return jsonify({"error": "invalid lifecycle"}), 400
+    verification = advance_provider_access_check(
+        get_db(),
+        user["id"],
+        verification_id,
+        lifecycle=lifecycle,  # type: ignore[arg-type]
+        error_message=(body.get("error_message") or None),
+    )
+    if verification is None:
+        return jsonify({"ok": False, "error": "verification not found or not advanceable"}), 404
+    return jsonify({"ok": True, **session_verification_to_json(verification)})
 
 
 # ── Admin debug pages (internal only) ─────────────────────────────────────────
@@ -21711,7 +21847,15 @@ def api_extension_provider_access_probe():
         verification_id=verification_id,
         manual_run_id=manual_run_id,
     )
-    return jsonify(row_to_json(result))
+    payload = row_to_json(result)
+    if result.get("access_cycle_lifecycle"):
+        payload["access_cycle_lifecycle"] = result["access_cycle_lifecycle"]
+    if "extraction_required" in result:
+        payload["extraction_required"] = bool(result["extraction_required"])
+    if verification_id:
+        payload["verification_id"] = verification_id
+        payload["access_cycle_id"] = verification_id
+    return jsonify(payload)
 
 
 @app.route("/api/admin/provider-access-probe/bootstrap-trace", methods=["POST"])

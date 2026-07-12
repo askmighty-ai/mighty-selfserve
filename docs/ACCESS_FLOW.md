@@ -25,6 +25,8 @@ Product poll / recovery / ensure_stale
       → extension runSessionVerification (execute)
       → provider_access_probe (classify)
       → provider_session_state (persist definitive evidence only)
+      → Amex: session_verified → extracting → correlated /amex/extract
+      → access cycle completed only after extraction success (or signed_out)
 ```
 
 Recovery Planner (when present) sits **above** this flow and must request checks
