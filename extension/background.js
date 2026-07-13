@@ -2158,6 +2158,21 @@ async function waitForAmexQualifyingPrivateData(tabId, { timeoutMs = AMEX_PRIVAT
   const deadline = Date.now() + Math.max(0, timeoutMs);
   while (Date.now() <= deadline) {
     try {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (!tab || tab.id == null) {
+        console.log('[Mighty Amex] private-data wait cancelled — tab closed');
+        return false;
+      }
+      // Navigation away from Amex account surfaces ends the wait for this cycle.
+      const url = String(tab.url || '');
+      if (url && !/americanexpress\.com/i.test(url)) {
+        console.log('[Mighty Amex] private-data wait cancelled — left Amex surface');
+        return false;
+      }
+      if (/\/account\/log-?in/i.test(url)) {
+        console.log('[Mighty Amex] private-data wait cancelled — login page');
+        return false;
+      }
       const [r] = await chrome.scripting.executeScript({
         target: { tabId },
         func: () => {
@@ -2179,8 +2194,17 @@ async function waitForAmexQualifyingPrivateData(tabId, { timeoutMs = AMEX_PRIVAT
         console.log('[Mighty Amex] qualifying private data observed:', r.result.reason);
         return true;
       }
+      if (r?.result?.reason === 'login_page') {
+        return false;
+      }
     } catch (e) {
-      console.warn('[Mighty Amex] private-data poll failed:', e.message);
+      const msg = String(e?.message || e || '');
+      // Tab gone / navigated away — do not burn the full deadline.
+      if (/no tab|invalid tab|cannot access|receiving end does not exist/i.test(msg)) {
+        console.log('[Mighty Amex] private-data wait cancelled — tab unavailable');
+        return false;
+      }
+      console.warn('[Mighty Amex] private-data poll failed:', msg);
     }
     if (Date.now() > deadline) break;
     await sleep(AMEX_PRIVATE_DATA_POLL_MS);

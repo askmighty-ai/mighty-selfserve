@@ -43,10 +43,12 @@ from mighty.session_verification import (
     READY_REVALIDATION_INTERVAL_SECONDS,
     READY_RESULT_GRACE_SECONDS,
     SessionVerification,
+    TERMINAL_VERIFICATION_LIFECYCLES,
     VerificationLifecycle,
     advance_session_verification,
     complete_session_verification,
     ensure_provider_session_verification_if_stale,
+    ensure_session_verification_tables,
     ensure_stale_session_verifications_for_user,
     log_access_cycle_event,
     mark_session_verification_running,
@@ -308,12 +310,74 @@ def complete_amex_cycle_no_qualifying_private_data(
     candidate_payload_count: int = 0,
     rejection_reason: str = "no_qualifying_private_data",
     now: datetime | None = None,
-) -> None:
+) -> dict[str, Any]:
     """Authenticated Amex cycle finished observation with no extractable private data.
 
     Extraction is intentionally NOT RUN. Cycle completes (not failed) so Truth
     Validation can show Extraction/Snapshot NOT RUN rather than a parser failure.
+
+    Ownership / idempotency:
+      - verification must exist for this user
+      - provider must be amex
+      - mid-cycle (session_verified / extracting / running) → complete once
+      - already completed with no_qualifying_private_data → idempotent ok
+      - other terminal / missing / wrong provider → rejected (no overwrite)
     """
+    ensure_session_verification_tables(db)
+
+    row = db.execute(
+        """
+        SELECT verification_id, provider, lifecycle, error_message
+        FROM provider_session_verification
+        WHERE verification_id = ? AND user_id = ?
+        """,
+        (verification_id, user_id),
+    ).fetchone()
+    if row is None:
+        return {
+            "ok": False,
+            "error": "verification_not_found",
+            "status_code": 404,
+        }
+    provider = str(row["provider"] or "").strip().lower()
+    lifecycle = str(row["lifecycle"] or "").strip().lower()
+    error_message = str(row["error_message"] or "").strip()
+    if provider != "amex":
+        return {
+            "ok": False,
+            "error": "provider_mismatch",
+            "status_code": 409,
+            "provider": provider,
+            "lifecycle": lifecycle,
+        }
+    if lifecycle in TERMINAL_VERIFICATION_LIFECYCLES:
+        if (
+            lifecycle == "completed"
+            and error_message == "no_qualifying_private_data"
+        ):
+            return {
+                "ok": True,
+                "idempotent": True,
+                "extraction": "not_run",
+                "lifecycle": lifecycle,
+                "verification_id": verification_id,
+                "access_cycle_id": verification_id,
+            }
+        return {
+            "ok": False,
+            "error": "cycle_already_terminal",
+            "status_code": 409,
+            "lifecycle": lifecycle,
+            "error_message": error_message or None,
+        }
+    if lifecycle not in {"running", "session_verified", "extracting"}:
+        return {
+            "ok": False,
+            "error": "cycle_not_ready_for_observation_complete",
+            "status_code": 409,
+            "lifecycle": lifecycle,
+        }
+
     log_access_cycle_event(
         "observation_summary",
         provider="amex",
@@ -359,6 +423,15 @@ def complete_amex_cycle_no_qualifying_private_data(
         readiness="unverified",
         reason="logged_in_no_account_data",
     )
+    return {
+        "ok": True,
+        "idempotent": False,
+        "extraction": "not_run",
+        "lifecycle": "completed",
+        "verification_id": verification_id,
+        "access_cycle_id": verification_id,
+        "capability_hint": "logged_in_no_account_data",
+    }
 
 
 def _sanitized_observation_counts(result: dict[str, Any]) -> dict[str, int | str]:

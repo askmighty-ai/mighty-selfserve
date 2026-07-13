@@ -21287,6 +21287,41 @@ def api_extension_amex_extract():
         mark_access_check_extracting,
         record_amex_extension_connected,
     )
+    from mighty.session_verification import TERMINAL_VERIFICATION_LIFECYCLES
+
+    if verification_id:
+        # Reject extract against a terminal / missing cycle so a late extract
+        # cannot overwrite a no-qualifying or failed completion for this id.
+        row = db.execute(
+            """
+            SELECT lifecycle, provider, error_message
+            FROM provider_session_verification
+            WHERE verification_id = ? AND user_id = ?
+            """,
+            (verification_id, uid),
+        ).fetchone()
+        if row is None:
+            return jsonify({
+                "ok": False,
+                "error": "verification_not_found",
+                "verification_id": verification_id,
+            }), 404
+        lifecycle = str(row["lifecycle"] or "")
+        provider = str(row["provider"] or "").strip().lower()
+        if provider != "amex":
+            return jsonify({
+                "ok": False,
+                "error": "provider_mismatch",
+                "verification_id": verification_id,
+            }), 409
+        if lifecycle in TERMINAL_VERIFICATION_LIFECYCLES:
+            return jsonify({
+                "ok": False,
+                "error": "cycle_already_terminal",
+                "lifecycle": lifecycle,
+                "verification_id": verification_id,
+                "access_cycle_id": verification_id,
+            }), 409
 
     input_source = str(body.get("input_source") or body.get("source") or "extension").strip()
     value_len = len(raw_value)
@@ -21527,6 +21562,7 @@ def api_extension_amex_no_qualifying_private_data():
     """Authenticated Amex cycle: observation finished with no extractable private data.
 
     Extraction is NOT RUN. Does not publish a snapshot. Does not mark EXTRACTION_FAILED.
+    Rejects unknown, non-Amex, and already-terminal cycles (except idempotent no-data replay).
     """
     from mighty.provider_access_manager import complete_amex_cycle_no_qualifying_private_data
 
@@ -21540,7 +21576,7 @@ def api_extension_amex_no_qualifying_private_data():
     if not verification_id:
         return jsonify({"error": "verification_id required"}), 400
     counts = body.get("observation_counts") if isinstance(body.get("observation_counts"), dict) else {}
-    complete_amex_cycle_no_qualifying_private_data(
+    result = complete_amex_cycle_no_qualifying_private_data(
         get_db(),
         user["id"],
         verification_id,
@@ -21553,12 +21589,23 @@ def api_extension_amex_no_qualifying_private_data():
             or "no_qualifying_private_data"
         ),
     )
+    if not result.get("ok"):
+        status = int(result.get("status_code") or 409)
+        return jsonify({
+            "ok": False,
+            "error": result.get("error") or "rejected",
+            "lifecycle": result.get("lifecycle"),
+            "verification_id": verification_id,
+            "access_cycle_id": verification_id,
+        }), status
     return jsonify({
         "ok": True,
         "extraction": "not_run",
         "capability_hint": "logged_in_no_account_data",
+        "idempotent": bool(result.get("idempotent")),
         "verification_id": verification_id,
         "access_cycle_id": verification_id,
+        "lifecycle": result.get("lifecycle") or "completed",
     })
 
 

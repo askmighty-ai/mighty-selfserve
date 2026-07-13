@@ -503,3 +503,34 @@ class TestCurrentCycleVsHistoricalPipeline:
         cap = build_capability_view(view)
         assert cap.state == CapabilityState.LOGIN_UNKNOWN
         assert cap.state != CapabilityState.SIGNED_OUT
+
+
+class TestOutcomeMatrixPR99:
+    def test_signed_out_no_extraction_wait(self):
+        view = _view(SIGNED_OUT)
+        cap = build_capability_view(view)
+        assert cap.state == CapabilityState.SIGNED_OUT
+
+    def test_inconclusive_login_unknown(self):
+        view = _view(UNVERIFIED, session_state="unknown", verification_lifecycle="failed")
+        cap = build_capability_view(view)
+        assert cap.state == CapabilityState.LOGIN_UNKNOWN
+        assert cap.state != CapabilityState.SIGNED_OUT
+
+    def test_historical_fields_do_not_promote_success(self):
+        view = _view(
+            UNVERIFIED,
+            session_state="connected",
+            extraction_ok=True,
+            extraction_correlated=False,
+            cached_data_label="Last saved data: yesterday",
+            verification_lifecycle="completed",
+        )
+        cap = build_capability_view(
+            view,
+            extracted_items=AMEX_FIELDS,
+            extraction_status=EXTRACTION_COMPLETE,
+        )
+        assert cap.state != CapabilityState.EXTRACTION_SUCCESS
+        assert cap.state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
+        assert cap.extracted_fields == ()

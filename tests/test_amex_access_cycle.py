@@ -577,3 +577,143 @@ def test_extension_gates_extraction_on_qualifying_private_data():
     assert "AMEX_PRIVATE_DATA_OBSERVATION_MS" in bg
     assert "/api/extension/amex/no-qualifying-private-data" in bg
     assert "extraction NOT RUN" in bg
+
+
+def test_no_qualifying_endpoint_idempotent_and_rejects_bad_cycles(client):
+    """Duplicate no-data POST is idempotent; wrong/completed/missing IDs rejected."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        verification = request_provider_access_check(db, uid, "amex")
+        vid = verification.verification_id
+        complete_provider_access_check(db, uid, _probe(), verification_id=vid)
+        api_key = _api_key(mighty, uid)
+
+    payload = {
+        "verification_id": vid,
+        "access_cycle_id": vid,
+        "observation_counts": {
+            "authenticated_private_api_responses": 0,
+            "qualifying_dom_observations": 0,
+            "candidate_payloads": 0,
+            "rejection_reason": "no_qualifying_private_data",
+        },
+    }
+    first = client.post(
+        "/api/extension/amex/no-qualifying-private-data",
+        headers={"X-Mighty-Key": api_key},
+        json=payload,
+    )
+    assert first.status_code == 200, first.get_json()
+    assert first.get_json().get("idempotent") is False
+
+    second = client.post(
+        "/api/extension/amex/no-qualifying-private-data",
+        headers={"X-Mighty-Key": api_key},
+        json=payload,
+    )
+    assert second.status_code == 200, second.get_json()
+    assert second.get_json().get("idempotent") is True
+
+    missing = client.post(
+        "/api/extension/amex/no-qualifying-private-data",
+        headers={"X-Mighty-Key": api_key},
+        json={"verification_id": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert missing.status_code == 404
+
+    # Extract against the completed no-data cycle must not write/overwrite.
+    extract = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "125,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
+    )
+    assert extract.status_code == 409
+    assert extract.get_json()["error"] == "cycle_already_terminal"
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        latest = get_latest_session_verification(db, uid, "amex")
+        assert latest.lifecycle == "completed"
+        assert latest.error_message == "no_qualifying_private_data"
+        row = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source='amex'",
+            (uid,),
+        ).fetchone()
+        data = mighty.decrypt_account_data(uid, row["data_enc"] or "")
+        # Historical/seeded data may exist, but this cycle must not correlate extract.
+        assert data.get("access_cycle_id") != vid or data.get("extraction_access_cycle_id") != vid
+
+
+def test_no_qualifying_rejects_after_successful_extraction(client):
+    """Completed successful cycle cannot be overwritten by a late no-data POST."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        verification = request_provider_access_check(db, uid, "amex")
+        vid = verification.verification_id
+        complete_provider_access_check(db, uid, _probe(), verification_id=vid)
+        api_key = _api_key(mighty, uid)
+
+    assert client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "88,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
+    ).status_code == 200
+
+    late = client.post(
+        "/api/extension/amex/no-qualifying-private-data",
+        headers={"X-Mighty-Key": api_key},
+        json={"verification_id": vid, "access_cycle_id": vid},
+    )
+    assert late.status_code == 409
+    assert late.get_json()["error"] == "cycle_already_terminal"
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        latest = get_latest_session_verification(db, uid, "amex")
+        assert latest.lifecycle == "completed"
+        assert latest.error_message != "no_qualifying_private_data"
+        row = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source='amex'",
+            (uid,),
+        ).fetchone()
+        data = mighty.decrypt_account_data(uid, row["data_enc"] or "")
+        assert data.get("access_cycle_id") == vid
+
+
+def test_extension_private_data_wait_contract():
+    """Bounded wait: hard deadline, tab-close cancel, DOM-only qualifying rules."""
+    from pathlib import Path
+
+    bg = (Path(__file__).resolve().parents[1] / "extension" / "background.js").read_text()
+    assert "AMEX_PRIVATE_DATA_OBSERVATION_MS = 20000" in bg
+    assert "AMEX_PRIVATE_DATA_POLL_MS = 1000" in bg
+    assert "waitForAmexQualifyingPrivateData" in bg
+    assert "private-data wait cancelled — tab closed" in bg
+    assert "private-data wait cancelled — left Amex surface" in bg
+    assert "Date.now() + Math.max(0, timeoutMs)" in bg
+    # Qualifying = value-bearing DOM patterns, not session API alone / static chrome.
+    assert "membership rewards[^0-9\\n]{0,120}([\\d][\\d,]*)" in bg
+    assert "session_api" not in bg.split("waitForAmexQualifyingPrivateData")[1].split(
+        "async function _postAmexNoQualifyingPrivateData"
+    )[0]
+    # Gate uses current-cycle probe private_data_detected, not prior-cycle cache.
+    assert "payload.private_data_detected" in bg
+    assert "probeData.private_data_detected" in bg
