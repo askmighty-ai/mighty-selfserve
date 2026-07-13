@@ -51,7 +51,7 @@ class TestHomeUi:
         assert "acct-card" not in rendered
         assert "dash-brief-row" not in rendered
 
-    def test_all_clear_shows_health_strip(self):
+    def test_all_clear_shows_summary_and_system_health(self):
         accounts = [
             _status(
                 "amex",
@@ -68,29 +68,33 @@ class TestHomeUi:
             last_checked="2h ago",
             escape=_escape,
         )
-        assert "Account health" in rendered
-        assert "Connected: American Express" in rendered
-        assert "need login" not in rendered.lower()
-        assert "all set" in rendered or "You&#x27;re all set." in rendered
-        assert "Mighty runs in Chrome" in rendered
+        assert "Summary" in rendered
+        assert "System Health" in rendered
         assert "American Express" in rendered
+        assert "watching your accounts" in rendered.lower()
+        assert "No action needed." in rendered
+        assert "all set" not in rendered.lower()
+        assert "Mighty runs in Chrome" in rendered
 
-    def test_update_state_disabled_cta(self):
-        result = HomeStateResult(
-            state=HomeState.UPDATE,
-            priority_summary="Almost there.",
-            featured=HomeFeatured(
-                headline="Updating American Express…",
-                body="Please wait.",
-                disabled_cta_label="Updating…",
-            ),
-            health=resolve_home_state(accounts=[]).health,
+    def test_update_state_shows_refreshing_activity(self):
+        accounts = [
+            _status(
+                "amex",
+                "American Express",
+                "up_to_date",
+                last_successful_sync_at="2026-07-03T12:00:00",
+            )
+        ]
+        result = resolve_home_state(
+            accounts=accounts,
+            sync_running=True,
+            updating_display_name="American Express",
         )
         rendered = render_home_page(result, first_name="Alex", today_label="Friday, July 3", escape=_escape)
-        assert "dash-brief-featured-cta--disabled" in rendered
-        assert "Updating…" in rendered
+        assert "Current activity: Refreshing account" in rendered
+        assert "watching your accounts" in rendered.lower()
 
-    def test_health_strip_needs_attention_copy(self):
+    def test_health_summary_needs_you(self):
         accounts = [
             _status(
                 "amex",
@@ -113,12 +117,12 @@ class TestHomeUi:
             today_label="Friday, July 3",
             escape=_escape,
         )
-        assert "1 needs attention" in rendered
-        assert 'filter=needs_attention' in rendered
-        assert "need login" not in rendered.lower()
+        assert "Needs you" in rendered
+        assert "Needs your attention" in rendered or "needs your attention" in rendered.lower()
+        assert "No action needed." not in rendered
         assert "Dismiss for now" not in rendered
 
-    def test_mixed_setup_all_clear_copy(self):
+    def test_mixed_setup_monitoring_copy(self):
         accounts = [
             _status(
                 "amex",
@@ -136,14 +140,12 @@ class TestHomeUi:
             today_label="Friday, July 3",
             escape=_escape,
         )
-        assert "You&#x27;re all set for now." in rendered or "You're all set for now." in rendered
-        assert "Nothing needs your attention right now." in rendered
-        assert "still setting up 2 accounts" in rendered
-        assert "2 still setting up" in rendered
-        assert "watching" not in rendered.lower()
-        assert "Log in" not in rendered
+        assert "all set" not in rendered.lower()
+        assert "No action needed." in rendered
+        assert "watching" in rendered.lower() or "monitoring" in rendered.lower()
+        assert "Log in" not in rendered or "Log in" in (result.featured.cta_label or "")
 
-    def test_hero_agrees_with_health_when_attention_required(self):
+    def test_hero_agrees_with_summary_when_attention_required(self):
         accounts = [
             _status(
                 "amex",
@@ -162,13 +164,11 @@ class TestHomeUi:
             escape=_escape,
         )
         assert result.health.attention_required == 1
-        assert "One account needs your attention." in rendered
-        assert "1 needs attention" in rendered
-        assert "Nothing needs your attention" not in rendered
-        assert "still setting up 1 account" in rendered
-        assert "1 still setting up" in rendered
+        assert result.tower.needs_you_count == 1
+        assert "Needs your attention" in rendered or "needs your attention" in rendered.lower()
+        assert "No action needed." not in rendered
 
-    def test_zero_attention_hero_says_nothing_needs_attention(self):
+    def test_zero_attention_hero_says_no_action_needed(self):
         accounts = [
             _status(
                 "amex",
@@ -186,13 +186,10 @@ class TestHomeUi:
             escape=_escape,
         )
         assert result.health.attention_required == 0
-        assert "Nothing needs your attention right now." in rendered
-        assert "1 needs attention" not in rendered
-        assert "needs attention" not in rendered.replace(
-            "Nothing needs your attention right now.", ""
-        )
+        assert "No action needed." in rendered
+        assert "Needs your attention." not in rendered
 
-    def test_all_up_to_date_monitoring_copy(self):
+    def test_all_up_to_date_watching_copy(self):
         accounts = [
             _status(
                 "amex",
@@ -214,7 +211,6 @@ class TestHomeUi:
             today_label="Friday, July 3",
             escape=_escape,
         )
-        assert "You&#x27;re all set." in rendered or "You're all set." in rendered
-        assert "all set for now" not in rendered
-        assert "monitoring all 2 accounts" in rendered
-        assert "watching" not in rendered.lower()
+        assert "watching your accounts" in rendered.lower()
+        assert "all set" not in rendered.lower()
+        assert "No action needed." in rendered

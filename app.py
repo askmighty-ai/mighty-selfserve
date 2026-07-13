@@ -6218,6 +6218,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-access-debug-row{display:flex;gap:8px;font-size:10px;line-height:1.5}
 .dash-access-debug-key{color:#9ca3af;min-width:140px}
 .dash-access-debug-val{color:#374151;font-family:ui-monospace,monospace;word-break:break-all}
+/* Control Tower */
+.dash-tower-hero .dash-brief-featured-headline{margin-bottom:14px}
+.dash-tower-hero-lines{list-style:none;margin:0 0 16px;padding:0;display:flex;flex-direction:column;gap:6px}
+.dash-tower-hero-line{font-size:14px;color:#57534e;line-height:1.45}
+.dash-tower-summary{margin-top:20px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06)}
+.dash-tower-buckets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.dash-tower-bucket{padding:12px;border:0.5px solid rgba(0,0,0,0.07);border-radius:10px;background:#fafaf9}
+.dash-tower-bucket-title{margin:0 0 8px;font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:.05em}
+.dash-tower-bucket-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.dash-tower-bucket-item{font-size:13px;color:#1c1917;font-weight:500;line-height:1.35}
+.dash-tower-bucket-empty{margin:0;font-size:13px;color:#a8a29e}
+.dash-tower-bucket-note{margin:8px 0 0;font-size:12px;color:#b45309;font-weight:600}
+.dash-tower-system-health{margin-top:20px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06)}
+.dash-tower-health-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.dash-tower-health-cell{padding:10px 12px;border-radius:10px;background:#fff;border:0.5px solid rgba(0,0,0,0.07)}
+.dash-tower-health-label{display:block;font-size:11px;font-weight:600;color:#a8a29e;text-transform:uppercase;letter-spacing:.04em}
+.dash-tower-health-value{display:block;margin-top:4px;font-size:22px;font-weight:650;color:#1c1917;letter-spacing:-0.03em}
+.dash-tower-facts{grid-template-columns:1fr 1fr}
+.dash-tower-fact-wide{grid-column:1 / -1}
+@media(max-width:640px){
+  .dash-tower-buckets{grid-template-columns:1fr}
+  .dash-tower-health-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 /* Demo mode banner */
 .demo-mode-banner{background:linear-gradient(90deg,rgba(124,58,237,0.08),rgba(99,102,241,0.06));border-bottom:0.5px solid rgba(124,58,237,0.18);flex-shrink:0}
 .demo-mode-banner-inner{max-width:1600px;margin:0 auto;padding:10px 32px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -6362,14 +6385,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="pending-badge" style="display:{pending_display}" class="pending-pill">
       {pending_count} awaiting decision
     </div>
-    <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="{user_copy.GLOBAL_LAST_UPDATED_TITLE}">{global_sync_label}</span>
-    <span id="worker-active-badge" style="display:none;font-size:11px;color:#059669;white-space:nowrap;padding:4px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0" title="{user_copy.ROLE_EXTENSION_DESC}">
-      Worker · {user_copy.ACTIVITY_LABELS['watching']}
+    <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="{dash_global_last_updated_title}">{global_sync_label}</span>
+    <span id="worker-active-badge" style="display:none;font-size:11px;color:#059669;white-space:nowrap;padding:4px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0" title="{dash_role_extension_desc}">
+      Worker · {dash_activity_watching}
     </span>
     <!-- Alpha: manual sync removed — extension is the primary sync mechanism. Server retry is in Settings. -->
     <a id="ext-install-link" href="/extension-setup" target="_blank"
        style="display:none;font-size:11px;color:#6366f1;white-space:nowrap;text-decoration:none;padding:4px 8px;background:rgba(99,102,241,0.08);border-radius:6px;border:1px solid rgba(99,102,241,0.2)">
-      {user_copy.EXT_SETUP_LINK}
+      {dash_ext_setup_link}
     </a>
   </div>
 
@@ -6708,7 +6731,7 @@ function updateSyncTimes() {
     var sessionState = card ? card.dataset.sessionState : '';
     var loginRequired = card ? (card.dataset.loginRequired === 'true') : false;
     if (sessionState === 'signed_out' || loginRequired) {
-      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">{user_copy.NEEDS_LOGIN_BADGE}</span>';
+      el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">{dash_needs_login_badge}</span>';
       return;
     }
     if (sessionState === 'checking') {
@@ -6730,7 +6753,7 @@ function updateSyncTimes() {
       else if (hrs2 >= 48) { color = '#f59e0b'; icon = '~'; }
       else if (hrs2 >= 24) { color = '#f59e0b'; icon = '~'; }
       else if (hrs2 >= 2) { color = '#6b7280'; icon = '✓'; }
-      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' {user_copy.LAST_UPDATED_PREFIX} ' + rel + '</span>';
+      el.innerHTML = '<span style="font-size:11px;color:' + color + ';font-weight:' + fw + '">' + icon + ' {dash_last_updated_prefix} ' + rel + '</span>';
     }
     try {
       var d = new Date(ts);
@@ -6813,7 +6836,7 @@ function _updateGlobalSyncTime(ts) {
   if (!el) return;
   if (!ts) return;  // never blank it if we don't have a timestamp
   var rel = fmtRelative(ts);
-  if (rel) { el.textContent = '{user_copy.LAST_UPDATED_PREFIX} ' + rel; el.style.color = '#9ca3af'; }
+  if (rel) { el.textContent = '{dash_last_updated_prefix} ' + rel; el.style.color = '#9ca3af'; }
 }
 
 // ── Unified sync-status poll ────────────────────────────────────────────────
@@ -6894,7 +6917,7 @@ if (_isMobile) {
     var lbl = document.getElementById('sync-label');
     if (btn) {
       btn.onclick = function() {
-        _showToast('{user_copy.MOBILE_WORKER_TOAST}', 4000);
+        _showToast('{dash_mobile_worker_toast}', 4000);
       };
       btn.title = 'Updates require the Mighty extension or mobile app';
       btn.style.opacity = '0.55';
@@ -6974,7 +6997,7 @@ function _startSyncPoller(baseline) {
 function cloudSync() {
   // Mobile browsers can never run the extension — show a helpful message instead
   if (_isMobile) {
-    _showToast('{user_copy.MOBILE_WORKER_TOAST}', 4000);
+    _showToast('{dash_mobile_worker_toast}', 4000);
     return;
   }
 
@@ -6984,7 +7007,7 @@ function cloudSync() {
   // Desktop without extension — nudge to install rather than attempt a server-side sync
   // that won't be able to log into any of the major loyalty sites
   if (!_extPresent) {
-    _showToast('{user_copy.EXT_INSTALL_TOAST}', 4000);
+    _showToast('{dash_ext_install_toast}', 4000);
     // Show install link if it exists on the page
     var installLink = document.getElementById('ext-install-link');
     if (installLink) installLink.style.display = '';
@@ -6992,7 +7015,7 @@ function cloudSync() {
   }
 
   btn.classList.add('syncing');
-  _setSyncLabel('{user_copy.STATUS_LABEL_UPDATING}');
+  _setSyncLabel('{dash_status_label_updating}');
   _showSyncingHeader();
   btn.disabled = true;
   // Set sentinel immediately so checkForUpdates is blocked before the async fetch returns
@@ -10926,7 +10949,16 @@ function dismissOnboarding() {{
             .replace("{csrf_token}",              _csrf)
             .replace("{global_sync_label}",       _global_sync_label)
             .replace("{latest_sync_baseline}",    _latest_sync_baseline)
-            .replace("{awaiting_sync_poll}",      _awaiting_sync_poll))
+            .replace("{awaiting_sync_poll}",      _awaiting_sync_poll)
+            .replace("{dash_global_last_updated_title}", user_copy.GLOBAL_LAST_UPDATED_TITLE)
+            .replace("{dash_role_extension_desc}", user_copy.ROLE_EXTENSION_DESC)
+            .replace("{dash_activity_watching}", "Watching")
+            .replace("{dash_ext_setup_link}", user_copy.EXT_SETUP_LINK)
+            .replace("{dash_needs_login_badge}", user_copy.NEEDS_LOGIN_BADGE)
+            .replace("{dash_last_updated_prefix}", user_copy.LAST_UPDATED_PREFIX)
+            .replace("{dash_mobile_worker_toast}", user_copy.MOBILE_WORKER_TOAST)
+            .replace("{dash_ext_install_toast}", user_copy.EXT_INSTALL_TOAST)
+            .replace("{dash_status_label_updating}", user_copy.STATUS_LABEL_UPDATING))
 
 @app.route("/settings")
 @require_login

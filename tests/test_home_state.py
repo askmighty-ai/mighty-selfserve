@@ -66,8 +66,8 @@ class TestHomeStatePriority:
             updating_display_name="American Express",
         )
         assert result.state == HomeState.UPDATE
-        assert result.featured.disabled_cta_label
-        assert "American Express" in result.featured.headline
+        assert "Current activity: Refreshing account" in result.featured.body
+        assert "watching your accounts" in result.featured.headline.lower()
 
     def test_login_when_session_blocked(self):
         accounts = [
@@ -114,8 +114,9 @@ class TestHomeStatePriority:
         result = resolve_home_state(accounts=accounts, actions=[])
         assert result.state == HomeState.ALL_CLEAR
         assert result.health.up_to_date == 2
-        assert result.featured.headline == "You're all set."
-        assert "monitoring all 2 accounts" in result.featured.body
+        assert "watching your accounts" in result.featured.headline.lower()
+        assert "No action needed." in result.featured.body
+        assert "all set" not in result.featured.headline.lower()
 
     def test_all_clear_for_now_when_still_setting_up(self):
         """2 up to date + 6 still setting up + 0 user actions."""
@@ -134,9 +135,10 @@ class TestHomeStatePriority:
         assert result.health.up_to_date == 2
         assert result.health.waiting == 6
         assert result.health.attention_required == 0
-        assert result.featured.headline == "You're all set for now."
-        assert "Nothing needs your attention right now." in result.featured.body
-        assert "still setting up 6 accounts" in result.featured.body
+        assert "all set" not in result.featured.headline.lower()
+        assert "No action needed." in result.featured.body
+        assert result.tower.watching_count == 2
+        assert result.tower.waiting_count + result.tower.refreshing_count == 6
         assert result.featured.cta_label
         assert "Log in" not in (result.featured.cta_label or "")
 
@@ -156,9 +158,9 @@ class TestHomeStatePriority:
         assert result.health.up_to_date == 1
         assert result.health.waiting == 6
         assert result.health.attention_required == 1
-        assert result.featured.headline == "One account needs your attention."
-        assert "Nothing needs your attention" not in result.featured.body
-        assert "still setting up 6 accounts" in result.featured.body
+        assert "needs your attention" in result.featured.headline.lower()
+        assert "No action needed." not in result.featured.body
+        assert result.tower.needs_you_count == 1
         assert result.featured.cta_url == "/credentials?filter=needs_attention"
 
     def test_signed_out_shows_login_hero(self):

@@ -1,7 +1,7 @@
 """
 mighty.home_ui
 ──────────────
-Render Mighty Home — attention inbox layout (Daily Brief, health strip, footer).
+Render Mighty Home — Control Tower layout (system status, summary, accounts).
 """
 
 from __future__ import annotations
@@ -9,10 +9,17 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from mighty.action import Action
+from mighty.control_tower import (
+    action_required_label,
+    card_meaning,
+    card_status_label,
+    current_activity,
+    last_verified_label,
+    why_rows,
+)
 from mighty.customer_account_access import CustomerAccountAccessView
-from mighty.home_state import HomeState, HomeStateResult
+from mighty.home_state import HomeStateResult
 from mighty import user_copy
-from mighty.accounts_ui import filter_chip_url
 
 
 def _secondary_link(label: str, url: str, escape: Callable[[Any], str]) -> str:
@@ -22,12 +29,17 @@ def _secondary_link(label: str, url: str, escape: Callable[[Any], str]) -> str:
 
 
 def _featured_block(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
+    """System-status hero — what Mighty is doing and whether it needs the user."""
     featured = result.featured
-    body_html = (
-        f'<p class="dash-brief-featured-body">{escape(featured.body)}</p>'
-        if featured.body
-        else ""
-    )
+    body = featured.body or ""
+    body_lines = [line.strip() for line in body.split("\n") if line.strip()]
+    body_html = ""
+    if body_lines:
+        items = "".join(
+            f'<li class="dash-tower-hero-line">{escape(line)}</li>'
+            for line in body_lines
+        )
+        body_html = f'<ul class="dash-tower-hero-lines">{items}</ul>'
 
     if featured.disabled_cta_label:
         cta_html = (
@@ -53,7 +65,7 @@ def _featured_block(result: HomeStateResult, escape: Callable[[Any], str]) -> st
         )
 
     return (
-        f'<article class="dash-brief-featured">'
+        f'<article class="dash-brief-featured dash-tower-hero">'
         f'<h2 class="dash-brief-featured-headline">{escape(featured.headline)}</h2>'
         f"{body_html}"
         f"{cta_html}"
@@ -62,18 +74,9 @@ def _featured_block(result: HomeStateResult, escape: Callable[[Any], str]) -> st
     )
 
 
-def _health_chip(label: str, count: int, filter_key: str, escape: Callable[[Any], str]) -> str:
-    return (
-        f'<a href="{escape(filter_chip_url(filter_key))}" '
-        f'class="dash-brief-else-chip dash-home-health-chip">'
-        f"{escape(label)}</a>"
-    )
-
-
 def _fmt_confirmed(value: str | None) -> str:
     if not value:
         return "—"
-    # Keep ISO readable without pulling timezone helpers into the renderer.
     text = value.replace("T", " ").replace("+00:00", " UTC")
     if len(text) > 19:
         text = text[:19]
@@ -83,13 +86,15 @@ def _fmt_confirmed(value: str | None) -> str:
 def render_access_debug_details(
     view: CustomerAccountAccessView,
     escape: Callable[[Any], str],
+    *,
+    include_debug: bool = False,
 ) -> str:
     rows = "".join(
         f'<div class="dash-access-debug-row">'
         f'<span class="dash-access-debug-key">{escape(key)}</span>'
         f'<span class="dash-access-debug-val">{escape(val)}</span>'
         f"</div>"
-        for key, val in view.debug_rows()
+        for key, val in why_rows(view, include_debug=include_debug)
     )
     return (
         f'<details class="dash-access-why">'
@@ -105,7 +110,13 @@ def render_account_access_row(
     escape: Callable[[Any], str],
     show_debug: bool = False,
 ) -> str:
-    """Render one provider's canonical access-and-data state."""
+    """Render one provider card in Control Tower product language."""
+    status = card_status_label(view)
+    activity = current_activity(view)
+    meaning = card_meaning(view)
+    verified_prefix = last_verified_label(view)
+    action_label = action_required_label(view)
+
     action_html = ""
     if view.user_action_required and view.user_action_text:
         if view.user_action_url:
@@ -119,43 +130,28 @@ def render_account_access_row(
                 f'{escape(view.user_action_text)}</span>'
             )
 
-    secondary = ""
-    if view.cached_data_label and view.readiness != "ready":
-        secondary = (
-            f'<p class="dash-access-secondary">{escape(view.cached_data_label)}</p>'
-        )
-    elif view.secondary_label:
-        secondary = (
-            f'<p class="dash-access-secondary">{escape(view.secondary_label)}</p>'
-        )
-
-    debug_html = render_access_debug_details(view, escape) if show_debug else ""
-
     return (
         f'<article class="dash-access-row" data-provider="{escape(view.provider)}" '
         f'data-readiness="{escape(view.readiness)}" '
         f'data-live-access="{escape(view.live_access)}" '
         f'data-private-data="{escape(view.private_data_state)}" '
-        f'data-background="{escape(view.background_work)}">'
+        f'data-background="{escape(view.background_work)}" '
+        f'data-activity="{escape(activity)}">'
         f'<div class="dash-access-row-main">'
         f'<div class="dash-access-identity">'
         f'<h3 class="dash-access-name">{escape(view.display_name)}</h3>'
-        f'<p class="dash-access-status">{escape(view.status_label)}</p>'
-        f'<p class="dash-access-discovered">'
-        f'{escape(user_copy.access_discovered_from(view.discovered_from))}</p>'
+        f'<p class="dash-access-status">{escape(status)}</p>'
         f"</div>"
-        f'<dl class="dash-access-facts">'
-        f'<div><dt>Live access</dt><dd>{escape(view.live_access)}</dd></div>'
-        f'<div><dt>{escape(user_copy.ACCESS_PRIVATE_DATA_PREFIX)}</dt>'
-        f'<dd>{escape(view.private_data_label)}</dd></div>'
-        f'<div><dt>{escape(user_copy.ACCESS_LAST_CONFIRMED_PREFIX)}</dt>'
+        f'<dl class="dash-access-facts dash-tower-facts">'
+        f'<div><dt>{escape(user_copy.TOWER_CURRENT_ACTIVITY)}</dt>'
+        f'<dd>{escape(activity)}</dd></div>'
+        f'<div><dt>{escape(verified_prefix)}</dt>'
         f'<dd>{escape(_fmt_confirmed(view.last_confirmed_at))}</dd></div>'
-        f'<div><dt>{escape(user_copy.ACCESS_BACKGROUND_PREFIX)}</dt>'
-        f'<dd>{escape(view.background_work)}</dd></div>'
+        f'<div class="dash-tower-fact-wide"><dt>Status</dt>'
+        f'<dd>{escape(action_label)}</dd></div>'
         f"</dl>"
-        f'<p class="dash-access-meaning">{escape(view.meaning)}</p>'
-        f"{secondary}"
-        f"{debug_html}"
+        f'<p class="dash-access-meaning">{escape(meaning)}</p>'
+        f"{render_access_debug_details(view, escape, include_debug=show_debug)}"
         f"</div>"
         f"{action_html}"
         f"</article>"
@@ -175,66 +171,124 @@ def render_account_access_table(
         for view in views
     )
     return (
-        f'<section class="dash-access-table" aria-label="Account access">'
-        f'<p class="dash-brief-else-label">Account access</p>'
+        f'<section class="dash-access-table" aria-label="{escape(user_copy.TOWER_ACCOUNTS_LABEL)}">'
+        f'<p class="dash-brief-else-label">{escape(user_copy.TOWER_ACCOUNTS_LABEL)}</p>'
         f'<div class="dash-access-rows">{rows}</div>'
         f"</section>"
     )
 
 
-def _account_health_strip(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
+def _watching_list(names: list[str], escape: Callable[[Any], str]) -> str:
+    if not names:
+        return f'<p class="dash-tower-bucket-empty">{escape(user_copy.TOWER_SUMMARY_NONE)}</p>'
+    items = "".join(
+        f'<li class="dash-tower-bucket-item">✓ {escape(name)}</li>'
+        for name in names
+    )
+    return f'<ul class="dash-tower-bucket-list">{items}</ul>'
+
+
+def _working_block(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
+    tower = result.tower
+    if tower.refreshing_count == 0 and tower.waiting_count == 0:
+        return f'<p class="dash-tower-bucket-empty">{escape(user_copy.TOWER_SUMMARY_NONE)}</p>'
+    parts: list[str] = []
+    if tower.refreshing_count:
+        if tower.refreshing_count <= 3 and tower.refreshing_names:
+            parts.append(
+                "".join(
+                    f'<li class="dash-tower-bucket-item">{escape(n)}</li>'
+                    for n in tower.refreshing_names
+                )
+            )
+        else:
+            parts.append(
+                f'<li class="dash-tower-bucket-item">'
+                f'{escape(str(tower.refreshing_count))} accounts being verified</li>'
+            )
+    if tower.waiting_count:
+        if tower.waiting_count <= 3 and tower.waiting_names:
+            parts.append(
+                "".join(
+                    f'<li class="dash-tower-bucket-item">{escape(n)}</li>'
+                    for n in tower.waiting_names
+                )
+            )
+        else:
+            parts.append(
+                f'<li class="dash-tower-bucket-item">'
+                f'{escape(str(tower.waiting_count))} accounts waiting</li>'
+            )
+    return f'<ul class="dash-tower-bucket-list">{"".join(parts)}</ul>'
+
+
+def _needs_you_block(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
+    tower = result.tower
+    if not tower.needs_you_names:
+        return f'<p class="dash-tower-bucket-empty">{escape(user_copy.TOWER_SUMMARY_NONE)}</p>'
+    items = "".join(
+        f'<li class="dash-tower-bucket-item">{escape(n)}</li>'
+        for n in tower.needs_you_names
+    )
+    note = (
+        f'<p class="dash-tower-bucket-note">{escape(user_copy.TOWER_SUMMARY_SIGN_IN)}</p>'
+        if any(
+            v.user_action_required or v.readiness == "signed_out"
+            for v in result.access_views
+        )
+        else ""
+    )
+    return f'<ul class="dash-tower-bucket-list">{items}</ul>{note}'
+
+
+def _account_summary_strip(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
+    """Replace Account Health chips with Watching / Working / Needs you."""
     if not result.show_health:
         return ""
 
-    chips: list[str] = []
-    health = result.health
-    if health.up_to_date:
-        label = health.connected_label or f"{health.up_to_date} connected"
-        chips.append(_health_chip(label, health.up_to_date, "up_to_date", escape))
-    if health.waiting:
-        label = f"{health.waiting} {user_copy.HOME_HEALTH_STILL_SETTING_UP}"
-        chips.append(_health_chip(label, health.waiting, "waiting", escape))
-    attention = health.attention_required
-    if attention:
-        label = f"{attention} need{'s' if attention == 1 else ''} attention"
-        chips.append(_health_chip(label, attention, "needs_attention", escape))
-
-    freshness = escape(result.freshness_label or "")
-    freshness_html = (
-        f'<span class="dash-home-freshness">{freshness}</span>' if freshness else ""
-    )
-    if (
-        result.updating_display_name
-        and result.state not in (HomeState.UPDATE,)
-    ):
-        updating_note = escape(
-            user_copy.home_update_headline(result.updating_display_name).rstrip("…")
-        )
-        freshness_html += (
-            f'<span class="dash-home-freshness dash-home-freshness--updating">'
-            f"{updating_note}…</span>"
-        )
-
-    rows_html = ""
-    if result.waiting_rows and result.state == HomeState.WAITING:
-        row_items = "".join(
-            f'<div class="dash-home-waiting-row">'
-            f'<span class="dash-home-waiting-name">{escape(row.display_name)}</span>'
-            f'<span class="dash-home-waiting-status">{escape(row.status_label)}</span>'
-            f"</div>"
-            for row in result.waiting_rows
-        )
-        rows_html = f'<div class="dash-home-waiting-rows">{row_items}</div>'
-
-    if not chips and not freshness_html and not rows_html:
-        return ""
-
-    chips_html = "".join(chips)
+    tower = result.tower
     return (
-        f'<section class="dash-home-health" aria-label="Account health">'
-        f'<p class="dash-brief-else-label">Account health</p>'
-        f'<div class="dash-brief-else-chips">{chips_html}{freshness_html}</div>'
-        f"{rows_html}"
+        f'<section class="dash-home-health dash-tower-summary" aria-label="{escape(user_copy.TOWER_SUMMARY_LABEL)}">'
+        f'<p class="dash-brief-else-label">{escape(user_copy.TOWER_SUMMARY_LABEL)}</p>'
+        f'<div class="dash-tower-buckets">'
+        f'<div class="dash-tower-bucket">'
+        f'<h3 class="dash-tower-bucket-title">{escape(user_copy.TOWER_SUMMARY_WATCHING)}</h3>'
+        f'{_watching_list(tower.watching_names, escape)}'
+        f"</div>"
+        f'<div class="dash-tower-bucket">'
+        f'<h3 class="dash-tower-bucket-title">{escape(user_copy.TOWER_SUMMARY_WORKING)}</h3>'
+        f'{_working_block(result, escape)}'
+        f"</div>"
+        f'<div class="dash-tower-bucket">'
+        f'<h3 class="dash-tower-bucket-title">{escape(user_copy.TOWER_SUMMARY_NEEDS_YOU)}</h3>'
+        f'{_needs_you_block(result, escape)}'
+        f"</div>"
+        f"</div>"
+        f"</section>"
+    )
+
+
+def _system_health_section(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
+    if not result.show_health:
+        return ""
+    tower = result.tower
+    metrics = [
+        (user_copy.TOWER_HEALTH_WATCHING, tower.watching_count),
+        (user_copy.TOWER_HEALTH_REFRESHING, tower.refreshing_count),
+        (user_copy.TOWER_HEALTH_NEEDS_HELP, tower.needs_you_count),
+        (user_copy.TOWER_HEALTH_WAITING, tower.waiting_count),
+    ]
+    cells = "".join(
+        f'<div class="dash-tower-health-cell">'
+        f'<span class="dash-tower-health-label">{escape(label)}</span>'
+        f'<span class="dash-tower-health-value">{escape(str(count))}</span>'
+        f"</div>"
+        for label, count in metrics
+    )
+    return (
+        f'<section class="dash-tower-system-health" aria-label="{escape(user_copy.TOWER_SYSTEM_HEALTH)}">'
+        f'<p class="dash-brief-else-label">{escape(user_copy.TOWER_SYSTEM_HEALTH)}</p>'
+        f'<div class="dash-tower-health-grid">{cells}</div>'
         f"</section>"
     )
 
@@ -318,7 +372,7 @@ def render_home_page(
     last_checked: str = "",
     escape: Callable[[Any], str],
 ) -> str:
-    """Render the full Home attention-inbox layout."""
+    """Render the full Home Control Tower layout."""
     safe_name = escape(first_name)
     summary_html = ""
     if result.priority_summary:
@@ -343,11 +397,12 @@ def render_home_page(
         f"</div>"
         f"{summary_html}"
         f"</header>"
-        f'<section class="dash-brief-primary" aria-label="Featured">'
+        f'<section class="dash-brief-primary" aria-label="System status">'
         f"{_featured_block(result, escape)}"
         f"</section>"
         f"{_secondary_recommendations(result.secondary_recommendations, escape)}"
-        f"{_account_health_strip(result, escape)}"
+        f"{_account_summary_strip(result, escape)}"
+        f"{_system_health_section(result, escape)}"
         f"{access_table}"
         f"{_metrics_section(result, escape)}"
         f"{_activity_link(result, escape)}"

@@ -28,6 +28,7 @@ from mighty.customer_account_access import (
     CustomerAccountAccessView,
     connected_summary_label,
 )
+from mighty.control_tower import ControlTowerSummary, build_control_tower_from_statuses
 from mighty import user_copy
 
 
@@ -102,6 +103,7 @@ class HomeStateResult:
     updating_display_name: str | None = None
     access_views: list[CustomerAccountAccessView] = field(default_factory=list)
     show_access_debug: bool = False
+    tower: ControlTowerSummary = field(default_factory=ControlTowerSummary)
 
 
 _PRIORITY_ORDER = {
@@ -283,21 +285,24 @@ def resolve_home_state(
         updating_source=updating_source,
         updating_display_name=updating_display_name,
     )
+    tower = build_control_tower_from_statuses(
+        accounts,
+        updating_display_name=updating_name,
+    )
 
     def _result(**kwargs) -> HomeStateResult:
         kwargs.setdefault("access_views", access_views)
         kwargs.setdefault("show_access_debug", show_access_debug)
+        kwargs.setdefault("tower", tower)
         return HomeStateResult(**kwargs)
 
     login_acct = _pick_login_account(accounts)
     if login_acct:
         plural = health.needs_login > 1
-        headline = user_copy.home_login_headline(
-            login_acct.display_name,
-            plural=plural,
-            count=health.needs_login,
-        )
-        body = user_copy.home_login_body(login_acct.display_name)
+        headline = user_copy.TOWER_HERO_NEEDS_YOU
+        body_lines = tower.hero_lines()
+        body_lines.append(tower.attention_line())
+        body = "\n".join(body_lines) if body_lines else user_copy.home_login_body(login_acct.display_name)
         cta_label = login_acct.user_action_label or user_copy.home_login_cta(login_acct.display_name)
         cta_url = login_acct.user_action_url or "/credentials"
         secondary = user_copy.HOME_VIEW_NEEDS_LOGIN_LABEL if plural else None
@@ -389,15 +394,18 @@ def resolve_home_state(
         )
 
     if updating_name:
-        headline = user_copy.home_update_headline(updating_name)
-        body = user_copy.HOME_UPDATE_BODY
+        headline = tower.hero_headline()
+        body_lines = [line for line in tower.hero_lines() if not line.startswith("Current activity:")]
+        body_lines.append("Current activity: Refreshing account")
+        body_lines.append(tower.attention_line())
+        body = "\n".join(body_lines)
         return _result(
             state=HomeState.UPDATE,
             priority_summary=user_copy.HOME_PRIORITY_UPDATE,
             featured=HomeFeatured(
                 headline=headline,
                 body=body,
-                disabled_cta_label=user_copy.STATUS_LABEL_UPDATING,
+                disabled_cta_label=None,
                 secondary_label=user_copy.HOME_VIEW_ACCOUNTS_LABEL,
                 secondary_url="/credentials",
             ),
@@ -454,12 +462,14 @@ def resolve_home_state(
     setup_incomplete = health.waiting
     attention = health.attention_required
     if attention:
+        body_lines = tower.hero_lines()
+        body_lines.append(tower.attention_line())
         return _result(
             state=HomeState.ALL_CLEAR,
             priority_summary=user_copy.HOME_PRIORITY_LOGIN,
             featured=HomeFeatured(
-                headline=user_copy.home_attention_headline(attention),
-                body=user_copy.home_attention_body(setup_incomplete),
+                headline=tower.hero_headline(),
+                body="\n".join(body_lines),
                 cta_label=user_copy.HOME_VIEW_ACCOUNTS_LABEL,
                 cta_url="/credentials?filter=needs_attention",
             ),
@@ -472,12 +482,14 @@ def resolve_home_state(
             activity_pending_count=pending_activity_count,
             freshness_label=freshness_label,
         )
+    body_lines = tower.hero_lines()
+    body_lines.append(tower.attention_line())
     return _result(
         state=HomeState.ALL_CLEAR,
         priority_summary=user_copy.HOME_PRIORITY_ALL_CLEAR,
         featured=HomeFeatured(
-            headline=user_copy.home_all_clear_headline(setup_incomplete),
-            body=user_copy.home_all_clear_body(enrolled, setup_incomplete),
+            headline=tower.hero_headline(),
+            body="\n".join(body_lines),
             cta_label=cta_label,
             cta_url=cta_url,
         ),
