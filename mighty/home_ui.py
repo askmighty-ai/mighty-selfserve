@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from mighty.action import Action
+from mighty.customer_account_access import CustomerAccountAccessView
 from mighty.home_state import HomeState, HomeStateResult
 from mighty import user_copy
 from mighty.accounts_ui import filter_chip_url
@@ -69,6 +70,118 @@ def _health_chip(label: str, count: int, filter_key: str, escape: Callable[[Any]
     )
 
 
+def _fmt_confirmed(value: str | None) -> str:
+    if not value:
+        return "—"
+    # Keep ISO readable without pulling timezone helpers into the renderer.
+    text = value.replace("T", " ").replace("+00:00", " UTC")
+    if len(text) > 19:
+        text = text[:19]
+    return text
+
+
+def render_access_debug_details(
+    view: CustomerAccountAccessView,
+    escape: Callable[[Any], str],
+) -> str:
+    rows = "".join(
+        f'<div class="dash-access-debug-row">'
+        f'<span class="dash-access-debug-key">{escape(key)}</span>'
+        f'<span class="dash-access-debug-val">{escape(val)}</span>'
+        f"</div>"
+        for key, val in view.debug_rows()
+    )
+    return (
+        f'<details class="dash-access-why">'
+        f'<summary>{escape(user_copy.ACCESS_WHY_SUMMARY)}</summary>'
+        f'<div class="dash-access-debug">{rows}</div>'
+        f"</details>"
+    )
+
+
+def render_account_access_row(
+    view: CustomerAccountAccessView,
+    *,
+    escape: Callable[[Any], str],
+    show_debug: bool = False,
+) -> str:
+    """Render one provider's canonical access-and-data state."""
+    action_html = ""
+    if view.user_action_required and view.user_action_text:
+        if view.user_action_url:
+            action_html = (
+                f'<a class="dash-access-action" href="{escape(view.user_action_url)}">'
+                f'{escape(view.user_action_text)}</a>'
+            )
+        else:
+            action_html = (
+                f'<span class="dash-access-action dash-access-action--static">'
+                f'{escape(view.user_action_text)}</span>'
+            )
+
+    secondary = ""
+    if view.cached_data_label and view.readiness != "ready":
+        secondary = (
+            f'<p class="dash-access-secondary">{escape(view.cached_data_label)}</p>'
+        )
+    elif view.secondary_label:
+        secondary = (
+            f'<p class="dash-access-secondary">{escape(view.secondary_label)}</p>'
+        )
+
+    debug_html = render_access_debug_details(view, escape) if show_debug else ""
+
+    return (
+        f'<article class="dash-access-row" data-provider="{escape(view.provider)}" '
+        f'data-readiness="{escape(view.readiness)}" '
+        f'data-live-access="{escape(view.live_access)}" '
+        f'data-private-data="{escape(view.private_data_state)}" '
+        f'data-background="{escape(view.background_work)}">'
+        f'<div class="dash-access-row-main">'
+        f'<div class="dash-access-identity">'
+        f'<h3 class="dash-access-name">{escape(view.display_name)}</h3>'
+        f'<p class="dash-access-status">{escape(view.status_label)}</p>'
+        f'<p class="dash-access-discovered">'
+        f'{escape(user_copy.access_discovered_from(view.discovered_from))}</p>'
+        f"</div>"
+        f'<dl class="dash-access-facts">'
+        f'<div><dt>Live access</dt><dd>{escape(view.live_access)}</dd></div>'
+        f'<div><dt>{escape(user_copy.ACCESS_PRIVATE_DATA_PREFIX)}</dt>'
+        f'<dd>{escape(view.private_data_label)}</dd></div>'
+        f'<div><dt>{escape(user_copy.ACCESS_LAST_CONFIRMED_PREFIX)}</dt>'
+        f'<dd>{escape(_fmt_confirmed(view.last_confirmed_at))}</dd></div>'
+        f'<div><dt>{escape(user_copy.ACCESS_BACKGROUND_PREFIX)}</dt>'
+        f'<dd>{escape(view.background_work)}</dd></div>'
+        f"</dl>"
+        f'<p class="dash-access-meaning">{escape(view.meaning)}</p>'
+        f"{secondary}"
+        f"{debug_html}"
+        f"</div>"
+        f"{action_html}"
+        f"</article>"
+    )
+
+
+def render_account_access_table(
+    views: list[CustomerAccountAccessView],
+    *,
+    escape: Callable[[Any], str],
+    show_debug: bool = False,
+) -> str:
+    if not views:
+        return ""
+    rows = "".join(
+        render_account_access_row(view, escape=escape, show_debug=show_debug)
+        for view in views
+    )
+    return (
+        f'<section class="dash-access-table" aria-label="Account access">'
+        f'<p class="dash-brief-else-label">Account access</p>'
+        f'<div class="dash-access-rows">{rows}</div>'
+        f"</section>"
+    )
+
+
 def _account_health_strip(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
     if not result.show_health:
         return ""
@@ -76,7 +189,7 @@ def _account_health_strip(result: HomeStateResult, escape: Callable[[Any], str])
     chips: list[str] = []
     health = result.health
     if health.up_to_date:
-        label = f"{health.up_to_date} connected"
+        label = health.connected_label or f"{health.up_to_date} connected"
         chips.append(_health_chip(label, health.up_to_date, "up_to_date", escape))
     if health.waiting:
         label = f"{health.waiting} {user_copy.HOME_HEALTH_STILL_SETTING_UP}"
@@ -213,6 +326,12 @@ def render_home_page(
             f'<p class="dash-home-priority-summary">{escape(result.priority_summary)}</p>'
         )
 
+    access_table = render_account_access_table(
+        result.access_views,
+        escape=escape,
+        show_debug=result.show_access_debug,
+    )
+
     return (
         f'<div class="dash-hero">'
         f'<div class="dash-brief-card dash-brief-card--exec">'
@@ -229,6 +348,7 @@ def render_home_page(
         f"</section>"
         f"{_secondary_recommendations(result.secondary_recommendations, escape)}"
         f"{_account_health_strip(result, escape)}"
+        f"{access_table}"
         f"{_metrics_section(result, escape)}"
         f"{_activity_link(result, escape)}"
         f"{_footer_strip(last_checked, escape)}"

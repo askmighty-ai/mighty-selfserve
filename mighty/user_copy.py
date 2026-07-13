@@ -115,6 +115,40 @@ READINESS_COPY_UNVERIFIED = (
 )
 READINESS_SECONDARY_BACKGROUND = "Verifying in the background"
 
+# Shared Dashboard / Accounts access debugger labels.
+READINESS_STATUS_CONNECTED = "Connected"
+READINESS_STATUS_CHECKING = "Checking"
+READINESS_STATUS_SIGNED_OUT = "Sign in required"
+READINESS_STATUS_UNVERIFIED = "Unable to verify"
+
+ACCESS_MEANING_CONNECTED_SEEN = "Mighty can see your logged-in account data."
+ACCESS_MEANING_CONNECTED_NOT_SEEN = (
+    "Mighty verified your login but has not read account data yet."
+)
+ACCESS_MEANING_CHECKING = "Mighty is checking this account now."
+ACCESS_MEANING_SIGNED_OUT = (
+    "Mighty cannot access this account until you sign in."
+)
+ACCESS_MEANING_UNKNOWN = "Mighty has not confirmed access yet."
+ACCESS_MEANING_EXTRACTION_FAILED = (
+    "Mighty reached the account but could not read private data."
+)
+
+ACCESS_DISCOVERED_FROM_PREFIX = "Discovered from"
+ACCESS_PRIVATE_DATA_PREFIX = "Private data"
+ACCESS_BACKGROUND_PREFIX = "Background"
+ACCESS_LAST_CONFIRMED_PREFIX = "Last confirmed"
+ACCESS_WHY_SUMMARY = "Why?"
+
+
+def access_connected_named(names: str) -> str:
+    return f"Connected: {names}"
+
+
+def access_discovered_from(source: str) -> str:
+    return f"{ACCESS_DISCOVERED_FROM_PREFIX} {source}"
+
+
 # ── Worker popup copy ─────────────────────────────────────────────────────────
 WORKER_NAME = "Mighty"
 WORKER_SUBTITLE_RUNNING = ACTIVITY_LABELS[ACTIVITY_WATCHING]
