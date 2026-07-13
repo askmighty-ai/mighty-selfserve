@@ -2,6 +2,9 @@
 // Opens account pages as background tabs, extracts text, pushes to Railway.
 const MIGHTY_EXT_VERSION = '1.4.11-passive-admin-session-verify';
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
+// Bounded post-auth wait for qualifying private DOM evidence before extraction.
+const AMEX_PRIVATE_DATA_OBSERVATION_MS = 20000;
+const AMEX_PRIVATE_DATA_POLL_MS = 1000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 const AMEX_BOOTSTRAP_TRACE_MS = 20000;
 const AMEX_LIVE_SESSION_LOGGED_IN_OBSERVE_MS = 8000;
@@ -2116,7 +2119,22 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
       return false;
     }
     await waitForTabLoad(tab.id, 25_000);
-    await sleep(6000);
+    // Bounded wait for qualifying private DOM evidence on the extraction tab.
+    const found = await waitForAmexQualifyingPrivateData(tab.id, {
+      timeoutMs: AMEX_PRIVATE_DATA_OBSERVATION_MS,
+    });
+    if (!found) {
+      console.log('[Mighty Amex] extraction tab had no qualifying private data');
+      await _postAmexNoQualifyingPrivateData(apiKey, verificationId, {
+        observation_counts: {
+          authenticated_private_api_responses: 0,
+          qualifying_dom_observations: 0,
+          candidate_payloads: 0,
+          rejection_reason: 'no_qualifying_private_data',
+        },
+      });
+      return false;
+    }
     const ok = await extractAmexRewardsInTab(tab.id, apiKey, opts);
     if (!ok) {
       await _completeSessionVerification(
@@ -2132,6 +2150,73 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
     return false;
   } finally {
     if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+async function waitForAmexQualifyingPrivateData(tabId, { timeoutMs = AMEX_PRIVATE_DATA_OBSERVATION_MS } = {}) {
+  if (!tabId) return false;
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (Date.now() <= deadline) {
+    try {
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const body = (document.body && (document.body.innerText || document.body.textContent)) || '';
+          if (/\/account\/log-?in/i.test(location.pathname)) return { ok: false, reason: 'login_page' };
+          const patterns = [
+            /membership rewards[^0-9\n]{0,120}([\d][\d,]*)/i,
+            /statement\s+balance[^$\d]{0,40}\$?([\d][\d,]*(?:\.\d{2})?)/i,
+            /card\s+ending\s+(?:in\s+)?[\d*]{4,}/i,
+            /(?:points|rewards)\s*(?:balance|:)?\s*([\d][\d,]*)/i,
+          ];
+          for (const re of patterns) {
+            if (re.test(body)) return { ok: true, reason: 'dom_private_pattern' };
+          }
+          return { ok: false, reason: 'no_qualifying_private_data' };
+        },
+      });
+      if (r?.result?.ok) {
+        console.log('[Mighty Amex] qualifying private data observed:', r.result.reason);
+        return true;
+      }
+    } catch (e) {
+      console.warn('[Mighty Amex] private-data poll failed:', e.message);
+    }
+    if (Date.now() > deadline) break;
+    await sleep(AMEX_PRIVATE_DATA_POLL_MS);
+  }
+  return false;
+}
+
+async function _postAmexNoQualifyingPrivateData(apiKey, verificationId, opts = {}) {
+  if (!apiKey || !verificationId) return false;
+  try {
+    const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/no-qualifying-private-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body: JSON.stringify({
+        verification_id: verificationId,
+        access_cycle_id: verificationId,
+        observation_counts: opts.observation_counts || {},
+        reason: 'no_qualifying_private_data',
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      console.warn('[Mighty Amex] no-qualifying-private-data POST failed', resp.status, data);
+      await _completeSessionVerification(
+        apiKey, verificationId, 'completed', 'no_qualifying_private_data',
+      );
+      return false;
+    }
+    console.log('[Mighty Amex] cycle completed with extraction NOT RUN', data);
+    return true;
+  } catch (e) {
+    console.warn('[Mighty Amex] no-qualifying-private-data POST error:', e.message);
+    await _completeSessionVerification(
+      apiKey, verificationId, 'completed', 'no_qualifying_private_data',
+    );
+    return false;
   }
 }
 
@@ -3824,8 +3909,42 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
     const probeData = posted?.data || {};
     const authenticated = _isAmexAccessCycleAuthenticated(payload, probeData);
     if (provider === 'amex' && authenticated && verificationId) {
-      console.log('[Mighty] Amex session verified — starting access-cycle extraction', verificationId);
-      await runAmexExtractionForAccessCycle(apiKey, verificationId, tab?.id);
+      const privateObserved = !!(
+        payload.private_data_detected
+        || probeData.private_data_detected
+        || (probeData.observation_counts
+            && Number(probeData.observation_counts.qualifying_dom_observations || 0) > 0)
+      );
+      console.log(
+        '[Mighty] Amex session verified — access-cycle private-data gate',
+        verificationId,
+        'privateObserved=',
+        privateObserved,
+      );
+      let qualifying = privateObserved;
+      if (!qualifying && tab?.id) {
+        // Explicit bounded wait for qualifying private DOM evidence — not an arbitrary sleep.
+        qualifying = await waitForAmexQualifyingPrivateData(tab.id, {
+          timeoutMs: AMEX_PRIVATE_DATA_OBSERVATION_MS,
+        });
+      }
+      if (!qualifying) {
+        console.log(
+          '[Mighty] Amex authenticated but no qualifying private data by deadline — extraction NOT RUN',
+          verificationId,
+        );
+        await _postAmexNoQualifyingPrivateData(apiKey, verificationId, {
+          observation_counts: probeData.observation_counts || {
+            authenticated_private_api_responses: 0,
+            qualifying_dom_observations: 0,
+            candidate_payloads: 0,
+            rejection_reason: 'no_qualifying_private_data',
+          },
+        });
+      } else {
+        console.log('[Mighty] Amex session verified — starting access-cycle extraction', verificationId);
+        await runAmexExtractionForAccessCycle(apiKey, verificationId, tab?.id);
+      }
     }
   } catch (e) {
     await _postProviderAccessProbe(apiKey, {

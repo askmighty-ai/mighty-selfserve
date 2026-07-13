@@ -6271,6 +6271,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-truth-pipeline-stage[data-verdict="PASS"] .dash-truth-pipeline-verdict{color:#15803d}
 .dash-truth-pipeline-stage[data-verdict="FAIL"] .dash-truth-pipeline-verdict{color:#b91c1c}
 .dash-truth-pipeline-stage[data-verdict="UNKNOWN"] .dash-truth-pipeline-verdict{color:#a8a29e}
+.dash-truth-pipeline-stage[data-verdict="NOT_RUN"] .dash-truth-pipeline-verdict{color:#a8a29e}
 .dash-truth-pipeline-detail{color:#78716c;overflow-wrap:anywhere}
 .dash-truth-pipeline-arrow{padding:0 0 0 48px;color:#a8a29e;font-size:12px;line-height:1}
 .dash-truth-timeline{margin-top:16px;border-top:0.5px solid rgba(0,0,0,0.06);padding-top:12px}
@@ -21287,6 +21288,18 @@ def api_extension_amex_extract():
         record_amex_extension_connected,
     )
 
+    input_source = str(body.get("input_source") or body.get("source") or "extension").strip()
+    value_len = len(raw_value)
+    log_access_cycle_event(
+        "extraction_request_received",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id or verification_id,
+        input_source_types=input_source,
+        input_count=1,
+        input_value_len=value_len,
+    )
+
     if verification_id:
         mark_access_check_extracting(db, uid, verification_id)
 
@@ -21327,6 +21340,25 @@ def api_extension_amex_extract():
                 error_message=str(e),
             )
             log_access_cycle_event(
+                "extraction_result",
+                provider="amex",
+                verification_id=verification_id,
+                access_cycle_id=access_cycle_id or verification_id,
+                attempted=True,
+                outcome="failed",
+                non_empty_field_count=0,
+                failure_code="invalid_value",
+            )
+            log_access_cycle_event(
+                "snapshot_result",
+                provider="amex",
+                verification_id=verification_id,
+                access_cycle_id=access_cycle_id or verification_id,
+                attempted=False,
+                published=False,
+                reason="extraction_failed",
+            )
+            log_access_cycle_event(
                 "readiness_result",
                 provider="amex",
                 verification_id=verification_id,
@@ -21362,6 +21394,25 @@ def api_extension_amex_extract():
                 error_message=str(e),
             )
             log_access_cycle_event(
+                "extraction_result",
+                provider="amex",
+                verification_id=verification_id,
+                access_cycle_id=access_cycle_id or verification_id,
+                attempted=True,
+                outcome="failed",
+                non_empty_field_count=0,
+                failure_code="adapter_error",
+            )
+            log_access_cycle_event(
+                "snapshot_result",
+                provider="amex",
+                verification_id=verification_id,
+                access_cycle_id=access_cycle_id or verification_id,
+                attempted=False,
+                published=False,
+                reason="adapter_error",
+            )
+            log_access_cycle_event(
                 "readiness_result",
                 provider="amex",
                 verification_id=verification_id,
@@ -21378,6 +21429,47 @@ def api_extension_amex_extract():
         evidence_type="session_verified_extract",
         evidence_summary="Amex extension reported verified authenticated session",
         source="extension_amex_extract",
+    )
+
+    field = result.get("field") if isinstance(result, dict) else None
+    field_names = []
+    if isinstance(field, dict) and field.get("key"):
+        field_names = [str(field.get("key"))]
+    non_empty = 1 if field_names else 0
+    snapshot_id = None
+    if verification_id or access_cycle_id:
+        try:
+            from mighty.account_snapshot import load_latest_snapshots_by_provider
+
+            snaps = load_latest_snapshots_by_provider(db, uid, providers=[AMEX_SOURCE])
+            snap = snaps.get(AMEX_SOURCE)
+            if snap is not None and snap.access_cycle_id in {
+                verification_id,
+                access_cycle_id,
+            }:
+                snapshot_id = snap.snapshot_id
+        except Exception:
+            snapshot_id = None
+
+    log_access_cycle_event(
+        "extraction_result",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id or verification_id,
+        attempted=True,
+        outcome="success",
+        extracted_field_names=",".join(field_names) if field_names else "",
+        non_empty_field_count=non_empty,
+    )
+    log_access_cycle_event(
+        "snapshot_result",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id or verification_id,
+        attempted=True,
+        published=bool(snapshot_id or non_empty),
+        snapshot_id=snapshot_id or "",
+        reason="published" if (snapshot_id or non_empty) else "not_published",
     )
 
     if verification_id:
@@ -21428,6 +21520,46 @@ def api_extension_session_verification_advance():
     if verification is None:
         return jsonify({"ok": False, "error": "verification not found or not advanceable"}), 404
     return jsonify({"ok": True, **session_verification_to_json(verification)})
+
+
+@app.route("/api/extension/amex/no-qualifying-private-data", methods=["POST"])
+def api_extension_amex_no_qualifying_private_data():
+    """Authenticated Amex cycle: observation finished with no extractable private data.
+
+    Extraction is NOT RUN. Does not publish a snapshot. Does not mark EXTRACTION_FAILED.
+    """
+    from mighty.provider_access_manager import complete_amex_cycle_no_qualifying_private_data
+
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
+    body = body or {}
+    verification_id = str(
+        body.get("verification_id") or body.get("access_cycle_id") or ""
+    ).strip()
+    if not verification_id:
+        return jsonify({"error": "verification_id required"}), 400
+    counts = body.get("observation_counts") if isinstance(body.get("observation_counts"), dict) else {}
+    complete_amex_cycle_no_qualifying_private_data(
+        get_db(),
+        user["id"],
+        verification_id,
+        private_api_count=int(counts.get("authenticated_private_api_responses") or 0),
+        qualifying_dom_count=int(counts.get("qualifying_dom_observations") or 0),
+        candidate_payload_count=int(counts.get("candidate_payloads") or 0),
+        rejection_reason=str(
+            counts.get("rejection_reason")
+            or body.get("reason")
+            or "no_qualifying_private_data"
+        ),
+    )
+    return jsonify({
+        "ok": True,
+        "extraction": "not_run",
+        "capability_hint": "logged_in_no_account_data",
+        "verification_id": verification_id,
+        "access_cycle_id": verification_id,
+    })
 
 
 # ── Admin debug pages (internal only) ─────────────────────────────────────────
@@ -22250,6 +22382,20 @@ def api_extension_provider_access_probe():
         payload["access_cycle_lifecycle"] = result["access_cycle_lifecycle"]
     if "extraction_required" in result:
         payload["extraction_required"] = bool(result["extraction_required"])
+    if "private_data_detected" in result:
+        payload["private_data_detected"] = bool(result["private_data_detected"])
+    if isinstance(result.get("observation_counts"), dict):
+        # Sanitized counts only — never echo bodies or private values.
+        payload["observation_counts"] = {
+            k: result["observation_counts"][k]
+            for k in (
+                "authenticated_private_api_responses",
+                "qualifying_dom_observations",
+                "candidate_payloads",
+                "rejection_reason",
+            )
+            if k in result["observation_counts"]
+        }
     if verification_id:
         payload["verification_id"] = verification_id
         payload["access_cycle_id"] = verification_id

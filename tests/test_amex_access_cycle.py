@@ -471,3 +471,109 @@ def test_customer_surfaces_show_connected_only_after_correlated_extraction(clien
     assert amex_after["readiness"] == READY
     assert amex_after["status_label"] == "Connected"
     assert amex_after["status"] == UP_TO_DATE
+
+
+def test_no_qualifying_private_data_completes_without_extraction(client):
+    """Authenticated cycle + no qualifying private data → extraction NOT RUN."""
+    import app as mighty
+    from mighty.capability_state import CapabilityState
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        verification = request_provider_access_check(db, uid, "amex")
+        vid = verification.verification_id
+        result = complete_provider_access_check(db, uid, _probe(), verification_id=vid)
+        assert result.get("extraction_required") is True
+        api_key = _api_key(mighty, uid)
+
+    r = client.post(
+        "/api/extension/amex/no-qualifying-private-data",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "verification_id": vid,
+            "access_cycle_id": vid,
+            "observation_counts": {
+                "authenticated_private_api_responses": 0,
+                "qualifying_dom_observations": 0,
+                "candidate_payloads": 0,
+                "rejection_reason": "no_qualifying_private_data",
+            },
+        },
+    )
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert body["extraction"] == "not_run"
+    assert body["capability_hint"] == "logged_in_no_account_data"
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        latest = get_latest_session_verification(db, uid, "amex")
+        assert latest is not None
+        assert latest.lifecycle == "completed"
+        assert latest.error_message == "no_qualifying_private_data"
+        # No new correlated extraction — readiness stays unverified.
+        accounts, _ = load_all_account_statuses(
+            uid,
+            db,
+            decrypt_fn=mighty.decrypt_account_data,
+            display_names={"amex": "Amex"},
+            login_url_fn=lambda s: "",
+        )
+        amex = next(a for a in accounts if a.source == "amex")
+        assert amex.readiness != READY
+        assert amex.capability is not None
+        assert amex.capability.state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
+        extract = next(s for s in amex.capability.pipeline if s.name == "Extraction")
+        assert extract.verdict == "NOT_RUN"
+
+
+def test_extraction_diagnostics_correlated_by_access_cycle_id(client, capsys):
+    """6–7. Diagnostics correlated by access_cycle_id; no private payloads logged."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        verification = request_provider_access_check(db, uid, "amex")
+        vid = verification.verification_id
+        complete_provider_access_check(db, uid, _probe(), verification_id=vid)
+        api_key = _api_key(mighty, uid)
+
+    assert client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "125,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+            "input_source": "dom",
+        },
+    ).status_code == 200
+
+    captured = capsys.readouterr().out
+    assert f"access_cycle_id={vid}" in captured
+    assert "extraction_request_received" in captured
+    assert "extraction_result" in captured
+    assert "snapshot_result" in captured
+    assert "extracted_field_names=points_balance" in captured
+    # Never log private values / bodies
+    low = captured.lower()
+    assert "125,000" not in captured
+    assert "cookie" not in low
+    assert "authorization" not in low
+    assert "bearer" not in low
+
+
+def test_extension_gates_extraction_on_qualifying_private_data():
+    """Extension waits for qualifying private data before same-cycle extract."""
+    from pathlib import Path
+
+    bg = (Path(__file__).resolve().parents[1] / "extension" / "background.js").read_text()
+    assert "waitForAmexQualifyingPrivateData" in bg
+    assert "AMEX_PRIVATE_DATA_OBSERVATION_MS" in bg
+    assert "/api/extension/amex/no-qualifying-private-data" in bg
+    assert "extraction NOT RUN" in bg

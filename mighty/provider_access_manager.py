@@ -298,6 +298,99 @@ def complete_access_check_after_extraction(
         )
 
 
+def complete_amex_cycle_no_qualifying_private_data(
+    db: Any,
+    user_id: str,
+    verification_id: str,
+    *,
+    private_api_count: int = 0,
+    qualifying_dom_count: int = 0,
+    candidate_payload_count: int = 0,
+    rejection_reason: str = "no_qualifying_private_data",
+    now: datetime | None = None,
+) -> None:
+    """Authenticated Amex cycle finished observation with no extractable private data.
+
+    Extraction is intentionally NOT RUN. Cycle completes (not failed) so Truth
+    Validation can show Extraction/Snapshot NOT RUN rather than a parser failure.
+    """
+    log_access_cycle_event(
+        "observation_summary",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=verification_id,
+        authenticated_private_api_responses=int(private_api_count),
+        qualifying_dom_observations=int(qualifying_dom_count),
+        candidate_payloads=int(candidate_payload_count),
+        rejection_reason=rejection_reason,
+    )
+    log_access_cycle_event(
+        "extraction_result",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=verification_id,
+        attempted=False,
+        outcome="not_run",
+        non_empty_field_count=0,
+        failure_code="no_qualifying_private_data",
+    )
+    log_access_cycle_event(
+        "snapshot_result",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=verification_id,
+        attempted=False,
+        published=False,
+        reason="no_qualifying_private_data",
+    )
+    finish_provider_access_check(
+        db,
+        user_id,
+        verification_id,
+        lifecycle="completed",
+        error_message="no_qualifying_private_data",
+        now=now,
+    )
+    log_access_cycle_event(
+        "readiness_result",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=verification_id,
+        readiness="unverified",
+        reason="logged_in_no_account_data",
+    )
+
+
+def _sanitized_observation_counts(result: dict[str, Any]) -> dict[str, int | str]:
+    """Counts only — never bodies, balances, cookies, or tokens."""
+    deep = result.get("deep_inspect") if isinstance(result.get("deep_inspect"), dict) else {}
+    auth_trace = deep.get("auth_network_trace") if isinstance(deep, dict) else {}
+    if not isinstance(auth_trace, dict):
+        auth_trace = {}
+    private_api = 0
+    for key in (
+        "highlighted_requests",
+        "auth_session_requests",
+        "requests",
+    ):
+        bucket = auth_trace.get(key) or []
+        if isinstance(bucket, list):
+            private_api += len(bucket)
+    qualifying_dom = 1 if result.get("private_data_detected") else 0
+    candidates = qualifying_dom + (1 if private_api else 0)
+    rejection = ""
+    if not qualifying_dom and private_api == 0:
+        rejection = "no_qualifying_private_data"
+    elif not result.get("private_data_detected"):
+        rejection = str(result.get("failure_reason") or "signed_in_no_private_evidence")
+    return {
+        "authenticated_private_api_responses": private_api,
+        "qualifying_dom_observations": qualifying_dom,
+        "candidate_payloads": candidates,
+        "rejection_reason": rejection,
+    }
+
+
 # ── Probe completion (active verification + debug manual probe) ───────────────
 
 
@@ -421,6 +514,30 @@ def complete_provider_access_check(
             )
             result["access_cycle_lifecycle"] = "session_verified"
             result["extraction_required"] = True
+            private_observed = bool(result.get("private_data_detected"))
+            obs = _sanitized_observation_counts(result)
+            log_access_cycle_event(
+                "observation_summary",
+                provider="amex",
+                verification_id=verification_id,
+                access_cycle_id=verification_id,
+                **obs,
+            )
+            log_access_cycle_event(
+                "extraction_dispatch_decision",
+                provider="amex",
+                verification_id=verification_id,
+                access_cycle_id=verification_id,
+                extraction_required=True,
+                reason=(
+                    "authenticated_private_data_visible"
+                    if private_observed
+                    else "authenticated_awaiting_qualifying_private_data"
+                ),
+                private_data_detected=private_observed,
+            )
+            result["private_data_detected"] = private_observed
+            result["observation_counts"] = obs
         else:
             # Signed-out, non-Amex auth, or definitive terminal without extraction.
             finish_provider_access_check(

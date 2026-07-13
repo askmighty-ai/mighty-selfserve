@@ -48,7 +48,7 @@ _PLACEHOLDER_VALUES = frozenset({
     "", "—", "–", "-", "n/a", "none", "null", "undefined", "0", "no data",
 })
 
-StageVerdict = Literal["PASS", "FAIL", "UNKNOWN"]
+StageVerdict = Literal["PASS", "FAIL", "UNKNOWN", "NOT_RUN"]
 
 
 class CapabilityState(str, Enum):
@@ -210,6 +210,10 @@ def _extraction_in_flight(
     background_verification: bool,
 ) -> bool:
     lifecycle = (verification_lifecycle or "").strip()
+    # Terminal cycles are not in flight — stale EXTRACTION_PENDING must not
+    # keep capability in LOGIN_UNKNOWN after observation completed.
+    if lifecycle in {"completed", "failed", "timed_out"}:
+        return False
     if readiness == "checking" or live_access == _LIVE_CHECKING:
         return True
     if background_verification:
@@ -293,14 +297,24 @@ def resolve_capability_state(
     if extraction_failed:
         return CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
 
-    # Do not use LOGGED_IN_NO_ACCOUNT_DATA merely because extraction has not run.
-    if in_flight or extraction_status in (EXTRACTION_PENDING, EXTRACTION_NOT_STARTED, None, ""):
+    # Do not use LOGGED_IN_NO_ACCOUNT_DATA merely because extraction has not run
+    # while the access cycle is still open. Once the cycle is terminal without
+    # correlated private data, outcome C applies (extraction NOT RUN).
+    observation_finished = verification_lifecycle in {
+        "completed",
+        "failed",
+        "timed_out",
+    }
+    if in_flight or (
+        extraction_status in (EXTRACTION_PENDING, EXTRACTION_NOT_STARTED, None, "")
+        and not observation_finished
+    ):
         if private_data_state == "saved_data_only":
             # Authenticated; only uncorrelated cache — current private data not observable.
             return CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
         return CapabilityState.LOGIN_UNKNOWN
 
-    # D. LOGGED_IN_NO_ACCOUNT_DATA — authenticated, extraction finished, no qualifying data.
+    # D. LOGGED_IN_NO_ACCOUNT_DATA — authenticated, observation finished, no qualifying data.
     return CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
 
 
@@ -481,43 +495,95 @@ def _pipeline_stages(
     else:
         verify_verdict = "UNKNOWN"
 
-    if private == "seen" or state == CapabilityState.EXTRACTION_SUCCESS:
+    # Current-cycle private data only — never treat uncorrelated historical
+    # account_data / snapshots as observation or snapshot PASS for this cycle.
+    current_cycle_private = (
+        private == "seen" or state == CapabilityState.EXTRACTION_SUCCESS
+    )
+    historical_saved = (
+        not current_cycle_private
+        and (
+            private == "saved_data_only"
+            or has_publishable_fields
+            or bool(has_snapshot and snapshot_at)
+        )
+    )
+
+    if current_cycle_private:
         obs_verdict: StageVerdict = "PASS"
+        obs_detail = private or "seen"
     elif (
         private == "extraction_failed"
         or state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
         or state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
     ):
         obs_verdict = "FAIL"
+        obs_detail = private or "no_qualifying_private_data"
+        if historical_saved:
+            obs_detail = f"{obs_detail} · Previous data available"
     else:
         obs_verdict = "UNKNOWN"
+        obs_detail = private or None
+
+    extraction_attempted = (
+        extraction_status == EXTRACTION_FAILED
+        or private == "extraction_failed"
+        or state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
+        or state == CapabilityState.EXTRACTION_SUCCESS
+        or lifecycle == "extracting"
+    )
+    # Stale EXTRACTION_PENDING after a terminal cycle does not mean extraction ran.
+    if (
+        extraction_status == EXTRACTION_PENDING
+        and lifecycle not in {"completed", "failed", "timed_out", ""}
+    ):
+        extraction_attempted = True
 
     if state == CapabilityState.EXTRACTION_SUCCESS or (
         has_publishable_fields and private == "seen"
     ):
         extract_verdict: StageVerdict = "PASS"
+        extract_detail = "complete"
     elif (
         extraction_status == EXTRACTION_FAILED
         or private == "extraction_failed"
         or state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
     ):
         extract_verdict = "FAIL"
-    elif extraction_status == EXTRACTION_PENDING:
+        extract_detail = "failed"
+    elif state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA and not extraction_attempted:
+        # Authenticated cycle finished observation with no qualifying private data.
+        extract_verdict = "NOT_RUN"
+        extract_detail = "NOT RUN"
+    elif extraction_status == EXTRACTION_PENDING or lifecycle == "extracting":
         extract_verdict = "UNKNOWN"
+        extract_detail = "pending"
     else:
         extract_verdict = "UNKNOWN"
+        # Do not surface historical EXTRACTION_COMPLETE as a current-cycle result.
+        extract_detail = None
 
-    if has_publishable_fields or (has_snapshot and state == CapabilityState.EXTRACTION_SUCCESS):
-        snap_verdict: StageVerdict = "PASS"
-    elif state in (
-        CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED,
-        CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA,
+    if state == CapabilityState.EXTRACTION_SUCCESS and (
+        has_publishable_fields or has_snapshot
     ):
+        snap_verdict: StageVerdict = "PASS"
+        snap_detail = "current-cycle snapshot"
+    elif state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED:
         snap_verdict = "FAIL"
-    elif has_snapshot:
-        snap_verdict = "PASS" if state == CapabilityState.EXTRACTION_SUCCESS else "UNKNOWN"
+        snap_detail = "not published"
+        if historical_saved:
+            snap_detail = "not published · Previous data available"
+    elif state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA:
+        snap_verdict = "NOT_RUN"
+        snap_detail = (
+            "NOT RUN · Previous data available" if historical_saved else "NOT RUN"
+        )
+    elif historical_saved:
+        snap_verdict = "UNKNOWN"
+        snap_detail = "Previous data available"
     else:
         snap_verdict = "UNKNOWN"
+        snap_detail = None
 
     verify_ids = []
     if verification_id:
@@ -526,10 +592,12 @@ def _pipeline_stages(
         verify_ids.append(f"access_cycle_id:{cycle_id}")
 
     snap_id = None
-    if snapshot_at:
-        snap_id = f"snapshot_at:{snapshot_at}"
-    if cycle_id and snap_verdict == "PASS":
+    if snap_verdict == "PASS" and cycle_id:
         snap_id = f"access_cycle_id:{cycle_id}"
+    elif historical_saved and snapshot_at:
+        snap_id = f"historical_snapshot_at:{snapshot_at}"
+    elif snapshot_at:
+        snap_id = f"snapshot_at:{snapshot_at}"
 
     return (
         PipelineStage(
@@ -550,19 +618,21 @@ def _pipeline_stages(
             name="Observation",
             verdict=obs_verdict,
             timestamp=last_confirmed,
-            detail=private or None,
+            detail=obs_detail,
         ),
         PipelineStage(
             name="Extraction",
             verdict=extract_verdict,
-            timestamp=snapshot_at or last_confirmed,
-            detail=extraction_status or private or None,
+            timestamp=(
+                (snapshot_at or last_confirmed) if extract_verdict == "PASS" else last_confirmed
+            ),
+            detail=extract_detail,
         ),
         PipelineStage(
             name="Snapshot",
             verdict=snap_verdict,
-            timestamp=snapshot_at,
-            detail="persisted account_data" if snap_verdict == "PASS" else None,
+            timestamp=snapshot_at if snap_verdict == "PASS" else None,
+            detail=snap_detail,
             id_label=snap_id,
         ),
     )

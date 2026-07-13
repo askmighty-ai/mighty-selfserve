@@ -56,6 +56,7 @@ class EvidenceOutcome(str, Enum):
     PASS = "PASS"
     FAIL = "FAIL"
     UNKNOWN = "UNKNOWN"
+    NOT_RUN = "NOT_RUN"
 
 
 class ConfidenceLevel(str, Enum):
@@ -201,6 +202,8 @@ def _verdict(v: StageVerdict | str) -> EvidenceOutcome:
         return EvidenceOutcome.PASS
     if v == "FAIL":
         return EvidenceOutcome.FAIL
+    if v == "NOT_RUN":
+        return EvidenceOutcome.NOT_RUN
     return EvidenceOutcome.UNKNOWN
 
 
@@ -230,6 +233,7 @@ def _contribution_for(outcome: EvidenceOutcome, category: EvidenceCategory) -> i
         EvidenceOutcome.PASS: 18,
         EvidenceOutcome.FAIL: -12,
         EvidenceOutcome.UNKNOWN: -8,
+        EvidenceOutcome.NOT_RUN: -4,
     }[outcome]
     # High-signal categories weigh more when definitive.
     if category in (EvidenceCategory.SESSION, EvidenceCategory.EXTRACTION, EvidenceCategory.SNAPSHOT):
@@ -613,12 +617,16 @@ def _expand_pipeline(
             if state == CapabilityState.EXTRACTION_SUCCESS
             else EvidenceOutcome.FAIL
             if state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
+            else EvidenceOutcome.NOT_RUN
+            if state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
             else EvidenceOutcome.UNKNOWN
         ),
         evidence_ids=ids_for(EvidenceCategory.EXTRACTION),
         detail=(
             "Parser failed"
             if state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
+            else "NOT RUN"
+            if state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
             else None
         ),
     )
@@ -629,9 +637,16 @@ def _expand_pipeline(
             if state == CapabilityState.EXTRACTION_SUCCESS
             else EvidenceOutcome.FAIL
             if state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
+            else EvidenceOutcome.NOT_RUN
+            if state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
             else EvidenceOutcome.UNKNOWN
         ),
         evidence_ids=ids_for(EvidenceCategory.SNAPSHOT),
+        detail=(
+            "NOT RUN"
+            if state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
+            else None
+        ),
     )
 
     navigation = TruthPipelineStage(

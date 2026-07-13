@@ -144,10 +144,13 @@ def _pipeline_row(stage: TruthPipelineStage, escape: Callable[[Any], str]) -> st
         bits.append(stage.detail)
     if stage.evidence_ids:
         bits.append("evidence:" + ",".join(stage.evidence_ids))
+    verdict_label = (
+        "NOT RUN" if stage.verdict.value == "NOT_RUN" else stage.verdict.value
+    )
     return (
         f'<div class="dash-truth-pipeline-stage" data-verdict="{escape(stage.verdict.value)}">'
         f'<span class="dash-truth-pipeline-name">{escape(stage.name)}</span>'
-        f'<span class="dash-truth-pipeline-verdict">{escape(stage.verdict.value)}</span>'
+        f'<span class="dash-truth-pipeline-verdict">{escape(verdict_label)}</span>'
         f'<span class="dash-truth-pipeline-detail">{escape(" · ".join(bits) if bits else "—")}</span>'
         f"</div>"
     )

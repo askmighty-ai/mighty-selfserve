@@ -364,7 +364,7 @@ class TestEvidenceAndPipeline:
             "Extraction",
             "Snapshot",
         ]
-        assert all(s.verdict in ("PASS", "FAIL", "UNKNOWN") for s in cap.pipeline)
+        assert all(s.verdict in ("PASS", "FAIL", "UNKNOWN", "NOT_RUN") for s in cap.pipeline)
         assert any(
             s.id_label and "access_cycle_id" in s.id_label
             for s in cap.pipeline
@@ -413,3 +413,93 @@ class TestUiStates:
         assert "You are signed out" in rendered
         assert "Open American Express" in rendered
         assert "Technical Details" in rendered
+
+
+class TestCurrentCycleVsHistoricalPipeline:
+    """PR #99: historical data must not create current-cycle pipeline PASS."""
+
+    def test_authenticated_private_data_extraction_success_snapshot_pass(self):
+        """1. Auth + private data + extraction success → EXTRACTION_SUCCESS + snapshot PASS."""
+        view = _view(READY, session_state="connected")
+        cap = build_capability_view(view, extracted_items=AMEX_FIELDS)
+        assert cap.state == CapabilityState.EXTRACTION_SUCCESS
+        by_name = {s.name: s for s in cap.pipeline}
+        assert by_name["Observation"].verdict == "PASS"
+        assert by_name["Extraction"].verdict == "PASS"
+        assert by_name["Extraction"].detail == "complete"
+        assert by_name["Snapshot"].verdict == "PASS"
+        assert "current-cycle" in (by_name["Snapshot"].detail or "")
+
+    def test_authenticated_private_data_parser_fail_no_snapshot(self):
+        """2. Auth + private observed + parser fail → LOGIN_VISIBLE_EXTRACTION_FAILED."""
+        view = _view(
+            UNVERIFIED,
+            session_state="connected",
+            verification_lifecycle="failed",
+        )
+        cap = build_capability_view(view, extraction_status=EXTRACTION_FAILED)
+        assert cap.state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
+        by_name = {s.name: s for s in cap.pipeline}
+        assert by_name["Extraction"].verdict == "FAIL"
+        assert by_name["Snapshot"].verdict == "FAIL"
+        assert by_name["Snapshot"].verdict != "PASS"
+
+    def test_authenticated_no_qualifying_private_data_extraction_not_run(self):
+        """3. Auth + no qualifying private data → LOGGED_IN_NO_ACCOUNT_DATA, extraction NOT RUN."""
+        view = _view(
+            UNVERIFIED,
+            session_state="connected",
+            verification_lifecycle="completed",
+        )
+        cap = build_capability_view(
+            view,
+            extraction_status=EXTRACTION_NOT_STARTED,
+            extracted_items=[],
+        )
+        assert cap.state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
+        by_name = {s.name: s for s in cap.pipeline}
+        assert by_name["Observation"].verdict == "FAIL"
+        assert by_name["Extraction"].verdict == "NOT_RUN"
+        assert by_name["Extraction"].detail == "NOT RUN"
+        assert by_name["Snapshot"].verdict == "NOT_RUN"
+
+    def test_historical_account_data_does_not_pass_current_cycle_snapshot(self):
+        """4–5. Historical fields/snapshot cannot create current-cycle Snapshot PASS."""
+        view = _view(
+            UNVERIFIED,
+            session_state="connected",
+            extraction_ok=True,
+            extraction_correlated=False,
+            cached_data_label="Last saved data: 1 hour ago",
+            last_confirmed_access_cycle_id="cycle-old",
+            access_cycle_id="cycle-new",
+            verification_lifecycle="completed",
+        )
+        assert view.private_data_state == "saved_data_only"
+        cap = build_capability_view(
+            view,
+            extracted_items=AMEX_FIELDS,
+            extraction_status=EXTRACTION_COMPLETE,
+            verification_id="cycle-new",
+        )
+        assert cap.state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
+        by_name = {s.name: s for s in cap.pipeline}
+        assert by_name["Observation"].verdict == "FAIL"
+        assert by_name["Extraction"].verdict == "NOT_RUN"
+        assert by_name["Extraction"].detail != "complete"
+        assert by_name["Snapshot"].verdict == "NOT_RUN"
+        assert "Previous data available" in (by_name["Snapshot"].detail or "")
+        assert by_name["Snapshot"].verdict != "PASS"
+
+    def test_signed_out_unchanged(self):
+        """8. Signed-out behavior remains unchanged."""
+        view = _view(SIGNED_OUT)
+        cap = build_capability_view(view)
+        assert cap.state == CapabilityState.SIGNED_OUT
+
+    def test_inconclusive_remains_login_unknown(self):
+        """9. Inconclusive verification remains LOGIN_UNKNOWN, not signed out."""
+        view = _view(UNVERIFIED, session_state="unknown")
+        cap = build_capability_view(view)
+        assert cap.state == CapabilityState.LOGIN_UNKNOWN
+        assert cap.state != CapabilityState.SIGNED_OUT
