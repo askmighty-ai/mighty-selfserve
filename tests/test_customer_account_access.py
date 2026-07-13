@@ -167,14 +167,11 @@ class TestCustomerAccountAccessView:
             escape=_escape,
         )
         assert "American Express" in rendered
-        assert "✓ Watching" in rendered
-        assert "Current activity" in rendered
-        assert "Watching" in rendered
-        assert user_copy.TOWER_MEANING_WATCHING in rendered
-        assert 'data-readiness="ready"' in rendered
-        # Discovery / private data live in Why?, not the main card.
-        assert "Why?" in rendered
-        assert "Seen" in rendered
+        assert "can see and extract" in rendered.lower()
+        assert 'data-capability="extraction_success"' in rendered
+        assert "Technical Details" in rendered
+        assert "Summary" not in rendered
+        assert "✓ Watching" not in rendered
 
     def test_gmail_discovered_never_connected(self):
         readiness = _readiness("amex", UNVERIFIED, session_state="unknown")
@@ -196,10 +193,9 @@ class TestCustomerAccountAccessView:
         rendered = render_home_page(
             result, first_name="Alex", today_label="Monday, July 13", escape=_escape,
         )
-        assert "Discovered from" in rendered  # Why? section
-        assert "Gmail" in rendered
-        assert "Waiting for first verification" in rendered or "Waiting for first visit" in rendered
-        assert 'data-readiness="ready"' not in rendered
+        assert "cannot determine whether you are logged in" in rendered.lower()
+        assert 'data-capability="login_unknown"' in rendered
+        assert 'data-capability="extraction_success"' not in rendered
         assert "✓ Watching" not in rendered
 
     def test_ready_with_background_verifying_stays_connected(self):
@@ -235,8 +231,8 @@ class TestCustomerAccountAccessView:
             today_label="Monday, July 13",
             escape=_escape,
         )
-        assert "✓ Connected" in rendered or "Connected" in rendered
-        assert "Refreshing account" in rendered or "Verifying" in rendered
+        assert "can see and extract" in rendered.lower()
+        assert 'data-capability="extraction_success"' in rendered
         assert "Waiting for first verification" not in rendered
         assert "Awaiting first check" not in rendered
 
@@ -266,8 +262,8 @@ class TestCustomerAccountAccessView:
         home_html = render_home_page(
             home, first_name="Alex", today_label="Monday, July 13", escape=_escape,
         )
-        assert "✓ Watching" in home_html
-        assert "Seen" in home_html  # Why? section
+        assert "can see and extract" in home_html.lower()
+        assert "Technical Details" in home_html
 
         lc = resolve_account_lifecycle("amex", in_credentials=True, from_email=True)
         row = AccountsRow(
@@ -284,8 +280,8 @@ class TestCustomerAccountAccessView:
         )
         apply_access_view_to_row(row, view)
         assert row.section == SECTION_UP_TO_DATE
-        assert row.status_label == "Connected"
-        assert "Private data seen" in row.subline.lower() or "Seen" in (row.private_data_label or "")
+        assert row.status_label == "Extraction success"
+        assert "Updated" in row.subline or "extract" in row.subline.lower()
         assert "Discovered from Gmail" in row.source_label
         assert row.status_label != "Awaiting first check"
 
@@ -317,15 +313,14 @@ class TestCustomerAccountAccessView:
             today_label="Monday, July 13",
             escape=_escape,
         )
-        assert "Sign in" in rendered
-        assert "⚠ Sign in required" in rendered
-        # Cached data is an implementation detail — not required on the main card.
+        assert "You are signed out" in rendered
+        assert "Open American Express" in rendered
 
     def test_unknown_no_sign_in_cta(self):
-        readiness = _readiness("delta", UNVERIFIED, session_state="unknown")
+        readiness = _readiness("amex", UNVERIFIED, session_state="unknown")
         view = build_customer_account_access_view(
-            provider="delta",
-            display_name="Delta",
+            provider="amex",
+            display_name="American Express",
             readiness=readiness,
             discovered_from=DISCOVERED_MANUAL,
             user_action_text="Sign in",  # must be ignored unless signed_out
@@ -345,8 +340,12 @@ class TestCustomerAccountAccessView:
             today_label="Monday, July 13",
             escape=_escape,
         )
-        assert 'class="dash-access-action"' not in rendered
-        assert "Mighty has not confirmed access yet." in rendered
+        assert "Open American Express" not in rendered
+        assert "cannot determine whether you are logged in" in rendered.lower()
+        assert (
+            "No definitive current login evidence" in rendered
+            or "Verification" in rendered
+        )
 
     def test_labels_not_from_legacy_sync_or_gmail(self):
         # Gmail discovery alone must not produce Connected via build_account_status.

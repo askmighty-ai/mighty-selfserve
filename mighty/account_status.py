@@ -50,6 +50,7 @@ from mighty.customer_account_access import (
     build_customer_account_access_view,
     resolve_discovered_from,
 )
+from mighty.capability_state import CapabilityView, build_capability_view
 from mighty.provider_account import ProviderAccount, infer_extraction_status, has_normalized_data
 from mighty.session_access import (
     CHECKING,
@@ -134,6 +135,7 @@ class AccountStatus:
     snapshot_id: str | None = None
     snapshot_verified_at: str | None = None
     snapshot_schema_version: int | None = None
+    capability: CapabilityView | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -196,6 +198,14 @@ class AccountStatus:
             payload["snapshot_verified_at"] = self.snapshot_verified_at
         if self.snapshot_schema_version is not None:
             payload["snapshot_schema_version"] = self.snapshot_schema_version
+        if self.capability is not None:
+            cap = self.capability.to_dict()
+            payload["capability"] = cap
+            payload["capability_state"] = cap["capability_state"]
+        elif self.customer_access is not None:
+            payload["capability_state"] = self.customer_access.to_dict().get(
+                "capability_state",
+            )
         return payload
 
 
@@ -573,6 +583,20 @@ def build_account_status(
         cached_snapshot_at=last_data_refresh or synced_at,
         canonical_status=canonical,
     )
+    ext_status = extraction_status or (account.extraction_status if account else None)
+    capability = build_capability_view(
+        customer_access,
+        display_name=display_name,
+        provider=source,
+        extracted_items=account.normalized_fields if account else None,
+        extraction_status=ext_status,
+        login_url=login_url or None,
+        verification_id=(
+            getattr(session_access, "verification_id", None)
+            if session_access is not None
+            else None
+        ),
+    )
 
     return AccountStatus(
         source=source,
@@ -607,6 +631,7 @@ def build_account_status(
         snapshot_id=snapshot_id,
         snapshot_verified_at=snapshot_verified_at,
         snapshot_schema_version=snapshot_schema_version,
+        capability=capability,
     )
 
 

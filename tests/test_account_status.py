@@ -271,9 +271,10 @@ def test_api_account_status_dashboard_and_extension_consistent(client):
     assert ext_data["summary"] == dash_data["summary"]
 
     by_source = {a["source"]: a for a in ext_data["accounts"]}
+    assert set(by_source) == {"amex"}
     assert by_source["amex"]["status"] == NEEDS_LOGIN
     assert by_source["amex"]["session_state"] == "signed_out"
-    assert by_source["pa_utilities"]["status"] == UPDATING
+    assert by_source["amex"]["capability_state"] == "signed_out"
     assert ext_data["summary"]["access_loop"]["needs_sign_in"] == 1
 
     from mighty.user_copy import ACCOUNT_STATE_LABELS
@@ -288,19 +289,19 @@ def test_api_account_status_dashboard_and_extension_consistent(client):
 
 def test_api_sync_progress_updates_updating_account(client):
     uid, api_key = _user_api(client)
-    _insert_account(client, "marriott", "Marriott Bonvoy")
+    _insert_account(client, "amex", "American Express")
 
     client.post("/api/sync/start", headers={"X-Mighty-Key": api_key, "Content-Type": "application/json"})
     client.post(
         "/api/sync/progress",
         headers={"X-Mighty-Key": api_key, "Content-Type": "application/json"},
-        data=json.dumps({"source": "marriott"}),
+        data=json.dumps({"source": "amex"}),
     )
 
     resp = client.get("/api/account-status", headers={"X-Mighty-Key": api_key})
     data = resp.get_json()
     by_source = {a["source"]: a for a in data["accounts"]}
-    assert by_source["marriott"]["status"] == UPDATING
+    assert by_source["amex"]["status"] == UPDATING
     assert data["summary"]["is_syncing"] is True
 
 
@@ -323,18 +324,18 @@ def test_synced_account_is_up_to_date(client):
         db.execute(
             "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
             "VALUES (?,?,?,?,?,?,?)",
-            (uid, "delta", "", "", "", mighty.iso(), mighty.iso()),
+            (uid, "amex", "", "", "", mighty.iso(), mighty.iso()),
         )
         db.execute(
             "INSERT INTO account_data (user_id, source, display_name, icon, color, data_enc, synced_at, sync_status, extraction_status) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
-            (uid, "delta", "Delta", "?", "#eee", stub, synced.isoformat(), "ok", "complete"),
+            (uid, "amex", "American Express", "?", "#eee", stub, synced.isoformat(), "ok", "complete"),
         )
         upsert_provider_session_state(
             db,
             uid,
             SessionEvidence(
-                provider="delta",
+                provider="amex",
                 state="connected",
                 evidence_type="session_verified",
                 evidence_summary="fresh",
@@ -347,16 +348,17 @@ def test_synced_account_is_up_to_date(client):
 
     resp = client.get("/api/account-status", headers={"X-Mighty-Key": api_key})
     by_source = {a["source"]: a for a in resp.get_json()["accounts"]}
-    assert by_source["delta"]["status"] == UP_TO_DATE
-    assert by_source["delta"]["readiness"] == "ready"
+    assert by_source["amex"]["status"] == UP_TO_DATE
+    assert by_source["amex"]["readiness"] == "ready"
+    assert by_source["amex"]["capability_state"] == "extraction_success"
 
 
 def test_waiting_for_extension_status(client):
-    _insert_account(client, "hilton", "Hilton Honors", sync_status="needs_first_visit")
+    _insert_account(client, "amex", "American Express", sync_status="needs_first_visit")
     _, api_key = _user_api(client)
     resp = client.get("/api/account-status", headers={"X-Mighty-Key": api_key})
     by_source = {a["source"]: a for a in resp.get_json()["accounts"]}
-    assert by_source["hilton"]["status"] == WAITING_FOR_EXTENSION
+    assert by_source["amex"]["status"] == WAITING_FOR_EXTENSION
 
 
 def test_legacy_login_required_alone_does_not_force_needs_login(client):
