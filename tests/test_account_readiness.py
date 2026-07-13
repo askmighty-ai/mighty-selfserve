@@ -761,3 +761,393 @@ def test_delta_cached_data_with_signed_out_agrees_on_every_surface(client):
     assert summary.needs_login_count >= 1
     assert "Connected" not in row["status_label"]
     assert row["status"] != UP_TO_DATE
+
+
+# ── Stale-while-revalidate: preserve ready during background re-verification ──
+
+
+def _prior_ready_inputs(now: datetime, *, cycle_id: str = "cycle-a"):
+    session_at = _iso(now - timedelta(seconds=90))
+    extraction_at = _iso(now - timedelta(seconds=60))
+    account = _acct(synced_at=extraction_at)
+    return session_at, extraction_at, account, cycle_id
+
+
+@pytest.mark.parametrize(
+    "lifecycle",
+    ["requested", "running", "session_verified", "extracting"],
+)
+def test_prior_ready_plus_active_lifecycle_stays_connected(lifecycle):
+    """1–4. Prior ready + requested/running/session_verified/extracting → Connected."""
+    now = _now()
+    session_at, extraction_at, account, cycle_a = _prior_ready_inputs(now)
+    # Product may show checking while a later cycle is active.
+    product = resolve_product_account_state(
+        _session(
+            "amex",
+            "checking",
+            last_verified=session_at,
+            verification_lifecycle=lifecycle,
+            verification_id="cycle-b",
+        )
+    )
+    readiness = resolve_account_readiness(
+        provider="amex",
+        product=product,
+        session_evidence_at=session_at,
+        verification_id="cycle-b",
+        verification_lifecycle=lifecycle,
+        account=account,
+        extraction_at=extraction_at,
+        extraction_access_cycle_id=cycle_a,
+        now=now,
+    )
+    assert readiness.state == READY
+    assert readiness.status_label == "Connected"
+    assert readiness.background_verification is True
+    assert readiness.secondary_label == "Verifying in the background"
+    assert readiness.access_cycle_id == cycle_a
+    assert readiness.last_confirmed_access_cycle_id == cycle_a
+
+
+def test_no_prior_ready_plus_running_is_checking():
+    """5. No prior ready + running → Checking."""
+    now = _now()
+    product = resolve_product_account_state(
+        _session("amex", "checking", verification_lifecycle="running", verification_id="v1")
+    )
+    readiness = resolve_account_readiness(
+        provider="amex",
+        product=product,
+        verification_id="v1",
+        verification_lifecycle="running",
+        account=_acct(
+            extraction_status="not_started",
+            normalized_fields=[],
+            synced_at=None,
+        ),
+        extraction_at=None,
+        now=now,
+    )
+    assert readiness.state == CHECKING
+    assert readiness.status_label == "Checking"
+    assert readiness.background_verification is False
+
+
+def test_prior_ready_plus_definitive_signed_out_is_immediate():
+    """6. Prior ready + definitive signed_out → Sign in required immediately."""
+    now = _now()
+    session_at, extraction_at, account, cycle_a = _prior_ready_inputs(now)
+    product = resolve_product_account_state(
+        _session(
+            "amex",
+            "signed_out",
+            last_verified=_iso(now - timedelta(seconds=5)),
+            last_private_data=extraction_at,
+        )
+    )
+    readiness = resolve_account_readiness(
+        provider="amex",
+        product=product,
+        session_evidence_at=_iso(now - timedelta(seconds=5)),
+        account=account,
+        extraction_at=extraction_at,
+        extraction_access_cycle_id=cycle_a,
+        last_private_data_at=extraction_at,
+        now=now,
+    )
+    assert readiness.state == SIGNED_OUT
+    assert readiness.status_label == "Sign in required"
+    assert readiness.login_required is True
+
+
+def test_prior_ready_plus_inconclusive_inside_grace_stays_connected():
+    """7. Prior ready + inconclusive/timeout inside grace → Connected + warning."""
+    now = _now()
+    session_at, extraction_at, account, cycle_a = _prior_ready_inputs(now)
+    product = resolve_product_account_state(_session("amex", "error"))
+    readiness = resolve_account_readiness(
+        provider="amex",
+        product=product,
+        session_evidence_at=session_at,
+        verification_lifecycle="timed_out",
+        account=account,
+        extraction_at=extraction_at,
+        extraction_access_cycle_id=cycle_a,
+        now=now,
+    )
+    assert readiness.state == READY
+    assert readiness.status_label == "Connected"
+    assert readiness.background_verification is True
+    assert readiness.secondary_label is not None
+    assert readiness.login_required is False
+
+
+def test_prior_ready_plus_expired_grace_plus_inconclusive_is_unverified():
+    """8. Prior ready + expired grace + inconclusive → Unable to verify."""
+    from mighty.session_verification import READY_RESULT_GRACE_SECONDS
+
+    now = _now()
+    extraction_at = _iso(now - timedelta(seconds=READY_RESULT_GRACE_SECONDS + 60))
+    product = resolve_product_account_state(_session("amex", "error"))
+    readiness = resolve_account_readiness(
+        provider="amex",
+        product=product,
+        verification_lifecycle="timed_out",
+        account=_acct(synced_at=extraction_at),
+        extraction_at=extraction_at,
+        extraction_access_cycle_id="cycle-a",
+        now=now,
+        grace_seconds=READY_RESULT_GRACE_SECONDS,
+    )
+    assert readiness.state == UNVERIFIED
+    assert readiness.status_label == "Unable to verify"
+    assert readiness.login_required is False
+
+
+def test_successful_new_extraction_refreshes_ready_timestamp():
+    """9. Successful new correlated extraction refreshes ready timestamp."""
+    now = _now()
+    old_extraction = _iso(now - timedelta(minutes=10))
+    new_session = _iso(now - timedelta(seconds=20))
+    new_extraction = _iso(now - timedelta(seconds=5))
+    product = resolve_product_account_state(
+        _session("amex", "connected_now", last_verified=new_session)
+    )
+    readiness = resolve_account_readiness(
+        provider="amex",
+        product=product,
+        session_evidence_at=new_session,
+        verification_id="cycle-b",
+        verification_lifecycle="completed",
+        account=_acct(synced_at=new_extraction),
+        extraction_at=new_extraction,
+        extraction_access_cycle_id="cycle-b",
+        now=now,
+    )
+    assert readiness.state == READY
+    assert readiness.extraction_at == new_extraction
+    assert readiness.last_confirmed_ready_at == new_extraction
+    assert readiness.access_cycle_id == "cycle-b"
+    assert readiness.background_verification is False
+    assert old_extraction != new_extraction
+
+
+def test_awaiting_data_never_after_valid_correlated_extraction():
+    """13. awaiting data never appears after a valid correlated extraction."""
+    now = _now()
+    session_at, extraction_at, account, cycle_a = _prior_ready_inputs(now)
+    product = resolve_product_account_state(
+        _session(
+            "amex",
+            "checking",
+            last_verified=session_at,
+            verification_lifecycle="running",
+            verification_id="cycle-b",
+        )
+    )
+    readiness = resolve_account_readiness(
+        provider="amex",
+        product=product,
+        session_evidence_at=session_at,
+        verification_id="cycle-b",
+        verification_lifecycle="running",
+        account=account,
+        extraction_at=extraction_at,
+        extraction_access_cycle_id=cycle_a,
+        now=now,
+    )
+    assert readiness.state == READY
+    blob = " ".join(
+        filter(
+            None,
+            [
+                readiness.status_label,
+                readiness.status_copy,
+                readiness.secondary_label,
+                readiness.cached_data_label,
+            ],
+        )
+    ).lower()
+    assert "awaiting data" not in blob
+
+
+def test_production_sequence_cycle_a_ready_cycle_b_running_customer_stays_connected(client):
+    """Regression: cycle A ready, cycle B starts ~2m later → customer Connected.
+
+    Admin may still expose cycle B as the active lifecycle separately.
+    """
+    import app as mighty
+    from mighty.provider_session_state import SessionEvidence, upsert_provider_session_state
+    from mighty.session_verification import (
+        ensure_session_verification_tables,
+        get_latest_session_verification,
+        request_session_verification,
+    )
+
+    uid = _uid(client)
+    now = _now()
+    cycle_a_at = now - timedelta(minutes=2, seconds=10)
+    extraction_at = now - timedelta(minutes=2)
+    _seed_provider(client, "amex", synced_at=_iso(extraction_at))
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        # Persist extraction access_cycle_id from cycle A.
+        row = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+            (uid, "amex"),
+        ).fetchone()
+        data = mighty.decrypt_account_data(uid, row["data_enc"] or "")
+        data["access_cycle_id"] = "cycle-a"
+        data["extraction_access_cycle_id"] = "cycle-a"
+        db.execute(
+            "UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
+            (mighty.encrypt_account_data(uid, data), uid, "amex"),
+        )
+        upsert_provider_session_state(
+            db,
+            uid,
+            SessionEvidence(
+                provider="amex",
+                state="connected",
+                evidence_type="session_verified",
+                evidence_summary="cycle A connected",
+                observed_at=cycle_a_at,
+                source="test",
+                confidence="high",
+            ),
+        )
+        ensure_session_verification_tables(db)
+        # Simulate completed cycle A verification row, then start cycle B.
+        db.execute(
+            """
+            INSERT INTO provider_session_verification (
+                verification_id, user_id, provider, lifecycle, entry_url,
+                requested_at, started_at, completed_at
+            ) VALUES (?, ?, 'amex', 'completed', ?, ?, ?, ?)
+            """,
+            (
+                "cycle-a",
+                uid,
+                "https://global.americanexpress.com/overview",
+                _iso(cycle_a_at - timedelta(seconds=30)),
+                _iso(cycle_a_at - timedelta(seconds=25)),
+                _iso(extraction_at),
+            ),
+        )
+        db.commit()
+        # Force a new cycle B (bypass throttle by using older completed request).
+        db.execute(
+            "UPDATE provider_session_verification SET requested_at=? WHERE verification_id=?",
+            (_iso(now - timedelta(minutes=5)), "cycle-a"),
+        )
+        db.commit()
+        cycle_b = request_session_verification(db, uid, "amex", now=now, throttle_seconds=0)
+        assert cycle_b is not None
+        assert cycle_b.lifecycle == "requested"
+        assert cycle_b.verification_id != "cycle-a"
+
+        accounts, _ = load_all_account_statuses(
+            uid,
+            db,
+            decrypt_fn=mighty.decrypt_account_data,
+            display_names={"amex": "Amex"},
+            login_url_fn=lambda s: f"https://example.com/{s}",
+        )
+        latest = get_latest_session_verification(db, uid, "amex")
+
+    amex = next(a for a in accounts if a.source == "amex")
+    assert latest is not None
+    assert latest.verification_id == cycle_b.verification_id
+    assert latest.lifecycle == "requested"
+    # Customer product remains Connected based on cycle A.
+    assert amex.readiness == READY
+    assert amex.presentation_label == "Connected"
+    assert amex.status == UP_TO_DATE
+    assert amex.background_verification is True
+    assert amex.access_cycle_id == "cycle-a"
+    assert "awaiting data" not in (amex.verification_message or "").lower()
+
+    home = resolve_home_state(accounts=accounts, actions=[], freshness_label="")
+    assert home.health.up_to_date >= 1
+
+    resp = client.get("/api/account-status")
+    assert resp.status_code == 200
+    row = next(a for a in resp.get_json()["accounts"] if a["source"] == "amex")
+    assert row["readiness"] == READY
+    assert row["status_label"] == "Connected"
+    assert row["status"] == UP_TO_DATE
+    assert row.get("background_verification") is True
+    assert "awaiting data" not in (row.get("status_copy") or "").lower()
+
+
+def test_ready_revalidation_interval_suppresses_churn_while_preserving_active_reuse():
+    """12. No repeated verification jobs while one is active; ready interval suppresses churn."""
+    from mighty.provider_session_state import (
+        SessionEvidence,
+        ensure_provider_session_state_tables,
+        upsert_provider_session_state,
+    )
+    from mighty.session_verification import (
+        READY_REVALIDATION_INTERVAL_SECONDS,
+        ensure_provider_session_verification_if_stale,
+        ensure_session_verification_tables,
+        get_latest_session_verification,
+        request_session_verification,
+    )
+    import sqlite3
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    ensure_session_verification_tables(db)
+    ensure_provider_session_state_tables(db)
+    uid = "u1"
+    now = _now()
+    # Stale session evidence (past 120s) but recent ready extraction.
+    upsert_provider_session_state(
+        db,
+        uid,
+        SessionEvidence(
+            provider="amex",
+            state="connected",
+            evidence_type="session_verified",
+            evidence_summary="connected",
+            observed_at=now - timedelta(seconds=180),
+            source="test",
+            confidence="high",
+        ),
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_data (
+            user_id TEXT, source TEXT, synced_at TEXT, extraction_status TEXT
+        )
+        """
+    )
+    db.execute(
+        "INSERT INTO account_data (user_id, source, synced_at, extraction_status) VALUES (?,?,?,?)",
+        (uid, "amex", _iso(now - timedelta(minutes=5)), "complete"),
+    )
+    db.commit()
+
+    created = ensure_provider_session_verification_if_stale(db, uid, "amex", now=now)
+    assert created is None  # within READY_REVALIDATION_INTERVAL_SECONDS
+
+    # Past revalidation interval → enqueue once.
+    old_ready = _iso(now - timedelta(seconds=READY_REVALIDATION_INTERVAL_SECONDS + 30))
+    db.execute(
+        "UPDATE account_data SET synced_at=? WHERE user_id=? AND source=?",
+        (old_ready, uid, "amex"),
+    )
+    db.commit()
+    first = ensure_provider_session_verification_if_stale(db, uid, "amex", now=now)
+    assert first is not None
+    second = ensure_provider_session_verification_if_stale(db, uid, "amex", now=now)
+    assert second is not None
+    assert second.verification_id == first.verification_id
+    assert get_latest_session_verification(db, uid, "amex").verification_id == first.verification_id
+    # Explicit request also reuses active job.
+    again = request_session_verification(db, uid, "amex", now=now)
+    assert again is not None
+    assert again.verification_id == first.verification_id

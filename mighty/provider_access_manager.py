@@ -40,6 +40,8 @@ from mighty.provider_session_state import (
 )
 from mighty.session_verification import (
     CURRENT_SESSION_FRESHNESS_SECONDS,
+    READY_REVALIDATION_INTERVAL_SECONDS,
+    READY_RESULT_GRACE_SECONDS,
     SessionVerification,
     VerificationLifecycle,
     advance_session_verification,

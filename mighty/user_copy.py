@@ -113,6 +113,7 @@ READINESS_COPY_SIGNED_OUT = "Sign in so Mighty can access your account data."
 READINESS_COPY_UNVERIFIED = (
     "Mighty could not confirm both account access and data."
 )
+READINESS_SECONDARY_BACKGROUND = "Verifying in the background"
 
 # ── Worker popup copy ─────────────────────────────────────────────────────────
 WORKER_NAME = "Mighty"

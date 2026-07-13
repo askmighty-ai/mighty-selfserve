@@ -148,11 +148,16 @@ def _pick_waiting_account(accounts: Sequence[AccountStatus]) -> AccountStatus | 
 def _waiting_row_label(acct: AccountStatus) -> str:
     if acct.status == NEEDS_LOGIN:
         return user_copy.STATUS_LABEL_NEEDS_LOGIN
+    if acct.readiness == "ready" or acct.status == UP_TO_DATE:
+        return user_copy.ACCOUNT_STATE_LABELS[user_copy.ACCOUNT_STATE_READY]
     if acct.status == CHECKING:
         return user_copy.ACCOUNTS_STATUS_CHECKING
     if acct.status == UPDATING:
         return user_copy.STATUS_LABEL_UPDATING
-    if acct.last_successful_sync_at:
+    # “Connected — awaiting data” only before any successful correlated extraction.
+    if acct.last_successful_sync_at and acct.readiness not in (
+        "ready", "checking", "signed_out", "unverified",
+    ):
         return user_copy.CONNECTION_STATUS_LINES.get("connected", "Connected — awaiting data")
     return user_copy.ACCOUNTS_STATUS_AWAITING_FIRST
 
