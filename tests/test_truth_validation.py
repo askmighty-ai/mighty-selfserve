@@ -276,3 +276,48 @@ class TestTruthValidationAPIAndUI:
         assert "access_cycle_id" in rendered
         assert "Opened americanexpress.com" in rendered
         assert "Capability State" in rendered
+
+
+class TestTruthValidationCurrentCycleSemantics:
+    def test_logged_in_no_data_extraction_and_snapshot_not_run(self):
+        from mighty.provider_account import EXTRACTION_COMPLETE
+
+        view = _view(
+            UNVERIFIED,
+            session_state="connected",
+            extraction_ok=True,
+            extraction_correlated=False,
+            cached_data_label="Last saved data: 2 hours ago",
+            verification_lifecycle="completed",
+        )
+        cap = build_capability_view(
+            view,
+            extracted_items=AMEX_FIELDS,
+            extraction_status=EXTRACTION_COMPLETE,
+        )
+        tv = build_truth_validation(cap)
+        by_name = {s.name: s for s in tv.pipeline}
+        assert by_name["Extraction"].verdict == EvidenceOutcome.NOT_RUN
+        assert by_name["Snapshot"].verdict == EvidenceOutcome.NOT_RUN
+        assert "Previous data available" in (by_name["Snapshot"].detail or "")
+        blob = str(tv.to_dict()).lower()
+        assert "cookie" not in blob
+        assert "password" not in blob
+        assert "125,000" not in blob  # field values not dumped into truth metadata
+
+    def test_ui_renders_not_run_label(self):
+        from mighty.provider_account import EXTRACTION_COMPLETE
+
+        view = _view(
+            UNVERIFIED,
+            session_state="connected",
+            verification_lifecycle="completed",
+        )
+        cap = build_capability_view(
+            view,
+            extracted_items=[],
+            extraction_status=EXTRACTION_COMPLETE,
+        )
+        assert cap.state.value == "logged_in_no_account_data"
+        rendered = render_capability_panel(cap, escape=_escape)
+        assert "NOT RUN" in rendered
