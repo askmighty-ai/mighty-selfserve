@@ -12,12 +12,16 @@ from mighty.capability_state import (
     CapabilityState,
     CapabilityView,
     EvidenceItem,
-    PipelineStage,
     TRUTH_PROVIDER_DISPLAY,
     build_capability_view,
 )
 from mighty.customer_account_access import CustomerAccountAccessView
 from mighty.home_state import HomeStateResult
+from mighty.truth_validation import (
+    TruthEvidence,
+    TruthPipelineStage,
+    TruthValidation,
+)
 
 
 def _evidence_mark(item: EvidenceItem) -> str:
@@ -130,20 +134,48 @@ def _render_action(
     )
 
 
-def _pipeline_row(stage: PipelineStage, escape: Callable[[Any], str]) -> str:
-    bits: list[str] = [stage.verdict]
+def _pipeline_row(stage: TruthPipelineStage, escape: Callable[[Any], str]) -> str:
+    bits: list[str] = []
     if stage.timestamp:
         bits.append(stage.timestamp)
+    if stage.duration_ms is not None:
+        bits.append(f"{stage.duration_ms}ms")
     if stage.detail:
         bits.append(stage.detail)
-    if stage.id_label:
-        bits.append(stage.id_label)
+    if stage.evidence_ids:
+        bits.append("evidence:" + ",".join(stage.evidence_ids))
     return (
-        f'<div class="dash-truth-pipeline-stage" data-verdict="{escape(stage.verdict)}">'
+        f'<div class="dash-truth-pipeline-stage" data-verdict="{escape(stage.verdict.value)}">'
         f'<span class="dash-truth-pipeline-name">{escape(stage.name)}</span>'
-        f'<span class="dash-truth-pipeline-verdict">{escape(stage.verdict)}</span>'
-        f'<span class="dash-truth-pipeline-detail">{escape(" · ".join(bits[1:]) if len(bits) > 1 else "—")}</span>'
+        f'<span class="dash-truth-pipeline-verdict">{escape(stage.verdict.value)}</span>'
+        f'<span class="dash-truth-pipeline-detail">{escape(" · ".join(bits) if bits else "—")}</span>'
         f"</div>"
+    )
+
+
+def _timeline_row(item: TruthEvidence, escape: Callable[[Any], str]) -> str:
+    ts = item.timestamp or "—"
+    return (
+        f'<div class="dash-truth-timeline-row" data-outcome="{escape(item.outcome.value)}">'
+        f'<span class="dash-truth-timeline-ts">{escape(ts)}</span>'
+        f'<span class="dash-truth-timeline-desc">{escape(item.description)}</span>'
+        f'<span class="dash-truth-timeline-outcome">{escape(item.outcome.value)}</span>'
+        f"</div>"
+    )
+
+
+def _render_truth_timeline(
+    truth: TruthValidation,
+    escape: Callable[[Any], str],
+) -> str:
+    if not truth.timeline:
+        return ""
+    rows = "".join(_timeline_row(e, escape) for e in truth.timeline)
+    return (
+        f'<details class="dash-truth-timeline">'
+        f"<summary>Truth Timeline</summary>"
+        f'<div class="dash-truth-timeline-body">{rows}</div>'
+        f"</details>"
     )
 
 
@@ -151,21 +183,105 @@ def _render_technical_details(
     capability: CapabilityView,
     escape: Callable[[Any], str],
 ) -> str:
-    stages = capability.pipeline
-    if not stages:
+    truth = capability.truth_validation
+    if truth is None:
         return ""
+
+    # Capability
+    capability_html = (
+        f'<div class="dash-truth-tech-block">'
+        f'<p class="dash-truth-section-label">Capability</p>'
+        f'<p class="dash-truth-tech-value">{escape(truth.capability_state)}</p>'
+        f'<p class="dash-truth-tech-explain">{escape(truth.explanation)}</p>'
+        f"</div>"
+    )
+
+    # Confidence
+    confidence_html = (
+        f'<div class="dash-truth-tech-block">'
+        f'<p class="dash-truth-section-label">Confidence</p>'
+        f'<p class="dash-truth-tech-value">{escape(truth.confidence)}'
+        f' ({escape(str(truth.confidence_score))})</p>'
+        f"</div>"
+    )
+
+    # Pipeline
     body_parts: list[str] = []
-    for i, stage in enumerate(stages):
+    for i, stage in enumerate(truth.pipeline):
         body_parts.append(_pipeline_row(stage, escape))
-        if i < len(stages) - 1:
-            body_parts.append('<div class="dash-truth-pipeline-arrow" aria-hidden="true">↓</div>')
-    return (
-        f'<details class="dash-truth-tech">'
-        f"<summary>Technical Details</summary>"
-        f'<div class="dash-truth-pipeline">'
+        if i < len(truth.pipeline) - 1:
+            body_parts.append(
+                '<div class="dash-truth-pipeline-arrow" aria-hidden="true">↓</div>'
+            )
+    pipeline_html = (
+        f'<div class="dash-truth-tech-block dash-truth-pipeline">'
         f'<p class="dash-truth-section-label">Pipeline</p>'
         f'{"".join(body_parts)}'
         f"</div>"
+    )
+
+    # Evidence
+    ev_rows = "".join(
+        f'<li class="dash-truth-tech-evidence-item" data-outcome="{escape(e.outcome.value)}">'
+        f'<span class="dash-truth-tech-evidence-cat">{escape(e.category.value)}</span>'
+        f'<span class="dash-truth-tech-evidence-desc">{escape(e.description)}</span>'
+        f'<span class="dash-truth-tech-evidence-out">{escape(e.outcome.value)}</span>'
+        f"</li>"
+        for e in truth.evidence
+    )
+    evidence_html = (
+        f'<div class="dash-truth-tech-block">'
+        f'<p class="dash-truth-section-label">Evidence</p>'
+        f'<ul class="dash-truth-tech-evidence-list">{ev_rows}</ul>'
+        f"</div>"
+    )
+
+    # Timeline (nested under Technical Details as well as collapsible section)
+    tl_rows = "".join(_timeline_row(e, escape) for e in truth.timeline)
+    timeline_html = (
+        f'<div class="dash-truth-tech-block">'
+        f'<p class="dash-truth-section-label">Timeline</p>'
+        f'<div class="dash-truth-timeline-body">{tl_rows}</div>'
+        f"</div>"
+    )
+
+    # Developer ids — never cookies/tokens/credentials/bodies
+    id_rows = "".join(
+        f'<div class="dash-truth-dev-id">'
+        f'<dt>{escape(key)}</dt>'
+        f'<dd>{escape(value or "—")}</dd>'
+        f"</div>"
+        for key, value in truth.developer_ids.items()
+    )
+    ids_html = (
+        f'<div class="dash-truth-tech-block">'
+        f'<p class="dash-truth-section-label">Developer ids</p>'
+        f'<dl class="dash-truth-dev-ids">{id_rows}</dl>'
+        f"</div>"
+    )
+
+    transition_html = ""
+    if truth.transition and truth.transition.previous_state:
+        transition_html = (
+            f'<div class="dash-truth-tech-block">'
+            f'<p class="dash-truth-section-label">Transition</p>'
+            f'<p class="dash-truth-tech-value">'
+            f'{escape(truth.transition.previous_state)} → '
+            f'{escape(truth.transition.current_state)}</p>'
+            f'<p class="dash-truth-tech-explain">{escape(truth.transition.reason)}</p>'
+            f"</div>"
+        )
+
+    return (
+        f'<details class="dash-truth-tech">'
+        f"<summary>Technical Details</summary>"
+        f"{capability_html}"
+        f"{confidence_html}"
+        f"{transition_html}"
+        f"{pipeline_html}"
+        f"{evidence_html}"
+        f"{timeline_html}"
+        f"{ids_html}"
         f"</details>"
     )
 
@@ -176,6 +292,8 @@ def render_capability_panel(
     escape: Callable[[Any], str],
 ) -> str:
     """Render one provider Truth panel from CapabilityView only."""
+    truth = capability.truth_validation
+    timeline = _render_truth_timeline(truth, escape) if truth else ""
     return (
         f'<article class="dash-truth-panel" data-provider="{escape(capability.provider)}" '
         f'data-capability="{escape(capability.state.value)}">'
@@ -186,6 +304,7 @@ def render_capability_panel(
         f"{_render_extracted(capability, escape)}"
         f"{_render_meta_only(capability, escape)}"
         f"{_render_action(capability, escape)}"
+        f"{timeline}"
         f"{_render_technical_details(capability, escape)}"
         f"</article>"
     )

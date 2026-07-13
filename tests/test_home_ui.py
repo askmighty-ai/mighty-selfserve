@@ -124,6 +124,7 @@ class TestTruthDashboardHomeUi:
         assert "Statement balance" in rendered
         assert "Confidence: High" in rendered
         assert "Technical Details" in rendered
+        assert "Truth Timeline" in rendered
         assert "Summary" not in rendered
         assert "System Health" not in rendered
         assert "Last checked: 2h ago" in rendered

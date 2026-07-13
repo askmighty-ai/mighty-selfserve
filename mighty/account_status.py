@@ -202,6 +202,10 @@ class AccountStatus:
             cap = self.capability.to_dict()
             payload["capability"] = cap
             payload["capability_state"] = cap["capability_state"]
+            if cap.get("truth_validation") is not None:
+                payload["truth_validation"] = cap["truth_validation"]
+            elif self.capability.truth_validation is not None:
+                payload["truth_validation"] = self.capability.truth_validation.to_dict()
         elif self.customer_access is not None:
             payload["capability_state"] = self.customer_access.to_dict().get(
                 "capability_state",

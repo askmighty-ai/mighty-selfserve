@@ -6273,9 +6273,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-truth-pipeline-stage[data-verdict="UNKNOWN"] .dash-truth-pipeline-verdict{color:#a8a29e}
 .dash-truth-pipeline-detail{color:#78716c;overflow-wrap:anywhere}
 .dash-truth-pipeline-arrow{padding:0 0 0 48px;color:#a8a29e;font-size:12px;line-height:1}
+.dash-truth-timeline{margin-top:16px;border-top:0.5px solid rgba(0,0,0,0.06);padding-top:12px}
+.dash-truth-timeline summary{cursor:pointer;font-size:13px;font-weight:600;color:#57534e}
+.dash-truth-timeline-body{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.dash-truth-timeline-row{display:grid;grid-template-columns:150px minmax(0,1fr) 72px;gap:8px;align-items:baseline;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dash-truth-timeline-ts{color:#78716c}
+.dash-truth-timeline-desc{color:#1c1917}
+.dash-truth-timeline-outcome{font-weight:700;letter-spacing:.04em}
+.dash-truth-timeline-row[data-outcome="PASS"] .dash-truth-timeline-outcome{color:#15803d}
+.dash-truth-timeline-row[data-outcome="FAIL"] .dash-truth-timeline-outcome{color:#b91c1c}
+.dash-truth-timeline-row[data-outcome="UNKNOWN"] .dash-truth-timeline-outcome{color:#a8a29e}
+.dash-truth-tech-block{margin-top:14px}
+.dash-truth-tech-value{margin:0;font-size:13px;font-weight:600;color:#1c1917;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dash-truth-tech-explain{margin:6px 0 0;font-size:12px;color:#57534e;line-height:1.45}
+.dash-truth-tech-evidence-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.dash-truth-tech-evidence-item{display:grid;grid-template-columns:100px minmax(0,1fr) 64px;gap:8px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dash-truth-tech-evidence-cat{color:#78716c}
+.dash-truth-tech-evidence-desc{color:#1c1917}
+.dash-truth-tech-evidence-out{font-weight:700}
+.dash-truth-tech-evidence-item[data-outcome="PASS"] .dash-truth-tech-evidence-out{color:#15803d}
+.dash-truth-tech-evidence-item[data-outcome="FAIL"] .dash-truth-tech-evidence-out{color:#b91c1c}
+.dash-truth-tech-evidence-item[data-outcome="UNKNOWN"] .dash-truth-tech-evidence-out{color:#a8a29e}
+.dash-truth-dev-ids{margin:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:4px 12px}
+.dash-truth-dev-id{display:contents}
+.dash-truth-dev-id dt{font-size:12px;color:#78716c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dash-truth-dev-id dd{margin:0;font-size:12px;color:#1c1917;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 @media(max-width:640px){
   .dash-truth-fields{grid-template-columns:1fr}
   .dash-truth-pipeline-stage{grid-template-columns:1fr}
+  .dash-truth-timeline-row{grid-template-columns:1fr}
+  .dash-truth-tech-evidence-item{grid-template-columns:1fr}
+  .dash-truth-dev-ids{grid-template-columns:1fr}
 }
 @media(max-width:640px){
   .dash-tower-buckets{grid-template-columns:1fr}
