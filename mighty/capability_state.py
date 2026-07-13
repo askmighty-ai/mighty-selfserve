@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
+
+if TYPE_CHECKING:
+    from mighty.truth_validation import TruthValidation
 
 from mighty.connection_state import AMEX_SOURCE
 from mighty.provider_account import (
@@ -94,9 +97,10 @@ class CapabilityView:
     action_required: bool
     extracted_fields: tuple[ExtractedField, ...]
     pipeline: tuple[PipelineStage, ...]
+    truth_validation: TruthValidation | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "provider": self.provider,
             "display_name": self.display_name,
             "capability_state": self.state.value,
@@ -131,6 +135,9 @@ class CapabilityView:
                 for s in self.pipeline
             ],
         }
+        if self.truth_validation is not None:
+            payload["truth_validation"] = self.truth_validation.to_dict()
+        return payload
 
 
 _HEADLINES: dict[CapabilityState, str] = {
@@ -571,6 +578,9 @@ def build_capability_view(
     extraction_status: str | None = None,
     login_url: str | None = None,
     verification_id: str | None = None,
+    previous_capability_state: CapabilityState | str | None = None,
+    correlation_id: str | None = None,
+    snapshot_id: str | None = None,
 ) -> CapabilityView:
     """Assemble the customer Truth Dashboard / API model.
 
@@ -643,7 +653,7 @@ def build_capability_view(
             or AMEX_OPEN_URL
         )
 
-    return CapabilityView(
+    capability = CapabilityView(
         provider=provider,
         display_name=display_name,
         state=state,
@@ -657,6 +667,23 @@ def build_capability_view(
         action_required=action_required,
         extracted_fields=show_fields,
         pipeline=pipeline,
+        truth_validation=None,
+    )
+    # Observability only — lazy import avoids circular dependency at module load.
+    from mighty.truth_validation import attach_truth_validation
+
+    return attach_truth_validation(
+        capability,
+        access_view=view,
+        previous_state=previous_capability_state,
+        session_confidence=session_confidence,
+        verification_id=verification_id,
+        snapshot_id=snapshot_id,
+        correlation_id=correlation_id,
+        access_cycle_id=(
+            (view.access_cycle_id if view else None)
+            or (view.last_confirmed_access_cycle_id if view else None)
+        ),
     )
 
 
