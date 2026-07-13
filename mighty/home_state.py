@@ -24,7 +24,15 @@ from mighty.account_status import (
 )
 from mighty.action import Action, ActionCategory, ActionPriority
 from mighty.action_builders import attention_actions, savings_actions
+from mighty.capability_state import (
+    CapabilityView,
+    TRUTH_PROVIDER,
+    TRUTH_PROVIDER_DISPLAY,
+    build_capability_view,
+    filter_customer_accounts,
+)
 from mighty.customer_account_access import (
+    DISCOVERED_MANUAL,
     CustomerAccountAccessView,
     connected_summary_label,
 )
@@ -104,6 +112,11 @@ class HomeStateResult:
     access_views: list[CustomerAccountAccessView] = field(default_factory=list)
     show_access_debug: bool = False
     tower: ControlTowerSummary = field(default_factory=ControlTowerSummary)
+    # Truth Dashboard (single-provider capability instrument)
+    capability: CapabilityView | None = None
+    extracted_items: list[dict] = field(default_factory=list)
+    session_confidence: str | None = None
+    provider_open_url: str | None = None
 
 
 _PRIORITY_ORDER = {
@@ -273,8 +286,15 @@ def resolve_home_state(
     worker_setup_needed: bool = False,
     provider_open_urls: dict[str, str] | None = None,
     show_access_debug: bool = False,
+    extracted_items: list[dict] | None = None,
+    session_confidence: str | None = None,
+    extraction_status: str | None = None,
 ) -> HomeStateResult:
-    """Pick the dominant Home state and featured content."""
+    """Pick the dominant Home state and featured content.
+
+    CapabilityView is always Amex-first (Truth Dashboard). Callers that want a
+    single-provider customer home should pass only Amex accounts (dashboard does).
+    """
     actions = list(actions or [])
     access_views = _access_views_from_accounts(accounts)
     health = _health_counts(accounts, access_views=access_views)
@@ -289,11 +309,85 @@ def resolve_home_state(
         accounts,
         updating_display_name=updating_name,
     )
+    open_urls = provider_open_urls or {}
+    provider_open_url = open_urls.get(TRUTH_PROVIDER)
+    truth_accounts = filter_customer_accounts(list(accounts))
+    truth_views = _access_views_from_accounts(truth_accounts)
+    truth_view = truth_views[0] if truth_views else None
+    truth_acct = truth_accounts[0] if truth_accounts else None
+    if truth_view is None and truth_acct is not None and (
+        truth_acct.status == NEEDS_LOGIN
+        or truth_acct.readiness == "signed_out"
+        or truth_acct.login_required
+    ):
+        # Fixtures / edge rows without customer_access still need SIGNED_OUT.
+        from mighty.customer_account_access import build_customer_account_access_view
+        from mighty.account_readiness import AccountReadiness, SIGNED_OUT as R_SIGNED_OUT
+        from mighty import user_copy as _uc
+
+        synthetic = AccountReadiness(
+            provider=truth_acct.source,
+            state=R_SIGNED_OUT,
+            status_label="Sign in required",
+            status_copy=_uc.READINESS_COPY_SIGNED_OUT,
+            presentation_key="needs_sign_in",
+            canonical_status="needs_login",
+            login_required=True,
+            session_state="signed_out",
+            access_cycle_id=None,
+            session_evidence_at=None,
+            extraction_at=None,
+            extraction_ok=False,
+            extraction_correlated=False,
+            verification_id=None,
+            cached_data_label=truth_acct.cached_data_label,
+            last_confirmed_ready_at=None,
+            last_confirmed_access_cycle_id=None,
+            background_verification=False,
+            secondary_label=None,
+        )
+        truth_view = build_customer_account_access_view(
+            provider=truth_acct.source,
+            display_name=truth_acct.display_name,
+            readiness=synthetic,
+            discovered_from=DISCOVERED_MANUAL,
+            user_action_text=truth_acct.user_action_label,
+            user_action_url=truth_acct.user_action_url or provider_open_url,
+        )
+    capability = build_capability_view(
+        truth_view,
+        display_name=(
+            truth_view.display_name if truth_view else (
+                truth_acct.display_name if truth_acct else TRUTH_PROVIDER_DISPLAY
+            )
+        ),
+        provider=(
+            truth_view.provider if truth_view else (
+                truth_acct.source if truth_acct else TRUTH_PROVIDER
+            )
+        ),
+        extracted_items=extracted_items,
+        session_confidence=session_confidence,
+        extraction_status=extraction_status,
+        login_url=(
+            (truth_view.user_action_url if truth_view else None)
+            or (truth_acct.user_action_url if truth_acct else None)
+            or provider_open_url
+        ),
+    )
 
     def _result(**kwargs) -> HomeStateResult:
-        kwargs.setdefault("access_views", access_views)
+        kwargs.setdefault("access_views", truth_views if truth_views else access_views)
         kwargs.setdefault("show_access_debug", show_access_debug)
         kwargs.setdefault("tower", tower)
+        kwargs.setdefault("capability", capability)
+        kwargs.setdefault("extracted_items", list(extracted_items or []))
+        kwargs.setdefault("session_confidence", session_confidence)
+        kwargs.setdefault("provider_open_url", provider_open_url)
+        # Truth Dashboard presentation — hide multi-provider chrome.
+        kwargs["show_health"] = False
+        kwargs["show_metrics"] = False
+        kwargs["secondary_recommendations"] = []
         return HomeStateResult(**kwargs)
 
     login_acct = _pick_login_account(accounts)

@@ -6242,6 +6242,41 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-tower-health-value{display:block;margin-top:4px;font-size:22px;font-weight:650;color:#1c1917;letter-spacing:-0.03em}
 .dash-tower-facts{grid-template-columns:1fr 1fr}
 .dash-tower-fact-wide{grid-column:1 / -1}
+/* Truth Dashboard (single-provider capability instrument) */
+.dash-truth-card .dash-brief-header{margin-bottom:8px}
+.dash-truth-subhead{margin:6px 0 0;font-size:14px;color:#57534e;line-height:1.45;max-width:40rem}
+.dash-truth-panel{margin-top:8px;padding:16px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
+.dash-truth-provider{margin:0 0 10px;font-size:20px;font-weight:650;color:#1c1917;letter-spacing:-0.02em}
+.dash-truth-headline{margin:0 0 12px;font-size:16px;font-weight:600;color:#1c1917;line-height:1.4}
+.dash-truth-explain{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:4px}
+.dash-truth-explain-item{font-size:14px;color:#57534e;line-height:1.45}
+.dash-truth-section-label{margin:0 0 8px;font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:.05em}
+.dash-truth-evidence{margin:14px 0}
+.dash-truth-evidence-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.dash-truth-evidence-item{font-size:13px;color:#1c1917;line-height:1.4;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dash-truth-extracted{margin:16px 0}
+.dash-truth-fields{margin:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:6px 16px}
+.dash-truth-field{display:contents}
+.dash-truth-field dt{font-size:13px;color:#78716c}
+.dash-truth-field dd{margin:0;font-size:13px;font-weight:600;color:#1c1917}
+.dash-truth-empty{margin:0;font-size:13px;color:#a8a29e}
+.dash-truth-meta{margin:10px 0 0;font-size:12px;color:#78716c}
+.dash-truth-cta{display:inline-block;margin-top:14px}
+.dash-truth-tech{margin-top:18px;border-top:0.5px solid rgba(0,0,0,0.06);padding-top:12px}
+.dash-truth-tech summary{cursor:pointer;font-size:13px;font-weight:600;color:#57534e}
+.dash-truth-pipeline{margin-top:12px}
+.dash-truth-pipeline-stage{display:grid;grid-template-columns:140px 72px minmax(0,1fr);gap:8px;align-items:baseline;padding:6px 0;font-size:12px}
+.dash-truth-pipeline-name{font-weight:600;color:#1c1917}
+.dash-truth-pipeline-verdict{font-weight:700;letter-spacing:.04em}
+.dash-truth-pipeline-stage[data-verdict="PASS"] .dash-truth-pipeline-verdict{color:#15803d}
+.dash-truth-pipeline-stage[data-verdict="FAIL"] .dash-truth-pipeline-verdict{color:#b91c1c}
+.dash-truth-pipeline-stage[data-verdict="UNKNOWN"] .dash-truth-pipeline-verdict{color:#a8a29e}
+.dash-truth-pipeline-detail{color:#78716c;overflow-wrap:anywhere}
+.dash-truth-pipeline-arrow{padding:0 0 0 48px;color:#a8a29e;font-size:12px;line-height:1}
+@media(max-width:640px){
+  .dash-truth-fields{grid-template-columns:1fr}
+  .dash-truth-pipeline-stage{grid-template-columns:1fr}
+}
 @media(max-width:640px){
   .dash-tower-buckets{grid-template-columns:1fr}
   .dash-tower-health-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -9089,6 +9124,9 @@ def dashboard():
     login_required_accounts = []
     _home_account_statuses = []
     _home_provider_urls: dict[str, str] = {}
+    _truth_extracted_items: list = []
+    _truth_extraction_status: str | None = None
+    _truth_session_confidence: str | None = None
 
     _user_sync = get_db().execute(
         "SELECT sync_running, sync_started_at, sync_current_source FROM users WHERE id=?",
@@ -9100,6 +9138,8 @@ def dashboard():
 
     from mighty.session_access import load_session_access_by_provider
     from mighty.provider_access_probe import PROBE_PROVIDERS
+    from mighty.capability_state import TRUTH_PROVIDER, CUSTOMER_VISIBLE_PROVIDERS
+    from mighty.provider_session_state import get_provider_session_state
 
     _cred_sources = {
         r["source"]
@@ -9114,6 +9154,12 @@ def dashboard():
         decrypt_fn=_decrypt_acct,
         providers=sorted(_cred_sources | set(PROBE_PROVIDERS)),
     )
+    try:
+        _pss = get_provider_session_state(db, uid, TRUTH_PROVIDER)
+        if _pss and _pss.confidence:
+            _truth_session_confidence = _pss.confidence
+    except Exception:
+        pass
 
     from mighty.account_snapshot import load_latest_snapshots_by_provider
 
@@ -9123,6 +9169,10 @@ def dashboard():
 
     for cat in _cat_order:
         for src, display_name, icon, color in _cat_map[cat]:
+            # Truth Dashboard: only surface Amex on the customer home.
+            # Other providers remain in credentials / backend; not deleted.
+            if src not in CUSTOMER_VISIBLE_PROVIDERS:
+                continue
             row   = synced_map.get(src)
             _t1 = time.perf_counter()
             data  = _decrypt_acct(user["id"], row["data_enc"] or "") if row else {}
@@ -9205,6 +9255,9 @@ def dashboard():
                 snapshot_schema_version=_snap.schema_version if _snap else None,
             )
             _home_account_statuses.append(_acct_canon)
+            if src == TRUTH_PROVIDER:
+                _truth_extracted_items = list(items or [])
+                _truth_extraction_status = _provider_acct_early.extraction_status
             _card_url = SITE_ENTRY_URL.get(src) or (row or {}).get("entry_url", "") or _provider_login_url(src)
             if _card_url:
                 _home_provider_urls[src] = _card_url
@@ -9216,6 +9269,11 @@ def dashboard():
                     total_expiring += 1
                     break
 
+    # If Amex is not yet in credentials, still show the Truth Dashboard empty/signed-out state.
+    if not _home_account_statuses:
+        _home_provider_urls[TRUTH_PROVIDER] = SITE_ENTRY_URL.get(
+            TRUTH_PROVIDER, "https://www.americanexpress.com/en-us/account/login",
+        )
     account_data_html = ""
     _render_lap.record("decrypt_account", _render_decrypt_ms)
     _render_lap.finish()
@@ -9816,6 +9874,9 @@ def dashboard():
             freshness_label=_last_checked,
             provider_open_urls=_home_provider_urls,
             show_access_debug=_is_dev_debug(user),
+            extracted_items=_truth_extracted_items,
+            session_confidence=_truth_session_confidence,
+            extraction_status=_truth_extraction_status,
         )
         return render_home_page(
             _home_result,
@@ -13380,8 +13441,11 @@ def _field_config_html(source: str, configured: set, extra_data: dict = None,
 def _build_dash_modals(configured: set, csrf: str) -> str:
     """Inject the Connect-account modal + field-edit modal into the dashboard page."""
     # ── Build site picker HTML (same logic as credentials page) ──────────────
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
     modal_categories: dict = {}
     for key, name, icon, color, cat in SUPPORTED_SITES:
+        if key not in CUSTOMER_VISIBLE_PROVIDERS:
+            continue
         modal_categories.setdefault(cat, []).append((key, name, icon, color))
 
     modal_sections = ""
@@ -14394,6 +14458,8 @@ def _accounts_collect_rows(
     readiness_by_source: dict | None = None,
     cached_data_label_by_source: dict | None = None,
 ) -> list[AccountsRow]:
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
+
     rows: list[AccountsRow] = []
     site_map = {k: (n, ic, col, cat) for k, n, ic, col, cat in SUPPORTED_SITES}
     seen: set[str] = set()
@@ -14466,6 +14532,8 @@ def _accounts_collect_rows(
     for key, name, icon, color, _cat in SUPPORTED_SITES:
         if key not in configured:
             continue
+        if key not in CUSTOMER_VISIBLE_PROVIDERS:
+            continue
         lifecycle = lifecycle_by_source.get(key) or resolve_account_lifecycle(
             key, in_credentials=True,
         )
@@ -14474,6 +14542,8 @@ def _accounts_collect_rows(
     for row in pending_added:
         sk = row["site_key"]
         if sk in configured:
+            continue
+        if sk not in CUSTOMER_VISIBLE_PROVIDERS:
             continue
         info = site_map.get(sk)
         dname = info[0] if info else row["display_name"]
@@ -14618,8 +14688,11 @@ def _build_credentials_page(
 
     add_coverage_html = render_add_coverage_footer(he) if account_rows else ""
     # ── Modal site picker ────────────────────────────────────────────────────
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
     modal_categories: dict = {}
     for key, name, icon, color, cat in SUPPORTED_SITES:
+        if key not in CUSTOMER_VISIBLE_PROVIDERS:
+            continue
         modal_categories.setdefault(cat, []).append((key, name, icon, color))
 
     modal_sections = ""
@@ -18341,6 +18414,9 @@ def api_account_status():
         sync_started_at=sync_started_at,
         updating_source=updating_source,
     )
+    from mighty.capability_state import filter_customer_accounts
+    # Customer surface: Amex-only Truth Dashboard contract.
+    accounts = filter_customer_accounts(accounts)
     return jsonify({
         "ok": True,
         "accounts": [a.to_dict() for a in accounts],
@@ -20573,6 +20649,8 @@ if ({gmail_not_configured}) {
 
 def _render_email_scan_page(suggestions=None, already_count=0, provider_triggered=None, oauth_error=None):
     """Render the /email-scan page, optionally with pre-populated scan results."""
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
+
     db  = get_db()
     uid = session["user_id"]
     user = db.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
@@ -20585,6 +20663,12 @@ def _render_email_scan_page(suggestions=None, already_count=0, provider_triggere
     acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
     connected = {r["source"] for r in acts if not r["source"].startswith("_")}
 
+    # Customer surface: only show Amex suggestions for now.
+    if suggestions:
+        suggestions = [
+            s for s in suggestions
+            if s.get("site_key") in CUSTOMER_VISIBLE_PROVIDERS
+        ]
     gmail_configured = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
     outlook_configured = bool(MS_CLIENT_ID and MS_CLIENT_SECRET)
 
@@ -20777,7 +20861,8 @@ def email_gmail_callback():
         suggestions = []
 
     already_count = sum(1 for s in suggestions if s["site_key"] in connected)
-    visible = [s for s in suggestions if s["site_key"] not in connected]
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS as _CVP
+    visible = [s for s in suggestions if s["site_key"] not in connected and s["site_key"] in _CVP]
     _store_suggestions(uid, visible, db)
 
     if any(s["site_key"] == "amex" for s in visible):
@@ -20875,7 +20960,8 @@ def email_outlook_callback():
         suggestions = []
 
     already_count = sum(1 for s in suggestions if s["site_key"] in connected)
-    visible = [s for s in suggestions if s["site_key"] not in connected]
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS as _CVP
+    visible = [s for s in suggestions if s["site_key"] not in connected and s["site_key"] in _CVP]
     _store_suggestions(uid, visible, db)
 
     return _render_email_scan_page(suggestions=visible, already_count=already_count)
@@ -20921,8 +21007,12 @@ def api_email_scan_imap():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
     already_count = 0  # scan_imap already filters
-    visible = suggestions
+    visible = [
+        s for s in suggestions
+        if s.get("site_key") in CUSTOMER_VISIBLE_PROVIDERS
+    ]
     _store_suggestions(uid, visible, db)
 
     return jsonify({
@@ -20935,6 +21025,8 @@ def api_email_scan_imap():
 @app.route("/api/email/suggestions")
 @require_login
 def api_email_suggestions():
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
+
     db  = get_db()
     uid = session["user_id"]
     rows = db.execute("""
@@ -20943,7 +21035,11 @@ def api_email_suggestions():
         WHERE user_id=? AND dismissed=0 AND added=0
         ORDER BY email_count DESC
     """, (uid,)).fetchall()
-    return jsonify({"suggestions": [dict(r) for r in rows]})
+    visible = [
+        dict(r) for r in rows
+        if r["site_key"] in CUSTOMER_VISIBLE_PROVIDERS
+    ]
+    return jsonify({"suggestions": visible})
 
 
 @app.route("/api/email/suggestions/dismiss", methods=["POST"])
@@ -20962,9 +21058,13 @@ def api_email_suggestions_dismiss():
 @app.route("/api/email/suggestions/add", methods=["POST"])
 @require_login
 def api_email_suggestions_add():
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
+
     check_csrf()
     data = request.get_json(force=True) or {}
     site_key = data.get("site_key", "")
+    if site_key not in CUSTOMER_VISIBLE_PROVIDERS:
+        return jsonify({"error": "provider not available"}), 400
     db  = get_db()
     uid = session["user_id"]
     db.execute("UPDATE email_suggestions SET added=1 WHERE user_id=? AND site_key=?", (uid, site_key))

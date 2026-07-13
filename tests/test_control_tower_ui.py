@@ -1,20 +1,25 @@
-"""UI regression tests for Dashboard Control Tower presentation (PR #96)."""
+"""UI regression tests for Truth Dashboard capability presentation (PR #97).
+
+Replaces Control Tower multi-provider UI expectations from PR #96.
+"""
 
 from __future__ import annotations
 
 import html
+import re
 
 from mighty.account_readiness import AccountReadiness, READY, CHECKING, SIGNED_OUT, UNVERIFIED
 from mighty.account_status import AccountStatus
+from mighty.capability_state import CapabilityState
 from mighty.customer_account_access import (
-    BG_AWAITING_FIRST,
     DISCOVERED_GMAIL,
-    LIVE_UNKNOWN,
+    DISCOVERED_MANUAL,
     CustomerAccountAccessView,
     build_customer_account_access_view,
 )
 from mighty.home_state import resolve_home_state
 from mighty.home_ui import render_home_page
+from mighty.provider_account import EXTRACTION_COMPLETE, EXTRACTION_FAILED
 from mighty import user_copy
 
 
@@ -121,185 +126,92 @@ def _render(accounts, **kwargs):
     return result, html_out
 
 
-def _visible_without_why(rendered: str) -> str:
-    """Strip Why? expandable content so we can assert product language only."""
-    import re
+def _without_tech(rendered: str) -> str:
     return re.sub(
-        r'<details class="dash-access-why">.*?</details>',
+        r'<details class="dash-truth-tech">.*?</details>',
         "",
         rendered,
         flags=re.DOTALL,
     )
 
 
-class TestControlTowerHero:
-    def test_one_connected_account_watching_no_action(self):
-        view = _view_from_readiness(
-            "American Express",
-            _readiness("amex", READY),
-        )
-        result, rendered = _render([_status_from_view(view)])
-        assert "watching your accounts" in rendered.lower()
-        assert "No action needed." in rendered
-        assert "all set" not in rendered.lower()
-        assert result.tower.watching_count == 1
-        assert result.tower.needs_you_count == 0
-
-    def test_connected_while_background_refresh_running(self):
-        view = _view_from_readiness(
-            "American Express",
-            _readiness("amex", READY, background_verification=True),
-            verification_lifecycle="extracting",
-        )
+class TestTruthDashboardStates:
+    def test_extraction_success(self):
+        view = _view_from_readiness("American Express", _readiness("amex", READY))
         result, rendered = _render(
             [_status_from_view(view)],
-            sync_running=True,
-            updating_display_name="American Express",
+            extracted_items=[{"label": "Membership Rewards", "value": "50,000"}],
+            session_confidence="high",
         )
-        assert "watching your accounts" in rendered.lower()
-        assert "Current activity: Refreshing account" in rendered
-        assert "all set" not in rendered.lower()
-        assert result.tower.refreshing_count >= 1 or result.updating_display_name
+        assert result.capability.state == CapabilityState.EXTRACTION_SUCCESS
+        assert "can see and extract" in rendered.lower()
+        assert "Membership Rewards" in rendered
+        assert "Confidence: High" in rendered
+        assert "Technical Details" in rendered
+        assert "Summary" not in rendered
+        assert "System Health" not in rendered
 
-    def test_one_signed_out_account_needs_attention(self):
+    def test_signed_out(self):
         view = _view_from_readiness(
-            "United",
-            _readiness("united", SIGNED_OUT, session_state="signed_out"),
+            "American Express",
+            _readiness("amex", SIGNED_OUT, session_state="signed_out"),
             user_action_text="Sign in",
             user_action_url="https://example.com/login",
         )
         result, rendered = _render([_status_from_view(view, canonical="needs_login")])
-        assert "Needs your attention" in rendered or "needs your attention" in rendered.lower()
-        assert "No action needed." not in rendered
-        assert result.tower.needs_you_count == 1
+        assert result.capability.state == CapabilityState.SIGNED_OUT
+        assert "You are signed out" in rendered
+        assert "Open American Express" in rendered
+        assert "Definitive login page" in rendered or "signed-out" in rendered.lower()
 
-    def test_multiple_waiting_accounts_system_health(self):
-        accounts = [
-            _status_from_view(
-                _view_from_readiness("American Express", _readiness("amex", READY)),
-            ),
-            _status_from_view(
-                _view_from_readiness(
-                    "Delta",
-                    _readiness("delta", CHECKING, session_state="checking"),
-                    verification_lifecycle="visiting",
-                ),
-                canonical="checking",
-            ),
-            _status_from_view(
-                _view_from_readiness(
-                    "Hilton",
-                    _readiness("hilton", UNVERIFIED),
-                ),
-                canonical="waiting_for_extension",
-            ),
-            _status_from_view(
-                _view_from_readiness(
-                    "United",
-                    _readiness("united", UNVERIFIED),
-                ),
-                canonical="unverified",
-            ),
-        ]
-        result, rendered = _render(accounts)
-        assert "System Health" in rendered
-        assert "Watching" in rendered
-        assert "Refreshing" in rendered
-        assert "Waiting" in rendered
-        assert "Needs your help" in rendered
-        assert result.tower.watching_count == 1
-        assert result.tower.refreshing_count >= 1
-        assert result.tower.waiting_count >= 1
-
-
-class TestControlTowerConsistency:
-    def test_no_contradictory_hero_and_account_messaging(self):
+    def test_extraction_failed(self):
         view = _view_from_readiness(
             "American Express",
-            _readiness("amex", READY, background_verification=True),
-            verification_lifecycle="extracting",
+            _readiness("amex", UNVERIFIED, session_state="connected"),
+            extraction_status=EXTRACTION_FAILED,
         )
-        waiting = _view_from_readiness(
-            "Hilton",
-            _readiness("hilton", UNVERIFIED),
+        result, rendered = _render(
+            [_status_from_view(view, canonical="unverified")],
+            extraction_status=EXTRACTION_FAILED,
         )
-        result, rendered = _render([
-            _status_from_view(view),
-            _status_from_view(waiting, canonical="waiting_for_extension"),
-        ])
-        assert "all set" not in rendered.lower()
-        assert "No action needed." in rendered
-        # Hero should acknowledge background work, not claim idle all-clear.
-        assert (
-            "being verified" in rendered.lower()
-            or "waiting" in rendered.lower()
-            or "monitoring" in rendered.lower()
-            or "watching" in rendered.lower()
-        )
-        assert result.tower.has_background_work
+        assert result.capability.state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
+        assert "could not extract" in rendered.lower()
+        assert "No customer action required." in rendered
+        assert "Extraction failed" in rendered
 
-    def test_no_developer_terminology_outside_why(self):
+    def test_logged_in_no_data(self):
         view = _view_from_readiness(
             "American Express",
-            _readiness("amex", READY),
-            discovered_from=DISCOVERED_GMAIL,
+            _readiness("amex", UNVERIFIED, session_state="connected"),
         )
-        _, rendered = _render([_status_from_view(view)])
-        visible = _visible_without_why(rendered)
-        assert "Discovered from Gmail" not in visible
-        assert "Private data" not in visible
-        assert "Live access" not in visible
-        assert ">Background<" not in visible and "Background None" not in visible
-        assert "Current activity" in visible
-        assert "Watching" in visible
-        # Why? still holds discovery / private data for expansion.
-        assert "Why?" in rendered
-        assert "Discovered from" in rendered
+        result, rendered = _render(
+            [_status_from_view(view, canonical="unverified")],
+            extraction_status=EXTRACTION_COMPLETE,
+            extracted_items=[],
+        )
+        assert result.capability.state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
+        assert "cannot see your account information" in rendered.lower()
 
-
-class TestControlTowerAccountCards:
-    def test_watching_card_product_language(self):
+    def test_login_unknown(self):
         view = _view_from_readiness(
             "American Express",
-            _readiness("amex", READY),
+            _readiness("amex", CHECKING, session_state="checking"),
+            verification_lifecycle="running",
         )
-        _, rendered = _render([_status_from_view(view)])
-        assert "✓ Watching" in rendered
-        assert "Current activity" in rendered
-        assert "No action required" in rendered
-        assert user_copy.TOWER_MEANING_WATCHING in rendered
-
-    def test_sign_in_card(self):
-        view = _view_from_readiness(
-            "United",
-            _readiness("united", SIGNED_OUT, session_state="signed_out"),
-            user_action_text="Sign in",
-            user_action_url="https://example.com",
-        )
-        _, rendered = _render([_status_from_view(view, canonical="needs_login")])
-        assert "⚠ Sign in required" in rendered
-        assert "Waiting for you" in rendered
-
-    def test_waiting_first_verification_card(self):
-        view = _view_from_readiness(
-            "Hilton",
-            _readiness("hilton", UNVERIFIED),
-        )
-        assert view.background_work == BG_AWAITING_FIRST or view.live_access == LIVE_UNKNOWN
-        _, rendered = _render([_status_from_view(view, canonical="unverified")])
-        assert "Waiting for first verification" in rendered
-        assert user_copy.TOWER_MEANING_WAITING_FIRST in rendered
+        result, rendered = _render([_status_from_view(view, canonical="checking")])
+        assert result.capability.state == CapabilityState.LOGIN_UNKNOWN
+        assert "cannot determine whether you are logged in" in rendered.lower()
+        assert "Verification in progress" in rendered or "login not yet confirmed" in rendered.lower()
 
 
-class TestControlTowerSummaryBuckets:
-    def test_summary_watching_working_needs_you(self):
+class TestTruthDashboardPresentation:
+    def test_hides_multi_provider_noise(self):
         accounts = [
             _status_from_view(_view_from_readiness("American Express", _readiness("amex", READY))),
             _status_from_view(
                 _view_from_readiness(
                     "Delta",
                     _readiness("delta", CHECKING, session_state="checking"),
-                    verification_lifecycle="visiting",
                 ),
                 canonical="checking",
             ),
@@ -313,11 +225,28 @@ class TestControlTowerSummaryBuckets:
                 canonical="needs_login",
             ),
         ]
-        _, rendered = _render(accounts)
-        assert "Summary" in rendered
-        assert "Watching" in rendered
-        assert "Working" in rendered
-        assert "Needs you" in rendered
+        result, rendered = _render(accounts)
         assert "American Express" in rendered
-        assert "United" in rendered
-        assert "Sign in required" in rendered
+        assert "Delta" not in rendered
+        assert "United" not in rendered
+        assert "Summary" not in rendered
+        assert "System Health" not in rendered
+        assert "Needs you" not in rendered
+        assert len(result.access_views) == 1
+
+    def test_no_discovery_jargon_outside_tech_details(self):
+        view = _view_from_readiness(
+            "American Express",
+            _readiness("amex", READY),
+            discovered_from=DISCOVERED_MANUAL,
+        )
+        _, rendered = _render([_status_from_view(view)])
+        visible = _without_tech(rendered)
+        assert "Discovered from" not in visible
+        assert "Live access" not in visible
+        assert "readiness" not in visible.lower()
+        assert "Technical Details" in rendered
+        assert "Session Evidence" in rendered
+        assert "Verification" in rendered
+        assert "Extraction" in rendered
+        assert "Snapshot" in rendered

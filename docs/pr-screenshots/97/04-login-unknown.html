@@ -1,0 +1,45 @@
+<!DOCTYPE html><html><head><meta charset=utf-8><title>04-login-unknown.html</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f5f5f4;margin:0;padding:24px;color:#1c1917}
+.dash-brief-featured-cta{display:inline-block;margin-top:14px;padding:10px 14px;background:#1c1917;color:#fff;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600}
+/* Truth Dashboard (single-provider capability instrument) */
+.dash-truth-card .dash-brief-header{margin-bottom:8px}
+.dash-truth-subhead{margin:6px 0 0;font-size:14px;color:#57534e;line-height:1.45;max-width:40rem}
+.dash-truth-panel{margin-top:8px;padding:16px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
+.dash-truth-provider{margin:0 0 10px;font-size:20px;font-weight:650;color:#1c1917;letter-spacing:-0.02em}
+.dash-truth-headline{margin:0 0 12px;font-size:16px;font-weight:600;color:#1c1917;line-height:1.4}
+.dash-truth-explain{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:4px}
+.dash-truth-explain-item{font-size:14px;color:#57534e;line-height:1.45}
+.dash-truth-section-label{margin:0 0 8px;font-size:11px;font-weight:700;color:#78716c;text-transform:uppercase;letter-spacing:.05em}
+.dash-truth-evidence{margin:14px 0}
+.dash-truth-evidence-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.dash-truth-evidence-item{font-size:13px;color:#1c1917;line-height:1.4;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dash-truth-extracted{margin:16px 0}
+.dash-truth-fields{margin:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:6px 16px}
+.dash-truth-field{display:contents}
+.dash-truth-field dt{font-size:13px;color:#78716c}
+.dash-truth-field dd{margin:0;font-size:13px;font-weight:600;color:#1c1917}
+.dash-truth-empty{margin:0;font-size:13px;color:#a8a29e}
+.dash-truth-meta{margin:10px 0 0;font-size:12px;color:#78716c}
+.dash-truth-cta{display:inline-block;margin-top:14px}
+.dash-truth-tech{margin-top:18px;border-top:0.5px solid rgba(0,0,0,0.06);padding-top:12px}
+.dash-truth-tech summary{cursor:pointer;font-size:13px;font-weight:600;color:#57534e}
+.dash-truth-pipeline{margin-top:12px}
+.dash-truth-pipeline-stage{display:grid;grid-template-columns:140px 72px minmax(0,1fr);gap:8px;align-items:baseline;padding:6px 0;font-size:12px}
+.dash-truth-pipeline-name{font-weight:600;color:#1c1917}
+.dash-truth-pipeline-verdict{font-weight:700;letter-spacing:.04em}
+.dash-truth-pipeline-stage[data-verdict="PASS"] .dash-truth-pipeline-verdict{color:#15803d}
+.dash-truth-pipeline-stage[data-verdict="FAIL"] .dash-truth-pipeline-verdict{color:#b91c1c}
+.dash-truth-pipeline-stage[data-verdict="UNKNOWN"] .dash-truth-pipeline-verdict{color:#a8a29e}
+.dash-truth-pipeline-detail{color:#78716c;overflow-wrap:anywhere}
+.dash-truth-pipeline-arrow{padding:0 0 0 48px;color:#a8a29e;font-size:12px;line-height:1}
+@media(max-width:640px){
+  .dash-truth-fields{grid-template-columns:1fr}
+  .dash-truth-pipeline-stage{grid-template-columns:1fr}
+}
+@media(max-width:640px){
+  .dash-tower-buckets{grid-template-columns:1fr}
+  .dash-tower-health-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+</style></head><body><div class="dash-hero"><div class="dash-brief-card dash-brief-card--exec dash-truth-card"><div class="dash-brief-exec"><header class="dash-brief-header"><h1 class="dash-brief-greeting">Mighty</h1><p class="dash-truth-subhead">Can Mighty see and extract authenticated American Express account data?</p></header><section class="dash-brief-primary" aria-label="Capability status"><article class="dash-truth-panel" data-provider="amex" data-capability="login_unknown"><h2 class="dash-truth-provider">American Express</h2><p class="dash-truth-headline">⚪ Mighty cannot determine whether you are logged in.</p><ul class="dash-truth-explain"><li class="dash-truth-explain-item">Current evidence is insufficient.</li><li class="dash-truth-explain-item">Any cached data may be stale.</li></ul><section class="dash-truth-evidence" aria-label="Why Mighty believes this"><p class="dash-truth-section-label">Why Mighty believes this</p><ul class="dash-truth-evidence-list"><li class="dash-truth-evidence-item">No definitive current login evidence</li></ul></section><details class="dash-truth-tech"><summary>Technical Details</summary><div class="dash-truth-pipeline"><p class="dash-truth-section-label">Pipeline</p><div class="dash-truth-pipeline-stage" data-verdict="UNKNOWN"><span class="dash-truth-pipeline-name">Session Evidence</span><span class="dash-truth-pipeline-verdict">UNKNOWN</span><span class="dash-truth-pipeline-detail">Verification in flight</span></div><div class="dash-truth-pipeline-arrow" aria-hidden="true">↓</div><div class="dash-truth-pipeline-stage" data-verdict="UNKNOWN"><span class="dash-truth-pipeline-name">Verification</span><span class="dash-truth-pipeline-verdict">UNKNOWN</span><span class="dash-truth-pipeline-detail">—</span></div><div class="dash-truth-pipeline-arrow" aria-hidden="true">↓</div><div class="dash-truth-pipeline-stage" data-verdict="UNKNOWN"><span class="dash-truth-pipeline-name">Observation</span><span class="dash-truth-pipeline-verdict">UNKNOWN</span><span class="dash-truth-pipeline-detail">not_yet_seen</span></div><div class="dash-truth-pipeline-arrow" aria-hidden="true">↓</div><div class="dash-truth-pipeline-stage" data-verdict="UNKNOWN"><span class="dash-truth-pipeline-name">Extraction</span><span class="dash-truth-pipeline-verdict">UNKNOWN</span><span class="dash-truth-pipeline-detail">not_yet_seen</span></div><div class="dash-truth-pipeline-arrow" aria-hidden="true">↓</div><div class="dash-truth-pipeline-stage" data-verdict="UNKNOWN"><span class="dash-truth-pipeline-name">Snapshot</span><span class="dash-truth-pipeline-verdict">UNKNOWN</span><span class="dash-truth-pipeline-detail">—</span></div></div></details></article></section><footer class="dash-home-footer">Last checked: just now</footer></div></div></div></body></html>

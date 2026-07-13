@@ -543,14 +543,14 @@ def test_customer_surfaces_agree_on_readiness(client):
     now = _now()
     session_at = now - timedelta(seconds=30)
     extraction_at = now - timedelta(seconds=5)
-    _seed_provider(client, "delta", synced_at=_iso(extraction_at))
+    _seed_provider(client, "amex", synced_at=_iso(extraction_at))
     with mighty.app.app_context():
         db = mighty.get_db()
         upsert_provider_session_state(
             db,
             uid,
             SessionEvidence(
-                provider="delta",
+                provider="amex",
                 state="connected",
                 evidence_type="session_verified",
                 evidence_summary="test connected",
@@ -564,12 +564,12 @@ def test_customer_surfaces_agree_on_readiness(client):
             uid,
             db,
             decrypt_fn=mighty.decrypt_account_data,
-            display_names={"delta": "Delta"},
+            display_names={"amex": "American Express"},
             login_url_fn=lambda s: f"https://example.com/{s}",
         )
     by_source = {a.source: a for a in accounts}
-    assert by_source["delta"].readiness == READY
-    assert by_source["delta"].presentation_label == "Connected"
+    assert by_source["amex"].readiness == READY
+    assert by_source["amex"].presentation_label == "Connected"
 
     home = resolve_home_state(accounts=accounts, actions=[], freshness_label="")
     assert home.health.up_to_date >= 1
@@ -577,10 +577,11 @@ def test_customer_surfaces_agree_on_readiness(client):
     resp = client.get("/api/account-status")
     assert resp.status_code == 200
     payload = resp.get_json()
-    delta = next(a for a in payload["accounts"] if a["source"] == "delta")
-    assert delta["readiness"] == READY
-    assert delta["status_label"] == "Connected"
-    assert delta["status"] == UP_TO_DATE
+    amex = next(a for a in payload["accounts"] if a["source"] == "amex")
+    assert amex["readiness"] == READY
+    assert amex["status_label"] == "Connected"
+    assert amex["status"] == UP_TO_DATE
+    assert amex["capability_state"] == "extraction_success"
 
 
 def test_signed_out_with_cached_data_never_connected_on_api(client):
@@ -589,14 +590,14 @@ def test_signed_out_with_cached_data_never_connected_on_api(client):
     uid = _uid(client)
     now = _now()
     cached_at = now - timedelta(minutes=2)
-    _seed_provider(client, "delta", synced_at=_iso(cached_at))
+    _seed_provider(client, "amex", synced_at=_iso(cached_at))
     with mighty.app.app_context():
         db = mighty.get_db()
         upsert_provider_session_state(
             db,
             uid,
             SessionEvidence(
-                provider="delta",
+                provider="amex",
                 state="signed_out",
                 evidence_type="login_page",
                 evidence_summary="login page",
@@ -610,21 +611,22 @@ def test_signed_out_with_cached_data_never_connected_on_api(client):
             uid,
             db,
             decrypt_fn=mighty.decrypt_account_data,
-            display_names={"delta": "Delta"},
+            display_names={"amex": "American Express"},
             login_url_fn=lambda s: "",
         )
-    delta = next(a for a in accounts if a.source == "delta")
-    assert delta.readiness == SIGNED_OUT
-    assert delta.status == NEEDS_LOGIN
-    assert delta.presentation_label == "Sign in required"
-    assert delta.cached_data_label is not None
+    amex = next(a for a in accounts if a.source == "amex")
+    assert amex.readiness == SIGNED_OUT
+    assert amex.status == NEEDS_LOGIN
+    assert amex.presentation_label == "Sign in required"
+    assert amex.cached_data_label is not None
 
     resp = client.get("/api/account-status")
     payload = resp.get_json()
-    row = next(a for a in payload["accounts"] if a["source"] == "delta")
+    row = next(a for a in payload["accounts"] if a["source"] == "amex")
     assert row["readiness"] == SIGNED_OUT
     assert row["status_label"] == "Sign in required"
     assert row["status"] != UP_TO_DATE
+    assert row["capability_state"] == "signed_out"
 
 
 def test_delta_cached_data_with_signed_out_agrees_on_every_surface(client):
@@ -749,18 +751,18 @@ def test_delta_cached_data_with_signed_out_agrees_on_every_surface(client):
         card.data_freshness or ""
     )
 
-    # /api/account-status (popup + dashboard poll)
+    # /api/account-status (popup + dashboard poll) — Amex-only customer surface.
+    # Non-Amex providers remain via load_all_account_statuses (asserted above).
     resp = client.get("/api/account-status")
     assert resp.status_code == 200
     payload = resp.get_json()
-    row = next(a for a in payload["accounts"] if a["source"] == "delta")
-    assert row["readiness"] == SIGNED_OUT
-    assert row["status_label"] == "Sign in required"
-    assert row["status"] == NEEDS_LOGIN
-    assert row.get("cached_data_label")
+    assert all(a["source"] == "amex" for a in payload["accounts"])
+    # Delta is hidden from customer API but still signed_out in load_all.
     assert summary.needs_login_count >= 1
-    assert "Connected" not in row["status_label"]
-    assert row["status"] != UP_TO_DATE
+    assert delta.readiness == SIGNED_OUT
+    assert delta.status == NEEDS_LOGIN
+    assert delta.presentation_label == "Sign in required"
+    assert delta.status != UP_TO_DATE
 
 
 # ── Stale-while-revalidate: preserve ready during background re-verification ──

@@ -30,9 +30,11 @@ from mighty.account_status import (
     WAITING_FOR_EXTENSION,
     resolve_canonical_status,
 )
-from mighty.customer_account_access import (
-    CustomerAccountAccessView,
-    section_for_view,
+from mighty.customer_account_access import CustomerAccountAccessView
+from mighty.capability_state import (
+    CAPABILITY_STATUS_LABELS,
+    CapabilityState,
+    build_capability_view,
 )
 from mighty import user_copy
 
@@ -337,22 +339,40 @@ def portfolio_summary_line(
     return " · ".join(parts)
 
 
+def section_for_capability(state: CapabilityState) -> str:
+    """Accounts list section from CapabilityState only."""
+    if state == CapabilityState.SIGNED_OUT:
+        return SECTION_NEEDS_LOGIN
+    if state == CapabilityState.EXTRACTION_SUCCESS:
+        return SECTION_UP_TO_DATE
+    if state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED:
+        return SECTION_NEEDS_ATTENTION
+    return SECTION_WAITING
+
+
+def section_for_view(view: CustomerAccountAccessView) -> str:
+    """Prefer CapabilityState; fall back to legacy readiness mapping."""
+    capability = build_capability_view(view)
+    return section_for_capability(capability.state)
+
+
 def apply_access_view_to_row(row: AccountsRow, view: CustomerAccountAccessView) -> AccountsRow:
-    """Overwrite customer-facing labels from the shared view model."""
-    row.section = section_for_view(view)
-    row.status_label = view.status_label
+    """Overwrite customer-facing labels from CapabilityView (canonical product state)."""
+    capability = build_capability_view(view)
+    row.section = section_for_capability(capability.state)
+    row.status_label = CAPABILITY_STATUS_LABELS[capability.state]
     row.source_label = user_copy.access_discovered_from(view.discovered_from)
     row.access_view = view
     row.private_data_label = view.private_data_label
     row.live_access = view.live_access
     row.background_work = view.background_work
-    row.meaning = view.meaning
-    if view.readiness == "ready" and row.synced_fmt:
-        row.subline = f"Private data {view.private_data_label.lower()} · Updated {row.synced_fmt}"
-    elif view.user_action_required and view.cached_data_label:
-        row.subline = view.cached_data_label
+    row.meaning = capability.headline
+    if capability.state == CapabilityState.EXTRACTION_SUCCESS and row.synced_fmt:
+        row.subline = f"Updated {row.synced_fmt}"
+    elif capability.explanations:
+        row.subline = capability.explanations[0]
     else:
-        row.subline = view.meaning
+        row.subline = capability.headline
     return row
 
 

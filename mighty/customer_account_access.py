@@ -90,9 +90,13 @@ class CustomerAccountAccessView:
     canonical_status: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        from mighty.capability_state import build_capability_view
+
+        capability = build_capability_view(self)
         return {
             "provider": self.provider,
             "display_name": self.display_name,
+            "capability_state": capability.state.value,
             "readiness": self.readiness,
             "session_state": self.session_state,
             "private_data_state": self.private_data_state,
@@ -371,19 +375,25 @@ def connected_summary_label(views: Sequence[CustomerAccountAccessView]) -> str |
     return user_copy.access_connected_named(names)
 
 
+def section_for_view(view: CustomerAccountAccessView) -> str:
+    """Accounts list section from CapabilityState (canonical product state)."""
+    from mighty.capability_state import (
+        CapabilityState,
+        build_capability_view,
+    )
+
+    state = build_capability_view(view).state
+    if state == CapabilityState.SIGNED_OUT:
+        return SECTION_NEEDS_LOGIN
+    if state == CapabilityState.EXTRACTION_SUCCESS:
+        return SECTION_UP_TO_DATE
+    if state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED:
+        return SECTION_NEEDS_ATTENTION
+    return SECTION_WAITING
+
+
 # Accounts section keys — mirrored from accounts_ui to avoid import cycles.
 SECTION_NEEDS_LOGIN = "needs_login"
 SECTION_NEEDS_ATTENTION = "needs_attention"
 SECTION_WAITING = "waiting"
 SECTION_UP_TO_DATE = "up_to_date"
-
-
-def section_for_view(view: CustomerAccountAccessView) -> str:
-    """Accounts list section from the shared view — no page-specific reinterpretation."""
-    if view.readiness == READINESS_SIGNED_OUT or view.user_action_required:
-        return SECTION_NEEDS_LOGIN
-    if view.readiness == READINESS_READY:
-        return SECTION_UP_TO_DATE
-    if view.canonical_status == "error":
-        return SECTION_NEEDS_ATTENTION
-    return SECTION_WAITING

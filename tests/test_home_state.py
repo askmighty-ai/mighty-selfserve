@@ -1,7 +1,8 @@
-"""Tests for Home state resolution."""
+"""Tests for Home state resolution (Truth Dashboard / Amex capability)."""
 
 from mighty.account_status import AccountStatus
 from mighty.action import Action, ActionCategory, ActionPriority
+from mighty.capability_state import CapabilityState
 from mighty.home_state import HomeState, resolve_home_state
 
 
@@ -39,7 +40,8 @@ class TestHomeStatePriority:
         result = resolve_home_state(accounts=[])
         assert result.state == HomeState.EMPTY
         assert result.show_health is False
-        assert result.featured.cta_url == "/email-scan"
+        assert result.capability is not None
+        assert result.capability.state == CapabilityState.LOGIN_UNKNOWN
 
     def test_login_wins_while_updating(self):
         accounts = [
@@ -54,6 +56,7 @@ class TestHomeStatePriority:
         assert result.state == HomeState.LOGIN
         assert result.featured.cta_label == "Log in to American Express"
         assert result.updating_display_name == "American Express"
+        assert result.capability.state == CapabilityState.SIGNED_OUT
 
     def test_update_when_no_blockers(self):
         accounts = [
@@ -66,8 +69,8 @@ class TestHomeStatePriority:
             updating_display_name="American Express",
         )
         assert result.state == HomeState.UPDATE
-        assert "Current activity: Refreshing account" in result.featured.body
-        assert "watching your accounts" in result.featured.headline.lower()
+        assert result.show_health is False
+        assert result.secondary_recommendations == []
 
     def test_login_when_session_blocked(self):
         accounts = [
@@ -79,6 +82,9 @@ class TestHomeStatePriority:
         assert result.health.needs_login == 1
         assert result.health.up_to_date == 1
         assert result.featured.cta_label == "Log in to American Express"
+        assert result.capability.state == CapabilityState.SIGNED_OUT
+        # Customer access_views are Amex-only for Truth Dashboard rendering.
+        assert all(v.provider == "amex" for v in result.access_views)
 
     def test_waiting_when_no_fresh_data(self):
         accounts = [
@@ -89,7 +95,7 @@ class TestHomeStatePriority:
         assert result.waiting_rows
         assert "Open American Express" in result.featured.cta_label
 
-    def test_recommendation_when_urgent_benefit(self):
+    def test_recommendation_state_still_resolves_but_ui_hides_recs(self):
         accounts = [_acct("amex", "American Express", "up_to_date")]
         actions = [
             Action(
@@ -105,6 +111,8 @@ class TestHomeStatePriority:
         result = resolve_home_state(accounts=accounts, actions=actions)
         assert result.state == HomeState.RECOMMENDATION
         assert result.featured.headline == actions[0].title
+        assert result.secondary_recommendations == []
+        assert result.show_metrics is False
 
     def test_all_clear_when_healthy(self):
         accounts = [
@@ -114,9 +122,7 @@ class TestHomeStatePriority:
         result = resolve_home_state(accounts=accounts, actions=[])
         assert result.state == HomeState.ALL_CLEAR
         assert result.health.up_to_date == 2
-        assert "watching your accounts" in result.featured.headline.lower()
-        assert "No action needed." in result.featured.body
-        assert "all set" not in result.featured.headline.lower()
+        assert result.show_health is False
 
     def test_all_clear_for_now_when_still_setting_up(self):
         """2 up to date + 6 still setting up + 0 user actions."""
@@ -135,12 +141,9 @@ class TestHomeStatePriority:
         assert result.health.up_to_date == 2
         assert result.health.waiting == 6
         assert result.health.attention_required == 0
-        assert "all set" not in result.featured.headline.lower()
-        assert "No action needed." in result.featured.body
+        assert result.show_health is False
         assert result.tower.watching_count == 2
         assert result.tower.waiting_count + result.tower.refreshing_count == 6
-        assert result.featured.cta_label
-        assert "Log in" not in (result.featured.cta_label or "")
 
     def test_attention_hero_when_error_with_setup_incomplete(self):
         """1 up to date + 6 still setting up + 1 needs attention → hero agrees."""
@@ -158,10 +161,9 @@ class TestHomeStatePriority:
         assert result.health.up_to_date == 1
         assert result.health.waiting == 6
         assert result.health.attention_required == 1
-        assert "needs your attention" in result.featured.headline.lower()
-        assert "No action needed." not in result.featured.body
         assert result.tower.needs_you_count == 1
         assert result.featured.cta_url == "/credentials?filter=needs_attention"
+        assert result.show_health is False
 
     def test_signed_out_shows_login_hero(self):
         accounts = [
@@ -174,6 +176,7 @@ class TestHomeStatePriority:
         assert result.health.needs_login == 1
         assert result.health.waiting == 1
         assert "Log in" in (result.featured.cta_label or "")
+        assert result.capability.state == CapabilityState.SIGNED_OUT
 
     def test_setup_states_never_counted_as_needs_login(self):
         for status in ("checking", "waiting_for_extension", "updating"):
@@ -192,5 +195,4 @@ class TestHomeStatePriority:
         assert result.health.waiting == 1  # updating → still setting up
         assert result.health.needs_attention == 1  # error → needs attention
         assert result.health.needs_login == 0
-        # ERROR is user-actionable attention, not a login hero by itself
         assert result.state != HomeState.LOGIN

@@ -1,106 +1,193 @@
 """
 mighty.home_ui
 ──────────────
-Render Mighty Home — Control Tower layout (system status, summary, accounts).
+Render Mighty Home — Truth Dashboard (single-provider capability instrument).
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from mighty.action import Action
-from mighty.control_tower import (
-    action_required_label,
-    card_meaning,
-    card_status_label,
-    current_activity,
-    last_verified_label,
-    why_rows,
+from mighty.capability_state import (
+    CapabilityState,
+    CapabilityView,
+    EvidenceItem,
+    PipelineStage,
+    TRUTH_PROVIDER_DISPLAY,
+    build_capability_view,
 )
 from mighty.customer_account_access import CustomerAccountAccessView
 from mighty.home_state import HomeStateResult
-from mighty import user_copy
 
 
-def _secondary_link(label: str, url: str, escape: Callable[[Any], str]) -> str:
-    return (
-        f'<a href="{escape(url)}" class="dash-brief-onboard-secondary">{escape(label)}</a>'
-    )
+def _evidence_mark(item: EvidenceItem) -> str:
+    if item.ok is True:
+        return "✓ "
+    if item.ok is False:
+        return "✗ "
+    return ""
 
 
-def _featured_block(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
-    """System-status hero — what Mighty is doing and whether it needs the user."""
-    featured = result.featured
-    body = featured.body or ""
-    body_lines = [line.strip() for line in body.split("\n") if line.strip()]
-    body_html = ""
-    if body_lines:
-        items = "".join(
-            f'<li class="dash-tower-hero-line">{escape(line)}</li>'
-            for line in body_lines
-        )
-        body_html = f'<ul class="dash-tower-hero-lines">{items}</ul>'
-
-    if featured.disabled_cta_label:
-        cta_html = (
-            f'<span class="dash-brief-featured-cta dash-brief-featured-cta--disabled" '
-            f'aria-disabled="true">{escape(featured.disabled_cta_label)}</span>'
-        )
-    elif featured.cta_label and featured.cta_url:
-        external = featured.cta_url.startswith("http")
-        target = ' target="_blank" rel="noopener noreferrer"' if external else ""
-        cta_html = (
-            f'<a href="{escape(featured.cta_url)}" class="dash-brief-featured-cta"{target}>'
-            f'{escape(featured.cta_label)}</a>'
-        )
-    else:
-        cta_html = ""
-
-    secondary_html = ""
-    if featured.secondary_label and featured.secondary_url:
-        secondary_html = (
-            f'<div class="dash-brief-onboard-cta">'
-            f'{_secondary_link(featured.secondary_label, featured.secondary_url, escape)}'
-            f"</div>"
-        )
-
-    return (
-        f'<article class="dash-brief-featured dash-tower-hero">'
-        f'<h2 class="dash-brief-featured-headline">{escape(featured.headline)}</h2>'
-        f"{body_html}"
-        f"{cta_html}"
-        f"{secondary_html}"
-        f"</article>"
-    )
-
-
-def _fmt_confirmed(value: str | None) -> str:
-    if not value:
-        return "—"
-    text = value.replace("T", " ").replace("+00:00", " UTC")
-    if len(text) > 19:
-        text = text[:19]
-    return text
-
-
-def render_access_debug_details(
-    view: CustomerAccountAccessView,
+def _render_evidence(
+    evidence: tuple[EvidenceItem, ...],
     escape: Callable[[Any], str],
-    *,
-    include_debug: bool = False,
 ) -> str:
+    if not evidence:
+        return ""
     rows = "".join(
-        f'<div class="dash-access-debug-row">'
-        f'<span class="dash-access-debug-key">{escape(key)}</span>'
-        f'<span class="dash-access-debug-val">{escape(val)}</span>'
-        f"</div>"
-        for key, val in why_rows(view, include_debug=include_debug)
+        f'<li class="dash-truth-evidence-item">{escape(_evidence_mark(e) + e.text)}</li>'
+        for e in evidence
     )
     return (
-        f'<details class="dash-access-why">'
-        f'<summary>{escape(user_copy.ACCESS_WHY_SUMMARY)}</summary>'
-        f'<div class="dash-access-debug">{rows}</div>'
+        f'<section class="dash-truth-evidence" aria-label="Why Mighty believes this">'
+        f'<p class="dash-truth-section-label">Why Mighty believes this</p>'
+        f'<ul class="dash-truth-evidence-list">{rows}</ul>'
+        f"</section>"
+    )
+
+
+def _render_explanations(
+    explanations: tuple[str, ...],
+    escape: Callable[[Any], str],
+) -> str:
+    if not explanations:
+        return ""
+    items = "".join(
+        f'<li class="dash-truth-explain-item">{escape(line)}</li>'
+        for line in explanations
+    )
+    return f'<ul class="dash-truth-explain">{items}</ul>'
+
+
+def _render_extracted(
+    capability: CapabilityView,
+    escape: Callable[[Any], str],
+) -> str:
+    if capability.state != CapabilityState.EXTRACTION_SUCCESS:
+        return ""
+    if not capability.extracted_fields:
+        return (
+            f'<section class="dash-truth-extracted" aria-label="Extracted data">'
+            f'<p class="dash-truth-section-label">Extracted data</p>'
+            f'<p class="dash-truth-empty">No field values in the latest snapshot.</p>'
+            f"</section>"
+        )
+    rows = "".join(
+        f'<div class="dash-truth-field">'
+        f'<dt>{escape(f.label)}</dt>'
+        f'<dd>{escape(f.value)}</dd>'
+        f"</div>"
+        for f in capability.extracted_fields
+    )
+    meta_parts: list[str] = []
+    if capability.last_verified:
+        meta_parts.append(f"Last verified: {capability.last_verified}")
+    if capability.confidence:
+        meta_parts.append(f"Confidence: {capability.confidence}")
+    meta_html = ""
+    if meta_parts:
+        meta_html = (
+            f'<p class="dash-truth-meta">{escape(" · ".join(meta_parts))}</p>'
+        )
+    return (
+        f'<section class="dash-truth-extracted" aria-label="Extracted data">'
+        f'<p class="dash-truth-section-label">Extracted data</p>'
+        f'<dl class="dash-truth-fields">{rows}</dl>'
+        f"{meta_html}"
+        f"</section>"
+    )
+
+
+def _render_meta_only(
+    capability: CapabilityView,
+    escape: Callable[[Any], str],
+) -> str:
+    """Last verified / confidence when not showing the extracted-data block."""
+    if capability.state == CapabilityState.EXTRACTION_SUCCESS:
+        return ""
+    parts: list[str] = []
+    if capability.last_verified:
+        parts.append(f"Last verified: {capability.last_verified}")
+    if capability.confidence:
+        parts.append(f"Confidence: {capability.confidence}")
+    if not parts:
+        return ""
+    return f'<p class="dash-truth-meta">{escape(" · ".join(parts))}</p>'
+
+
+def _render_action(
+    capability: CapabilityView,
+    escape: Callable[[Any], str],
+) -> str:
+    if not capability.action_required or not capability.action_label or not capability.action_url:
+        return ""
+    external = capability.action_url.startswith("http")
+    target = ' target="_blank" rel="noopener noreferrer"' if external else ""
+    return (
+        f'<a href="{escape(capability.action_url)}" '
+        f'class="dash-brief-featured-cta dash-truth-cta"{target}>'
+        f'{escape(capability.action_label)}</a>'
+    )
+
+
+def _pipeline_row(stage: PipelineStage, escape: Callable[[Any], str]) -> str:
+    bits: list[str] = [stage.verdict]
+    if stage.timestamp:
+        bits.append(stage.timestamp)
+    if stage.detail:
+        bits.append(stage.detail)
+    if stage.id_label:
+        bits.append(stage.id_label)
+    return (
+        f'<div class="dash-truth-pipeline-stage" data-verdict="{escape(stage.verdict)}">'
+        f'<span class="dash-truth-pipeline-name">{escape(stage.name)}</span>'
+        f'<span class="dash-truth-pipeline-verdict">{escape(stage.verdict)}</span>'
+        f'<span class="dash-truth-pipeline-detail">{escape(" · ".join(bits[1:]) if len(bits) > 1 else "—")}</span>'
+        f"</div>"
+    )
+
+
+def _render_technical_details(
+    capability: CapabilityView,
+    escape: Callable[[Any], str],
+) -> str:
+    stages = capability.pipeline
+    if not stages:
+        return ""
+    body_parts: list[str] = []
+    for i, stage in enumerate(stages):
+        body_parts.append(_pipeline_row(stage, escape))
+        if i < len(stages) - 1:
+            body_parts.append('<div class="dash-truth-pipeline-arrow" aria-hidden="true">↓</div>')
+    return (
+        f'<details class="dash-truth-tech">'
+        f"<summary>Technical Details</summary>"
+        f'<div class="dash-truth-pipeline">'
+        f'<p class="dash-truth-section-label">Pipeline</p>'
+        f'{"".join(body_parts)}'
+        f"</div>"
         f"</details>"
+    )
+
+
+def render_capability_panel(
+    capability: CapabilityView,
+    *,
+    escape: Callable[[Any], str],
+) -> str:
+    """Render one provider Truth panel from CapabilityView only."""
+    return (
+        f'<article class="dash-truth-panel" data-provider="{escape(capability.provider)}" '
+        f'data-capability="{escape(capability.state.value)}">'
+        f'<h2 class="dash-truth-provider">{escape(capability.display_name)}</h2>'
+        f'<p class="dash-truth-headline">{escape(capability.headline)}</p>'
+        f"{_render_explanations(capability.explanations, escape)}"
+        f"{_render_evidence(capability.evidence, escape)}"
+        f"{_render_extracted(capability, escape)}"
+        f"{_render_meta_only(capability, escape)}"
+        f"{_render_action(capability, escape)}"
+        f"{_render_technical_details(capability, escape)}"
+        f"</article>"
     )
 
 
@@ -109,53 +196,19 @@ def render_account_access_row(
     *,
     escape: Callable[[Any], str],
     show_debug: bool = False,
+    extracted_items: list[dict] | None = None,
+    session_confidence: str | None = None,
 ) -> str:
-    """Render one provider card in Control Tower product language."""
-    status = card_status_label(view)
-    activity = current_activity(view)
-    meaning = card_meaning(view)
-    verified_prefix = last_verified_label(view)
-    action_label = action_required_label(view)
-
-    action_html = ""
-    if view.user_action_required and view.user_action_text:
-        if view.user_action_url:
-            action_html = (
-                f'<a class="dash-access-action" href="{escape(view.user_action_url)}">'
-                f'{escape(view.user_action_text)}</a>'
-            )
-        else:
-            action_html = (
-                f'<span class="dash-access-action dash-access-action--static">'
-                f'{escape(view.user_action_text)}</span>'
-            )
-
-    return (
-        f'<article class="dash-access-row" data-provider="{escape(view.provider)}" '
-        f'data-readiness="{escape(view.readiness)}" '
-        f'data-live-access="{escape(view.live_access)}" '
-        f'data-private-data="{escape(view.private_data_state)}" '
-        f'data-background="{escape(view.background_work)}" '
-        f'data-activity="{escape(activity)}">'
-        f'<div class="dash-access-row-main">'
-        f'<div class="dash-access-identity">'
-        f'<h3 class="dash-access-name">{escape(view.display_name)}</h3>'
-        f'<p class="dash-access-status">{escape(status)}</p>'
-        f"</div>"
-        f'<dl class="dash-access-facts dash-tower-facts">'
-        f'<div><dt>{escape(user_copy.TOWER_CURRENT_ACTIVITY)}</dt>'
-        f'<dd>{escape(activity)}</dd></div>'
-        f'<div><dt>{escape(verified_prefix)}</dt>'
-        f'<dd>{escape(_fmt_confirmed(view.last_confirmed_at))}</dd></div>'
-        f'<div class="dash-tower-fact-wide"><dt>Status</dt>'
-        f'<dd>{escape(action_label)}</dd></div>'
-        f"</dl>"
-        f'<p class="dash-access-meaning">{escape(meaning)}</p>'
-        f"{render_access_debug_details(view, escape, include_debug=show_debug)}"
-        f"</div>"
-        f"{action_html}"
-        f"</article>"
+    """Compatibility wrapper — maps access view → CapabilityView → Truth panel."""
+    del show_debug
+    capability = build_capability_view(
+        view,
+        display_name=view.display_name,
+        provider=view.provider,
+        extracted_items=extracted_items,
+        session_confidence=session_confidence,
     )
+    return render_capability_panel(capability, escape=escape)
 
 
 def render_account_access_table(
@@ -163,204 +216,37 @@ def render_account_access_table(
     *,
     escape: Callable[[Any], str],
     show_debug: bool = False,
+    extracted_items_by_provider: dict[str, list[dict]] | None = None,
+    session_confidence_by_provider: dict[str, str] | None = None,
 ) -> str:
+    del show_debug
+    items_map = extracted_items_by_provider or {}
+    conf_map = session_confidence_by_provider or {}
     if not views:
-        return ""
-    rows = "".join(
-        render_account_access_row(view, escape=escape, show_debug=show_debug)
+        capability = build_capability_view(None)
+        return (
+            f'<section class="dash-truth" aria-label="{escape(TRUTH_PROVIDER_DISPLAY)}">'
+            f"{render_capability_panel(capability, escape=escape)}"
+            f"</section>"
+        )
+    panels = "".join(
+        render_capability_panel(
+            build_capability_view(
+                view,
+                display_name=view.display_name,
+                provider=view.provider,
+                extracted_items=items_map.get(view.provider),
+                session_confidence=conf_map.get(view.provider),
+                login_url=view.user_action_url,
+            ),
+            escape=escape,
+        )
         for view in views
     )
     return (
-        f'<section class="dash-access-table" aria-label="{escape(user_copy.TOWER_ACCOUNTS_LABEL)}">'
-        f'<p class="dash-brief-else-label">{escape(user_copy.TOWER_ACCOUNTS_LABEL)}</p>'
-        f'<div class="dash-access-rows">{rows}</div>'
+        f'<section class="dash-truth" aria-label="{escape(TRUTH_PROVIDER_DISPLAY)}">'
+        f"{panels}"
         f"</section>"
-    )
-
-
-def _watching_list(names: list[str], escape: Callable[[Any], str]) -> str:
-    if not names:
-        return f'<p class="dash-tower-bucket-empty">{escape(user_copy.TOWER_SUMMARY_NONE)}</p>'
-    items = "".join(
-        f'<li class="dash-tower-bucket-item">✓ {escape(name)}</li>'
-        for name in names
-    )
-    return f'<ul class="dash-tower-bucket-list">{items}</ul>'
-
-
-def _working_block(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
-    tower = result.tower
-    if tower.refreshing_count == 0 and tower.waiting_count == 0:
-        return f'<p class="dash-tower-bucket-empty">{escape(user_copy.TOWER_SUMMARY_NONE)}</p>'
-    parts: list[str] = []
-    if tower.refreshing_count:
-        if tower.refreshing_count <= 3 and tower.refreshing_names:
-            parts.append(
-                "".join(
-                    f'<li class="dash-tower-bucket-item">{escape(n)}</li>'
-                    for n in tower.refreshing_names
-                )
-            )
-        else:
-            parts.append(
-                f'<li class="dash-tower-bucket-item">'
-                f'{escape(str(tower.refreshing_count))} accounts being verified</li>'
-            )
-    if tower.waiting_count:
-        if tower.waiting_count <= 3 and tower.waiting_names:
-            parts.append(
-                "".join(
-                    f'<li class="dash-tower-bucket-item">{escape(n)}</li>'
-                    for n in tower.waiting_names
-                )
-            )
-        else:
-            parts.append(
-                f'<li class="dash-tower-bucket-item">'
-                f'{escape(str(tower.waiting_count))} accounts waiting</li>'
-            )
-    return f'<ul class="dash-tower-bucket-list">{"".join(parts)}</ul>'
-
-
-def _needs_you_block(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
-    tower = result.tower
-    if not tower.needs_you_names:
-        return f'<p class="dash-tower-bucket-empty">{escape(user_copy.TOWER_SUMMARY_NONE)}</p>'
-    items = "".join(
-        f'<li class="dash-tower-bucket-item">{escape(n)}</li>'
-        for n in tower.needs_you_names
-    )
-    note = (
-        f'<p class="dash-tower-bucket-note">{escape(user_copy.TOWER_SUMMARY_SIGN_IN)}</p>'
-        if any(
-            v.user_action_required or v.readiness == "signed_out"
-            for v in result.access_views
-        )
-        else ""
-    )
-    return f'<ul class="dash-tower-bucket-list">{items}</ul>{note}'
-
-
-def _account_summary_strip(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
-    """Replace Account Health chips with Watching / Working / Needs you."""
-    if not result.show_health:
-        return ""
-
-    tower = result.tower
-    return (
-        f'<section class="dash-home-health dash-tower-summary" aria-label="{escape(user_copy.TOWER_SUMMARY_LABEL)}">'
-        f'<p class="dash-brief-else-label">{escape(user_copy.TOWER_SUMMARY_LABEL)}</p>'
-        f'<div class="dash-tower-buckets">'
-        f'<div class="dash-tower-bucket">'
-        f'<h3 class="dash-tower-bucket-title">{escape(user_copy.TOWER_SUMMARY_WATCHING)}</h3>'
-        f'{_watching_list(tower.watching_names, escape)}'
-        f"</div>"
-        f'<div class="dash-tower-bucket">'
-        f'<h3 class="dash-tower-bucket-title">{escape(user_copy.TOWER_SUMMARY_WORKING)}</h3>'
-        f'{_working_block(result, escape)}'
-        f"</div>"
-        f'<div class="dash-tower-bucket">'
-        f'<h3 class="dash-tower-bucket-title">{escape(user_copy.TOWER_SUMMARY_NEEDS_YOU)}</h3>'
-        f'{_needs_you_block(result, escape)}'
-        f"</div>"
-        f"</div>"
-        f"</section>"
-    )
-
-
-def _system_health_section(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
-    if not result.show_health:
-        return ""
-    tower = result.tower
-    metrics = [
-        (user_copy.TOWER_HEALTH_WATCHING, tower.watching_count),
-        (user_copy.TOWER_HEALTH_REFRESHING, tower.refreshing_count),
-        (user_copy.TOWER_HEALTH_NEEDS_HELP, tower.needs_you_count),
-        (user_copy.TOWER_HEALTH_WAITING, tower.waiting_count),
-    ]
-    cells = "".join(
-        f'<div class="dash-tower-health-cell">'
-        f'<span class="dash-tower-health-label">{escape(label)}</span>'
-        f'<span class="dash-tower-health-value">{escape(str(count))}</span>'
-        f"</div>"
-        for label, count in metrics
-    )
-    return (
-        f'<section class="dash-tower-system-health" aria-label="{escape(user_copy.TOWER_SYSTEM_HEALTH)}">'
-        f'<p class="dash-brief-else-label">{escape(user_copy.TOWER_SYSTEM_HEALTH)}</p>'
-        f'<div class="dash-tower-health-grid">{cells}</div>'
-        f"</section>"
-    )
-
-
-def _secondary_recommendations(
-    actions: list[Action],
-    escape: Callable[[Any], str],
-) -> str:
-    if not actions:
-        return ""
-    rows = ""
-    for action in actions[:2]:
-        url = (action.action_url or "/credentials").strip()
-        rows += (
-            f'<a href="{escape(url)}" class="dash-brief-row">'
-            f'<span class="dash-brief-row-body">'
-            f'<span class="dash-brief-row-headline">{escape(action.title)}</span>'
-            f"</span>"
-            f'<span class="dash-brief-row-arrow" aria-hidden="true">'
-            f'<svg viewBox="0 0 16 16" fill="none"><path d="M6 3.5l4.5 4.5L6 12.5" '
-            f'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
-            f'stroke-linejoin="round"/></svg></span>'
-            f"</a>"
-        )
-    return (
-        f'<section class="dash-brief-secondary" aria-label="More opportunities">'
-        f"{rows}"
-        f"</section>"
-    )
-
-
-def _metrics_section(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
-    if not result.show_metrics:
-        return ""
-    items: list[str] = []
-    if result.metrics_accounts:
-        n = result.metrics_accounts
-        items.append(f"{n} account{'s' if n != 1 else ''}")
-    if result.metrics_benefits:
-        n = result.metrics_benefits
-        items.append(f"{n} benefit{'s' if n != 1 else ''}")
-    if result.metrics_value:
-        items.append(f"{escape(result.metrics_value)} tracked")
-    if not items:
-        return ""
-    chips = "".join(f'<span class="dash-brief-else-chip">{item}</span>' for item in items)
-    return (
-        f'<section class="dash-brief-else" aria-label="Overview">'
-        f'<p class="dash-brief-else-label">Also</p>'
-        f'<div class="dash-brief-else-chips">{chips}</div>'
-        f"</section>"
-    )
-
-
-def _activity_link(result: HomeStateResult, escape: Callable[[Any], str]) -> str:
-    if not result.activity_pending_count:
-        return ""
-    label = user_copy.HOME_ACTIVITY_LINK.format(count=result.activity_pending_count)
-    return (
-        f'<p class="dash-home-activity-link">'
-        f'<a href="#pending-badge" class="dash-brief-onboard-secondary">{escape(label)}</a>'
-        f"</p>"
-    )
-
-
-def _footer_strip(last_checked: str, escape: Callable[[Any], str]) -> str:
-    checked = escape(last_checked) if last_checked else "—"
-    return (
-        f'<footer class="dash-home-footer">'
-        f"{escape(user_copy.HOME_FOOTER_WORKER)} · "
-        f"{escape(user_copy.HOME_FOOTER_LAST_CHECKED.format(time=checked))}"
-        f"</footer>"
     )
 
 
@@ -372,50 +258,45 @@ def render_home_page(
     last_checked: str = "",
     escape: Callable[[Any], str],
 ) -> str:
-    """Render the full Home Control Tower layout."""
-    safe_name = escape(first_name)
-    summary_html = ""
-    if result.priority_summary:
-        summary_html = (
-            f'<p class="dash-home-priority-summary">{escape(result.priority_summary)}</p>'
+    """Render the Truth Dashboard — Amex capability instrument only."""
+    del first_name, today_label  # Greeting removed; diagnostic instrument only.
+    capability = result.capability
+    if capability is None:
+        view = result.access_views[0] if result.access_views else None
+        capability = build_capability_view(
+            view,
+            display_name=(view.display_name if view else TRUTH_PROVIDER_DISPLAY),
+            provider=(view.provider if view else "amex"),
+            extracted_items=result.extracted_items,
+            session_confidence=result.session_confidence,
+            login_url=(
+                view.user_action_url
+                if view and view.user_action_url
+                else result.provider_open_url
+            ),
         )
 
-    access_table = render_account_access_table(
-        result.access_views,
-        escape=escape,
-        show_debug=result.show_access_debug,
-    )
+    footer = ""
+    if last_checked:
+        footer = (
+            f'<footer class="dash-home-footer">'
+            f'Last checked: {escape(last_checked)}'
+            f"</footer>"
+        )
 
     return (
         f'<div class="dash-hero">'
-        f'<div class="dash-brief-card dash-brief-card--exec">'
+        f'<div class="dash-brief-card dash-brief-card--exec dash-truth-card">'
         f'<div class="dash-brief-exec">'
         f'<header class="dash-brief-header">'
-        f'<h1 class="dash-brief-greeting" id="hero-greeting">Hello, {safe_name}</h1>'
-        f'<div class="dash-brief-meta">'
-        f'<time class="dash-brief-today-date">{escape(today_label)}</time>'
-        f"</div>"
-        f"{summary_html}"
+        f'<h1 class="dash-brief-greeting">Mighty</h1>'
+        f'<p class="dash-truth-subhead">Can Mighty see and extract authenticated American Express account data?</p>'
         f"</header>"
-        f'<section class="dash-brief-primary" aria-label="System status">'
-        f"{_featured_block(result, escape)}"
+        f'<section class="dash-brief-primary" aria-label="Capability status">'
+        f"{render_capability_panel(capability, escape=escape)}"
         f"</section>"
-        f"{_secondary_recommendations(result.secondary_recommendations, escape)}"
-        f"{_account_summary_strip(result, escape)}"
-        f"{_system_health_section(result, escape)}"
-        f"{access_table}"
-        f"{_metrics_section(result, escape)}"
-        f"{_activity_link(result, escape)}"
-        f"{_footer_strip(last_checked, escape)}"
+        f"{footer}"
         f"</div>"
         f"</div>"
-        f"<script>"
-        f"(function(){{"
-        f'  var h=new Date().getHours();'
-        f'  var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";'
-        f'  var el=document.getElementById("hero-greeting");'
-        f'  if(el) el.textContent=g+", {safe_name}";'
-        f"}})();"
-        f"</script>"
         f"</div>"
     )
