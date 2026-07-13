@@ -167,11 +167,14 @@ class TestCustomerAccountAccessView:
             escape=_escape,
         )
         assert "American Express" in rendered
-        assert "Connected: American Express" in rendered
-        assert "Connected" in rendered
-        assert "Seen" in rendered
-        assert "Mighty can see your logged-in account data." in rendered
+        assert "✓ Watching" in rendered
+        assert "Current activity" in rendered
+        assert "Watching" in rendered
+        assert user_copy.TOWER_MEANING_WATCHING in rendered
         assert 'data-readiness="ready"' in rendered
+        # Discovery / private data live in Why?, not the main card.
+        assert "Why?" in rendered
+        assert "Seen" in rendered
 
     def test_gmail_discovered_never_connected(self):
         readiness = _readiness("amex", UNVERIFIED, session_state="unknown")
@@ -193,10 +196,11 @@ class TestCustomerAccountAccessView:
         rendered = render_home_page(
             result, first_name="Alex", today_label="Monday, July 13", escape=_escape,
         )
-        assert "Discovered from Gmail" in rendered
-        assert "Awaiting first check" in rendered or "Unable to verify" in rendered
+        assert "Discovered from" in rendered  # Why? section
+        assert "Gmail" in rendered
+        assert "Waiting for first verification" in rendered or "Waiting for first visit" in rendered
         assert 'data-readiness="ready"' not in rendered
-        assert "Connected: American Express" not in rendered
+        assert "✓ Watching" not in rendered
 
     def test_ready_with_background_verifying_stays_connected(self):
         readiness = _readiness(
@@ -231,8 +235,9 @@ class TestCustomerAccountAccessView:
             today_label="Monday, July 13",
             escape=_escape,
         )
-        assert "Connected" in rendered
-        assert "Verifying" in rendered
+        assert "✓ Connected" in rendered or "Connected" in rendered
+        assert "Refreshing account" in rendered or "Verifying" in rendered
+        assert "Waiting for first verification" not in rendered
         assert "Awaiting first check" not in rendered
 
     def test_dashboard_and_accounts_compatible(self):
@@ -261,8 +266,8 @@ class TestCustomerAccountAccessView:
         home_html = render_home_page(
             home, first_name="Alex", today_label="Monday, July 13", escape=_escape,
         )
-        assert "Connected" in home_html
-        assert "Seen" in home_html
+        assert "✓ Watching" in home_html
+        assert "Seen" in home_html  # Why? section
 
         lc = resolve_account_lifecycle("amex", in_credentials=True, from_email=True)
         row = AccountsRow(
@@ -313,7 +318,8 @@ class TestCustomerAccountAccessView:
             escape=_escape,
         )
         assert "Sign in" in rendered
-        assert "Last saved data: 2 hours ago" in rendered
+        assert "⚠ Sign in required" in rendered
+        # Cached data is an implementation detail — not required on the main card.
 
     def test_unknown_no_sign_in_cta(self):
         readiness = _readiness("delta", UNVERIFIED, session_state="unknown")

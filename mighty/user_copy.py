@@ -140,6 +140,44 @@ ACCESS_BACKGROUND_PREFIX = "Background"
 ACCESS_LAST_CONFIRMED_PREFIX = "Last confirmed"
 ACCESS_WHY_SUMMARY = "Why?"
 
+# ── Control Tower (Dashboard presentation) ───────────────────────────────────
+TOWER_CURRENT_ACTIVITY = "Current activity"
+TOWER_LAST_VERIFIED = "Last verified"
+TOWER_LAST_SUCCESSFUL = "Last successful verification"
+TOWER_ACTION_NONE = "No action required"
+TOWER_ACTION_SIGN_IN = "Sign in required"
+TOWER_ACTION_NEEDED = "Needs your help"
+
+TOWER_MEANING_WATCHING = "Mighty can currently read your logged-in account."
+TOWER_MEANING_REFRESHING = "Mighty is refreshing this account in the background."
+TOWER_MEANING_CHECKING = "Mighty is checking this account now."
+TOWER_MEANING_SIGN_IN = "Mighty cannot access this account until you sign in."
+TOWER_MEANING_WAITING_FIRST = "Mighty has not confirmed access yet."
+TOWER_MEANING_ATTENTION = "Something needs your help before Mighty can continue."
+
+TOWER_HERO_WATCHING = "Mighty is watching your accounts."
+TOWER_HERO_WORKING = "Mighty is actively monitoring your financial accounts."
+TOWER_HERO_WAITING = "Mighty is getting ready to watch your accounts."
+TOWER_HERO_NEEDS_YOU = "Mighty needs your attention."
+
+TOWER_ATTENTION_NONE = "No action needed."
+TOWER_ATTENTION_NEEDED = "Needs your attention."
+
+TOWER_SUMMARY_WATCHING = "Watching"
+TOWER_SUMMARY_WORKING = "Working"
+TOWER_SUMMARY_NEEDS_YOU = "Needs you"
+TOWER_SUMMARY_NONE = "None"
+TOWER_SUMMARY_SIGN_IN = "Sign in required"
+
+TOWER_SYSTEM_HEALTH = "System Health"
+TOWER_HEALTH_WATCHING = "Watching"
+TOWER_HEALTH_REFRESHING = "Refreshing"
+TOWER_HEALTH_NEEDS_HELP = "Needs your help"
+TOWER_HEALTH_WAITING = "Waiting"
+
+TOWER_ACCOUNTS_LABEL = "Accounts"
+TOWER_SUMMARY_LABEL = "Summary"
+
 
 def access_connected_named(names: str) -> str:
     return f"Connected: {names}"
@@ -535,19 +573,19 @@ HOME_UPDATE_BODY = (
     "Home will refresh when your data is ready."
 )
 
-HOME_ALL_CLEAR_HEADLINE = "You're all set."
-HOME_ALL_CLEAR_FOR_NOW_HEADLINE = "You're all set for now."
+HOME_ALL_CLEAR_HEADLINE = "Mighty is watching your accounts."
+HOME_ALL_CLEAR_FOR_NOW_HEADLINE = "Mighty is actively monitoring your financial accounts."
 
 HOME_PRIORITY_WAITING = "Getting your first update."
-HOME_PRIORITY_LOGIN = "One thing needs you."
-HOME_PRIORITY_UPDATE = "Almost there."
-HOME_PRIORITY_ALL_CLEAR = "Nothing urgent today."
+HOME_PRIORITY_LOGIN = "Needs your attention."
+HOME_PRIORITY_UPDATE = "Refreshing accounts."
+HOME_PRIORITY_ALL_CLEAR = "No action needed."
 HOME_PRIORITY_RECOMMENDATION = "1 thing worth your attention."
 
 HOME_FOOTER_WORKER = "Mighty runs in Chrome"
 HOME_FOOTER_LAST_CHECKED = "Last checked {time}"
 HOME_ACTIVITY_LINK = "{count} awaiting decision"
-HOME_HEALTH_STILL_SETTING_UP = "still setting up"
+HOME_HEALTH_STILL_SETTING_UP = "being verified"
 
 # ── Accounts maintenance page (/credentials) ─────────────────────────────────
 ACCOUNTS_PAGE_TITLE = "Accounts"
@@ -628,20 +666,20 @@ def home_all_clear_body(account_count: int, setup_incomplete_count: int = 0) -> 
         n = setup_incomplete_count
         word = "account" if n == 1 else "accounts"
         return (
-            f"Nothing needs your attention right now. Mighty is still setting up {n} {word} "
-            "and will keep working in the background."
+            f"Watching your connected accounts while {n} {word} "
+            f"{'is' if n == 1 else 'are'} being verified. {TOWER_ATTENTION_NONE}"
         )
     n = account_count
     word = "account" if n == 1 else "accounts"
     return (
-        f"Mighty is monitoring all {n} {word}. "
-        "We'll let you know when something needs your attention."
+        f"✓ {n} {word} connected\n"
+        f"{TOWER_ATTENTION_NONE}"
     )
 
 
 def home_attention_headline(attention_count: int) -> str:
     if attention_count == 1:
-        return "One account needs your attention."
+        return TOWER_HERO_NEEDS_YOU
     return f"{attention_count} accounts need your attention."
 
 
@@ -649,8 +687,11 @@ def home_attention_body(setup_incomplete_count: int = 0) -> str:
     if setup_incomplete_count > 0:
         n = setup_incomplete_count
         word = "account" if n == 1 else "accounts"
-        return f"Mighty is also still setting up {n} {word} in the background."
-    return "Open Accounts to see what needs you — Mighty will keep monitoring everything else."
+        return (
+            f"Mighty is also verifying {n} {word} in the background. "
+            f"{TOWER_ATTENTION_NEEDED}"
+        )
+    return TOWER_ATTENTION_NEEDED
 
 
 def home_recommendation_priority(total: int) -> str:
