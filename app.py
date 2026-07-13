@@ -829,6 +829,11 @@ def init_db():
         except Exception:
             pass
         try:
+            from mighty.account_snapshot import ensure_account_snapshot_tables
+            ensure_account_snapshot_tables(db)
+        except Exception:
+            pass
+        try:
             from mighty.provider_access_probe import ensure_probe_tables, ensure_manual_probe_tables, ensure_bootstrap_trace_tables, ensure_live_session_comparison_tables
             ensure_probe_tables(db)
             ensure_manual_probe_tables(db)
@@ -9110,6 +9115,12 @@ def dashboard():
         providers=sorted(_cred_sources | set(PROBE_PROVIDERS)),
     )
 
+    from mighty.account_snapshot import load_latest_snapshots_by_provider
+
+    _snapshots_by_provider = load_latest_snapshots_by_provider(
+        db, uid, providers=sorted(_cred_sources | set(PROBE_PROVIDERS)),
+    )
+
     for cat in _cat_order:
         for src, display_name, icon, color in _cat_map[cat]:
             row   = synced_map.get(src)
@@ -9117,8 +9128,9 @@ def dashboard():
             data  = _decrypt_acct(user["id"], row["data_enc"] or "") if row else {}
             _render_decrypt_ms += (time.perf_counter() - _t1) * 1000
 
-            # Determine items to display
+            # Determine items to display — latest successful snapshot is source of truth.
             review_required_keys: set = set()
+            _snap = _snapshots_by_provider.get(src)
             if src in discovered_by_source:
                 disc  = discovered_by_source[src]
                 review_required_keys = disc.get("review_required", set())
@@ -9133,14 +9145,19 @@ def dashboard():
                     for f in _post_filter_fields(disc["fields"], source=src)
                     if f.get("key") in disc["enabled"]
                 ]
+            elif _snap is not None:
+                items = _snap.display_items()
             else:
-                items = data.get("items", [])
+                items = []
                 # Reclassify items that are missing _type (older stored data)
                 for _item in items:
                     if not _item.get("_type") or _item.get("_type") == "other":
                         _item["_type"] = classify_benefit(_item.get("label",""), str(_item.get("value","")), src)
 
-            synced_at   = row["synced_at"] if row else ""
+            synced_at   = (
+                (_snap.verified_at if _snap is not None else "")
+                or (row["synced_at"] if row else "")
+            )
             sync_status = data.get("sync_status", "ok") if row else ""
             _connection_status = ""
             if row:
@@ -9183,6 +9200,9 @@ def dashboard():
                 login_url=_provider_login_url(src),
                 connect_url=f"/credentials?connect={src}",
                 session_access=_session_by_provider.get(src),
+                snapshot_id=_snap.snapshot_id if _snap else None,
+                snapshot_verified_at=_snap.verified_at if _snap else None,
+                snapshot_schema_version=_snap.schema_version if _snap else None,
             )
             _home_account_statuses.append(_acct_canon)
             _card_url = SITE_ENTRY_URL.get(src) or (row or {}).get("entry_url", "") or _provider_login_url(src)
@@ -9201,30 +9221,15 @@ def dashboard():
     _render_lap.finish()
     _rt.step("account_status")
 
-    # Compute total tracked value across all accounts
+    # Compute total tracked value across all accounts — from latest snapshots only.
     total_value = 0.0
     value_items = []  # list of (source_display, field_label, value_str, dollar_val, methodology)
     for cat in _cat_order:
         for src, display_name_v, icon_v, color_v in _cat_map[cat]:
             row_v = synced_map.get(src)
-            if not row_v:
+            if not row_v and src not in _snapshots_by_provider:
                 continue
-            data_v = _decrypt_acct(user["id"], row_v["data_enc"] or "")
-            items_v = data_v.get("items", []) or data_v.get("ai_items", []) or []
-            _bf_dirty = False
-            for _bi in items_v:
-                # Reclassify if missing or stale "other" (catches items from older classifier versions)
-                if not _bi.get("_type") or _bi.get("_type") == "other":
-                    _bi["_type"] = classify_benefit(_bi.get("label",""), str(_bi.get("value","")), row_v["source"])
-                    _bf_dirty = True
-            if _bf_dirty:
-                data_v["items"] = items_v
-                try:
-                    _bfdb = get_db()
-                    _bfdb.execute("UPDATE account_data SET data_enc=? WHERE user_id=? AND source=?",
-                        (encrypt_account_data(user["id"], data_v), user["id"], row_v["source"]))
-                    _bfdb.commit()
-                except Exception: pass
+            _snap_v = _snapshots_by_provider.get(src)
             if src in discovered_by_source:
                 disc_v = discovered_by_source[src]
                 items_v = [
@@ -9232,9 +9237,13 @@ def dashboard():
                     for f in disc_v.get("fields", [])
                     if f.get("key") in disc_v.get("enabled", set())
                 ]
-                # Classify discovered items — they have no _type from the discovery pipeline
                 for _di in items_v:
-                    _di["_type"] = classify_benefit(_di.get("label",""), str(_di.get("value","")), row_v["source"])
+                    _di["_type"] = classify_benefit(_di.get("label",""), str(_di.get("value","")), src)
+            elif _snap_v is not None:
+                items_v = _snap_v.display_items()
+            else:
+                # No successful snapshot — do not fall back to live extraction state.
+                items_v = []
             for it in items_v:
                 _rs, _rf = _relevance_score(it.get("key",""), it.get("label",""), str(it.get("value","")))
                 _raw_val = _rf.get("value_factor", 1.0) * 300.0  # default 1.0 when using inline fallback
@@ -9274,12 +9283,13 @@ def dashboard():
                   ((user["email"] or "").split("@")[0].split(".")[0] or "").capitalize() or "there"
     _account_count = len(connected_sources)
 
-    _has_synced_data = False
-    for _sr in acct_rows:
-        _pa = load_provider_account(uid, dict(_sr), decrypt_fn=_decrypt_acct)
-        if _pa and _pa.is_synced:
-            _has_synced_data = True
-            break
+    _has_synced_data = bool(_snapshots_by_provider)
+    if not _has_synced_data:
+        for _sr in acct_rows:
+            _pa = load_provider_account(uid, dict(_sr), decrypt_fn=_decrypt_acct)
+            if _pa and _pa.is_synced:
+                _has_synced_data = True
+                break
 
     _email_suggestion_count = 0
     try:
@@ -16493,6 +16503,28 @@ def api_data_sync():
     db.commit()
     _log_privacy_event(user["id"], "data_synced", source=source, detail=f"{len(raw_text)} chars")
 
+    from mighty.provider_account import EXTRACTION_COMPLETE, has_normalized_data
+
+    if _extraction == EXTRACTION_COMPLETE and has_normalized_data(_normalized):
+        try:
+            from mighty.account_snapshot import create_account_snapshot_from_extraction
+
+            create_account_snapshot_from_extraction(
+                db,
+                user_id=user["id"],
+                provider=source,
+                fields=_normalized,
+                verified_at=synced_at,
+                access_cycle_id=data.get("access_cycle_id")
+                or data.get("extraction_access_cycle_id"),
+                correlation_id=data.get("access_cycle_id")
+                or data.get("extraction_access_cycle_id"),
+                pipeline_run_id=_pipeline_run_id,
+                data_source=data.get("data_source") or data.get("sync_source"),
+            )
+        except Exception as _snap_err:
+            print(f"[Mighty] account_snapshot create error: {_snap_err}", flush=True)
+
     from mighty.account_state import safe_recompute_account_state
 
     safe_recompute_account_state(db, user["id"], source)
@@ -19720,8 +19752,10 @@ from mighty.email_scan import (
     fetch_recent_subjects,
 )
 from mighty.provider_account import (
+    EXTRACTION_COMPLETE,
     EXTRACTION_PENDING,
     ProviderAccount,
+    has_normalized_data,
     infer_extraction_status,
     load_provider_account,
 )
@@ -21709,6 +21743,70 @@ def admin_account_state_page():
         )
     states.sort(key=lambda s: s.display_name.lower())
     return _admin_debug.render_account_state_page(states)
+
+
+@app.route("/admin/account-snapshots")
+@require_admin
+def admin_account_snapshots_page():
+    from mighty.account_snapshot import (
+        get_latest_successful_snapshot,
+        get_snapshot_by_id,
+        list_account_snapshots,
+    )
+
+    uid = session["user_id"]
+    source, sources = _admin_pick_source(uid, request.args.get("source"))
+    if not source:
+        return _admin_debug.render_account_snapshots_page(sources, None, [])
+    snapshots = list_account_snapshots(get_db(), uid, source, limit=100)
+    snap_id = (request.args.get("snapshot_id") or "").strip()
+    active = get_snapshot_by_id(get_db(), snap_id) if snap_id else None
+    if active is None or active.provider != source or active.user_id != uid:
+        active = get_latest_successful_snapshot(get_db(), uid, source)
+    return _admin_debug.render_account_snapshots_page(
+        sources, source, snapshots, active=active,
+    )
+
+
+@app.route("/api/admin/account-snapshots")
+@require_admin
+def api_admin_account_snapshots():
+    """Internal API — snapshot metadata (+ optional full payload)."""
+    from mighty.account_snapshot import (
+        get_latest_successful_snapshot,
+        get_snapshot_by_id,
+        list_account_snapshots,
+    )
+
+    uid = session["user_id"]
+    provider = (request.args.get("provider") or request.args.get("source") or "").strip()
+    snap_id = (request.args.get("snapshot_id") or "").strip()
+    include_payload = request.args.get("include_payload") in ("1", "true", "yes")
+
+    if snap_id:
+        snap = get_snapshot_by_id(get_db(), snap_id)
+        if not snap or snap.user_id != uid:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        payload = snap.to_dict() if include_payload else snap.to_metadata_dict()
+        return jsonify({"ok": True, "snapshot": payload})
+
+    if not provider:
+        return jsonify({"ok": False, "error": "provider_required"}), 400
+
+    latest = get_latest_successful_snapshot(get_db(), uid, provider)
+    history = list_account_snapshots(get_db(), uid, provider, limit=50)
+    return jsonify({
+        "ok": True,
+        "provider": provider,
+        "latest": (
+            (latest.to_dict() if include_payload else latest.to_metadata_dict())
+            if latest else None
+        ),
+        "history": [
+            (s.to_dict() if include_payload else s.to_metadata_dict())
+            for s in history
+        ],
+    })
 
 
 @app.route("/admin/delta-evidence-audit")

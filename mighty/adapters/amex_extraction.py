@@ -108,6 +108,22 @@ def apply_amex_membership_rewards_extraction(
     )
     db.commit()
 
+    try:
+        from mighty.account_snapshot import create_account_snapshot_from_extraction
+
+        create_account_snapshot_from_extraction(
+            db,
+            user_id=uid,
+            provider=AMEX_SOURCE,
+            fields=[item],
+            verified_at=now,
+            access_cycle_id=cycle_id,
+            correlation_id=cycle_id,
+            data_source=data_source,
+        )
+    except Exception:
+        pass
+
     record_adapter_extraction_run(
         db,
         user_id=uid,

@@ -131,6 +131,9 @@ class AccountStatus:
     discovered_from: str | None = None
     evidence_source: str | None = None
     customer_access: CustomerAccountAccessView | None = None
+    snapshot_id: str | None = None
+    snapshot_verified_at: str | None = None
+    snapshot_schema_version: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -187,6 +190,12 @@ class AccountStatus:
             payload["evidence_source"] = self.evidence_source
         if self.customer_access is not None:
             payload["customer_access"] = self.customer_access.to_dict()
+        if self.snapshot_id is not None:
+            payload["snapshot_id"] = self.snapshot_id
+        if self.snapshot_verified_at is not None:
+            payload["snapshot_verified_at"] = self.snapshot_verified_at
+        if self.snapshot_schema_version is not None:
+            payload["snapshot_schema_version"] = self.snapshot_schema_version
         return payload
 
 
@@ -353,6 +362,9 @@ def build_account_status(
     last_data_refresh: str | None = None,
     session_access=None,
     extraction_access_cycle_id: str | None = None,
+    snapshot_id: str | None = None,
+    snapshot_verified_at: str | None = None,
+    snapshot_schema_version: int | None = None,
 ) -> AccountStatus:
     session_state = None
     current_access = None
@@ -592,6 +604,9 @@ def build_account_status(
         discovered_from=discovered,
         evidence_source=evidence_source,
         customer_access=customer_access,
+        snapshot_id=snapshot_id,
+        snapshot_verified_at=snapshot_verified_at,
+        snapshot_schema_version=snapshot_schema_version,
     )
 
 
@@ -691,6 +706,12 @@ def load_all_account_statuses(
         db, uid, decrypt_fn=decrypt_fn, providers=session_providers,
     )
 
+    from mighty.account_snapshot import load_latest_snapshots_by_provider
+
+    snapshots_by_provider = load_latest_snapshots_by_provider(
+        db, uid, providers=session_providers,
+    )
+
     effective_updating = updating_source if sync_running else None
 
     accounts: list[AccountStatus] = []
@@ -719,9 +740,17 @@ def load_all_account_statuses(
         if ad_row:
             connection_status = (ad_row["connection_status"] or "") or data.get("connection_status", "")
 
-        items = data.get("items", [])
+        snapshot = snapshots_by_provider.get(source)
+        # Customer field source of truth: latest successful snapshot.
+        # Fall back to account_data only when no snapshot exists yet (migration).
+        if snapshot is not None:
+            items = snapshot.display_items()
+        else:
+            items = data.get("items", [])
         extraction_st = (ad_row["extraction_status"] if ad_row else "") or ""
         extraction_access_cycle_id = data.get("access_cycle_id") or data.get("extraction_access_cycle_id")
+        if snapshot is not None and snapshot.access_cycle_id:
+            extraction_access_cycle_id = snapshot.access_cycle_id
         provider_acct = ProviderAccount(
             source=source,
             connection_status=connection_status or None,
@@ -732,7 +761,10 @@ def load_all_account_statuses(
             ),
             normalized_fields=items,
             data_source=data.get("data_source") or data.get("sync_source"),
-            synced_at=ad_row["synced_at"] if ad_row else None,
+            synced_at=(
+                snapshot.verified_at if snapshot is not None
+                else (ad_row["synced_at"] if ad_row else None)
+            ),
             sync_status=sync_status,
         ) if ad_row else None
 
@@ -774,11 +806,17 @@ def load_all_account_statuses(
                 connection_status=connection_status or None,
                 last_verified_at=_latest_connection_verification(db, uid, source),
                 extraction_status=extraction_st or None,
-                last_data_refresh=ad_row["synced_at"] if ad_row else None,
+                last_data_refresh=(
+                    snapshot.verified_at if snapshot is not None
+                    else (ad_row["synced_at"] if ad_row else None)
+                ),
                 session_access=session_access,
                 extraction_access_cycle_id=(
                     str(extraction_access_cycle_id) if extraction_access_cycle_id else None
                 ),
+                snapshot_id=snapshot.snapshot_id if snapshot else None,
+                snapshot_verified_at=snapshot.verified_at if snapshot else None,
+                snapshot_schema_version=snapshot.schema_version if snapshot else None,
             )
         )
 
