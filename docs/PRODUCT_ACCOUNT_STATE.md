@@ -63,6 +63,16 @@ Correlation: extraction timestamp ≥ winning session evidence time, or shared
 Dashboard, Accounts, Account Center, popup, and `/api/account-status` must use
 this readiness result for Connected / Sign in required / Unable to verify.
 
+### A3. Data layer — `AccountSnapshot` (customer field source of truth)
+
+Source: `mighty.account_snapshot` — immutable normalized snapshots created on
+each **successful** correlated extraction. See [ACCOUNT_SNAPSHOTS.md](ACCOUNT_SNAPSHOTS.md).
+
+Customer field/rewards presentation (Dashboard/Home value rails, status
+`snapshot_id`) must consume the **latest successful snapshot**, not live
+`account_data` extraction state, verification lifecycle, or temporary provider
+JSON. Failed / partial / running extractions never replace a good snapshot.
+
 ### B. Update / data layer — `AccountStatus.status`
 
 Source: `resolve_canonical_status()` (lifecycle + sync + session).

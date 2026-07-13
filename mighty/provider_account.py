@@ -301,6 +301,24 @@ def apply_adapter_payload(
     )
     db.commit()
 
+    if extraction == EXTRACTION_COMPLETE and has_normalized_data(normalized):
+        try:
+            from mighty.account_snapshot import create_account_snapshot_from_extraction
+
+            create_account_snapshot_from_extraction(
+                db,
+                user_id=uid,
+                provider=source,
+                fields=normalized,
+                verified_at=synced_at,
+                access_cycle_id=cycle_id,
+                correlation_id=cycle_id,
+                data_source=adapter,
+            )
+        except Exception:
+            # Snapshot persistence must not break extraction writes.
+            pass
+
     return ProviderAccount(
         source=source,
         connection_status=ad_data.get("connection_status"),

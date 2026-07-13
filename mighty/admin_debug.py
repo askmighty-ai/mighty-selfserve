@@ -52,6 +52,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
         "Canonical AccountState projection — internal preview only",
     ),
     (
+        "account-snapshots",
+        "Account Snapshots",
+        "Immutable normalized snapshots — customer UI source of truth",
+    ),
+    (
         "provider-access-probe",
         "Provider Access Probe",
         "Latest account access probe per provider (Phase 1 reliability)",
@@ -1134,6 +1139,86 @@ def render_account_state_page(states: list[Any]) -> str:
         f"</tr></thead><tbody>{table}</tbody></table></div>"
     )
     return _admin_shell("account-state", "Account State (shadow)", body)
+
+
+def render_account_snapshots_page(
+    sources: list[str],
+    source: str | None,
+    snapshots: list[Any],
+    *,
+    active: Any | None = None,
+) -> str:
+    picker = _source_picker(sources, source, "/admin/account-snapshots")
+    if not source:
+        body = (
+            '<p class="lede">Select a provider to inspect immutable Account Snapshots. '
+            "Customer UI renders from the latest successful snapshot only.</p>"
+            f"{picker}"
+        )
+        return _admin_shell("account-snapshots", "Account Snapshots", body)
+
+    rows = []
+    for snap in snapshots:
+        is_active = active is not None and snap.snapshot_id == active.snapshot_id
+        badge = (
+            '<span style="color:#065f46;font-weight:600">active</span>'
+            if is_active
+            else '<span class="muted">history</span>'
+        )
+        rows.append(
+            f"<tr>"
+            f'<td><a href="/admin/account-snapshots?source={_he(source)}'
+            f'&snapshot_id={_he(snap.snapshot_id)}">{_he(snap.snapshot_id[:8])}…</a></td>'
+            f"<td>{badge}</td>"
+            f'<td class="muted">{_he(format_admin_local_time(snap.verified_at))}</td>'
+            f'<td class="muted">{_he(format_admin_local_time(snap.created_at))}</td>'
+            f"<td>v{_he(snap.schema_version)}</td>"
+            f'<td class="muted">{_he(snap.provider_version)}</td>'
+            f'<td class="muted">{_he(snap.confidence if snap.confidence is not None else "—")}</td>'
+            f"<td>{_he(snap.field_count)}</td>"
+            f'<td class="muted" style="font-size:10px">{_he(snap.access_cycle_id or "—")}</td>'
+            f"</tr>"
+        )
+    table = "".join(rows) or (
+        '<tr><td colspan="9" class="muted">No successful snapshots yet.</td></tr>'
+    )
+
+    detail = ""
+    if active is not None:
+        detail = (
+            '<div class="card" style="margin-top:16px"><h3>Snapshot detail</h3>'
+            f'<p><strong>Provider</strong> {_he(active.provider)} · '
+            f'<strong>Verified</strong> {_he(format_admin_local_time(active.verified_at))} · '
+            f'<strong>Snapshot ID</strong> <code>{_he(active.snapshot_id)}</code> · '
+            f'<strong>Schema</strong> v{_he(active.schema_version)}</p>'
+            f'<p class="muted">correlation_id={_he(active.correlation_id or "—")} · '
+            f'access_cycle_id={_he(active.access_cycle_id or "—")} · '
+            f'confidence={_he(active.confidence if active.confidence is not None else "—")}</p>'
+            "<h4>Normalized fields</h4>"
+            f"{_json_block(list(active.normalized_fields))}"
+            "<h4>Buckets</h4>"
+            f"{_json_block({k: getattr(active, k) for k in ('accounts','benefits','rewards','credits','offers','travel','warnings')})}"
+            "<h4>Evidence references</h4>"
+            f"{_json_block([ref.to_dict() for ref in active.evidence_refs])}"
+            "<h4>Metadata</h4>"
+            f"{_json_block(active.metadata)}"
+            "</div>"
+        )
+
+    body = (
+        '<p class="lede">Immutable normalized Account Snapshots. '
+        "Newest successful snapshot is active; older rows remain queryable. "
+        "Evidence refs point at extraction artifacts — raw payloads are not duplicated.</p>"
+        f"{picker}"
+        '<div class="card"><h3>History</h3>'
+        '<table><thead><tr>'
+        "<th>Snapshot</th><th>Role</th><th>Verified</th><th>Created</th>"
+        "<th>Schema</th><th>Provider ver</th><th>Confidence</th>"
+        "<th>Fields</th><th>Access cycle</th>"
+        f"</tr></thead><tbody>{table}</tbody></table></div>"
+        f"{detail}"
+    )
+    return _admin_shell("account-snapshots", "Account Snapshots", body)
 
 
 def _probe_status_badge(status: str) -> str:
