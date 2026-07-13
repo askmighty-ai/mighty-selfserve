@@ -30,6 +30,10 @@ from mighty.account_status import (
     WAITING_FOR_EXTENSION,
     resolve_canonical_status,
 )
+from mighty.customer_account_access import (
+    CustomerAccountAccessView,
+    section_for_view,
+)
 from mighty import user_copy
 
 # ── User-facing list sections (display order) ────────────────────────────────
@@ -75,6 +79,11 @@ class AccountsRow:
     lifecycle: AccountLifecycle
     synced_fmt: str
     is_pending: bool = False
+    access_view: CustomerAccountAccessView | None = None
+    private_data_label: str | None = None
+    live_access: str | None = None
+    background_work: str | None = None
+    meaning: str | None = None
 
 
 @dataclass
@@ -311,10 +320,14 @@ def _count_phrase(count: int, verb: str) -> str:
     return f"{count} {verb}{'s' if count == 1 else ''}"
 
 
-def portfolio_summary_line(portfolio: AccountsPortfolio) -> str:
+def portfolio_summary_line(
+    portfolio: AccountsPortfolio,
+    *,
+    connected_label: str | None = None,
+) -> str:
     parts: list[str] = [f"{portfolio.total} account{'s' if portfolio.total != 1 else ''}"]
     if portfolio.up_to_date:
-        parts.append(f"{portfolio.up_to_date} connected")
+        parts.append(connected_label or f"{portfolio.up_to_date} connected")
     if portfolio.waiting:
         parts.append(f"{portfolio.waiting} still setting up")
     if portfolio.needs_login:
@@ -324,10 +337,31 @@ def portfolio_summary_line(portfolio: AccountsPortfolio) -> str:
     return " · ".join(parts)
 
 
+def apply_access_view_to_row(row: AccountsRow, view: CustomerAccountAccessView) -> AccountsRow:
+    """Overwrite customer-facing labels from the shared view model."""
+    row.section = section_for_view(view)
+    row.status_label = view.status_label
+    row.source_label = user_copy.access_discovered_from(view.discovered_from)
+    row.access_view = view
+    row.private_data_label = view.private_data_label
+    row.live_access = view.live_access
+    row.background_work = view.background_work
+    row.meaning = view.meaning
+    if view.readiness == "ready" and row.synced_fmt:
+        row.subline = f"Private data {view.private_data_label.lower()} · Updated {row.synced_fmt}"
+    elif view.user_action_required and view.cached_data_label:
+        row.subline = view.cached_data_label
+    else:
+        row.subline = view.meaning
+    return row
+
+
 def render_portfolio_summary(
     portfolio: AccountsPortfolio,
     active_filter: str,
     escape: Callable[[Any], str],
+    *,
+    connected_label: str | None = None,
 ) -> str:
     chips = [
         (user_copy.ACCOUNTS_FILTER_ALL, "all"),
@@ -352,7 +386,7 @@ def render_portfolio_summary(
             f'<a href="{escape(filter_chip_url(key))}" '
             f'class="acct-portfolio-chip{active}"{hide}>{escape(label)}</a>'
         )
-    summary = escape(portfolio_summary_line(portfolio))
+    summary = escape(portfolio_summary_line(portfolio, connected_label=connected_label))
     freshness = escape(portfolio.last_checked_label)
     return (
         f'<section class="acct-portfolio" aria-label="Account portfolio">'

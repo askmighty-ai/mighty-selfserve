@@ -24,6 +24,10 @@ from mighty.account_status import (
 )
 from mighty.action import Action, ActionCategory, ActionPriority
 from mighty.action_builders import attention_actions, savings_actions
+from mighty.customer_account_access import (
+    CustomerAccountAccessView,
+    connected_summary_label,
+)
 from mighty import user_copy
 
 
@@ -53,6 +57,8 @@ class AccountHealthCounts:
     waiting: int = 0  # still setting up / verifying (not user-actionable)
     needs_login: int = 0
     needs_attention: int = 0  # ERROR and other non-login user-actionable issues
+    connected_names: list[str] = field(default_factory=list)
+    connected_label: str | None = None
 
     @property
     def attention_required(self) -> int:
@@ -94,6 +100,8 @@ class HomeStateResult:
     activity_pending_count: int = 0
     freshness_label: str = ""
     updating_display_name: str | None = None
+    access_views: list[CustomerAccountAccessView] = field(default_factory=list)
+    show_access_debug: bool = False
 
 
 _PRIORITY_ORDER = {
@@ -103,7 +111,17 @@ _PRIORITY_ORDER = {
 }
 
 
-def _health_counts(accounts: Sequence[AccountStatus]) -> AccountHealthCounts:
+def _access_views_from_accounts(
+    accounts: Sequence[AccountStatus],
+) -> list[CustomerAccountAccessView]:
+    return [a.customer_access for a in accounts if a.customer_access is not None]
+
+
+def _health_counts(
+    accounts: Sequence[AccountStatus],
+    *,
+    access_views: Sequence[CustomerAccountAccessView] | None = None,
+) -> AccountHealthCounts:
     """Bucket accounts for Dashboard health chips.
 
     Same product buckets as Accounts portfolio:
@@ -118,6 +136,7 @@ def _health_counts(accounts: Sequence[AccountStatus]) -> AccountHealthCounts:
     for acct in accounts:
         if acct.status == UP_TO_DATE:
             counts.up_to_date += 1
+            counts.connected_names.append(acct.display_name)
         elif acct.status == NEEDS_LOGIN:
             counts.needs_login += 1
         elif acct.status == ERROR:
@@ -125,8 +144,16 @@ def _health_counts(accounts: Sequence[AccountStatus]) -> AccountHealthCounts:
         elif acct.status in _STILL_SETTING_UP or acct.status == UNVERIFIED:
             counts.waiting += 1
         else:
-            # Unknown / unexpected incomplete statuses → still setting up
             counts.waiting += 1
+    views = list(access_views) if access_views is not None else _access_views_from_accounts(accounts)
+    counts.connected_label = connected_summary_label(views)
+    if not counts.connected_label and counts.connected_names:
+        if len(counts.connected_names) == 1:
+            counts.connected_label = user_copy.access_connected_named(
+                counts.connected_names[0],
+            )
+        else:
+            counts.connected_label = f"{counts.up_to_date} connected"
     return counts
 
 
@@ -146,6 +173,8 @@ def _pick_waiting_account(accounts: Sequence[AccountStatus]) -> AccountStatus | 
 
 
 def _waiting_row_label(acct: AccountStatus) -> str:
+    if acct.customer_access is not None:
+        return acct.customer_access.status_label
     if acct.status == NEEDS_LOGIN:
         return user_copy.STATUS_LABEL_NEEDS_LOGIN
     if acct.readiness == "ready" or acct.status == UP_TO_DATE:
@@ -154,7 +183,6 @@ def _waiting_row_label(acct: AccountStatus) -> str:
         return user_copy.ACCOUNTS_STATUS_CHECKING
     if acct.status == UPDATING:
         return user_copy.STATUS_LABEL_UPDATING
-    # “Connected — awaiting data” only before any successful correlated extraction.
     if acct.last_successful_sync_at and acct.readiness not in (
         "ready", "checking", "signed_out", "unverified",
     ):
@@ -242,10 +270,12 @@ def resolve_home_state(
     freshness_label: str = "",
     worker_setup_needed: bool = False,
     provider_open_urls: dict[str, str] | None = None,
+    show_access_debug: bool = False,
 ) -> HomeStateResult:
     """Pick the dominant Home state and featured content."""
     actions = list(actions or [])
-    health = _health_counts(accounts)
+    access_views = _access_views_from_accounts(accounts)
+    health = _health_counts(accounts, access_views=access_views)
     enrolled = len(accounts)
     updating_name = _resolve_updating_name(
         accounts,
@@ -253,6 +283,11 @@ def resolve_home_state(
         updating_source=updating_source,
         updating_display_name=updating_display_name,
     )
+
+    def _result(**kwargs) -> HomeStateResult:
+        kwargs.setdefault("access_views", access_views)
+        kwargs.setdefault("show_access_debug", show_access_debug)
+        return HomeStateResult(**kwargs)
 
     login_acct = _pick_login_account(accounts)
     if login_acct:
@@ -267,7 +302,7 @@ def resolve_home_state(
         cta_url = login_acct.user_action_url or "/credentials"
         secondary = user_copy.HOME_VIEW_NEEDS_LOGIN_LABEL if plural else None
         return _attach_update_context(
-            HomeStateResult(
+            _result(
                 state=HomeState.LOGIN,
                 priority_summary=user_copy.HOME_PRIORITY_LOGIN,
                 featured=HomeFeatured(
@@ -290,7 +325,7 @@ def resolve_home_state(
         body = user_copy.HOME_EMPTY_BODY
         if worker_setup_needed:
             body = f"{body} {user_copy.HOME_EMPTY_WORKER_NOTE}"
-        return HomeStateResult(
+        return _result(
             state=HomeState.EMPTY,
             priority_summary="",
             featured=HomeFeatured(
@@ -333,7 +368,7 @@ def resolve_home_state(
             if a.status != UP_TO_DATE
         ][:5]
         return _attach_update_context(
-            HomeStateResult(
+            _result(
                 state=HomeState.WAITING,
                 priority_summary=user_copy.HOME_PRIORITY_WAITING,
                 featured=HomeFeatured(
@@ -356,7 +391,7 @@ def resolve_home_state(
     if updating_name:
         headline = user_copy.home_update_headline(updating_name)
         body = user_copy.HOME_UPDATE_BODY
-        return HomeStateResult(
+        return _result(
             state=HomeState.UPDATE,
             priority_summary=user_copy.HOME_PRIORITY_UPDATE,
             featured=HomeFeatured(
@@ -397,7 +432,7 @@ def resolve_home_state(
             summary = user_copy.home_recommendation_priority(count_secondary + 1)
         else:
             summary = user_copy.HOME_PRIORITY_RECOMMENDATION
-        return HomeStateResult(
+        return _result(
             state=HomeState.RECOMMENDATION,
             priority_summary=summary,
             featured=featured,
@@ -419,8 +454,7 @@ def resolve_home_state(
     setup_incomplete = health.waiting
     attention = health.attention_required
     if attention:
-        # Hero must agree with Account Health chips when action is required.
-        return HomeStateResult(
+        return _result(
             state=HomeState.ALL_CLEAR,
             priority_summary=user_copy.HOME_PRIORITY_LOGIN,
             featured=HomeFeatured(
@@ -438,7 +472,7 @@ def resolve_home_state(
             activity_pending_count=pending_activity_count,
             freshness_label=freshness_label,
         )
-    return HomeStateResult(
+    return _result(
         state=HomeState.ALL_CLEAR,
         priority_summary=user_copy.HOME_PRIORITY_ALL_CLEAR,
         featured=HomeFeatured(

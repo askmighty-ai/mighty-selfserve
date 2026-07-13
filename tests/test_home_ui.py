@@ -69,10 +69,11 @@ class TestHomeUi:
             escape=_escape,
         )
         assert "Account health" in rendered
-        assert "1 connected" in rendered
+        assert "Connected: American Express" in rendered
         assert "need login" not in rendered.lower()
         assert "all set" in rendered or "You&#x27;re all set." in rendered
         assert "Mighty runs in Chrome" in rendered
+        assert "American Express" in rendered
 
     def test_update_state_disabled_cta(self):
         result = HomeStateResult(

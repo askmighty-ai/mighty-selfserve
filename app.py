@@ -205,23 +205,29 @@ def _is_dev_debug(user) -> bool:
 
 
 def _account_debug_panel_html(info: dict) -> str:
-    """Collapsible dev-only sync state panel for an account row."""
+    """Collapsible alpha/admin Why? panel — no secrets or raw payloads."""
     def _row(key: str, val) -> str:
         display = "—" if val is None or val == "" else str(val)
         return (
             f'<div style="display:flex;gap:8px;font-size:10px;line-height:1.5">'
-            f'<span style="color:#9ca3af;min-width:110px">{he(key)}</span>'
+            f'<span style="color:#9ca3af;min-width:140px">{he(key)}</span>'
             f'<span style="color:#374151;font-family:ui-monospace,monospace;word-break:break-all">{he(display)}</span>'
             f'</div>'
         )
-    rows = "".join(_row(k, info.get(k)) for k in (
-        "source", "connection_status", "extraction_status", "sync_status",
-        "is_synced", "synced_at", "last_error",
-    ))
+    preferred = (
+        "readiness", "session_state", "verification_lifecycle",
+        "last_ready_cycle_id", "active_cycle_id", "cached_snapshot_at",
+        "evidence_source",
+    )
+    keys = [k for k in preferred if k in info] or list(info.keys())
+    # Never render secret-like keys.
+    blocked = {"token", "cookie", "password", "secret", "payload", "raw"}
+    keys = [k for k in keys if not any(b in k.lower() for b in blocked)]
+    rows = "".join(_row(k, info.get(k)) for k in keys)
     return (
         f'<details class="acct-debug-panel" style="margin-top:10px;padding-top:8px;border-top:1px dashed #e8e4de">'
         f'<summary style="font-size:10px;font-weight:600;color:#6366f1;cursor:pointer;user-select:none">'
-        f'Debug sync state</summary>'
+        f'{he(user_copy.ACCESS_WHY_SUMMARY)}</summary>'
         f'<div style="margin-top:6px;display:flex;flex-direction:column;gap:2px">{rows}</div>'
         f'</details>'
     )
@@ -6192,6 +6198,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-home-activity-link a{color:#78716c;text-decoration:none}
 .dash-home-activity-link a:hover{text-decoration:underline;color:#57534e}
 .dash-home-footer{margin-top:24px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06);font-size:12px;color:#a8a29e}
+.dash-access-table{margin-top:20px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06)}
+.dash-access-rows{display:flex;flex-direction:column;gap:10px;margin-top:10px}
+.dash-access-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:12px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
+.dash-access-row-main{min-width:0;flex:1}
+.dash-access-name{margin:0;font-size:14px;font-weight:600;color:#1c1917}
+.dash-access-status{margin:3px 0 0;font-size:12px;font-weight:600;color:#374151}
+.dash-access-discovered{margin:4px 0 0;font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em}
+.dash-access-facts{margin:10px 0 0;display:grid;grid-template-columns:1fr 1fr;gap:6px 12px}
+.dash-access-facts dt{font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em}
+.dash-access-facts dd{margin:2px 0 0;font-size:12px;color:#1c1917;font-weight:500}
+.dash-access-meaning{margin:10px 0 0;font-size:13px;color:#57534e;line-height:1.45}
+.dash-access-secondary{margin:6px 0 0;font-size:12px;color:#78716c}
+.dash-access-action{flex-shrink:0;font-size:12px;font-weight:600;color:#dc2626;text-decoration:none;padding:6px 10px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2}
+.dash-access-action--static{color:#78716c;border-color:#e8e4de;background:#fafaf9}
+.dash-access-why{margin-top:8px}
+.dash-access-why summary{font-size:11px;font-weight:600;color:#6366f1;cursor:pointer}
+.dash-access-debug{margin-top:6px;display:flex;flex-direction:column;gap:2px}
+.dash-access-debug-row{display:flex;gap:8px;font-size:10px;line-height:1.5}
+.dash-access-debug-key{color:#9ca3af;min-width:140px}
+.dash-access-debug-val{color:#374151;font-family:ui-monospace,monospace;word-break:break-all}
 /* Demo mode banner */
 .demo-mode-banner{background:linear-gradient(90deg,rgba(124,58,237,0.08),rgba(99,102,241,0.06));border-bottom:0.5px solid rgba(124,58,237,0.18);flex-shrink:0}
 .demo-mode-banner-inner{max-width:1600px;margin:0 auto;padding:10px 32px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -9756,6 +9782,7 @@ def dashboard():
             tracked_value_label=_tracked_value_label,
             freshness_label=_last_checked,
             provider_open_urls=_home_provider_urls,
+            show_access_debug=_is_dev_debug(user),
         )
         return render_home_page(
             _home_result,
@@ -14134,6 +14161,9 @@ _CREDENTIALS_PAGE_CSS = """
 .acct-maint-status{font-size:12px;font-weight:600;color:#374151;margin:3px 0 0}
 .acct-maint-sub{font-size:12px;color:#6b7280;margin:4px 0 0;line-height:1.45}
 .acct-maint-meta{font-size:10px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin:6px 0 0}
+.acct-access-facts{margin:8px 0 0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.acct-access-facts dt{font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em}
+.acct-access-facts dd{margin:2px 0 0;font-size:12px;color:#1c1917;font-weight:500}
 .acct-maint-actions{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}
 .acct-maint-cta{background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe}
 .acct-maint-cta--urgent{background:#fef2f2;color:#dc2626;border-color:#fecaca}
@@ -14281,15 +14311,27 @@ def _accounts_row_html(
         if row.source_label
         else ""
     )
+    facts_html = ""
+    if row.access_view is not None:
+        facts_html = (
+            f'<dl class="acct-access-facts">'
+            f'<div><dt>Live access</dt><dd>{he(row.live_access or "")}</dd></div>'
+            f'<div><dt>Private data</dt><dd>{he(row.private_data_label or "")}</dd></div>'
+            f'<div><dt>Background</dt><dd>{he(row.background_work or "")}</dd></div>'
+            f"</dl>"
+        )
     return (
         f'<article class="acct-maint-row{pending_cls}" id="card-{src}" '
-        f'data-section="{he(row.section)}">'
+        f'data-section="{he(row.section)}" '
+        f'data-readiness="{he(row.access_view.readiness if row.access_view else "")}" '
+        f'data-live-access="{he(row.live_access or "")}" '
+        f'data-private-data="{he(row.access_view.private_data_state if row.access_view else "")}">'
         f'<div class="acct-maint-main">'
         f'<div class="acct-maint-icon" style="background:{he(row.color)}">{row.icon}</div>'
         f'<div class="acct-maint-body">'
         f'<h3 class="acct-maint-name">{he(row.display_name)}</h3>'
         f'<p class="acct-maint-status">{he(row.status_label)}</p>'
-        f"{subline_html}{meta_html}"
+        f"{subline_html}{facts_html}{meta_html}"
         f"</div></div>"
         f'<div class="acct-maint-actions">{primary_cta}{disconnect}</div>'
         f"{debug_html}"
@@ -14446,6 +14488,7 @@ def _build_credentials_page(
     login_required_by_source: dict = None,
     readiness_by_source: dict = None,
     cached_data_label_by_source: dict = None,
+    access_view_by_source: dict = None,
 ) -> str:
     """Generate the Accounts maintenance page HTML."""
     extra_by_source = extra_by_source or {}
@@ -14462,10 +14505,14 @@ def _build_credentials_page(
     login_required_by_source = login_required_by_source or {}
     readiness_by_source = readiness_by_source or {}
     cached_data_label_by_source = cached_data_label_by_source or {}
+    access_view_by_source = access_view_by_source or {}
     active_filter = normalize_filter(filter_key)
     csrf = get_csrf_token()
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
     _cred_styles = BASE_CSS + _CREDENTIALS_PAGE_CSS
+
+    from mighty.accounts_ui import apply_access_view_to_row
+    from mighty.customer_account_access import connected_summary_label
 
     account_rows = _accounts_collect_rows(
         configured=configured,
@@ -14479,9 +14526,17 @@ def _build_credentials_page(
         readiness_by_source=readiness_by_source,
         cached_data_label_by_source=cached_data_label_by_source,
     )
+    for row in account_rows:
+        view = access_view_by_source.get(row.source)
+        if view is not None:
+            apply_access_view_to_row(row, view)
+    account_rows = sort_rows(account_rows)
     last_checked = last_checked_label or user_copy.ACCOUNTS_NOT_CHECKED_YET
     portfolio = build_portfolio(account_rows, last_checked)
     grouped = group_rows_by_section(account_rows, active_filter)
+    connected_label = connected_summary_label([
+        r.access_view for r in account_rows if r.access_view is not None
+    ])
 
     list_html = ""
     if not account_rows:
@@ -14505,13 +14560,19 @@ def _build_credentials_page(
                 debug_html = ""
                 if show_debug and row.source in debug_by_source:
                     debug_html = _account_debug_panel_html(debug_by_source[row.source])
+                elif show_debug and row.access_view is not None:
+                    debug_html = _account_debug_panel_html(
+                        dict(row.access_view.debug_rows())
+                    )
                 list_html += _accounts_row_html(
                     row, primary_cta=primary, debug_html=debug_html,
                 )
 
     portfolio_html = ""
     if account_rows:
-        portfolio_html = render_portfolio_summary(portfolio, active_filter, he)
+        portfolio_html = render_portfolio_summary(
+            portfolio, active_filter, he, connected_label=connected_label,
+        )
 
     add_coverage_html = render_add_coverage_footer(he) if account_rows else ""
     # ── Modal site picker ────────────────────────────────────────────────────
@@ -15199,7 +15260,11 @@ def credentials_page():
         db,
         uid,
         decrypt_fn=_decrypt_acct,
-        providers=sorted(set(configured) | set(PROBE_PROVIDERS)),
+        providers=sorted(
+            set(configured)
+            | set(PROBE_PROVIDERS)
+            | {row["site_key"] for row in pending_added}
+        ),
     )
     product_by_source = {
         provider: resolve_product_account_state(row)
@@ -15215,6 +15280,16 @@ def credentials_page():
     }
     readiness_by_source: dict[str, str] = {}
     cached_data_label_by_source: dict[str, str] = {}
+    access_view_by_source: dict = {}
+    from mighty.customer_account_access import (
+        build_customer_account_access_view,
+        resolve_discovered_from,
+    )
+    from mighty.user_copy import (
+        SOURCE_EXTENSION as _SRC_EXT,
+        SOURCE_FOUND_FROM_GMAIL as _SRC_GMAIL,
+    )
+
     for provider, access in _session_access.items():
         product = product_by_source[provider]
         acct = None
@@ -15249,6 +15324,38 @@ def credentials_page():
         readiness_by_source[provider] = readiness.state
         if readiness.cached_data_label:
             cached_data_label_by_source[provider] = readiness.cached_data_label
+        lc = lifecycle_by_source.get(provider)
+        if lc and lc.source_label == _SRC_GMAIL:
+            discovered = resolve_discovered_from(from_email=True)
+        elif lc and lc.source_label == _SRC_EXT:
+            discovered = resolve_discovered_from(data_source="extension")
+        else:
+            discovered = resolve_discovered_from(
+                data_source=acct.data_source if acct else None,
+            )
+        site_name = next(
+            (n for k, n, *_rest in SUPPORTED_SITES if k == provider),
+            provider.replace("_", " ").title(),
+        )
+        view = build_customer_account_access_view(
+            provider=provider,
+            display_name=site_name,
+            readiness=readiness,
+            discovered_from=discovered,
+            verification_lifecycle=access.verification_lifecycle,
+            extraction_status=extraction_status_by_source.get(provider),
+            user_action_text=user_copy.CTA_SIGN_IN if readiness.login_required else None,
+            user_action_url=(
+                _provider_login_url(provider) if readiness.login_required else None
+            ),
+            evidence_source=getattr(access, "source", None),
+            cached_snapshot_at=synced_at_by_source.get(provider) or (
+                ad["synced_at"] if ad else None
+            ),
+        )
+        access_view_by_source[provider] = view
+        if show_debug:
+            debug_by_source[provider] = dict(view.debug_rows())
     page_html = _build_credentials_page(
         user, configured, extra_by_source, synced_at_by_source,
         connection_status_by_source, extraction_status_by_source,
@@ -15264,6 +15371,7 @@ def credentials_page():
         login_required_by_source=login_required_by_source,
         readiness_by_source=readiness_by_source,
         cached_data_label_by_source=cached_data_label_by_source,
+        access_view_by_source=access_view_by_source,
     )
     _rt.step("build_html")
     _rt.finish()

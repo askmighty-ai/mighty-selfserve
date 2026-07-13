@@ -45,6 +45,11 @@ from mighty.account_readiness import (
     AccountReadiness,
     resolve_account_readiness,
 )
+from mighty.customer_account_access import (
+    CustomerAccountAccessView,
+    build_customer_account_access_view,
+    resolve_discovered_from,
+)
 from mighty.provider_account import ProviderAccount, infer_extraction_status, has_normalized_data
 from mighty.session_access import (
     CHECKING,
@@ -58,6 +63,8 @@ from mighty.user_copy import (
     CTA_SIGN_IN,
     FAILURE_HINTS,
     LIFECYCLE_CTAS,
+    SOURCE_EXTENSION,
+    SOURCE_FOUND_FROM_GMAIL,
     STATUS_LABELS,
 )
 
@@ -120,6 +127,10 @@ class AccountStatus:
     last_confirmed_access_cycle_id: str | None = None
     background_verification: bool = False
     secondary_label: str | None = None
+    verification_lifecycle: str | None = None
+    discovered_from: str | None = None
+    evidence_source: str | None = None
+    customer_access: CustomerAccountAccessView | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -168,6 +179,14 @@ class AccountStatus:
             payload["background_verification"] = True
         if self.secondary_label is not None:
             payload["secondary_label"] = self.secondary_label
+        if self.verification_lifecycle is not None:
+            payload["verification_lifecycle"] = self.verification_lifecycle
+        if self.discovered_from is not None:
+            payload["discovered_from"] = self.discovered_from
+        if self.evidence_source is not None:
+            payload["evidence_source"] = self.evidence_source
+        if self.customer_access is not None:
+            payload["customer_access"] = self.customer_access.to_dict()
         return payload
 
 
@@ -512,6 +531,37 @@ def build_account_status(
         presentation_cta=presentation.cta_label,
     )
 
+    verification_lifecycle = (
+        getattr(session_access, "verification_lifecycle", None)
+        if session_access is not None
+        else None
+    )
+    evidence_source = (
+        getattr(session_access, "source", None) if session_access is not None else None
+    )
+    if lifecycle.source_label == SOURCE_FOUND_FROM_GMAIL:
+        discovered = resolve_discovered_from(from_email=True)
+    elif lifecycle.source_label == SOURCE_EXTENSION:
+        discovered = resolve_discovered_from(data_source="extension")
+    else:
+        discovered = resolve_discovered_from(
+            data_source=account.data_source if account else None,
+        )
+
+    customer_access = build_customer_account_access_view(
+        provider=source,
+        display_name=display_name,
+        readiness=readiness,
+        discovered_from=discovered,
+        verification_lifecycle=verification_lifecycle,
+        extraction_status=extraction_status or (account.extraction_status if account else None),
+        user_action_text=action_label,
+        user_action_url=action_url,
+        evidence_source=evidence_source,
+        cached_snapshot_at=last_data_refresh or synced_at,
+        canonical_status=canonical,
+    )
+
     return AccountStatus(
         source=source,
         display_name=display_name,
@@ -538,6 +588,10 @@ def build_account_status(
         last_confirmed_access_cycle_id=readiness.last_confirmed_access_cycle_id,
         background_verification=readiness.background_verification,
         secondary_label=readiness.secondary_label,
+        verification_lifecycle=verification_lifecycle,
+        discovered_from=discovered,
+        evidence_source=evidence_source,
+        customer_access=customer_access,
     )
 
 
