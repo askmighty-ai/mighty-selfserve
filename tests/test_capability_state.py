@@ -230,7 +230,9 @@ class TestPrecedence:
         )
         cap = build_capability_view(view, extraction_status=EXTRACTION_PENDING)
         assert cap.state == CapabilityState.LOGIN_UNKNOWN
-        assert any("timed out" in e.text.lower() for e in cap.evidence)
+        assert any("Verification timed out." == e.text for e in cap.evidence)
+        assert any("No authenticated session observed." == e.text for e in cap.evidence)
+        assert not any("in progress" in e.text.lower() for e in cap.evidence)
 
     def test_11_background_verification_preserves_success(self):
         view = _view(

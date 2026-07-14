@@ -7,6 +7,10 @@ const AMEX_PRIVATE_DATA_OBSERVATION_MS = 20000;
 const AMEX_PRIVATE_DATA_POLL_MS = 1000;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
 const AMEX_BOOTSTRAP_TRACE_MS = 20000;
+// Hard ceiling for a single session-verification cycle (matches server
+// VERIFICATION_MAX_DURATION_SECONDS). After this the server forces timeout;
+// the extension must not keep a cycle open longer than this budget.
+const SESSION_VERIFICATION_MAX_MS = 20000;
 const AMEX_LIVE_SESSION_LOGGED_IN_OBSERVE_MS = 8000;
 const AMEX_BOOTSTRAP_ENTRY_URLS = [
   'https://www.americanexpress.com/en-us/account/',
@@ -53,6 +57,25 @@ chrome.tabs.onRemoved.addListener((id, info) => {
   _dbg('TAB_REMOVED', { id, windowId: info.windowId });
   _newTabsSeen.delete(id); // prune — Set would otherwise grow for every tab ever opened
   _amexMrTabEvidenceByTabId.delete(id);
+  // Active session-verification tab closed → terminal cancelled (never leave running).
+  if (
+    _sessionVerificationInProgress
+    && _activeSessionVerificationId
+    && _activeSessionVerificationTabId === id
+  ) {
+    const verificationId = _activeSessionVerificationId;
+    _activeSessionVerificationTabId = null;
+    chrome.storage.local.get('api_key').then(({ api_key }) => {
+      if (!api_key) return;
+      _completeSessionVerification(
+        api_key,
+        verificationId,
+        'failed',
+        'verification cancelled — tab closed',
+        { terminalReason: 'cancelled', terminalSource: 'extension_tab_closed' },
+      ).catch(() => {});
+    }).catch(() => {});
+  }
 });
 // Track first URL a newly-created tab navigates to — tells us which link/button opened it
 const _newTabsSeen = new Set();
@@ -2115,6 +2138,7 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
     if (!tab?.id) {
       await _completeSessionVerification(
         apiKey, verificationId, 'failed', 'extraction_tab_blocked',
+        { terminalReason: 'navigation_failed', terminalSource: 'extension_extraction_tab_blocked' },
       );
       return false;
     }
@@ -2139,6 +2163,7 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
     if (!ok) {
       await _completeSessionVerification(
         apiKey, verificationId, 'failed', 'extraction_failed',
+        { terminalReason: 'unknown', terminalSource: 'extension_extraction_failed' },
       );
     }
     return ok;
@@ -2146,6 +2171,7 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
     console.warn('[Mighty Amex] access-cycle extraction failed:', e.message);
     await _completeSessionVerification(
       apiKey, verificationId, 'failed', e.message || 'extraction_failed',
+      { terminalReason: 'unknown', terminalSource: 'extension_extraction_exception' },
     );
     return false;
   } finally {
@@ -2230,6 +2256,7 @@ async function _postAmexNoQualifyingPrivateData(apiKey, verificationId, opts = {
       console.warn('[Mighty Amex] no-qualifying-private-data POST failed', resp.status, data);
       await _completeSessionVerification(
         apiKey, verificationId, 'completed', 'no_qualifying_private_data',
+        { terminalReason: 'authenticated', terminalSource: 'extension_no_qualifying_fallback' },
       );
       return false;
     }
@@ -2239,6 +2266,7 @@ async function _postAmexNoQualifyingPrivateData(apiKey, verificationId, opts = {
     console.warn('[Mighty Amex] no-qualifying-private-data POST error:', e.message);
     await _completeSessionVerification(
       apiKey, verificationId, 'completed', 'no_qualifying_private_data',
+      { terminalReason: 'authenticated', terminalSource: 'extension_no_qualifying_fallback' },
     );
     return false;
   }
@@ -3832,7 +3860,13 @@ async function pollManualProbeTrigger() {
   }
 }
 
-async function _completeSessionVerification(apiKey, verificationId, lifecycle, errorMessage) {
+async function _completeSessionVerification(
+  apiKey,
+  verificationId,
+  lifecycle,
+  errorMessage,
+  { terminalReason, terminalSource } = {},
+) {
   try {
     await fetch(`${MIGHTY_URL}/api/extension/session-verification/complete`, {
       method: 'POST',
@@ -3844,6 +3878,8 @@ async function _completeSessionVerification(apiKey, verificationId, lifecycle, e
         verification_id: verificationId,
         lifecycle,
         error_message: errorMessage || undefined,
+        terminal_reason: terminalReason || undefined,
+        terminal_source: terminalSource || 'extension',
       }),
     });
   } catch (e) {
@@ -3870,7 +3906,13 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
     || (provider === 'amex' ? AMEX_SESSION_VERIFICATION_ENTRY : ACCOUNT_ENTRY[provider]);
   if (!entry) {
     console.warn(`[Mighty] no session verification entry for ${provider}`);
-    await _completeSessionVerification(apiKey, verificationId, 'failed', 'no_entry_url');
+    await _completeSessionVerification(
+      apiKey,
+      verificationId,
+      'failed',
+      'no_entry_url',
+      { terminalReason: 'navigation_failed', terminalSource: 'extension_no_entry_url' },
+    );
     _lastProcessedSessionVerificationId = verificationId;
     return;
   }
@@ -3878,6 +3920,7 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
   _sessionVerificationInProgress = true;
   _activeSessionVerificationId = verificationId || null;
   _activeSessionVerificationTabId = null;
+  const deadlineMs = Date.now() + SESSION_VERIFICATION_MAX_MS;
   console.log(`[Mighty] session verification for ${provider} via ${entry}`);
   try {
     await fetch(`${MIGHTY_URL}/api/extension/session-verification/running`, {
@@ -3898,7 +3941,13 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
   try {
     tab = await createProviderTab(entry, { active: false }, SESSION_VERIFICATION_TAB_REASON);
     if (!tab?.id) {
-      await _completeSessionVerification(apiKey, verificationId, 'failed', 'tab_creation_blocked');
+      await _completeSessionVerification(
+        apiKey,
+        verificationId,
+        'failed',
+        'tab_creation_blocked',
+        { terminalReason: 'navigation_failed', terminalSource: 'extension_tab_blocked' },
+      );
       _lastProcessedSessionVerificationId = verificationId;
       return;
     }
@@ -3906,10 +3955,39 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
     if (deepInspect) {
       await injectDeepInspectObservers(tab.id);
     }
+    const remainingBeforeWait = Math.max(0, deadlineMs - Date.now());
+    if (remainingBeforeWait < 500) {
+      await _completeSessionVerification(
+        apiKey,
+        verificationId,
+        'timed_out',
+        'verification timed out',
+        { terminalReason: 'timeout', terminalSource: 'extension_deadline' },
+      );
+      _lastProcessedSessionVerificationId = verificationId;
+      return;
+    }
+    // Cap load + observation inside the finite verification budget.
+    const loadBudgetMs = Math.min(12_000, Math.max(2_000, remainingBeforeWait - 3_000));
+    const observationBudgetMs = Math.min(
+      deepInspect ? AMEX_MANUAL_PROBE_OBSERVATION_MS : 5000,
+      Math.max(500, deadlineMs - Date.now() - loadBudgetMs - 500),
+    );
     const domWaitStart = Date.now();
-    await waitForProbePageStability(tab.id, {
-      observationMs: deepInspect ? AMEX_MANUAL_PROBE_OBSERVATION_MS : 5000,
-    });
+    await waitForTabLoad(tab.id, loadBudgetMs);
+    const afterLoadRemaining = Math.max(0, deadlineMs - Date.now());
+    if (afterLoadRemaining < 400) {
+      await _completeSessionVerification(
+        apiKey,
+        verificationId,
+        'timed_out',
+        'verification timed out',
+        { terminalReason: 'timeout', terminalSource: 'extension_deadline' },
+      );
+      _lastProcessedSessionVerificationId = verificationId;
+      return;
+    }
+    await sleep(Math.min(observationBudgetMs, afterLoadRemaining - 200));
     const domWaitMs = Date.now() - domWaitStart;
     const result = await runProviderAccessProbeInTab(tab.id, provider, {
       classifierStartedAt,
@@ -3948,9 +4026,17 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
       let qualifying = privateObserved;
       if (!qualifying && tab?.id) {
         // Explicit bounded wait for qualifying private DOM evidence — not an arbitrary sleep.
-        qualifying = await waitForAmexQualifyingPrivateData(tab.id, {
-          timeoutMs: AMEX_PRIVATE_DATA_OBSERVATION_MS,
-        });
+        // Extraction path keeps AMEX_PRIVATE_DATA_OBSERVATION_MS; verification
+        // budget may already be exhausted after the probe.
+        const privateWaitMs = Math.min(
+          AMEX_PRIVATE_DATA_OBSERVATION_MS,
+          Math.max(0, deadlineMs - Date.now()),
+        );
+        if (privateWaitMs > 0) {
+          qualifying = await waitForAmexQualifyingPrivateData(tab.id, {
+            timeoutMs: privateWaitMs,
+          });
+        }
       }
       if (!qualifying) {
         console.log(
@@ -3983,10 +4069,13 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
     }, { skipDedup: true });
     _lastProcessedSessionVerificationId = verificationId;
   } finally {
-    if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
+    // Clear active markers before closing the tab so the intentional close
+    // does not emit a spurious cancelled terminal over a finished cycle.
+    const tabIdToClose = tab?.id;
     _sessionVerificationInProgress = false;
     _activeSessionVerificationTabId = null;
     _activeSessionVerificationId = null;
+    if (tabIdToClose) chrome.tabs.remove(tabIdToClose).catch(() => {});
   }
 }
 
