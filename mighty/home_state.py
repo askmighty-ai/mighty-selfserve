@@ -33,6 +33,7 @@ from mighty.capability_state import (
 from mighty.customer_capability_presentation import (
     build_presented_capability_view,
     load_stable_capability,
+    resolve_account_identity,
 )
 from mighty.customer_account_access import (
     DISCOVERED_MANUAL,
@@ -370,9 +371,19 @@ def resolve_home_state(
             truth_acct.source if truth_acct else TRUTH_PROVIDER
         )
     )
+    account_identity = None
+    if persist_db is not None and persist_user_id:
+        account_identity = resolve_account_identity(
+            persist_db, persist_user_id, provider_key,
+        )
     previous = previous_stable_capability
     if previous is None and persist_db is not None and persist_user_id:
-        previous = load_stable_capability(persist_db, persist_user_id, provider_key)
+        previous = load_stable_capability(
+            persist_db,
+            persist_user_id,
+            provider_key,
+            account_identity=account_identity,
+        )
 
     capability = build_presented_capability_view(
         truth_view,
@@ -380,6 +391,7 @@ def resolve_home_state(
         force_unknown=force_unknown,
         persist_db=persist_db,
         persist_user_id=persist_user_id,
+        account_identity=account_identity,
         display_name=(
             truth_view.display_name if truth_view else (
                 truth_acct.display_name if truth_acct else TRUTH_PROVIDER_DISPLAY

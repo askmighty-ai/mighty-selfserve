@@ -873,15 +873,21 @@ def _apply_stable_customer_capability(
     """Hold prior Truth card while verification is in flight (customer providers)."""
     from mighty.capability_state import is_customer_visible_provider
     from mighty.customer_capability_presentation import (
+        enrich_order_meta_from_db,
         load_stable_capability,
+        order_meta_from_capability,
         present_customer_capability,
+        resolve_account_identity,
         save_stable_capability,
     )
 
     for acct in accounts:
         if not is_customer_visible_provider(acct.source) or acct.capability is None:
             continue
-        previous = load_stable_capability(db, user_id, acct.source)
+        identity = resolve_account_identity(db, user_id, acct.source)
+        previous = load_stable_capability(
+            db, user_id, acct.source, account_identity=identity,
+        )
         presented = present_customer_capability(
             acct.capability,
             previous_stable=previous,
@@ -891,7 +897,23 @@ def _apply_stable_customer_capability(
         )
         acct.capability = presented
         if not presented.is_refreshing:
-            save_stable_capability(db, user_id, presented)
+            meta = order_meta_from_capability(
+                presented,
+                access_view=acct.customer_access,
+                verification_lifecycle=acct.verification_lifecycle,
+                account_identity=identity,
+            )
+            meta = enrich_order_meta_from_db(
+                db, user_id, meta, provider=acct.source,
+            )
+            save_stable_capability(
+                db,
+                user_id,
+                presented,
+                order_meta=meta,
+                access_view=acct.customer_access,
+                force_unknown=False,
+            )
 
 
 def _load_lifecycle_signals(uid: str, db) -> dict[str, tuple[bool, bool, bool]]:
