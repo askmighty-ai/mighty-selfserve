@@ -15,7 +15,10 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mighty.extension_version import (
+    check_extension_version_bump,
+    check_repo_extension_version_bump,
     compare_chrome_versions,
+    extension_paths_changed,
     extension_update_required,
     get_extension_version_status,
     read_expected_extension_version,
@@ -63,10 +66,69 @@ def _api_key(mighty, uid):
         return row["api_key"]
 
 
-def test_manifest_version_incremented_in_this_pr():
+def test_manifest_version_is_chrome_dotted_numeric():
     version = json.loads(MANIFEST.read_text(encoding="utf-8"))["version"]
-    assert version == "1.3.15"
     assert re.fullmatch(r"\d+(?:\.\d+){1,3}", version)
+    assert read_expected_extension_version() == version
+
+
+def test_extension_paths_changed_detects_extension_tree_only():
+    assert extension_paths_changed(
+        ["app.py", "mighty/home_ui.py", "tests/test_extension_version.py"]
+    ) == []
+    assert extension_paths_changed(
+        ["extension/background.js", "app.py", "extension/manifest.json"]
+    ) == ["extension/background.js", "extension/manifest.json"]
+    assert extension_paths_changed(["./extension/popup.js"]) == ["extension/popup.js"]
+
+
+def test_check_extension_version_bump_requires_strict_increase():
+    assert (
+        check_extension_version_bump(
+            changed_paths=["app.py"],
+            base_version="1.3.15",
+            head_version="1.3.15",
+        )
+        is None
+    )
+    assert (
+        check_extension_version_bump(
+            changed_paths=["extension/background.js"],
+            base_version="1.3.15",
+            head_version="1.3.16",
+        )
+        is None
+    )
+    err_same = check_extension_version_bump(
+        changed_paths=["extension/background.js"],
+        base_version="1.3.15",
+        head_version="1.3.15",
+    )
+    assert err_same is not None
+    assert "not increased" in err_same
+    assert "extension/background.js" in err_same
+
+    err_down = check_extension_version_bump(
+        changed_paths=["extension/popup.js"],
+        base_version="1.3.15",
+        head_version="1.3.14",
+    )
+    assert err_down is not None
+    assert "not increased" in err_down
+
+    err_missing = check_extension_version_bump(
+        changed_paths=["extension/content.js"],
+        base_version="1.3.15",
+        head_version="",
+    )
+    assert err_missing is not None
+    assert "no version" in err_missing
+
+
+def test_repo_extension_version_bump_holds_against_base():
+    """Live git check: extension changes since base require a version bump."""
+    err = check_repo_extension_version_bump(include_working_tree=True)
+    assert err is None, err
 
 
 def test_extension_reports_getManifest_version():

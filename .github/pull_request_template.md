@@ -40,6 +40,12 @@
 
 
 
+## Extension version
+
+<!-- Required when any file under extension/ changes. Delete if N/A. -->
+
+- [ ] Bumped `extension/manifest.json` version (strict increase vs base)
+
 ## Test plan
 
 <!-- How did you verify this works? -->

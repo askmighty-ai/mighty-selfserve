@@ -28,6 +28,7 @@ The manifesto is not marketing copy. It is a decision framework. When a feature,
 - **Respect the three axes:** enrollment (discovery), session (logged in?), extraction (have data?). Do not infer session state from stale extracted data.
 - **Extension-owned session truth.** The server records session events from the extension; it does not guess login state.
 - **Silent success.** Background extraction completion should not require a user notification unless it resolves a previously blocked state or surfaces new actionable value.
+- **Bump `extension/manifest.json` version whenever any file under `extension/` changes.** The Truth Dashboard version diagnostic only works if every shipped extension change gets a new version. Tests and `scripts/check_extension_version_bump.py` enforce a strict increase vs the merge base.
 
 ### Agent authorization
 
