@@ -3,12 +3,17 @@
  * Enhances <time class="mighty-customer-local-time"> with exact browser-local
  * date/time including timezone abbreviation when supported.
  * UTC remains in datetime + title attributes for inspection.
+ *
+ * Also updates <span class="mighty-customer-elapsed"> live without rewriting
+ * the underlying started_at timestamp.
  */
 (function () {
   "use strict";
 
   var CLASS_NAME = "mighty-customer-local-time";
+  var ELAPSED_CLASS = "mighty-customer-elapsed";
   var READY_ATTR = "data-mighty-customer-local-ready";
+  var elapsedTimer = null;
 
   function parseTimestamp(value) {
     if (value == null || value === "") return null;
@@ -62,6 +67,18 @@
     }
   }
 
+  function formatElapsed(seconds) {
+    if (seconds < 60) {
+      return seconds + (seconds === 1 ? " second" : " seconds");
+    }
+    var minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+      return minutes + (minutes === 1 ? " minute" : " minutes");
+    }
+    var hours = Math.floor(minutes / 60);
+    return hours + (hours === 1 ? " hour" : " hours");
+  }
+
   function enhance(el) {
     if (!el || el.getAttribute(READY_ATTR) === "1") return;
     var raw = el.getAttribute("datetime") || el.textContent;
@@ -76,6 +93,16 @@
     el.setAttribute(READY_ATTR, "1");
   }
 
+  function updateElapsed(el) {
+    if (!el) return;
+    var raw = el.getAttribute("data-started-at");
+    var d = parseTimestamp(raw);
+    if (!d) return;
+    var prefix = el.getAttribute("data-elapsed-prefix") || "Checking for";
+    var seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+    el.textContent = prefix + " " + formatElapsed(seconds);
+  }
+
   function initCustomerLocalTimes(root) {
     var scope = root && root.querySelectorAll ? root : document;
     var nodes = scope.querySelectorAll
@@ -84,11 +111,26 @@
     for (var i = 0; i < nodes.length; i++) {
       enhance(nodes[i]);
     }
+    var elapsed = scope.querySelectorAll
+      ? scope.querySelectorAll("." + ELAPSED_CLASS)
+      : [];
+    for (var j = 0; j < elapsed.length; j++) {
+      updateElapsed(elapsed[j]);
+    }
+    if (elapsed.length && !elapsedTimer) {
+      elapsedTimer = setInterval(function () {
+        var live = document.querySelectorAll("." + ELAPSED_CLASS);
+        for (var k = 0; k < live.length; k++) {
+          updateElapsed(live[k]);
+        }
+      }, 1000);
+    }
   }
 
   window.initCustomerLocalTimes = initCustomerLocalTimes;
   window.formatMightyCustomerLocalTime = formatExactLocal;
   window.parseMightyCustomerTimestamp = parseTimestamp;
+  window.updateMightyCustomerElapsed = updateElapsed;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {

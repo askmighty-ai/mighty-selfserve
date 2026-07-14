@@ -146,6 +146,10 @@ class CurrentAccountAccess:
     verification_lifecycle: str | None = None
     verification_id: str | None = None
     evidence_type: str | None = None
+    verification_requested_at: str | None = None
+    verification_started_at: str | None = None
+    verification_completed_at: str | None = None
+    terminal_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -651,6 +655,10 @@ def resolve_current_account_access(
 
     verification_lifecycle = verification.lifecycle if verification else None
     verification_id = verification.verification_id if verification else None
+    verification_requested_at = verification.requested_at if verification else None
+    verification_started_at = verification.started_at if verification else None
+    verification_completed_at = verification.completed_at if verification else None
+    terminal_reason = verification.terminal_reason if verification else None
     evidence_type = session_state.evidence_type if session_state else None
     verifying = is_verification_active(verification)
     fresh = is_session_evidence_fresh(
@@ -709,6 +717,10 @@ def resolve_current_account_access(
         verification_lifecycle=verification_lifecycle,
         verification_id=verification_id,
         evidence_type=evidence_type,
+        verification_requested_at=verification_requested_at,
+        verification_started_at=verification_started_at,
+        verification_completed_at=verification_completed_at,
+        terminal_reason=terminal_reason,
     )
 
 

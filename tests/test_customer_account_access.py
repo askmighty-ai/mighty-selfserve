@@ -239,9 +239,10 @@ class TestCustomerAccountAccessView:
         assert "could access and extract" in rendered.lower()
         assert "mighty can see and extract your logged-in account data" not in rendered.lower()
         assert 'data-presentation-phase="determining"' in rendered
-        assert 'data-capability="extraction_success"' in rendered
+        assert 'data-capability="determining"' in rendered
         assert "Waiting for first verification" not in rendered
         assert "Awaiting first check" not in rendered
+        assert "freshness window" not in rendered.lower()
 
     def test_dashboard_and_accounts_compatible(self):
         readiness = _readiness(

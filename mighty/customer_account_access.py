@@ -88,6 +88,12 @@ class CustomerAccountAccessView:
     cached_snapshot_at: str | None = None
     background_verification: bool = False
     canonical_status: str | None = None
+    # First-class verification cycle identity / timing (presentation correlation).
+    verification_id: str | None = None
+    verification_requested_at: str | None = None
+    verification_started_at: str | None = None
+    verification_completed_at: str | None = None
+    terminal_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         from mighty.capability_state import build_capability_view
@@ -119,6 +125,11 @@ class CustomerAccountAccessView:
             "cached_snapshot_at": self.cached_snapshot_at,
             "background_verification": self.background_verification,
             "canonical_status": self.canonical_status,
+            "verification_id": self.verification_id,
+            "verification_requested_at": self.verification_requested_at,
+            "verification_started_at": self.verification_started_at,
+            "verification_completed_at": self.verification_completed_at,
+            "terminal_reason": self.terminal_reason,
         }
 
     def debug_rows(self) -> list[tuple[str, str]]:
@@ -293,6 +304,11 @@ def build_customer_account_access_view(
     evidence_source: str | None = None,
     cached_snapshot_at: str | None = None,
     canonical_status: str | None = None,
+    verification_id: str | None = None,
+    verification_requested_at: str | None = None,
+    verification_started_at: str | None = None,
+    verification_completed_at: str | None = None,
+    terminal_reason: str | None = None,
 ) -> CustomerAccountAccessView:
     """Build the shared customer view from readiness + discovery (presentation only)."""
     session_state = readiness.session_state
@@ -333,6 +349,7 @@ def build_customer_account_access_view(
         action_text = user_copy.CTA_SIGN_IN
 
     discovered = discovered_from if discovered_from in DISCOVERED_FROM_VALUES else DISCOVERED_MANUAL
+    resolved_verification_id = verification_id or readiness.verification_id
 
     return CustomerAccountAccessView(
         provider=provider,
@@ -353,12 +370,17 @@ def build_customer_account_access_view(
         status_label=status_label,
         cached_data_label=readiness.cached_data_label,
         secondary_label=readiness.secondary_label,
-        access_cycle_id=readiness.access_cycle_id,
+        access_cycle_id=readiness.access_cycle_id or resolved_verification_id,
         last_confirmed_access_cycle_id=readiness.last_confirmed_access_cycle_id,
         evidence_source=evidence_source,
         cached_snapshot_at=cached_snapshot_at or readiness.extraction_at,
         background_verification=readiness.background_verification,
         canonical_status=canonical_status or readiness.canonical_status,
+        verification_id=resolved_verification_id,
+        verification_requested_at=verification_requested_at,
+        verification_started_at=verification_started_at,
+        verification_completed_at=verification_completed_at,
+        terminal_reason=terminal_reason,
     )
 
 

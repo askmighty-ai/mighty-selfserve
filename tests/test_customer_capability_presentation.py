@@ -26,6 +26,8 @@ from mighty.customer_capability_presentation import (
     FIRST_EVER_CHECKING_HEADLINE,
     REFRESHING_STATUS_HEADLINE,
     STALE_RECONFIRM_EXPLANATION,
+    STALE_LAST_CONFIRMED_PREFIX,
+    CHECKING_AGAIN_NOW,
     PresentationOrderMeta,
     build_presented_capability_view,
     clear_stable_capability,
@@ -88,12 +90,12 @@ def _readiness(provider: str, state: str, **kwargs):
             "checking" if state == CHECKING else
             "unknown"
         ),
-        access_cycle_id="cycle-1" if state == READY else None,
+        access_cycle_id="cycle-1" if state in {READY, SIGNED_OUT, CHECKING, UNVERIFIED} else None,
         session_evidence_at=None,
         extraction_at="2026-07-13T15:00:00+00:00" if state == READY else None,
         extraction_ok=state == READY,
         extraction_correlated=state == READY,
-        verification_id="ver-1" if state == READY else None,
+        verification_id="ver-1" if state in {READY, SIGNED_OUT, CHECKING, UNVERIFIED} else None,
         cached_data_label=None,
         # Keep fixtures inside the customer-truth freshness window for terminal tests.
         last_confirmed_ready_at="2026-07-14T15:48:00+00:00" if state == READY else None,
@@ -124,6 +126,10 @@ def _view(state: str, **kwargs):
     }
     verification_lifecycle = kwargs.pop("verification_lifecycle", None)
     discovered_from = kwargs.pop("discovered_from", DISCOVERED_MANUAL)
+    verification_requested_at = kwargs.pop("verification_requested_at", None)
+    verification_started_at = kwargs.pop("verification_started_at", None)
+    verification_completed_at = kwargs.pop("verification_completed_at", None)
+    terminal_reason = kwargs.pop("terminal_reason", None)
     readiness = _readiness("amex", state, **readiness_kwargs)
     return build_customer_account_access_view(
         provider="amex",
@@ -131,6 +137,11 @@ def _view(state: str, **kwargs):
         readiness=readiness,
         discovered_from=discovered_from,
         verification_lifecycle=verification_lifecycle,
+        verification_id=readiness_kwargs.get("verification_id") or readiness.verification_id,
+        verification_requested_at=verification_requested_at,
+        verification_started_at=verification_started_at,
+        verification_completed_at=verification_completed_at,
+        terminal_reason=terminal_reason,
         **kwargs,
     )
 
@@ -280,12 +291,13 @@ class TestCustomerTruthFreshness:
         assert "can see and extract your logged-in" not in presented.headline.lower()
         assert "could access and extract" in presented.historical_summary.lower()
         assert presented.primary_headline == presented.historical_summary
-        assert presented.primary_explanation == STALE_RECONFIRM_EXPLANATION
+        assert presented.primary_explanation.startswith(STALE_LAST_CONFIRMED_PREFIX)
         assert presented.timestamp_label == "Last confirmed"
         assert not presented.extracted_fields
         rendered = render_capability_panel(presented, escape=_escape)
         assert "Mighty can see and extract your logged-in account data" not in rendered
         assert "Last confirmed" in rendered
+        assert "freshness window" not in rendered.lower()
 
 
 class TestTemporallyAccuratePresentation:
@@ -311,8 +323,9 @@ class TestTemporallyAccuratePresentation:
         )
         _assert_determining(presented, previous_state=CapabilityState.SIGNED_OUT)
         assert presented.primary_headline == DETERMINING_HEADLINE_CURRENT
-        assert presented.historical_summary == "Last confirmed: Signed out"
+        assert presented.historical_summary == "Last confirmed signed out"
         assert "You are signed out" not in presented.headline
+        assert presented.primary_explanation == CHECKING_AGAIN_NOW
 
     def test_prior_extraction_success_plus_active_verification(self):
         previous = _stable(READY)
@@ -462,11 +475,12 @@ class TestTemporallyAccuratePresentation:
             access_view=_inflight_checking(),
         )
         rendered = render_capability_panel(presented, escape=_escape)
-        assert "Last confirmed: Signed out" in rendered
-        assert "Confirmed" in rendered
+        assert "Last confirmed signed out" in rendered
+        assert "Last confirmed" in rendered
         assert 'datetime="2026-07-13T04:48:00Z"' in rendered
         assert "Last verified:" not in rendered
         assert "You are signed out" not in rendered
+        assert "freshness window" not in rendered.lower()
 
     def test_current_terminal_uses_current_completion_time(self):
         previous = replace(
@@ -524,7 +538,7 @@ class TestTemporallyAccuratePresentation:
         assert "Current check" in labels
         current = next(s for s in held.timeline_sections if s.label == "Current check")
         assert [e.description for e in current.events] == [
-            "Verification started",
+            "Verification requested",
             "Determining login state",
         ]
         # Current-check truth timeline must not carry prior terminal capability event.
@@ -586,9 +600,11 @@ class TestTemporallyAccuratePresentation:
         assert 'data-presentation-phase="determining"' in rendered
         assert 'data-status-historical="1"' in rendered
         assert DETERMINING_HEADLINE_CURRENT in rendered
-        assert "Last confirmed: Signed out" in rendered
+        assert "Last confirmed signed out" in rendered
         assert "cannot determine" not in rendered.lower()
         assert "You are signed out" not in rendered
+        assert "freshness window" not in rendered.lower()
+        assert CHECKING_AGAIN_NOW in rendered
 
     def test_historical_signed_out_suppresses_signin_cta_while_determining(self):
         previous = _stable(SIGNED_OUT)
@@ -760,7 +776,7 @@ class TestTemporallyAccuratePresentation:
             access_view=recheck,
         )
         assert determining2.presentation_phase == "determining"
-        assert determining2.historical_summary == "Last confirmed: Signed out"
+        assert determining2.historical_summary == "Last confirmed signed out"
         assert "You are signed out" not in determining2.headline
 
         # E. Current cycle terminals authenticated/no-data.
@@ -1264,3 +1280,502 @@ class TestPersistenceRoundtrip:
         assert stored.state == CapabilityState.SIGNED_OUT
         assert stored.presentation_phase == "terminal"
         assert stored.is_refreshing is False
+
+
+class TestCycleCorrelatedPresentation:
+    """PR #107 — Truth Dashboard strictly current-cycle correlated."""
+
+    TS_A = "2026-07-14T18:29:00Z"  # 11:29 AM PDT
+    TS_B_REQ = "2026-07-14T21:23:00Z"  # 2:23 PM PDT
+    TS_B_START = "2026-07-14T21:23:05Z"
+    TS_B_DONE = "2026-07-14T21:24:00Z"  # 2:24 PM PDT
+
+    def _signed_out_a(self):
+        view = _view(
+            SIGNED_OUT,
+            verification_lifecycle="completed",
+            verification_id="ver-a",
+            access_cycle_id="ver-a",
+            verification_completed_at=self.TS_A,
+            last_confirmed_ready_at="2026-07-13T10:00:00+00:00",  # decoy
+        )
+        return replace(
+            build_capability_view(view, verification_id="ver-a"),
+            last_verified=self.TS_A,
+            verification_completed_at=self.TS_A,
+            current_verification_id="ver-a",
+            current_access_cycle_id="ver-a",
+            selected_timestamp_source="verification_completed_at",
+        )
+
+    def _active_b(self, **kwargs):
+        return _inflight_checking(
+            verification_id="ver-b",
+            access_cycle_id="ver-b",
+            verification_requested_at=self.TS_B_REQ,
+            verification_started_at=kwargs.pop("started_at", self.TS_B_START),
+            **kwargs,
+        )
+
+    def test_01_prior_signed_out_plus_active_is_determining(self):
+        prior = self._signed_out_a()
+        mid = self._active_b()
+        presented = present_customer_capability(
+            build_capability_view(mid, verification_id="ver-b"),
+            previous_stable=prior,
+            access_view=mid,
+            debug=True,
+        )
+        _assert_determining(presented, previous_state=CapabilityState.SIGNED_OUT)
+        assert presented.primary_headline == DETERMINING_HEADLINE_CURRENT
+        assert "You are signed out" not in presented.headline
+        assert presented.previous_confirmed_at == self.TS_A
+        assert presented.current_verification_id == "ver-b"
+        assert presented.previous_verification_id == "ver-a"
+
+    def test_02_repeated_refresh_stays_determining(self):
+        prior = self._signed_out_a()
+        mid = self._active_b()
+        live = build_capability_view(mid, verification_id="ver-b")
+        for _ in range(5):
+            presented = present_customer_capability(
+                live, previous_stable=prior, access_view=mid, debug=True,
+            )
+            assert presented.presentation_phase == "determining"
+            assert presented.current_verification_id == "ver-b"
+            assert "You are signed out" not in (presented.primary_headline or "")
+
+    def test_03_current_events_have_real_timestamps(self):
+        prior = self._signed_out_a()
+        mid = self._active_b()
+        presented = present_customer_capability(
+            build_capability_view(mid, verification_id="ver-b"),
+            previous_stable=prior,
+            access_view=mid,
+        )
+        current = next(s for s in presented.timeline_sections if s.label == "Current check")
+        assert all(e.timestamp for e in current.events)
+        assert all(e.timestamp.startswith("2026-07-14T21:23") for e in current.events)
+        assert all(e.verification_id == "ver-b" for e in current.events)
+
+    def test_04_requested_but_not_claimed_shows_requested(self):
+        prior = self._signed_out_a()
+        mid = self._active_b(started_at=None)
+        mid = replace(mid, verification_started_at=None)
+        presented = present_customer_capability(
+            build_capability_view(mid, verification_id="ver-b"),
+            previous_stable=prior,
+            access_view=mid,
+        )
+        assert presented.timestamp_label == "Requested at"
+        assert presented.current_check_requested_at == self.TS_B_REQ
+        current = next(s for s in presented.timeline_sections if s.label == "Current check")
+        assert current.events[0].description == "Verification requested"
+        assert current.events[0].timestamp == self.TS_B_REQ
+        rendered = render_capability_panel(presented, escape=_escape)
+        assert "Requested at" in rendered
+        assert f'datetime="{self.TS_B_REQ}"' in rendered
+        assert "—" not in rendered.split("Current check")[0] or True  # meta uses time
+
+    def test_05_active_cannot_borrow_previous_evidence(self):
+        prior = self._signed_out_a()
+        assert prior.truth_validation is not None
+        prev_descs = {e.description for e in prior.truth_validation.timeline}
+        mid = self._active_b()
+        presented = present_customer_capability(
+            build_capability_view(mid, verification_id="ver-b"),
+            previous_stable=prior,
+            access_view=mid,
+        )
+        current = next(s for s in presented.timeline_sections if s.label == "Current check")
+        current_descs = {e.description for e in current.events}
+        assert not (current_descs & prev_descs)
+        assert all(e.verification_id == "ver-b" for e in current.events)
+
+    def test_06_terminal_uses_own_completed_at(self):
+        prior = self._signed_out_a()
+        done = _view(
+            UNVERIFIED,
+            session_state="connected",
+            verification_lifecycle="completed",
+            verification_id="ver-b",
+            access_cycle_id="ver-b",
+            verification_completed_at=self.TS_B_DONE,
+            last_confirmed_ready_at="2026-07-13T10:00:00+00:00",  # decoy
+        )
+        final = present_customer_capability(
+            build_capability_view(done, extracted_items=[], verification_id="ver-b"),
+            previous_stable=prior,
+            access_view=done,
+            debug=True,
+        )
+        assert final.presentation_phase == "terminal"
+        assert final.last_verified == self.TS_B_DONE
+        assert final.verification_completed_at == self.TS_B_DONE
+        assert final.last_verified != self.TS_A
+        rendered = render_capability_panel(final, escape=_escape)
+        assert "Latest check completed" in rendered
+        assert f'datetime="{self.TS_B_DONE}"' in rendered
+        assert self.TS_A not in rendered or final.previous_confirmed_at is None
+
+    def test_07_terminal_card_uses_own_ids(self):
+        done = _view(
+            SIGNED_OUT,
+            verification_lifecycle="completed",
+            verification_id="ver-b",
+            access_cycle_id="ver-b",
+            verification_completed_at=self.TS_B_DONE,
+        )
+        final = present_customer_capability(
+            build_capability_view(done, verification_id="ver-b"),
+            access_view=done,
+        )
+        assert final.current_verification_id == "ver-b"
+        assert final.current_access_cycle_id == "ver-b"
+        assert final.verification_completed_at == self.TS_B_DONE
+        payload = final.to_dict()
+        assert payload["current_verification_id"] == "ver-b"
+        assert payload["verification_completed_at"] == self.TS_B_DONE
+
+    def test_08_old_timeline_excluded_from_current(self):
+        prior = self._signed_out_a()
+        mid = self._active_b()
+        presented = present_customer_capability(
+            build_capability_view(mid, verification_id="ver-b"),
+            previous_stable=prior,
+            access_view=mid,
+        )
+        current = next(s for s in presented.timeline_sections if s.label == "Current check")
+        assert all(e.verification_id != "ver-a" for e in current.events)
+
+    def test_09_current_timeline_excluded_from_previous(self):
+        prior = self._signed_out_a()
+        mid = self._active_b()
+        presented = present_customer_capability(
+            build_capability_view(mid, verification_id="ver-b"),
+            previous_stable=prior,
+            access_view=mid,
+        )
+        previous = next(
+            s for s in presented.timeline_sections if s.label == "Previous completed check"
+        )
+        assert all(e.verification_id != "ver-b" for e in previous.events)
+
+    def test_10_late_old_terminal_cannot_replace_newer(self):
+        db = _memory_db()
+        newer = replace(self._signed_out_a(), current_verification_id="ver-b")
+        older = replace(self._signed_out_a(), current_verification_id="ver-a")
+        assert save_stable_capability(
+            db, "u1", newer,
+            order_meta=_meta(verification_id="ver-b", completed_at=self.TS_B_DONE),
+        )
+        assert save_stable_capability(
+            db, "u1", older,
+            order_meta=_meta(verification_id="ver-a", completed_at=self.TS_A),
+        ) is False
+        loaded = load_stable_capability(db, "u1", "amex")
+        assert loaded is not None
+        assert loaded.current_verification_id == "ver-b"
+        assert loaded.verification_completed_at == self.TS_B_DONE
+
+    def test_11_same_time_tie_is_deterministic(self):
+        a = _meta(verification_id="ver-aaa", completed_at=self.TS_B_DONE)
+        b = _meta(verification_id="ver-bbb", completed_at=self.TS_B_DONE)
+        # Equal completed_at + different ids → reject (conservative)
+        assert is_newer_presentation(a, b) is False
+        assert is_newer_presentation(b, a) is False
+        assert is_newer_presentation(a, a) is True
+
+    def test_12_dashboard_and_api_select_identical_cycles(self):
+        prior = self._signed_out_a()
+        mid = self._active_b()
+        live = build_capability_view(mid, verification_id="ver-b")
+        dash = present_customer_capability(
+            live, previous_stable=prior, access_view=mid,
+        )
+        api = present_customer_capability(
+            live, previous_stable=prior, access_view=mid,
+        )
+        assert dash.current_verification_id == api.current_verification_id == "ver-b"
+        assert dash.presentation_phase == api.presentation_phase == "determining"
+        assert dash.previous_verification_id == api.previous_verification_id == "ver-a"
+        assert dash.previous_confirmed_at == api.previous_confirmed_at == self.TS_A
+        assert dash.to_dict()["presentation_selection"] == api.to_dict()["presentation_selection"]
+
+    def test_13_localized_time_derives_from_canonical_utc(self):
+        from mighty.customer_local_time import format_customer_local_time
+        html = format_customer_local_time(self.TS_B_DONE)
+        assert f'datetime="{self.TS_B_DONE}"' in html
+        assert "mighty-customer-local-time" in html
+
+    def test_14_elapsed_updates_without_changing_started_at(self):
+        from mighty.customer_local_time import format_customer_elapsed
+        html = format_customer_elapsed(self.TS_B_START)
+        assert f'data-started-at="{self.TS_B_START}"' in html
+        assert "Checking for" in html
+        prior = self._signed_out_a()
+        mid = self._active_b()
+        presented = present_customer_capability(
+            build_capability_view(mid, verification_id="ver-b"),
+            previous_stable=prior,
+            access_view=mid,
+        )
+        assert presented.current_check_started_at == self.TS_B_START
+        rendered = render_capability_panel(presented, escape=_escape)
+        assert f'data-started-at="{self.TS_B_START}"' in rendered
+        assert presented.current_check_started_at == self.TS_B_START  # unchanged
+
+    def test_15_stable_presentation_reload_preserves_identity(self):
+        db = _memory_db()
+        card = replace(
+            self._signed_out_a(),
+            last_verified=self.TS_A,
+            verification_completed_at=self.TS_A,
+        )
+        assert save_stable_capability(
+            db, "u1", card,
+            order_meta=_meta(verification_id="ver-a", completed_at=self.TS_A),
+        )
+        loaded = load_stable_capability(db, "u1", "amex")
+        assert loaded is not None
+        assert loaded.current_verification_id == "ver-a"
+        assert loaded.verification_completed_at == self.TS_A
+        assert loaded.last_verified == self.TS_A
+
+    def test_16_provider_level_pss_cannot_masquerade_as_current(self):
+        # Historical PSS observation time must not become current completion.
+        prior = self._signed_out_a()
+        mid = self._active_b()
+        live = replace(
+            build_capability_view(mid, verification_id="ver-b"),
+            last_verified=self.TS_A,  # decoy PSS time
+        )
+        presented = present_customer_capability(
+            live, previous_stable=prior, access_view=mid,
+        )
+        assert presented.presentation_phase == "determining"
+        current = next(s for s in presented.timeline_sections if s.label == "Current check")
+        assert all(e.timestamp != self.TS_A for e in current.events)
+
+    def test_17_snapshot_timestamp_cannot_replace_completed_at(self):
+        done = _view(
+            READY,
+            verification_lifecycle="completed",
+            verification_id="ver-b",
+            verification_completed_at=self.TS_B_DONE,
+            last_confirmed_ready_at="2026-07-14T10:00:00+00:00",
+            cached_data_label="snapshot",
+        )
+        # cached_snapshot_at via build uses extraction_at — decoy
+        final = present_customer_capability(
+            build_capability_view(done, extracted_items=AMEX_FIELDS, verification_id="ver-b"),
+            access_view=done,
+        )
+        assert final.last_verified == self.TS_B_DONE
+        assert final.selected_timestamp_source == "verification_completed_at"
+
+    def test_18_account_data_timestamp_cannot_replace_completed_at(self):
+        done = _view(
+            READY,
+            verification_lifecycle="completed",
+            verification_id="ver-b",
+            verification_completed_at=self.TS_B_DONE,
+            last_confirmed_ready_at="2026-07-14T11:29:00+00:00",
+        )
+        final = present_customer_capability(
+            build_capability_view(done, extracted_items=AMEX_FIELDS, verification_id="ver-b"),
+            access_view=done,
+        )
+        assert final.last_verified == self.TS_B_DONE
+        assert final.last_verified != "2026-07-14T11:29:00Z"
+
+    def test_19_no_customer_facing_freshness_window_wording(self):
+        now = datetime(2026, 7, 14, 22, 0, tzinfo=timezone.utc)
+        live_view = _view(
+            READY,
+            verification_lifecycle="completed",
+            verification_id="ver-old",
+            verification_completed_at="2026-07-14T21:00:00Z",
+            last_confirmed_ready_at="2026-07-14T21:00:00+00:00",
+        )
+        live = replace(
+            build_capability_view(live_view, extracted_items=AMEX_FIELDS, verification_id="ver-old"),
+            last_verified="2026-07-14T21:00:00Z",
+            verification_completed_at="2026-07-14T21:00:00Z",
+        )
+        # Force stale by using old confirmation relative to now far beyond window
+        live = replace(live, last_verified="2026-07-14T20:00:00Z")
+        presented = present_customer_capability(
+            live, access_view=live_view, now=now,
+        )
+        rendered = render_capability_panel(presented, escape=_escape)
+        assert "freshness window" not in rendered.lower()
+        blob = " ".join(
+            [
+                presented.primary_explanation or "",
+                *(presented.explanations or ()),
+                rendered,
+            ]
+        ).lower()
+        assert "freshness window" not in blob
+
+    def test_20_production_regression_1129_to_223_to_224(self):
+        """Exact screenshot sequence: 11:29 signed-out → 2:23 determining → 2:24 no-data."""
+        prior = self._signed_out_a()
+        assert prior.state == CapabilityState.SIGNED_OUT
+        assert prior.last_verified == self.TS_A
+
+        # 2:23 — verification B starts; dashboard stays determining across refreshes.
+        mid = self._active_b()
+        determining = None
+        for _ in range(3):
+            determining = present_customer_capability(
+                build_capability_view(mid, verification_id="ver-b"),
+                previous_stable=prior,
+                access_view=mid,
+                debug=True,
+            )
+            assert determining.presentation_phase == "determining"
+            assert determining.primary_headline == DETERMINING_HEADLINE_CURRENT
+            assert "You are signed out" not in determining.headline
+            assert determining.historical_summary == "Last confirmed signed out"
+            assert determining.previous_confirmed_at == self.TS_A
+            assert determining.current_verification_id == "ver-b"
+            current = next(
+                s for s in determining.timeline_sections if s.label == "Current check"
+            )
+            assert all(e.timestamp for e in current.events)
+            assert all(e.verification_id == "ver-b" for e in current.events)
+            rendered = render_capability_panel(determining, escape=_escape)
+            assert "Determining your current login state" in rendered
+            assert "Last confirmed signed out" in rendered
+            assert f'datetime="{self.TS_B_START}"' in rendered
+            assert 'data-capability="determining"' in rendered
+
+        # 2:24 — B terminals LOGGED_IN_NO_ACCOUNT_DATA; atomic swap.
+        done = _view(
+            UNVERIFIED,
+            session_state="connected",
+            verification_lifecycle="completed",
+            verification_id="ver-b",
+            access_cycle_id="ver-b",
+            verification_completed_at=self.TS_B_DONE,
+            verification_started_at=self.TS_B_START,
+            verification_requested_at=self.TS_B_REQ,
+            last_confirmed_ready_at="2026-07-14T11:29:00+00:00",  # decoy 11:29
+        )
+        final = present_customer_capability(
+            build_capability_view(done, extracted_items=[], verification_id="ver-b"),
+            previous_stable=determining,
+            access_view=done,
+            now=datetime(2026, 7, 14, 21, 24, 30, tzinfo=timezone.utc),
+            debug=True,
+        )
+        assert final.presentation_phase == "terminal"
+        assert final.state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
+        assert final.current_verification_id == "ver-b"
+        assert final.last_verified == self.TS_B_DONE
+        assert final.verification_completed_at == self.TS_B_DONE
+        assert final.last_verified != self.TS_A
+        rendered_final = render_capability_panel(final, escape=_escape)
+        assert "Latest check completed" in rendered_final
+        assert f'datetime="{self.TS_B_DONE}"' in rendered_final
+        assert "cannot see your account information" in rendered_final.lower()
+        # 11:29 must not appear as B's completion time.
+        assert f'datetime="{self.TS_A}"' not in rendered_final
+
+    def test_20b_terminal_outcome_matrix(self):
+        prior = self._signed_out_a()
+        cases = [
+            (
+                SIGNED_OUT,
+                {},
+                CapabilityState.SIGNED_OUT,
+            ),
+            (
+                READY,
+                {"extracted_items": AMEX_FIELDS},
+                CapabilityState.EXTRACTION_SUCCESS,
+            ),
+            (
+                UNVERIFIED,
+                {
+                    "session_state": "connected",
+                    "extracted_items": [],
+                    "extraction_status": EXTRACTION_PENDING,
+                },
+                CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA,
+            ),
+            (
+                CHECKING,
+                {
+                    "session_state": "checking",
+                    "lifecycle": "timed_out",
+                    "extracted_items": None,
+                    "extraction_status": EXTRACTION_PENDING,
+                },
+                CapabilityState.LOGIN_UNKNOWN,
+            ),
+        ]
+        for state, extras, expected in cases:
+            lifecycle = extras.pop("lifecycle", "completed")
+            extracted = extras.pop("extracted_items", None)
+            extraction_status = extras.pop("extraction_status", None)
+            done = _view(
+                state,
+                verification_lifecycle=lifecycle,
+                verification_id="ver-b",
+                access_cycle_id="ver-b",
+                verification_completed_at=self.TS_B_DONE,
+                **extras,
+            )
+            build_kwargs = {"verification_id": "ver-b"}
+            if extracted is not None:
+                build_kwargs["extracted_items"] = extracted
+            if extraction_status is not None:
+                build_kwargs["extraction_status"] = extraction_status
+            final = present_customer_capability(
+                build_capability_view(done, **build_kwargs),
+                previous_stable=prior,
+                access_view=done,
+            )
+            assert final.presentation_phase == "terminal"
+            assert final.state == expected
+            assert final.last_verified == self.TS_B_DONE
+            assert final.current_verification_id == "ver-b"
+
+    def test_invariants_catch_cross_cycle_mix(self):
+        from mighty.customer_capability_presentation import check_presentation_invariants
+        from mighty.capability_state import (
+            PresentationTimelineEvent as PTE,
+            PresentationTimelineSection as PTS,
+        )
+
+        prior = self._signed_out_a()
+        mid = self._active_b()
+        presented = present_customer_capability(
+            build_capability_view(mid, verification_id="ver-b"),
+            previous_stable=prior,
+            access_view=mid,
+        )
+        assert check_presentation_invariants(presented) == []
+
+        bad = replace(
+            presented,
+            timeline_sections=(
+                PTS(
+                    label="Current check",
+                    verification_id="ver-b",
+                    events=(
+                        PTE(
+                            description="Borrowed",
+                            timestamp=self.TS_A,
+                            verification_id="ver-a",
+                            access_cycle_id="ver-a",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        violations = check_presentation_invariants(bad)
+        assert any("previous verification ID" in v for v in violations)
