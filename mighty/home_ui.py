@@ -80,6 +80,7 @@ def _render_extracted(
             f'<section class="dash-truth-extracted" aria-label="Extracted data">'
             f'<p class="dash-truth-section-label">Extracted data</p>'
             f'<p class="dash-truth-empty">No field values in the latest snapshot.</p>'
+            f"{_render_refresh_indicator(capability, escape)}"
             f"</section>"
         )
     rows = "".join(
@@ -97,12 +98,29 @@ def _render_extracted(
     meta_html = ""
     if meta_bits:
         meta_html = f'<p class="dash-truth-meta">{" · ".join(meta_bits)}</p>'
+    refresh = _render_refresh_indicator(capability, escape)
     return (
         f'<section class="dash-truth-extracted" aria-label="Extracted data">'
         f'<p class="dash-truth-section-label">Extracted data</p>'
         f'<dl class="dash-truth-fields">{rows}</dl>'
         f"{meta_html}"
+        f"{refresh}"
         f"</section>"
+    )
+
+
+def _render_refresh_indicator(
+    capability: CapabilityView,
+    escape: Callable[[Any], str],
+) -> str:
+    """Subtle in-place refresh cue — never replaces the stable card body."""
+    if not capability.is_refreshing:
+        return ""
+    label = (capability.refresh_label or "Refreshing…").strip() or "Refreshing…"
+    return (
+        f'<p class="dash-truth-refresh" data-refreshing="1" aria-live="polite">'
+        f"{escape(label)}"
+        f"</p>"
     )
 
 
@@ -112,15 +130,17 @@ def _render_meta_only(
 ) -> str:
     """Last verified / confidence when not showing the extracted-data block."""
     if capability.state == CapabilityState.EXTRACTION_SUCCESS:
+        # Refresh indicator is rendered inside the extracted-data block.
         return ""
     parts: list[str] = []
     if capability.last_verified:
         parts.append(f"Last verified: {_ts_html(capability.last_verified)}")
     if capability.confidence:
         parts.append(f"Confidence: {escape(capability.confidence)}")
-    if not parts:
-        return ""
-    return f'<p class="dash-truth-meta">{" · ".join(parts)}</p>'
+    meta = ""
+    if parts:
+        meta = f'<p class="dash-truth-meta">{" · ".join(parts)}</p>'
+    return meta + _render_refresh_indicator(capability, escape)
 
 
 def _render_action(
@@ -361,9 +381,10 @@ def render_capability_panel(
     """Render one provider Truth panel from CapabilityView only."""
     truth = capability.truth_validation
     timeline = _render_truth_timeline(truth, escape) if truth else ""
+    refreshing_attr = ' data-refreshing="1"' if capability.is_refreshing else ""
     return (
         f'<article class="dash-truth-panel" data-provider="{escape(capability.provider)}" '
-        f'data-capability="{escape(capability.state.value)}">'
+        f'data-capability="{escape(capability.state.value)}"{refreshing_attr}>'
         f'<h2 class="dash-truth-provider">{escape(capability.display_name)}</h2>'
         f'<p class="dash-truth-headline">{escape(capability.headline)}</p>'
         f"{_render_explanations(capability.explanations, escape)}"

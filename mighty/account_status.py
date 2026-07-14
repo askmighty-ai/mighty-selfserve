@@ -849,6 +849,8 @@ def load_all_account_statuses(
             )
         )
 
+    _apply_stable_customer_capability(accounts, db=db, user_id=uid)
+
     accounts.sort(key=lambda a: a.display_name.lower())
     summary_presentations = [
         AccountPresentation(
@@ -860,6 +862,58 @@ def load_all_account_statuses(
         for a in accounts
     ]
     return accounts, build_status_summary(accounts, access_loop_presentations=summary_presentations)
+
+
+def _apply_stable_customer_capability(
+    accounts: list[AccountStatus],
+    *,
+    db,
+    user_id: str,
+) -> None:
+    """Hold prior Truth card while verification is in flight (customer providers)."""
+    from mighty.capability_state import is_customer_visible_provider
+    from mighty.customer_capability_presentation import (
+        enrich_order_meta_from_db,
+        load_stable_capability,
+        order_meta_from_capability,
+        present_customer_capability,
+        resolve_account_identity,
+        save_stable_capability,
+    )
+
+    for acct in accounts:
+        if not is_customer_visible_provider(acct.source) or acct.capability is None:
+            continue
+        identity = resolve_account_identity(db, user_id, acct.source)
+        previous = load_stable_capability(
+            db, user_id, acct.source, account_identity=identity,
+        )
+        presented = present_customer_capability(
+            acct.capability,
+            previous_stable=previous,
+            access_view=acct.customer_access,
+            verification_lifecycle=acct.verification_lifecycle,
+            background_verification=acct.background_verification,
+        )
+        acct.capability = presented
+        if not presented.is_refreshing:
+            meta = order_meta_from_capability(
+                presented,
+                access_view=acct.customer_access,
+                verification_lifecycle=acct.verification_lifecycle,
+                account_identity=identity,
+            )
+            meta = enrich_order_meta_from_db(
+                db, user_id, meta, provider=acct.source,
+            )
+            save_stable_capability(
+                db,
+                user_id,
+                presented,
+                order_meta=meta,
+                access_view=acct.customer_access,
+                force_unknown=False,
+            )
 
 
 def _load_lifecycle_signals(uid: str, db) -> dict[str, tuple[bool, bool, bool]]:

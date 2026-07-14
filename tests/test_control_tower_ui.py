@@ -200,9 +200,14 @@ class TestTruthDashboardStates:
         )
         result, rendered = _render([_status_from_view(view, canonical="checking")])
         assert result.capability.state == CapabilityState.LOGIN_UNKNOWN
-        assert "cannot determine whether you are logged in" in rendered.lower()
-        assert "Verification in progress" in rendered or "login not yet confirmed" in rendered.lower()
-
+        # First-ever in-flight: neutral checking face, not a completed conclusion.
+        assert "verifying account access" in rendered.lower()
+        assert "cannot determine whether you are logged in" not in rendered.lower()
+        assert result.capability.headline == "Verifying account access…"
+        assert not any(
+            "in progress" in e.text.lower() for e in result.capability.evidence
+        )
+        assert result.capability.is_refreshing is True
 
 class TestTruthDashboardPresentation:
     def test_hides_multi_provider_noise(self):
