@@ -18,7 +18,7 @@ from mighty.capability_state import (
     build_capability_view,
 )
 from mighty.customer_account_access import CustomerAccountAccessView
-from mighty.customer_local_time import format_customer_local_time
+from mighty.customer_local_time import format_customer_elapsed, format_customer_local_time
 from mighty.home_state import HomeStateResult
 from mighty.truth_validation import (
     TruthEvidence,
@@ -30,6 +30,13 @@ from mighty.truth_validation import (
 def _ts_html(value: str | None) -> str:
     """Browser-local <time> element; canonical UTC stays in datetime/title."""
     return format_customer_local_time(value)
+
+
+def _elapsed_html(started_at: str | None) -> str:
+    """Live elapsed label that updates client-side without rewriting started_at."""
+    if not started_at:
+        return ""
+    return format_customer_elapsed(started_at)
 
 
 def _evidence_mark(item: EvidenceItem) -> str:
@@ -118,16 +125,24 @@ def _render_historical(
     """Explicitly labeled prior result — never present-tense current truth."""
     if not capability.status_is_historical or not capability.historical_summary:
         return ""
-    parts = [
-        f'<p class="dash-truth-historical-summary">'
-        f"{escape(capability.historical_summary)}</p>"
-    ]
-    if capability.previous_confirmed_at:
-        verb = (capability.historical_timestamp_label or "Confirmed").strip()
-        parts.append(
-            f'<p class="dash-truth-historical-meta">'
-            f"{escape(verb)} {_ts_html(capability.previous_confirmed_at)}</p>"
-        )
+    summary = capability.historical_summary
+    if capability.previous_confirmed_at and summary.lower().startswith("last confirmed"):
+        # Temporally direct: "Last confirmed signed out at <local time>."
+        parts = [
+            f'<p class="dash-truth-historical-summary">'
+            f"{escape(summary)} at {_ts_html(capability.previous_confirmed_at)}.</p>"
+        ]
+    else:
+        parts = [
+            f'<p class="dash-truth-historical-summary">'
+            f"{escape(summary)}</p>"
+        ]
+        if capability.previous_confirmed_at:
+            verb = (capability.historical_timestamp_label or "Last confirmed").strip()
+            parts.append(
+                f'<p class="dash-truth-historical-meta">'
+                f"{escape(verb)} {_ts_html(capability.previous_confirmed_at)}</p>"
+            )
     return (
         f'<section class="dash-truth-historical" aria-label="Previous confirmed result">'
         f'{"".join(parts)}'
@@ -147,11 +162,20 @@ def _render_meta_only(
         return ""
     parts: list[str] = []
     if capability.presentation_phase == "determining":
-        if capability.current_check_started_at:
-            label = capability.timestamp_label or "Checking started"
-            parts.append(
-                f"{escape(label)}: {_ts_html(capability.current_check_started_at)}"
-            )
+        started = capability.verification_started_at or capability.current_check_started_at
+        requested = capability.current_check_requested_at
+        if started:
+            label = capability.timestamp_label or "Check started"
+            parts.append(f"{escape(label)}: {_ts_html(started)}")
+            elapsed = _elapsed_html(started)
+            if elapsed:
+                parts.append(elapsed)
+        elif requested:
+            label = capability.timestamp_label or "Requested at"
+            parts.append(f"{escape(label)} {_ts_html(requested)}")
+            elapsed = _elapsed_html(requested)
+            if elapsed:
+                parts.append(elapsed)
     elif capability.last_verified:
         label = capability.timestamp_label or "Latest check completed"
         parts.append(f"{escape(label)}: {_ts_html(capability.last_verified)}")
@@ -216,11 +240,20 @@ def _presentation_timeline_row(
     escape: Callable[[Any], str],
 ) -> str:
     ts_html = _ts_html(item.timestamp) if item.timestamp else "—"
+    vid = escape(item.verification_id) if item.verification_id else ""
+    cid = escape(item.access_cycle_id) if item.access_cycle_id else ""
+    id_attrs = ""
+    if vid:
+        id_attrs += f' data-verification-id="{vid}"'
+    if cid:
+        id_attrs += f' data-access-cycle-id="{cid}"'
+    result = escape(item.result or item.outcome)
     return (
-        f'<div class="dash-truth-timeline-row" data-outcome="{escape(item.outcome)}">'
+        f'<div class="dash-truth-timeline-row" data-outcome="{escape(item.outcome)}"'
+        f"{id_attrs}>"
         f'<span class="dash-truth-timeline-ts">{ts_html}</span>'
         f'<span class="dash-truth-timeline-desc">{escape(item.description)}</span>'
-        f'<span class="dash-truth-timeline-outcome">{escape(item.outcome)}</span>'
+        f'<span class="dash-truth-timeline-outcome">{result}</span>'
         f"</div>"
     )
 
@@ -236,8 +269,17 @@ def _render_timeline_sections(
         rows = "".join(
             _presentation_timeline_row(event, escape) for event in section.events
         )
+        section_attrs = ""
+        if section.verification_id:
+            section_attrs += (
+                f' data-verification-id="{escape(section.verification_id)}"'
+            )
+        if section.access_cycle_id:
+            section_attrs += (
+                f' data-access-cycle-id="{escape(section.access_cycle_id)}"'
+            )
         bodies.append(
-            f'<div class="dash-truth-timeline-section">'
+            f'<div class="dash-truth-timeline-section"{section_attrs}>'
             f'<p class="dash-truth-section-label">{escape(section.label)}</p>'
             f'<div class="dash-truth-timeline-body">{rows}</div>'
             f"</div>"
@@ -447,11 +489,33 @@ def render_capability_panel(
     historical_attr = (
         ' data-status-historical="1"' if capability.status_is_historical else ""
     )
+    vid_attr = ""
+    if capability.current_verification_id:
+        vid_attr = (
+            f' data-verification-id="{escape(capability.current_verification_id)}"'
+        )
+    cid_attr = ""
+    if capability.current_access_cycle_id:
+        cid_attr = (
+            f' data-access-cycle-id="{escape(capability.current_access_cycle_id)}"'
+        )
+    completed_attr = ""
+    if capability.verification_completed_at:
+        completed_attr = (
+            f' data-verification-completed-at="'
+            f'{escape(capability.verification_completed_at)}"'
+        )
     headline = capability.primary_headline or capability.headline
+    # During determining, never surface a prior terminal state as data-capability.
+    capability_attr = (
+        "determining"
+        if phase == "determining"
+        else capability.state.value
+    )
     return (
         f'<article class="dash-truth-panel" data-provider="{escape(capability.provider)}" '
-        f'data-capability="{escape(capability.state.value)}"'
-        f"{phase_attr}{historical_attr}{refreshing_attr}>"
+        f'data-capability="{escape(capability_attr)}"'
+        f"{phase_attr}{historical_attr}{refreshing_attr}{vid_attr}{cid_attr}{completed_attr}>"
         f'<h2 class="dash-truth-provider">{escape(capability.display_name)}</h2>'
         f'<p class="dash-truth-headline">{escape(headline)}</p>'
         f"{_render_explanations(capability.explanations, escape)}"

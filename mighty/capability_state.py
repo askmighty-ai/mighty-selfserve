@@ -86,8 +86,16 @@ class PresentationTimelineEvent:
     """One Truth Timeline row for customer presentation (not CapabilityState)."""
 
     description: str
-    timestamp: str | None = None
+    timestamp: str | None = None  # occurred_at (UTC ISO)
     outcome: str = "UNKNOWN"  # PASS | FAIL | UNKNOWN | NOT_RUN
+    verification_id: str | None = None
+    access_cycle_id: str | None = None
+    source: str | None = None  # stage / source label
+    result: str | None = None  # alias of outcome when set
+
+    @property
+    def occurred_at(self) -> str | None:
+        return self.timestamp
 
 
 @dataclass(frozen=True)
@@ -96,6 +104,8 @@ class PresentationTimelineSection:
 
     label: str
     events: tuple[PresentationTimelineEvent, ...]
+    verification_id: str | None = None
+    access_cycle_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,8 +133,16 @@ class CapabilityView:
     presentation_phase: PresentationPhase = "terminal"
     current_verification_active: bool = False
     current_verification_id: str | None = None
+    current_access_cycle_id: str | None = None
     current_check_started_at: str | None = None
+    current_check_requested_at: str | None = None
+    verification_started_at: str | None = None
+    verification_completed_at: str | None = None
+    verification_lifecycle: str | None = None
+    terminal_reason: str | None = None
     terminal_capability_state: str | None = None
+    previous_verification_id: str | None = None
+    previous_access_cycle_id: str | None = None
     previous_capability_state: str | None = None
     previous_confirmed_at: str | None = None
     status_is_historical: bool = False
@@ -134,6 +152,9 @@ class CapabilityView:
     historical_summary: str | None = None
     historical_timestamp_label: str | None = None
     timeline_sections: tuple[PresentationTimelineSection, ...] = ()
+    # Sanitized selection diagnostic (no private account values).
+    presentation_selection: dict[str, Any] | None = None
+    selected_timestamp_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         primary_headline = self.primary_headline if self.primary_headline is not None else self.headline
@@ -165,8 +186,16 @@ class CapabilityView:
             "presentation_phase": self.presentation_phase,
             "current_verification_active": self.current_verification_active,
             "current_verification_id": self.current_verification_id,
+            "current_access_cycle_id": self.current_access_cycle_id,
             "current_check_started_at": self.current_check_started_at,
+            "current_check_requested_at": self.current_check_requested_at,
+            "verification_started_at": self.verification_started_at,
+            "verification_completed_at": self.verification_completed_at,
+            "verification_lifecycle": self.verification_lifecycle,
+            "terminal_reason": self.terminal_reason,
             "terminal_capability_state": self.terminal_capability_state,
+            "previous_verification_id": self.previous_verification_id,
+            "previous_access_cycle_id": self.previous_access_cycle_id,
             "previous_capability_state": self.previous_capability_state,
             "previous_confirmed_at": self.previous_confirmed_at,
             "status_is_historical": self.status_is_historical,
@@ -175,14 +204,23 @@ class CapabilityView:
             "timestamp_label": self.timestamp_label,
             "historical_summary": self.historical_summary,
             "historical_timestamp_label": self.historical_timestamp_label,
+            "selected_timestamp_source": self.selected_timestamp_source,
+            "presentation_selection": self.presentation_selection,
             "timeline_sections": [
                 {
                     "label": section.label,
+                    "verification_id": section.verification_id,
+                    "access_cycle_id": section.access_cycle_id,
                     "events": [
                         {
                             "description": event.description,
                             "timestamp": event.timestamp,
+                            "occurred_at": event.timestamp,
                             "outcome": event.outcome,
+                            "result": event.result or event.outcome,
+                            "verification_id": event.verification_id,
+                            "access_cycle_id": event.access_cycle_id,
+                            "source": event.source,
                         }
                         for event in section.events
                     ],
@@ -805,6 +843,22 @@ def build_capability_view(
     headline = _HEADLINES[state]
     explanations = _EXPLANATIONS[state]
     last_verified = _fmt_ts(view.last_confirmed_at if view else None)
+    access_cycle_id = (
+        (view.access_cycle_id if view else None)
+        or (view.last_confirmed_access_cycle_id if view else None)
+        or verification_id
+    )
+    verification_completed_at = _fmt_ts(
+        getattr(view, "verification_completed_at", None) if view else None
+    )
+    # Prefer verification completion over readiness/extraction observation time.
+    if verification_completed_at:
+        last_verified = verification_completed_at
+        selected_timestamp_source = "verification_completed_at"
+    else:
+        selected_timestamp_source = (
+            "last_confirmed_at" if last_verified else None
+        )
     capability = CapabilityView(
         provider=provider,
         display_name=display_name,
@@ -822,8 +876,25 @@ def build_capability_view(
         truth_validation=None,
         presentation_phase="terminal",
         current_verification_active=False,
-        current_verification_id=verification_id,
+        current_verification_id=(
+            verification_id
+            or (getattr(view, "verification_id", None) if view else None)
+        ),
+        current_access_cycle_id=access_cycle_id,
         current_check_started_at=None,
+        current_check_requested_at=_fmt_ts(
+            getattr(view, "verification_requested_at", None) if view else None
+        ),
+        verification_started_at=_fmt_ts(
+            getattr(view, "verification_started_at", None) if view else None
+        ),
+        verification_completed_at=verification_completed_at,
+        verification_lifecycle=(
+            getattr(view, "active_verification_lifecycle", None) if view else None
+        ),
+        terminal_reason=(
+            getattr(view, "terminal_reason", None) if view else None
+        ),
         terminal_capability_state=state.value,
         previous_capability_state=None,
         previous_confirmed_at=None,
@@ -834,6 +905,7 @@ def build_capability_view(
         historical_summary=None,
         historical_timestamp_label=None,
         timeline_sections=(),
+        selected_timestamp_source=selected_timestamp_source,
     )
     # Observability only — lazy import avoids circular dependency at module load.
     from mighty.truth_validation import attach_truth_validation
@@ -846,10 +918,7 @@ def build_capability_view(
         verification_id=verification_id,
         snapshot_id=snapshot_id,
         correlation_id=correlation_id,
-        access_cycle_id=(
-            (view.access_cycle_id if view else None)
-            or (view.last_confirmed_access_cycle_id if view else None)
-        ),
+        access_cycle_id=access_cycle_id,
     )
 
 

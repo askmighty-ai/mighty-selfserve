@@ -15,6 +15,7 @@ from mighty.admin_local_time import (
 )
 
 CUSTOMER_LOCAL_TIME_CLASS = "mighty-customer-local-time"
+CUSTOMER_ELAPSED_CLASS = "mighty-customer-elapsed"
 
 
 def _he(value: Any) -> str:
@@ -46,6 +47,20 @@ def format_customer_local_time(value: Any, *, empty: str = "—") -> str:
     return (
         f'<time class="{CUSTOMER_LOCAL_TIME_CLASS}" datetime="{_he(iso_z)}" '
         f'title="UTC: {_he(iso_z)}">{_he(iso_z)}</time>'
+    )
+
+
+def format_customer_elapsed(started_at: Any, *, prefix: str = "Checking for") -> str:
+    """Return a live-updating elapsed span; started_at remains canonical UTC."""
+    if started_at is None or started_at == "":
+        return ""
+    dt = parse_admin_timestamp(started_at)
+    if dt is None:
+        return ""
+    iso_z = to_utc_iso_z(dt)
+    return (
+        f'<span class="{CUSTOMER_ELAPSED_CLASS}" data-started-at="{_he(iso_z)}" '
+        f'data-elapsed-prefix="{_he(prefix)}">{_he(prefix)} …</span>'
     )
 
 

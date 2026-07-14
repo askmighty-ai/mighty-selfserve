@@ -565,6 +565,31 @@ def build_account_status(
     evidence_source = (
         getattr(session_access, "source", None) if session_access is not None else None
     )
+    verification_id = (
+        getattr(session_access, "verification_id", None)
+        if session_access is not None
+        else None
+    )
+    verification_requested_at = (
+        getattr(session_access, "verification_requested_at", None)
+        if session_access is not None
+        else None
+    )
+    verification_started_at = (
+        getattr(session_access, "verification_started_at", None)
+        if session_access is not None
+        else None
+    )
+    verification_completed_at = (
+        getattr(session_access, "verification_completed_at", None)
+        if session_access is not None
+        else None
+    )
+    terminal_reason = (
+        getattr(session_access, "terminal_reason", None)
+        if session_access is not None
+        else None
+    )
     if lifecycle.source_label == SOURCE_FOUND_FROM_GMAIL:
         discovered = resolve_discovered_from(from_email=True)
     elif lifecycle.source_label == SOURCE_EXTENSION:
@@ -586,6 +611,11 @@ def build_account_status(
         evidence_source=evidence_source,
         cached_snapshot_at=last_data_refresh or synced_at,
         canonical_status=canonical,
+        verification_id=verification_id,
+        verification_requested_at=verification_requested_at,
+        verification_started_at=verification_started_at,
+        verification_completed_at=verification_completed_at,
+        terminal_reason=terminal_reason,
     )
     ext_status = extraction_status or (account.extraction_status if account else None)
     capability = build_capability_view(
@@ -595,11 +625,7 @@ def build_account_status(
         extracted_items=account.normalized_fields if account else None,
         extraction_status=ext_status,
         login_url=login_url or None,
-        verification_id=(
-            getattr(session_access, "verification_id", None)
-            if session_access is not None
-            else None
-        ),
+        verification_id=verification_id,
     )
 
     return AccountStatus(
@@ -873,8 +899,10 @@ def _apply_stable_customer_capability(
     """Hold prior Truth card while verification is in flight (customer providers)."""
     from mighty.capability_state import is_customer_visible_provider
     from mighty.customer_capability_presentation import (
+        enrich_access_view_with_cycle,
         enrich_order_meta_from_db,
         load_stable_capability,
+        load_verification_cycle_identities,
         order_meta_from_capability,
         persistable_terminal_capability,
         present_customer_capability,
@@ -889,20 +917,29 @@ def _apply_stable_customer_capability(
         previous = load_stable_capability(
             db, user_id, acct.source, account_identity=identity,
         )
+        active_cycle, terminal_cycles = load_verification_cycle_identities(
+            db, user_id, acct.source,
+        )
+        enrich_cycle = active_cycle or (terminal_cycles[0] if terminal_cycles else None)
+        access_view = enrich_access_view_with_cycle(acct.customer_access, enrich_cycle)
         live = acct.capability
         presented = present_customer_capability(
             live,
             previous_stable=previous,
-            access_view=acct.customer_access,
+            access_view=access_view,
             verification_lifecycle=acct.verification_lifecycle,
             background_verification=acct.background_verification,
+            active_cycle=active_cycle,
+            terminal_cycles=terminal_cycles,
         )
         acct.capability = presented
+        if access_view is not None:
+            acct.customer_access = access_view
         persist_view = persistable_terminal_capability(live, presented)
         if persist_view is not None:
             meta = order_meta_from_capability(
                 persist_view,
-                access_view=acct.customer_access,
+                access_view=access_view,
                 verification_lifecycle=acct.verification_lifecycle,
                 account_identity=identity,
             )
@@ -914,7 +951,7 @@ def _apply_stable_customer_capability(
                 user_id,
                 persist_view,
                 order_meta=meta,
-                access_view=acct.customer_access,
+                access_view=access_view,
                 force_unknown=False,
             )
 

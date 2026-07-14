@@ -5,24 +5,31 @@ Presentation-layer gate for the Truth Dashboard.
 
 Capability resolution (resolve_capability_state / build_capability_view) still
 computes live pipeline truth. This module decides *how* that truth is phrased
-for the customer:
+for the customer and enforces one current-verification correlation invariant:
 
-  • presentation_phase ``determining`` while the newest relevant verification
-    is active — never present-tense CapabilityState conclusions.
-  • A prior completed result may appear only as explicitly historical copy
-    (“Last confirmed…”, “Previous check was inconclusive”).
-  • presentation_phase ``terminal`` atomically replaces determining when the
-    current cycle completes. CapabilityState remains the terminal answer.
+  A. Current check — active verification identity + its timestamps/evidence only
+  B. Previous completed check — prior terminal verification only
 
-Freshness rule: a prior result may be stated as *current* only when no newer
-verification is active and the result is still inside
-CUSTOMER_TRUTH_FRESHNESS_SECONDS. Once a new verification begins, the prior
-result becomes “last confirmed” and the primary status becomes determining.
-Stale-while-revalidate must not convert historical truth into present tense.
+Never combine fields from A and B into one apparent result.
 
-Persistence is monotonic: an older verification/access cycle must never
-overwrite a newer published presentation. Ordering uses canonical completion
-time (and cycle ids for idempotency), not formatted display strings.
+Selection algorithm (deterministic; shared by Dashboard HTML and /api/account-status):
+
+  1. Find the newest active verification for the user/provider.
+  2. Find the newest terminal verification for the user/provider.
+  3. If an active verification exists:
+       primary phase = determining
+       current section = active verification only
+       historical section = newest terminal older than the active one
+  4. If no active verification exists:
+       primary phase = terminal
+       display the newest terminal verification
+  5. Never select terminal capability/evidence solely by provider-level recency
+     without verification identity.
+  6. Break ties using requested_at / started_at / completed_at + verification_id.
+  7. Older or late writes must not replace a newer selected verification.
+
+Freshness calculations may remain internal but must not substitute for actual
+timestamps in customer-facing copy.
 
 Does not change capability precedence, verification FSM, extraction, snapshots,
 provider adapters, or truth-validation scoring.
@@ -34,7 +41,7 @@ import hashlib
 import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal, Sequence
 
 from mighty.admin_local_time import parse_admin_timestamp, to_utc_iso_z
 from mighty.capability_state import (
@@ -61,9 +68,10 @@ DETERMINING_BODY = (
     "Mighty is checking whether your American Express session is signed in."
 )
 REFRESHING_STATUS_HEADLINE = "Refreshing current status…"
-STALE_RECONFIRM_EXPLANATION = (
-    "Mighty has not reconfirmed this result within the current freshness window."
-)
+CHECKING_AGAIN_NOW = "Mighty is checking again now."
+STALE_LAST_CONFIRMED_PREFIX = "This result was last confirmed at"
+# Kept as alias so older imports keep resolving; never shown to customers.
+STALE_RECONFIRM_EXPLANATION = CHECKING_AGAIN_NOW
 
 # Backward-compatible aliases (tests / callers from PR #102).
 REFRESH_LABEL = DETERMINING_HEADLINE_CURRENT
@@ -72,6 +80,323 @@ FIRST_EVER_CHECKING_HEADLINE = DETERMINING_HEADLINE
 FIRST_EVER_CHECKING_EVIDENCE = DETERMINING_BODY
 
 _LIVE_CHECKING = "Checking"
+
+TimestampSource = Literal[
+    "verification_completed_at",
+    "verification_started_at",
+    "verification_requested_at",
+    "stable_card_completed_at",
+    "none",
+]
+
+
+# ── Cycle identity / selection ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class VerificationCycleIdentity:
+    """First-class identity + timing for one verification/access cycle."""
+
+    verification_id: str | None = None
+    access_cycle_id: str | None = None
+    requested_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    lifecycle: str | None = None
+    terminal_reason: str | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return (self.lifecycle or "") in ACTIVE_VERIFICATION_LIFECYCLES
+
+    @property
+    def is_terminal(self) -> bool:
+        return (self.lifecycle or "") in TERMINAL_VERIFICATION_LIFECYCLES
+
+
+@dataclass(frozen=True)
+class PresentationSelectionRecord:
+    """Sanitized debug record for one presentation resolution."""
+
+    provider: str
+    active_verification_id: str | None
+    selected_terminal_verification_id: str | None
+    previous_verification_id: str | None
+    presentation_phase: Literal["determining", "terminal"]
+    selected_timestamp_source: TimestampSource
+    selected_completed_at: str | None
+    current_timeline_event_count: int = 0
+    previous_timeline_event_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "active_verification_id": self.active_verification_id,
+            "selected_terminal_verification_id": self.selected_terminal_verification_id,
+            "previous_verification_id": self.previous_verification_id,
+            "presentation_phase": self.presentation_phase,
+            "selected_timestamp_source": self.selected_timestamp_source,
+            "selected_completed_at": self.selected_completed_at,
+            "current_timeline_event_count": self.current_timeline_event_count,
+            "previous_timeline_event_count": self.previous_timeline_event_count,
+        }
+
+
+def _norm_iso(value: str | None) -> str | None:
+    if not value:
+        return None
+    dt = parse_admin_timestamp(value)
+    if dt is None:
+        text = str(value).strip()
+        return text or None
+    return to_utc_iso_z(dt)
+
+
+def _cycle_sort_key(cycle: VerificationCycleIdentity) -> tuple:
+    """Newer cycles sort higher. Ties broken by verification_id ascending."""
+    completed = parse_admin_timestamp(cycle.completed_at)
+    started = parse_admin_timestamp(cycle.started_at)
+    requested = parse_admin_timestamp(cycle.requested_at)
+    # Use epoch floats; missing → -inf so known timestamps win.
+    def _epoch(dt: datetime | None) -> float:
+        if dt is None:
+            return float("-inf")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+
+    return (
+        _epoch(completed),
+        _epoch(started),
+        _epoch(requested),
+        cycle.verification_id or "",
+    )
+
+
+def cycle_identity_from_access_view(
+    access_view: Any | None,
+    *,
+    live: CapabilityView | None = None,
+) -> VerificationCycleIdentity:
+    """Extract cycle identity from the access view / live capability."""
+    ids: dict[str, Any] = {}
+    if live is not None and live.truth_validation is not None:
+        ids = dict(live.truth_validation.developer_ids or {})
+
+    verification_id = _norm_id(
+        (getattr(access_view, "verification_id", None) if access_view else None)
+        or (live.current_verification_id if live else None)
+        or ids.get("verification_id")
+    )
+    access_cycle_id = _norm_id(
+        (getattr(access_view, "access_cycle_id", None) if access_view else None)
+        or (live.current_access_cycle_id if live else None)
+        or ids.get("access_cycle_id")
+        or verification_id
+    )
+    lifecycle = _norm_id(
+        (getattr(access_view, "active_verification_lifecycle", None) if access_view else None)
+        or (live.verification_lifecycle if live else None)
+    )
+    requested = None
+    started = None
+    completed = None
+    reason = None
+    if access_view is not None:
+        requested = getattr(access_view, "verification_requested_at", None)
+        started = getattr(access_view, "verification_started_at", None)
+        completed = getattr(access_view, "verification_completed_at", None)
+        reason = getattr(access_view, "terminal_reason", None)
+    if live is not None:
+        requested = requested or live.current_check_requested_at
+        started = started or live.verification_started_at or live.current_check_started_at
+        completed = completed or live.verification_completed_at
+        reason = reason or live.terminal_reason
+    return VerificationCycleIdentity(
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id,
+        requested_at=_norm_iso(requested),
+        started_at=_norm_iso(started),
+        completed_at=_norm_iso(completed),
+        lifecycle=lifecycle,
+        terminal_reason=_norm_id(reason),
+    )
+
+
+def cycle_identity_from_capability(view: CapabilityView) -> VerificationCycleIdentity:
+    ids: dict[str, Any] = {}
+    if view.truth_validation is not None:
+        ids = dict(view.truth_validation.developer_ids or {})
+    verification_id = _norm_id(
+        view.current_verification_id or ids.get("verification_id")
+    )
+    return VerificationCycleIdentity(
+        verification_id=verification_id,
+        access_cycle_id=_norm_id(
+            view.current_access_cycle_id
+            or ids.get("access_cycle_id")
+            or verification_id
+        ),
+        requested_at=_norm_iso(view.current_check_requested_at),
+        started_at=_norm_iso(view.verification_started_at or view.current_check_started_at),
+        completed_at=_norm_iso(
+            view.verification_completed_at or view.last_verified
+        ),
+        lifecycle=_norm_id(view.verification_lifecycle),
+        terminal_reason=_norm_id(view.terminal_reason),
+    )
+
+
+def select_presentation_cycles(
+    *,
+    provider: str,
+    active: VerificationCycleIdentity | None,
+    terminals: Sequence[VerificationCycleIdentity] = (),
+    previous_stable: CapabilityView | None = None,
+) -> tuple[
+    VerificationCycleIdentity | None,
+    VerificationCycleIdentity | None,
+    VerificationCycleIdentity | None,
+    Literal["determining", "terminal"],
+]:
+    """Deterministic prior/current selector.
+
+    Returns (active_cycle, selected_terminal, previous_terminal, phase).
+    """
+    active_cycle = active if active is not None and active.is_active else None
+    terminal_list = [t for t in terminals if t.is_terminal and _norm_id(t.verification_id)]
+    if previous_stable is not None:
+        prior = cycle_identity_from_capability(previous_stable)
+        if prior.verification_id and prior.verification_id not in {
+            t.verification_id for t in terminal_list
+        }:
+            # Stable card is a terminal presentation even if lifecycle was cleared.
+            terminal_list.append(
+                VerificationCycleIdentity(
+                    verification_id=prior.verification_id,
+                    access_cycle_id=prior.access_cycle_id or prior.verification_id,
+                    requested_at=prior.requested_at,
+                    started_at=prior.started_at,
+                    completed_at=prior.completed_at or previous_stable.last_verified,
+                    lifecycle=prior.lifecycle or "completed",
+                    terminal_reason=prior.terminal_reason,
+                )
+            )
+
+    terminal_list.sort(key=_cycle_sort_key, reverse=True)
+
+    if active_cycle is not None:
+        previous = None
+        for candidate in terminal_list:
+            if candidate.verification_id == active_cycle.verification_id:
+                continue
+            # Prefer terminals strictly older than the active cycle.
+            if _cycle_sort_key(candidate) < _cycle_sort_key(active_cycle):
+                previous = candidate
+                break
+            if previous is None:
+                previous = candidate
+        return active_cycle, None, previous, "determining"
+
+    selected = terminal_list[0] if terminal_list else None
+    previous = terminal_list[1] if len(terminal_list) > 1 else None
+    return None, selected, previous, "terminal"
+
+
+def build_presentation_selection_record(
+    *,
+    provider: str,
+    phase: Literal["determining", "terminal"],
+    active: VerificationCycleIdentity | None,
+    selected_terminal: VerificationCycleIdentity | None,
+    previous: VerificationCycleIdentity | None,
+    timestamp_source: TimestampSource,
+    completed_at: str | None,
+    current_timeline_event_count: int = 0,
+    previous_timeline_event_count: int = 0,
+) -> PresentationSelectionRecord:
+    return PresentationSelectionRecord(
+        provider=provider,
+        active_verification_id=active.verification_id if active else None,
+        selected_terminal_verification_id=(
+            selected_terminal.verification_id if selected_terminal else None
+        ),
+        previous_verification_id=previous.verification_id if previous else None,
+        presentation_phase=phase,
+        selected_timestamp_source=timestamp_source,
+        selected_completed_at=_norm_iso(completed_at),
+        current_timeline_event_count=current_timeline_event_count,
+        previous_timeline_event_count=previous_timeline_event_count,
+    )
+
+
+def check_presentation_invariants(
+    view: CapabilityView,
+    *,
+    debug: bool = False,
+) -> list[str]:
+    """Return invariant violations for a presented CapabilityView.
+
+    Used in tests and when debug=True on presentation resolution.
+    """
+    del debug  # Same checks always; callers decide whether to raise/log.
+    violations: list[str] = []
+    current_id = _norm_id(view.current_verification_id)
+    previous_id = _norm_id(view.previous_verification_id)
+
+    if (
+        view.presentation_phase == "determining"
+        and view.current_verification_active
+        and view.terminal_capability_state
+    ):
+        violations.append(
+            "active determining card with terminal_capability_state as primary"
+        )
+
+    if view.presentation_phase == "terminal" and not view.current_verification_active:
+        if not view.verification_completed_at and not view.last_verified:
+            violations.append("terminal card without completed_at")
+
+    for section in view.timeline_sections:
+        section_id = _norm_id(section.verification_id)
+        is_current = section.label == "Current check"
+        is_previous = section.label == "Previous completed check"
+        for event in section.events:
+            event_id = _norm_id(event.verification_id)
+            if not event_id:
+                continue
+            if is_current and previous_id and event_id == previous_id:
+                violations.append(
+                    "current-check item with previous verification ID"
+                )
+            if is_previous and current_id and event_id == current_id:
+                violations.append(
+                    "previous-check item with current verification ID"
+                )
+            if section_id and event_id != section_id:
+                violations.append(
+                    f"timeline event verification_id {event_id} "
+                    f"does not match section {section_id}"
+                )
+
+    if (
+        view.presentation_phase == "terminal"
+        and view.verification_completed_at
+        and view.last_verified
+        and _norm_iso(view.verification_completed_at) != _norm_iso(view.last_verified)
+        and view.selected_timestamp_source == "verification_completed_at"
+    ):
+        violations.append("terminal timestamp from a different verification")
+
+    return violations
+
+
+def assert_presentation_invariants(view: CapabilityView) -> None:
+    violations = check_presentation_invariants(view)
+    if violations:
+        raise AssertionError(
+            "presentation invariant violations: " + "; ".join(violations)
+        )
 
 
 # ── Ordering metadata ────────────────────────────────────────────────────────
@@ -407,55 +732,86 @@ def _verification_id_from(
     view: CapabilityView,
     access_view: Any | None,
 ) -> str | None:
-    ids: dict[str, Any] = {}
-    if view.truth_validation is not None:
-        ids = dict(view.truth_validation.developer_ids or {})
-    return _norm_id(
-        ids.get("verification_id")
-        or view.current_verification_id
-        or (getattr(access_view, "verification_id", None) if access_view else None)
-        or (
-            getattr(access_view, "access_cycle_id", None) if access_view else None
-        )
-    )
+    return cycle_identity_from_access_view(access_view, live=view).verification_id
+
+
+def _access_cycle_id_from(
+    view: CapabilityView,
+    access_view: Any | None,
+) -> str | None:
+    return cycle_identity_from_access_view(access_view, live=view).access_cycle_id
+
+
+def _check_timing(
+    access_view: Any | None,
+    live: CapabilityView,
+) -> tuple[str | None, str | None, str | None, TimestampSource]:
+    """Return (display_at, started_at, requested_at, source).
+
+    Check started = started_at, falling back to requested_at only if not yet claimed.
+    Never uses session evidence / snapshot / account_data timestamps.
+    """
+    cycle = cycle_identity_from_access_view(access_view, live=live)
+    started = cycle.started_at
+    requested = cycle.requested_at
+    if started:
+        return started, started, requested, "verification_started_at"
+    if requested:
+        return requested, None, requested, "verification_requested_at"
+    return None, None, None, "none"
 
 
 def _check_started_at(access_view: Any | None, live: CapabilityView) -> str | None:
-    if access_view is not None:
-        for attr in (
-            "verification_requested_at",
-            "verification_started_at",
-            "current_attempt_at",
-            "session_evidence_at",
-        ):
-            value = getattr(access_view, attr, None)
-            if value:
-                return str(value)
-    return live.current_check_started_at
+    display_at, _started, _requested, _source = _check_timing(access_view, live)
+    return display_at
+
+
+def _canonical_completion_timestamp(
+    view: CapabilityView,
+    access_view: Any | None = None,
+) -> tuple[str | None, TimestampSource]:
+    """Prefer verification completed_at; never invent from snapshot/PSS/account_data."""
+    cycle = cycle_identity_from_access_view(access_view, live=view)
+    if cycle.completed_at:
+        return cycle.completed_at, "verification_completed_at"
+    if view.verification_completed_at:
+        return _norm_iso(view.verification_completed_at), "verification_completed_at"
+    if view.last_verified and view.selected_timestamp_source == "verification_completed_at":
+        return _norm_iso(view.last_verified), "verification_completed_at"
+    # Stable-card completion already correlated to a verification identity.
+    if view.last_verified and _norm_id(view.current_verification_id):
+        return _norm_iso(view.last_verified), "stable_card_completed_at"
+    return None, "none"
 
 
 def _historical_copy(state: CapabilityState) -> tuple[str, str]:
     """Return (historical_summary, timestamp_label_verb)."""
     if state == CapabilityState.SIGNED_OUT:
-        return "Last confirmed: Signed out", "Confirmed"
+        return "Last confirmed signed out", "Last confirmed"
     if state == CapabilityState.EXTRACTION_SUCCESS:
         return (
             "Last confirmed: Mighty could access and extract your account data",
-            "Confirmed",
+            "Last confirmed",
         )
     if state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA:
         return (
             "Last confirmed: Mighty could tell you were logged in, "
             "but could not see account information",
-            "Confirmed",
+            "Last confirmed",
         )
     if state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED:
         return (
             "Last confirmed: Mighty could tell you were logged in, "
             "but could not extract account information",
-            "Confirmed",
+            "Last confirmed",
         )
-    return "Previous check was inconclusive", "Checked"
+    return "Previous check was inconclusive", "Last confirmed"
+
+
+def _stale_explanation(confirmed_at: str | None) -> str:
+    if confirmed_at:
+        return f"{STALE_LAST_CONFIRMED_PREFIX} {confirmed_at}."
+    return f"{STALE_LAST_CONFIRMED_PREFIX}."
 
 
 def _determining_headline(previous: CapabilityView | None) -> str:
@@ -466,38 +822,102 @@ def _determining_headline(previous: CapabilityView | None) -> str:
     return DETERMINING_HEADLINE_CURRENT
 
 
+def _filter_timeline_events(
+    events: Sequence[PresentationTimelineEvent],
+    *,
+    verification_id: str | None,
+    access_cycle_id: str | None,
+) -> tuple[PresentationTimelineEvent, ...]:
+    """Keep only events whose IDs match the section (or lack IDs when section has none)."""
+    expected = _norm_id(verification_id)
+    expected_cycle = _norm_id(access_cycle_id) or expected
+    kept: list[PresentationTimelineEvent] = []
+    for event in events:
+        event_id = _norm_id(event.verification_id)
+        event_cycle = _norm_id(event.access_cycle_id)
+        if expected and event_id and event_id != expected:
+            continue
+        if expected_cycle and event_cycle and event_cycle != expected_cycle:
+            continue
+        if expected and not event_id:
+            # Untagged legacy events may be assigned to the section identity.
+            event = replace(
+                event,
+                verification_id=expected,
+                access_cycle_id=expected_cycle,
+            )
+        kept.append(event)
+    return tuple(kept)
+
+
 def _events_from_truth_timeline(
     view: CapabilityView,
+    *,
+    verification_id: str | None = None,
+    access_cycle_id: str | None = None,
 ) -> tuple[PresentationTimelineEvent, ...]:
     truth = view.truth_validation
     if truth is None or not truth.timeline:
         return ()
-    return tuple(
+    vid = _norm_id(verification_id) or _norm_id(view.current_verification_id)
+    cid = _norm_id(access_cycle_id) or _norm_id(view.current_access_cycle_id) or vid
+    events = tuple(
         PresentationTimelineEvent(
             description=item.description,
             timestamp=item.timestamp,
             outcome=item.outcome.value,
+            result=item.outcome.value,
+            verification_id=vid,
+            access_cycle_id=cid,
+            source="truth_timeline",
         )
         for item in truth.timeline
+    )
+    return _filter_timeline_events(
+        events, verification_id=vid, access_cycle_id=cid,
     )
 
 
 def _current_check_timeline(
     *,
+    display_at: str | None,
     started_at: str | None,
+    requested_at: str | None,
+    verification_id: str | None,
+    access_cycle_id: str | None,
+    timestamp_source: TimestampSource,
 ) -> PresentationTimelineSection:
+    vid = _norm_id(verification_id)
+    cid = _norm_id(access_cycle_id) or vid
+    # Prefer started; fall back to requested so rows never render as em dash.
+    event_ts = started_at or requested_at or display_at
+    start_desc = (
+        "Verification started"
+        if started_at or timestamp_source == "verification_started_at"
+        else "Verification requested"
+    )
     return PresentationTimelineSection(
         label="Current check",
+        verification_id=vid,
+        access_cycle_id=cid,
         events=(
             PresentationTimelineEvent(
-                description="Verification started",
-                timestamp=started_at,
+                description=start_desc,
+                timestamp=event_ts,
                 outcome="UNKNOWN",
+                result="UNKNOWN",
+                verification_id=vid,
+                access_cycle_id=cid,
+                source="verification",
             ),
             PresentationTimelineEvent(
                 description="Determining login state",
-                timestamp=started_at,
+                timestamp=event_ts,
                 outcome="UNKNOWN",
+                result="UNKNOWN",
+                verification_id=vid,
+                access_cycle_id=cid,
+                source="verification",
             ),
         ),
     )
@@ -506,17 +926,25 @@ def _current_check_timeline(
 def _previous_check_timeline(
     previous: CapabilityView,
 ) -> PresentationTimelineSection | None:
-    events = _events_from_truth_timeline(previous)
+    vid = _norm_id(previous.current_verification_id)
+    cid = _norm_id(previous.current_access_cycle_id) or vid
+    events = _events_from_truth_timeline(
+        previous, verification_id=vid, access_cycle_id=cid,
+    )
     if not events:
         return None
     return PresentationTimelineSection(
         label="Previous completed check",
+        verification_id=vid,
+        access_cycle_id=cid,
         events=events,
     )
 
 
 def _as_stable(view: CapabilityView) -> CapabilityView:
     explanations = view.explanations
+    completed, source = _canonical_completion_timestamp(view)
+    last_verified = completed or view.last_verified
     return replace(
         view,
         is_refreshing=False,
@@ -526,13 +954,18 @@ def _as_stable(view: CapabilityView) -> CapabilityView:
         terminal_capability_state=view.state.value,
         previous_capability_state=None,
         previous_confirmed_at=None,
+        previous_verification_id=None,
+        previous_access_cycle_id=None,
         status_is_historical=False,
         primary_headline=view.headline,
         primary_explanation=(" ".join(explanations) if explanations else None),
-        timestamp_label="Latest check completed" if view.last_verified else None,
+        last_verified=last_verified,
+        verification_completed_at=completed or view.verification_completed_at,
+        timestamp_label="Latest check completed" if last_verified else None,
         historical_summary=None,
         historical_timestamp_label=None,
         timeline_sections=(),
+        selected_timestamp_source=source if last_verified else "none",
     )
 
 
@@ -561,17 +994,25 @@ def persistable_terminal_capability(
     """Canonical terminal card to persist, or None while determining/in-flight.
 
     Freshness demotion is presentation-only and must not be written back.
+    Never persist a derived terminal card if its verification identity cannot
+    be proven.
     """
     if presented.is_refreshing or presented.presentation_phase == "determining":
         return None
     if presented.status_is_historical and not presented.current_verification_active:
-        return _as_stable(live)
-    return presented
+        candidate = _as_stable(live)
+    else:
+        candidate = presented
+    if not _norm_id(candidate.current_verification_id):
+        return None
+    return candidate
 
 
 def _stale_historical_presentation(view: CapabilityView) -> CapabilityView:
     """Completed but stale — historical wording only, never present-tense current truth."""
     summary, verb = _historical_copy(view.state)
+    confirmed_at = view.verification_completed_at or view.last_verified
+    explanation = _stale_explanation(confirmed_at)
     # Last confirmed signed-out may still offer sign-in; other stale states must not
     # imply a fresh current conclusion via CTA or extracted "current" fields.
     keep_signed_out_cta = (
@@ -583,8 +1024,8 @@ def _stale_historical_presentation(view: CapabilityView) -> CapabilityView:
     return replace(
         view,
         headline=summary,
-        explanations=(STALE_RECONFIRM_EXPLANATION,),
-        evidence=(EvidenceItem(STALE_RECONFIRM_EXPLANATION, None),),
+        explanations=(explanation,),
+        evidence=(EvidenceItem(explanation, None),),
         confidence=None,
         action_required=keep_signed_out_cta,
         action_label=view.action_label if keep_signed_out_cta else None,
@@ -596,14 +1037,17 @@ def _stale_historical_presentation(view: CapabilityView) -> CapabilityView:
         current_verification_active=False,
         terminal_capability_state=view.state.value,
         previous_capability_state=view.state.value,
-        previous_confirmed_at=view.last_verified,
+        previous_confirmed_at=confirmed_at,
         status_is_historical=True,
         primary_headline=summary,
-        primary_explanation=STALE_RECONFIRM_EXPLANATION,
-        timestamp_label="Last confirmed" if view.last_verified else None,
+        primary_explanation=explanation,
+        timestamp_label="Last confirmed" if confirmed_at else None,
         historical_summary=summary,
         historical_timestamp_label=verb,
         timeline_sections=(),
+        selected_timestamp_source=(
+            view.selected_timestamp_source or "stable_card_completed_at"
+        ),
     )
 
 
@@ -612,60 +1056,123 @@ def _determining_view(
     *,
     previous: CapabilityView | None,
     access_view: Any | None,
+    selection: PresentationSelectionRecord | None = None,
 ) -> CapabilityView:
     """Primary status is determining; prior result is historical only."""
     headline = _determining_headline(previous)
-    started_at = _check_started_at(access_view, live)
-    verification_id = _verification_id_from(live, access_view)
+    display_at, started_at, requested_at, ts_source = _check_timing(access_view, live)
+    cycle = cycle_identity_from_access_view(access_view, live=live)
+    verification_id = cycle.verification_id or _verification_id_from(live, access_view)
+    access_cycle_id = cycle.access_cycle_id or verification_id
     sections: list[PresentationTimelineSection] = []
+    previous_event_count = 0
     if previous is not None:
         prev_section = _previous_check_timeline(previous)
         if prev_section is not None:
             sections.append(prev_section)
-    sections.append(_current_check_timeline(started_at=started_at))
+            previous_event_count = len(prev_section.events)
+    current_section = _current_check_timeline(
+        display_at=display_at,
+        started_at=started_at,
+        requested_at=requested_at,
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id,
+        timestamp_source=ts_source,
+    )
+    sections.append(current_section)
 
     historical_summary = None
     historical_timestamp_label = None
     previous_state = None
     previous_confirmed_at = None
-    retained_state = CapabilityState.LOGIN_UNKNOWN
+    previous_verification_id = None
+    previous_access_cycle_id = None
+    # Determining must not carry a prior terminal CapabilityState as primary.
+    determining_state = CapabilityState.LOGIN_UNKNOWN
     if previous is not None:
         historical_summary, historical_timestamp_label = _historical_copy(previous.state)
         previous_state = previous.state.value
-        previous_confirmed_at = previous.last_verified
-        retained_state = previous.state
+        previous_confirmed_at = (
+            previous.verification_completed_at or previous.last_verified
+        )
+        previous_verification_id = previous.current_verification_id
+        previous_access_cycle_id = (
+            previous.current_access_cycle_id or previous.current_verification_id
+        )
+
+    if started_at:
+        timestamp_label = "Check started"
+    elif requested_at:
+        timestamp_label = "Requested at"
+    else:
+        timestamp_label = None
+
+    selection_record = selection or build_presentation_selection_record(
+        provider=live.provider,
+        phase="determining",
+        active=cycle if cycle.is_active or verification_id else None,
+        selected_terminal=None,
+        previous=(
+            cycle_identity_from_capability(previous) if previous is not None else None
+        ),
+        timestamp_source=ts_source,
+        completed_at=None,
+        current_timeline_event_count=len(current_section.events),
+        previous_timeline_event_count=previous_event_count,
+    )
 
     return replace(
         live,
-        state=retained_state,
+        state=determining_state,
         headline=headline,
-        explanations=(DETERMINING_BODY,),
-        evidence=(EvidenceItem(DETERMINING_BODY, None),),
+        explanations=(CHECKING_AGAIN_NOW if previous is not None else DETERMINING_BODY,),
+        evidence=(
+            EvidenceItem(
+                CHECKING_AGAIN_NOW if previous is not None else DETERMINING_BODY,
+                None,
+            ),
+        ),
         confidence=None,
         action_required=False,
         action_label=None,
         action_url=None,
         extracted_fields=(),
-        last_verified=previous_confirmed_at if previous is not None else started_at,
+        last_verified=previous_confirmed_at if previous is not None else display_at,
         is_refreshing=True,
         refresh_label=headline,
         presentation_phase="determining",
         current_verification_active=True,
         current_verification_id=verification_id,
-        current_check_started_at=started_at,
+        current_access_cycle_id=access_cycle_id,
+        current_check_started_at=started_at or display_at,
+        current_check_requested_at=requested_at,
+        verification_started_at=started_at,
+        verification_completed_at=None,
+        verification_lifecycle=cycle.lifecycle,
+        terminal_reason=None,
         terminal_capability_state=None,
+        previous_verification_id=previous_verification_id,
+        previous_access_cycle_id=previous_access_cycle_id,
         previous_capability_state=previous_state,
         previous_confirmed_at=previous_confirmed_at,
         status_is_historical=previous is not None,
         primary_headline=headline,
-        primary_explanation=DETERMINING_BODY,
-        timestamp_label="Checking started" if started_at else None,
+        primary_explanation=(
+            CHECKING_AGAIN_NOW if previous is not None else DETERMINING_BODY
+        ),
+        timestamp_label=timestamp_label,
         historical_summary=historical_summary,
         historical_timestamp_label=historical_timestamp_label,
         timeline_sections=tuple(sections),
+        selected_timestamp_source=ts_source,
+        presentation_selection=selection_record.to_dict(),
         # Current-check timeline only on the live truth object — never a terminal
         # capability event while determining.
-        truth_validation=_determining_truth_validation(live, started_at=started_at),
+        truth_validation=_determining_truth_validation(
+            live,
+            started_at=started_at or display_at,
+            verification_id=verification_id,
+        ),
     )
 
 
@@ -673,6 +1180,7 @@ def _determining_truth_validation(
     live: CapabilityView,
     *,
     started_at: str | None,
+    verification_id: str | None = None,
 ) -> Any:
     """Replace terminal capability timeline with in-flight current-check events."""
     truth = live.truth_validation
@@ -688,6 +1196,7 @@ def _determining_truth_validation(
             description="Verification started",
             outcome=EvidenceOutcome.UNKNOWN,
             confidence_contribution=0,
+            metadata={"verification_id": verification_id} if verification_id else {},
         ),
         TruthEvidence(
             id="current-determining-login",
@@ -696,6 +1205,7 @@ def _determining_truth_validation(
             description="Determining login state",
             outcome=EvidenceOutcome.UNKNOWN,
             confidence_contribution=0,
+            metadata={"verification_id": verification_id} if verification_id else {},
         ),
     )
     return replace(truth, timeline=events, capability_state="determining")
@@ -727,16 +1237,64 @@ def merge_unchanged_presentation(
     else:
         pipeline = previous.pipeline
 
-    last_verified = live.last_verified or previous.last_verified
+    # Same customer-visible card: adopt the newer correlated completion time.
+    # Never keep an older timestamp when live provides a newer one for this
+    # (or an equally identified) cycle.
+    live_completed, live_source = _canonical_completion_timestamp(live)
+    prev_completed = previous.verification_completed_at or previous.last_verified
+    last_verified = prev_completed
+    source = previous.selected_timestamp_source or live_source
+    if live_completed:
+        prev_dt = parse_admin_timestamp(prev_completed)
+        live_dt = parse_admin_timestamp(live_completed)
+        same_id = (
+            _norm_id(live.current_verification_id)
+            and _norm_id(live.current_verification_id)
+            == _norm_id(previous.current_verification_id)
+        )
+        if prev_dt is None or (live_dt is not None and live_dt >= prev_dt) or same_id:
+            last_verified = live_completed
+            source = live_source
+
+    # When live has a distinct verification identity, this is a new terminal
+    # publication with the same visual face — adopt live identity + completion.
+    live_vid = _norm_id(live.current_verification_id)
+    prev_vid = _norm_id(previous.current_verification_id)
+    if live_vid and live_vid != prev_vid:
+        return _as_stable(
+            replace(
+                live,
+                last_verified=live_completed or live.last_verified or prev_completed,
+                verification_completed_at=(
+                    live_completed or live.verification_completed_at or prev_completed
+                ),
+                pipeline=pipeline,
+                truth_validation=truth if truth is not None else live.truth_validation,
+                current_verification_id=live_vid,
+                current_access_cycle_id=(
+                    live.current_access_cycle_id or live_vid
+                ),
+                selected_timestamp_source=live_source or "verification_completed_at",
+            )
+        )
+
+    verification_id = live_vid or prev_vid
+    access_cycle_id = (
+        live.current_access_cycle_id
+        or previous.current_access_cycle_id
+        or verification_id
+    )
+
     return _as_stable(
         replace(
             previous,
             last_verified=last_verified,
+            verification_completed_at=last_verified,
             pipeline=pipeline,
             truth_validation=truth,
-            current_verification_id=(
-                live.current_verification_id or previous.current_verification_id
-            ),
+            current_verification_id=verification_id,
+            current_access_cycle_id=access_cycle_id,
+            selected_timestamp_source=source,
         )
     )
 
@@ -750,22 +1308,55 @@ def present_customer_capability(
     background_verification: bool | None = None,
     force_unknown: bool = False,
     now: datetime | None = None,
+    active_cycle: VerificationCycleIdentity | None = None,
+    terminal_cycles: Sequence[VerificationCycleIdentity] = (),
+    debug: bool = False,
 ) -> CapabilityView:
     """Gate live capability into the customer-visible Truth card.
 
     force_unknown: developer override — show live immediately. Never persisted
     by callers that honor ``persist=False`` / ``force_unknown`` on save.
 
-    Freshness: a completed definitive result may be phrased as current only while
-    inside CUSTOMER_TRUTH_FRESHNESS_SECONDS and no newer verification is active.
+    Dashboard HTML and /api/account-status must call this same selector path.
     """
-    if force_unknown:
-        return _as_stable(live)
+    cycle = active_cycle or cycle_identity_from_access_view(access_view, live=live)
+    if verification_lifecycle:
+        cycle = VerificationCycleIdentity(
+            verification_id=cycle.verification_id,
+            access_cycle_id=cycle.access_cycle_id,
+            requested_at=cycle.requested_at,
+            started_at=cycle.started_at,
+            completed_at=cycle.completed_at,
+            lifecycle=_norm_id(verification_lifecycle),
+            terminal_reason=cycle.terminal_reason,
+        )
 
-    refreshing = is_customer_refresh_in_flight(
-        access_view,
-        verification_lifecycle=verification_lifecycle,
-        background_verification=background_verification,
+    active, selected_terminal, previous_cycle, phase = select_presentation_cycles(
+        provider=live.provider,
+        active=cycle if cycle.is_active else (
+            cycle if is_customer_refresh_in_flight(
+                access_view,
+                verification_lifecycle=verification_lifecycle or cycle.lifecycle,
+                background_verification=background_verification,
+            ) and not cycle.is_terminal else None
+        ),
+        terminals=terminal_cycles,
+        previous_stable=previous_stable,
+    )
+
+    if force_unknown:
+        presented = _as_stable(live)
+        if debug:
+            assert_presentation_invariants(presented)
+        return presented
+
+    refreshing = (
+        phase == "determining"
+        or is_customer_refresh_in_flight(
+            access_view,
+            verification_lifecycle=verification_lifecycle or cycle.lifecycle,
+            background_verification=background_verification,
+        )
     )
 
     if refreshing:
@@ -774,20 +1365,103 @@ def present_customer_capability(
         if prior is None and live.state != CapabilityState.LOGIN_UNKNOWN:
             # SWR/live non-unknown during an active check is not current truth.
             prior = _as_stable(live)
-        return _determining_view(live, previous=prior, access_view=access_view)
+        selection = build_presentation_selection_record(
+            provider=live.provider,
+            phase="determining",
+            active=active or cycle,
+            selected_terminal=None,
+            previous=previous_cycle or (
+                cycle_identity_from_capability(prior) if prior is not None else None
+            ),
+            timestamp_source="none",
+            completed_at=None,
+        )
+        presented = _determining_view(
+            live,
+            previous=prior,
+            access_view=access_view,
+            selection=selection,
+        )
+        if debug:
+            assert_presentation_invariants(presented)
+        return presented
 
+    # Atomic terminal publication for the selected cycle.
     if previous_stable is not None and customer_visible_same(
         _as_stable(previous_stable), _as_stable(live)
     ):
         merged = merge_unchanged_presentation(previous_stable, live)
         if _needs_freshness_demotion(merged, now=now):
-            return _stale_historical_presentation(merged)
-        return merged
+            presented = _stale_historical_presentation(merged)
+        else:
+            presented = merged
+    else:
+        stable = _as_stable(live)
+        # Bind completion to this verification when known.
+        completed, source = _canonical_completion_timestamp(stable, access_view)
+        if completed:
+            stable = replace(
+                stable,
+                last_verified=completed,
+                verification_completed_at=completed,
+                selected_timestamp_source=source,
+                timestamp_label="Latest check completed",
+            )
+        if _needs_freshness_demotion(stable, now=now):
+            presented = _stale_historical_presentation(stable)
+        else:
+            presented = stable
 
-    stable = _as_stable(live)
-    if _needs_freshness_demotion(stable, now=now):
-        return _stale_historical_presentation(stable)
-    return stable
+        # Bind selected terminal identity only when it matches the live cycle
+        # (or live has no identity yet). Never let a prior cycle overwrite a
+        # newer live terminal identity.
+        live_vid = _norm_id(presented.current_verification_id) or _norm_id(
+            cycle.verification_id
+        )
+        selected_vid = (
+            _norm_id(selected_terminal.verification_id) if selected_terminal else None
+        )
+        if selected_terminal and selected_vid and (
+            live_vid is None or selected_vid == live_vid
+        ):
+            presented = replace(
+                presented,
+                current_verification_id=selected_terminal.verification_id,
+                current_access_cycle_id=(
+                    selected_terminal.access_cycle_id
+                    or selected_terminal.verification_id
+                ),
+                verification_lifecycle=(
+                    selected_terminal.lifecycle or presented.verification_lifecycle
+                ),
+                terminal_reason=(
+                    selected_terminal.terminal_reason or presented.terminal_reason
+                ),
+            )
+
+    selection = build_presentation_selection_record(
+        provider=live.provider,
+        phase="terminal",
+        active=None,
+        selected_terminal=selected_terminal or cycle_identity_from_capability(presented),
+        previous=previous_cycle,
+        timestamp_source=(
+            presented.selected_timestamp_source  # type: ignore[arg-type]
+            if presented.selected_timestamp_source in {
+                "verification_completed_at",
+                "verification_started_at",
+                "verification_requested_at",
+                "stable_card_completed_at",
+                "none",
+            }
+            else "none"
+        ),
+        completed_at=presented.verification_completed_at or presented.last_verified,
+    )
+    presented = replace(presented, presentation_selection=selection.to_dict())
+    if debug:
+        assert_presentation_invariants(presented)
+    return presented
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -863,7 +1537,14 @@ def capability_view_to_payload(view: CapabilityView) -> dict[str, Any]:
     payload["timeline_sections"] = []
     payload["previous_capability_state"] = None
     payload["previous_confirmed_at"] = None
+    payload["previous_verification_id"] = None
+    payload["previous_access_cycle_id"] = None
+    payload["current_check_started_at"] = None
+    payload["current_check_requested_at"] = None
     payload["terminal_capability_state"] = view.state.value
+    payload["verification_completed_at"] = (
+        view.verification_completed_at or view.last_verified
+    )
     payload["timestamp_label"] = (
         "Latest check completed" if view.last_verified else None
     )
@@ -1009,8 +1690,12 @@ def capability_view_from_payload(payload: dict[str, Any]) -> CapabilityView:
         events = tuple(
             PresentationTimelineEvent(
                 description=str(event.get("description") or ""),
-                timestamp=event.get("timestamp"),
-                outcome=str(event.get("outcome") or "UNKNOWN"),
+                timestamp=event.get("timestamp") or event.get("occurred_at"),
+                outcome=str(event.get("outcome") or event.get("result") or "UNKNOWN"),
+                result=str(event.get("result") or event.get("outcome") or "UNKNOWN"),
+                verification_id=event.get("verification_id"),
+                access_cycle_id=event.get("access_cycle_id"),
+                source=event.get("source"),
             )
             for event in (section.get("events") or [])
             if isinstance(event, dict)
@@ -1019,6 +1704,8 @@ def capability_view_from_payload(payload: dict[str, Any]) -> CapabilityView:
             PresentationTimelineSection(
                 label=str(section.get("label") or ""),
                 events=events,
+                verification_id=section.get("verification_id"),
+                access_cycle_id=section.get("access_cycle_id"),
             )
         )
 
@@ -1042,8 +1729,18 @@ def capability_view_from_payload(payload: dict[str, Any]) -> CapabilityView:
         presentation_phase="terminal",
         current_verification_active=False,
         current_verification_id=payload.get("current_verification_id"),
+        current_access_cycle_id=payload.get("current_access_cycle_id"),
         current_check_started_at=None,
+        current_check_requested_at=None,
+        verification_started_at=payload.get("verification_started_at"),
+        verification_completed_at=(
+            payload.get("verification_completed_at") or payload.get("last_verified")
+        ),
+        verification_lifecycle=payload.get("verification_lifecycle"),
+        terminal_reason=payload.get("terminal_reason"),
         terminal_capability_state=payload.get("terminal_capability_state") or state.value,
+        previous_verification_id=None,
+        previous_access_cycle_id=None,
         previous_capability_state=None,
         previous_confirmed_at=None,
         status_is_historical=False,
@@ -1057,6 +1754,8 @@ def capability_view_from_payload(payload: dict[str, Any]) -> CapabilityView:
         historical_summary=None,
         historical_timestamp_label=None,
         timeline_sections=tuple(timeline_sections),
+        selected_timestamp_source=payload.get("selected_timestamp_source"),
+        presentation_selection=payload.get("presentation_selection"),
     )
 
 
@@ -1124,9 +1823,37 @@ def load_stable_capability(
     if not isinstance(payload, dict):
         return None
     try:
-        return capability_view_from_payload(payload)
+        view = capability_view_from_payload(payload)
     except Exception:  # noqa: BLE001 — corrupt row must not break dashboard
         return None
+    # Overlay first-class columns so identity/timestamps survive payload drift.
+    if hasattr(row, "keys"):
+        vid = row["verification_id"] if "verification_id" in row.keys() else None
+        cid = row["access_cycle_id"] if "access_cycle_id" in row.keys() else None
+        completed = (
+            row["verification_completed_at"]
+            if "verification_completed_at" in row.keys()
+            else None
+        )
+        lifecycle = row["lifecycle"] if "lifecycle" in row.keys() else None
+        reason = row["terminal_reason"] if "terminal_reason" in row.keys() else None
+        if vid or cid or completed:
+            view = replace(
+                view,
+                current_verification_id=vid or view.current_verification_id,
+                current_access_cycle_id=cid or view.current_access_cycle_id,
+                verification_completed_at=_norm_iso(completed)
+                or view.verification_completed_at,
+                last_verified=_norm_iso(completed) or view.last_verified,
+                verification_lifecycle=lifecycle or view.verification_lifecycle,
+                terminal_reason=reason or view.terminal_reason,
+                selected_timestamp_source=(
+                    "verification_completed_at"
+                    if completed
+                    else view.selected_timestamp_source
+                ),
+            )
+    return view
 
 
 def load_stable_order_meta(
@@ -1175,14 +1902,30 @@ def save_stable_capability(
     ensure_customer_capability_presentation_tables(db)
     stable = _as_stable(view)
     meta = order_meta or order_meta_from_capability(stable, access_view=access_view)
+    # Refuse to persist without a proven verification identity.
+    if not _norm_id(meta.verification_id):
+        return False
     if not meta.verification_completed_at:
+        completed = (
+            stable.verification_completed_at
+            or stable.last_verified
+            or _utc_now_iso()
+        )
         meta = PresentationOrderMeta(
             verification_id=meta.verification_id,
-            access_cycle_id=meta.access_cycle_id,
-            verification_completed_at=_utc_now_iso(),
+            access_cycle_id=meta.access_cycle_id or meta.verification_id,
+            verification_completed_at=_norm_iso(completed),
             lifecycle=meta.lifecycle,
             terminal_reason=meta.terminal_reason,
             account_identity=meta.account_identity,
+        )
+        stable = replace(
+            stable,
+            last_verified=_norm_iso(completed),
+            verification_completed_at=_norm_iso(completed),
+            selected_timestamp_source=(
+                stable.selected_timestamp_source or "verification_completed_at"
+            ),
         )
 
     payload = capability_view_to_payload(stable)
@@ -1269,6 +2012,122 @@ def clear_all_stable_capabilities_for_user(db: Any, user_id: str) -> None:
     db.commit()
 
 
+def load_verification_cycle_identities(
+    db: Any,
+    user_id: str,
+    provider: str,
+) -> tuple[VerificationCycleIdentity | None, list[VerificationCycleIdentity]]:
+    """Return (active_cycle, terminal_cycles newest-first) for selection."""
+    active: VerificationCycleIdentity | None = None
+    terminals: list[VerificationCycleIdentity] = []
+    try:
+        from mighty.session_verification import (
+            get_active_session_verification,
+            get_latest_session_verification,
+            ensure_session_verification_tables,
+        )
+
+        ensure_session_verification_tables(db)
+        active_row = get_active_session_verification(db, user_id, provider)
+        if active_row is not None:
+            active = VerificationCycleIdentity(
+                verification_id=active_row.verification_id,
+                access_cycle_id=active_row.verification_id,
+                requested_at=_norm_iso(active_row.requested_at),
+                started_at=_norm_iso(active_row.started_at),
+                completed_at=_norm_iso(active_row.completed_at),
+                lifecycle=active_row.lifecycle,
+                terminal_reason=active_row.terminal_reason,
+            )
+        rows = db.execute(
+            """
+            SELECT verification_id, lifecycle, requested_at, started_at,
+                   completed_at, terminal_reason
+            FROM provider_session_verification
+            WHERE user_id = ? AND provider = ?
+              AND lifecycle IN ('completed', 'failed', 'timed_out')
+            ORDER BY COALESCE(completed_at, started_at, requested_at) DESC
+            LIMIT 5
+            """,
+            (user_id, provider),
+        ).fetchall()
+        for row in rows:
+            if hasattr(row, "keys"):
+                terminals.append(
+                    VerificationCycleIdentity(
+                        verification_id=row["verification_id"],
+                        access_cycle_id=row["verification_id"],
+                        requested_at=_norm_iso(row["requested_at"]),
+                        started_at=_norm_iso(row["started_at"]),
+                        completed_at=_norm_iso(row["completed_at"]),
+                        lifecycle=row["lifecycle"],
+                        terminal_reason=row["terminal_reason"],
+                    )
+                )
+            else:
+                terminals.append(
+                    VerificationCycleIdentity(
+                        verification_id=row[0],
+                        access_cycle_id=row[0],
+                        requested_at=_norm_iso(row[2]),
+                        started_at=_norm_iso(row[3]),
+                        completed_at=_norm_iso(row[4]),
+                        lifecycle=row[1],
+                        terminal_reason=row[5],
+                    )
+                )
+        # Ensure latest terminal is present even if query shape differs.
+        if not terminals:
+            latest = get_latest_session_verification(db, user_id, provider)
+            if latest is not None and latest.lifecycle in TERMINAL_VERIFICATION_LIFECYCLES:
+                terminals.append(
+                    VerificationCycleIdentity(
+                        verification_id=latest.verification_id,
+                        access_cycle_id=latest.verification_id,
+                        requested_at=_norm_iso(latest.requested_at),
+                        started_at=_norm_iso(latest.started_at),
+                        completed_at=_norm_iso(latest.completed_at),
+                        lifecycle=latest.lifecycle,
+                        terminal_reason=latest.terminal_reason,
+                    )
+                )
+    except Exception:  # noqa: BLE001 — unit tests may lack verification tables
+        return active, terminals
+    terminals.sort(key=_cycle_sort_key, reverse=True)
+    return active, terminals
+
+
+def enrich_access_view_with_cycle(
+    access_view: Any | None,
+    cycle: VerificationCycleIdentity | None,
+) -> Any | None:
+    """Overlay verification timing onto an access view when fields are missing."""
+    if access_view is None or cycle is None:
+        return access_view
+    updates: dict[str, Any] = {}
+    if not getattr(access_view, "verification_id", None) and cycle.verification_id:
+        updates["verification_id"] = cycle.verification_id
+    if not getattr(access_view, "verification_requested_at", None) and cycle.requested_at:
+        updates["verification_requested_at"] = cycle.requested_at
+    if not getattr(access_view, "verification_started_at", None) and cycle.started_at:
+        updates["verification_started_at"] = cycle.started_at
+    if not getattr(access_view, "verification_completed_at", None) and cycle.completed_at:
+        updates["verification_completed_at"] = cycle.completed_at
+    if not getattr(access_view, "terminal_reason", None) and cycle.terminal_reason:
+        updates["terminal_reason"] = cycle.terminal_reason
+    if (
+        not getattr(access_view, "active_verification_lifecycle", None)
+        and cycle.lifecycle
+    ):
+        updates["active_verification_lifecycle"] = cycle.lifecycle
+    if not updates:
+        return access_view
+    try:
+        return replace(access_view, **updates)
+    except TypeError:
+        return access_view
+
+
 def build_presented_capability_view(
     access_view: Any | None,
     *,
@@ -1278,12 +2137,26 @@ def build_presented_capability_view(
     persist_user_id: str | None = None,
     account_identity: str | None = None,
     order_meta: PresentationOrderMeta | None = None,
+    debug: bool = False,
     **build_kwargs: Any,
 ) -> CapabilityView:
     """Build live capability, apply presentation gate, optionally persist terminal."""
     from mighty.capability_state import build_capability_view
 
-    live = build_capability_view(access_view, **build_kwargs)
+    provider = build_kwargs.get("provider") or (
+        getattr(access_view, "provider", None) if access_view else "amex"
+    )
+    active_cycle = None
+    terminal_cycles: list[VerificationCycleIdentity] = []
+    enriched_access = access_view
+    if persist_db is not None and persist_user_id:
+        active_cycle, terminal_cycles = load_verification_cycle_identities(
+            persist_db, persist_user_id, provider,
+        )
+        enrich_cycle = active_cycle or (terminal_cycles[0] if terminal_cycles else None)
+        enriched_access = enrich_access_view_with_cycle(access_view, enrich_cycle)
+
+    live = build_capability_view(enriched_access, **build_kwargs)
 
     previous = previous_stable
     if (
@@ -1292,9 +2165,6 @@ def build_presented_capability_view(
         and persist_user_id
         and not force_unknown
     ):
-        provider = build_kwargs.get("provider") or (
-            getattr(access_view, "provider", None) if access_view else "amex"
-        )
         identity = account_identity
         if identity is None:
             identity = resolve_account_identity(persist_db, persist_user_id, provider)
@@ -1308,8 +2178,11 @@ def build_presented_capability_view(
     presented = present_customer_capability(
         live,
         previous_stable=previous,
-        access_view=access_view,
+        access_view=enriched_access,
         force_unknown=force_unknown,
+        active_cycle=active_cycle,
+        terminal_cycles=terminal_cycles,
+        debug=debug,
     )
     persist_view = None if force_unknown else persistable_terminal_capability(
         live, presented,
@@ -1317,7 +2190,7 @@ def build_presented_capability_view(
     if persist_db is not None and persist_user_id and persist_view is not None:
         meta = order_meta or order_meta_from_capability(
             persist_view,
-            access_view=access_view,
+            access_view=enriched_access,
             account_identity=account_identity,
         )
         if account_identity and not meta.account_identity:
@@ -1340,7 +2213,7 @@ def build_presented_capability_view(
             persist_user_id,
             persist_view,
             order_meta=meta,
-            access_view=access_view,
+            access_view=enriched_access,
             force_unknown=False,
         )
     return presented
