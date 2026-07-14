@@ -8,20 +8,26 @@ When multiple extension instances/devices report for the same user, this
 module keeps the most recently seen report (by ``extension_last_seen_at``).
 That is intentional for the initial PR and may under-represent older
 parallel instances.
+
+Whenever any file under ``extension/`` changes, ``manifest.json`` version
+must strictly increase vs the merge base. Otherwise the reported version
+cannot distinguish a stale loaded build from the current repo build.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from mighty.admin_local_time import parse_admin_timestamp, to_utc_iso_z
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "extension" / "manifest.json"
+EXTENSION_PREFIX = "extension/"
 
 _VERSION_RE = re.compile(r"^\d+(?:\.\d+){0,3}$")
 
@@ -202,3 +208,171 @@ def ensure_extension_version_columns(db: Any) -> None:
             msg = str(exc).lower()
             if "duplicate column" not in msg and "already exists" not in msg:
                 raise
+
+
+def is_extension_path(path: str | Path) -> bool:
+    """True when *path* is under the shipped Chrome extension tree."""
+    text = str(path).replace("\\", "/").lstrip("./")
+    return text == "extension" or text.startswith(EXTENSION_PREFIX)
+
+
+def extension_paths_changed(changed_paths: Iterable[str | Path]) -> list[str]:
+    """Return changed paths that live under ``extension/`` (sorted unique)."""
+    found: set[str] = set()
+    for path in changed_paths:
+        text = str(path).replace("\\", "/").lstrip("./")
+        if is_extension_path(text):
+            found.add(text)
+    return sorted(found)
+
+
+def check_extension_version_bump(
+    *,
+    changed_paths: Iterable[str | Path],
+    base_version: str | None,
+    head_version: str | None,
+) -> str | None:
+    """Require a strict manifest version increase when extension files change.
+
+    Returns an error message when the rule is violated, else None.
+    """
+    touched = extension_paths_changed(changed_paths)
+    if not touched:
+        return None
+
+    if not head_version or not str(head_version).strip():
+        return (
+            "extension/ files changed but extension/manifest.json has no version. "
+            f"Changed: {', '.join(touched)}"
+        )
+    if not base_version or not str(base_version).strip():
+        return (
+            "extension/ files changed but the base branch manifest has no version. "
+            "Cannot verify a bump."
+        )
+
+    cmp = compare_chrome_versions(head_version, base_version)
+    if cmp is None:
+        return (
+            f"Cannot compare extension versions "
+            f"(base={base_version!r}, head={head_version!r}). "
+            "Use Chrome dotted-numeric versions (e.g. 1.3.16)."
+        )
+    if cmp <= 0:
+        return (
+            "extension/ files changed but extension/manifest.json version was not "
+            f"increased (base={base_version}, head={head_version}). "
+            "Bump the manifest version whenever extension code ships so the "
+            "version diagnostic can tell stale builds from current ones. "
+            f"Changed: {', '.join(touched)}"
+        )
+    return None
+
+
+def _git_output(args: list[str], *, cwd: Path | None = None) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=str(cwd or ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {stderr}")
+    return result.stdout
+
+
+def resolve_extension_version_base_ref(
+    *,
+    cwd: Path | None = None,
+    preferred: str | None = None,
+) -> str:
+    """Pick a git ref to diff extension changes against."""
+    if preferred:
+        return preferred
+    import os
+
+    env_ref = (os.environ.get("MIGHTY_EXTENSION_VERSION_BASE") or "").strip()
+    if env_ref:
+        return env_ref
+    # Prefer origin/main when available; fall back to main / master.
+    for candidate in ("origin/main", "main", "origin/master", "master"):
+        probe = subprocess.run(
+            ["git", "rev-parse", "--verify", candidate],
+            cwd=str(cwd or ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return candidate
+    raise RuntimeError(
+        "No base ref found for extension version bump check "
+        "(tried origin/main, main, origin/master, master)."
+    )
+
+
+def changed_paths_since_base(
+    base_ref: str,
+    *,
+    cwd: Path | None = None,
+    include_working_tree: bool = True,
+) -> list[str]:
+    """List paths changed between merge-base(base_ref, HEAD) and HEAD (+ WT)."""
+    root = cwd or ROOT
+    merge_base = _git_output(["merge-base", "HEAD", base_ref], cwd=root).strip()
+    names: set[str] = set()
+    committed = _git_output(
+        ["diff", "--name-only", f"{merge_base}...HEAD"],
+        cwd=root,
+    )
+    names.update(line.strip() for line in committed.splitlines() if line.strip())
+    if include_working_tree:
+        dirty = _git_output(["diff", "--name-only", merge_base], cwd=root)
+        names.update(line.strip() for line in dirty.splitlines() if line.strip())
+        untracked = _git_output(
+            ["ls-files", "--others", "--exclude-standard", "--", "extension"],
+            cwd=root,
+        )
+        names.update(line.strip() for line in untracked.splitlines() if line.strip())
+    return sorted(names)
+
+
+def read_manifest_version_at_ref(
+    ref: str,
+    *,
+    cwd: Path | None = None,
+    manifest_git_path: str = "extension/manifest.json",
+) -> str:
+    """Read ``extension/manifest.json`` version from a git ref."""
+    raw = _git_output(["show", f"{ref}:{manifest_git_path}"], cwd=cwd or ROOT)
+    data = json.loads(raw)
+    version = str(data.get("version") or "").strip()
+    if not version:
+        raise ValueError(f"manifest at {ref}:{manifest_git_path} missing version")
+    return version
+
+
+def check_repo_extension_version_bump(
+    *,
+    cwd: Path | None = None,
+    base_ref: str | None = None,
+    include_working_tree: bool = True,
+) -> str | None:
+    """Run the extension version-bump rule against the current git checkout."""
+    root = cwd or ROOT
+    resolved_base = resolve_extension_version_base_ref(cwd=root, preferred=base_ref)
+    merge_base = _git_output(["merge-base", "HEAD", resolved_base], cwd=root).strip()
+    changed = changed_paths_since_base(
+        resolved_base,
+        cwd=root,
+        include_working_tree=include_working_tree,
+    )
+    base_version = read_manifest_version_at_ref(merge_base, cwd=root)
+    head_version = read_expected_extension_version(root / "extension" / "manifest.json")
+    return check_extension_version_bump(
+        changed_paths=changed,
+        base_version=base_version,
+        head_version=head_version,
+    )
