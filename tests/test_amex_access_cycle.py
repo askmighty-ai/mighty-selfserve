@@ -637,7 +637,8 @@ def test_no_qualifying_endpoint_idempotent_and_rejects_bad_cycles(client):
         },
     )
     assert extract.status_code == 409
-    assert extract.get_json()["error"] == "cycle_already_terminal"
+    assert extract.get_json()["error"] == "active_verification_required"
+    assert extract.get_json()["reason"] == "cycle_already_terminal"
 
     with mighty.app.app_context():
         db = mighty.get_db()
@@ -717,3 +718,666 @@ def test_extension_private_data_wait_contract():
     # Gate uses current-cycle probe private_data_detected, not prior-cycle cache.
     assert "payload.private_data_detected" in bg
     assert "probeData.private_data_detected" in bg
+
+
+def _start_mid_cycle(mighty, uid: str) -> tuple[str, str]:
+    """Seed Amex + authenticated mid-cycle; return (vid, api_key)."""
+    db = mighty.get_db()
+    ensure_provider_session_state_tables(db)
+    ensure_session_verification_tables(db)
+    ensure_probe_tables(db)
+    _seed_amex_connected(mighty, uid)
+    verification = request_provider_access_check(
+        db, uid, "amex", throttle_seconds=0,
+    )
+    assert verification is not None
+    vid = verification.verification_id
+    # Must be a fresh active cycle — never reuse a terminal id under throttle.
+    from mighty.session_verification import get_active_session_verification
+
+    active = get_active_session_verification(db, uid, "amex")
+    if active is None or active.verification_id != vid:
+        verification = request_provider_access_check(
+            db, uid, "amex", throttle_seconds=0,
+        )
+        vid = verification.verification_id
+    complete_provider_access_check(db, uid, _probe(), verification_id=vid)
+    return vid, _api_key(mighty, uid)
+
+
+def test_extract_without_cycle_returns_409(client, capsys):
+    """extraction without cycle → 409 active_verification_required."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        api_key = _api_key(mighty, uid)
+
+    r = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={"session_verified": True, "value": "10,000"},
+    )
+    assert r.status_code == 409
+    body = r.get_json()
+    assert body["error"] == "active_verification_required"
+    assert "ARCHITECTURE VIOLATION: uncorrelated extraction" in capsys.readouterr().out
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        row = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source='amex'",
+            (uid,),
+        ).fetchone()
+        data = mighty.decrypt_account_data(uid, row["data_enc"] or "")
+        assert data.get("access_cycle_id") in (None, "")
+        assert not (data.get("items") or [])
+
+
+def test_extract_with_wrong_cycle_returns_409(client):
+    """extraction with wrong / unknown cycle → 409."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, api_key = _start_mid_cycle(mighty, uid)
+
+    r = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "10,000",
+            "verification_id": "00000000-0000-0000-0000-000000000099",
+            "access_cycle_id": "00000000-0000-0000-0000-000000000099",
+        },
+    )
+    assert r.status_code == 409
+    assert r.get_json()["error"] == "active_verification_required"
+
+    mismatched = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "10,000",
+            "verification_id": vid,
+            "access_cycle_id": "other-cycle-id",
+        },
+    )
+    assert mismatched.status_code == 409
+    assert mismatched.get_json()["error"] == "active_verification_required"
+    assert mismatched.get_json()["reason"] == "cycle_id_mismatch"
+
+
+def test_extract_after_terminal_cycle_returns_409(client):
+    """extraction after terminal cycle → 409."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, api_key = _start_mid_cycle(mighty, uid)
+
+    assert client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "12,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
+    ).status_code == 200
+
+    late = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "99,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
+    )
+    assert late.status_code == 409
+    assert late.get_json()["error"] == "active_verification_required"
+    assert late.get_json()["reason"] == "cycle_already_terminal"
+
+
+def test_extract_before_authenticated_rejected(client):
+    """requested/running cycles cannot accept extraction."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        verification = request_provider_access_check(db, uid, "amex")
+        vid = verification.verification_id
+        assert get_latest_session_verification(db, uid, "amex").lifecycle == "requested"
+        api_key = _api_key(mighty, uid)
+
+    r = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "10,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
+    )
+    assert r.status_code == 409
+    assert r.get_json()["error"] == "active_verification_required"
+    assert r.get_json()["reason"] == "cycle_not_extractable"
+
+
+def test_late_extract_after_timeout_rejected(client):
+    """late extraction after timeout rejected."""
+    import app as mighty
+    from mighty.session_verification import expire_timed_out_verifications
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, api_key = _start_mid_cycle(mighty, uid)
+        db = mighty.get_db()
+        old = datetime.now(timezone.utc) - timedelta(seconds=120)
+        db.execute(
+            "UPDATE provider_session_verification SET requested_at=? WHERE verification_id=?",
+            (old.isoformat(), vid),
+        )
+        db.commit()
+        expire_timed_out_verifications(db, uid)
+        assert get_latest_session_verification(db, uid, "amex").lifecycle == "timed_out"
+
+    r = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "10,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
+    )
+    assert r.status_code == 409
+    assert r.get_json()["error"] == "active_verification_required"
+
+
+def test_duplicate_extract_same_cycle_rejected(client):
+    """duplicate extraction same cycle rejected (cycle already terminal)."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, api_key = _start_mid_cycle(mighty, uid)
+
+    payload = {
+        "session_verified": True,
+        "value": "44,000",
+        "verification_id": vid,
+        "access_cycle_id": vid,
+    }
+    assert client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json=payload,
+    ).status_code == 200
+    dup = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json=payload,
+    )
+    assert dup.status_code == 409
+    assert dup.get_json()["error"] == "active_verification_required"
+
+
+def test_successful_extract_always_has_non_null_cycle_ids(client):
+    """every successful extraction has non-null verification_id and access_cycle_id."""
+    import app as mighty
+    from mighty.account_snapshot import get_latest_successful_snapshot
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, api_key = _start_mid_cycle(mighty, uid)
+
+    r = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "77,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
+    )
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["verification_id"] == vid
+    assert body["access_cycle_id"] == vid
+    assert body["verification_id"] is not None
+    assert body["access_cycle_id"] is not None
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        row = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source='amex'",
+            (uid,),
+        ).fetchone()
+        data = mighty.decrypt_account_data(uid, row["data_enc"] or "")
+        assert data.get("access_cycle_id") == vid
+        assert data.get("extraction_access_cycle_id") == vid
+        snap = get_latest_successful_snapshot(db, uid, "amex")
+        assert snap is not None
+        assert snap.access_cycle_id == vid
+
+
+def test_snapshot_cannot_be_written_without_correlated_cycle(client):
+    """snapshot cannot be written without correlated cycle."""
+    import app as mighty
+    from mighty.account_snapshot import create_account_snapshot_from_extraction
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        refused = create_account_snapshot_from_extraction(
+            db,
+            user_id=uid,
+            provider="amex",
+            fields=[{
+                "key": "points_balance",
+                "label": "Membership Rewards Points",
+                "value": "1,000",
+                "_type": "points_balance",
+            }],
+            verified_at=mighty.iso(),
+            access_cycle_id=None,
+        )
+        assert refused is None
+
+
+def test_published_state_references_same_cycle(client):
+    """published customer state always references the same cycle."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, api_key = _start_mid_cycle(mighty, uid)
+
+    assert client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "210,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
+    ).status_code == 200
+
+    after = client.get("/api/account-status").get_json()
+    amex = next(a for a in after["accounts"] if a["source"] == "amex")
+    assert amex["readiness"] == READY
+    assert amex["status_label"] == "Connected"
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        row = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source='amex'",
+            (uid,),
+        ).fetchone()
+        data = mighty.decrypt_account_data(uid, row["data_enc"] or "")
+        assert data.get("access_cycle_id") == vid
+        assert data.get("extraction_access_cycle_id") == vid
+        latest = get_latest_session_verification(db, uid, "amex")
+        assert latest.verification_id == vid
+        assert latest.lifecycle == "completed"
+
+
+def test_passive_content_script_cannot_post_without_active_cycle():
+    """passive content script cannot POST after login unless verification created the cycle."""
+    from pathlib import Path
+
+    bg = (Path(__file__).resolve().parents[1] / "extension" / "background.js").read_text()
+    assert "content extract ignored — no active verification cycle" in bg
+    assert "refuse extract POST — no active verification/access cycle" in bg
+    # AMEX_MR_EXTRACTED must attach active cycle ids — never bare _pushAmexExtraction.
+    handler = bg.split("if (msg.type === 'AMEX_MR_EXTRACTED')")[1].split(
+        "if (msg.action === 'sync_now')"
+    )[0]
+    assert "_activeSessionVerificationId" in handler
+    assert "_sessionVerificationInProgress" in handler
+    assert "verificationId: vid" in handler
+    assert "_pushAmexExtraction(api_key, msg.value, 'content-script')" not in handler
+    push = bg.split("async function _pushAmexExtraction")[1].split(
+        "async function extractAmexRewardsInTab"
+    )[0]
+    assert "verification_id: verificationId" in push
+    assert "access_cycle_id: accessCycleId" in push
+    assert "if (!verificationId || !accessCycleId)" in push
+
+
+def test_cycle_diagnostics_emit_required_milestones(client, capsys):
+    """Once-per-cycle diagnostics include verification_id and access_cycle_id."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, api_key = _start_mid_cycle(mighty, uid)
+
+    assert client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "125,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+            "input_source": "dom",
+        },
+    ).status_code == 200
+
+    captured = capsys.readouterr().out
+    for event in (
+        "verification started",
+        "verification authenticated",
+        "extraction dispatched",
+        "extraction accepted",
+        "snapshot written",
+        "customer published",
+        "verification completed",
+    ):
+        assert f"event={event}" in captured, event
+        assert f"verification_id={vid}" in captured
+        assert f"access_cycle_id={vid}" in captured
+        assert "verification_state=" in captured
+        assert "cycle_age_ms=" in captured
+
+
+def test_only_one_active_verification_exists(client):
+    """Exactly one active verification per user/provider."""
+    import app as mighty
+    from mighty.session_verification import (
+        count_active_session_verifications,
+        get_active_session_verification,
+        request_session_verification,
+    )
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        first = request_provider_access_check(db, uid, "amex")
+        second = request_provider_access_check(db, uid, "amex")
+        third = request_session_verification(db, uid, "amex", throttle_seconds=0)
+        assert first is not None and second is not None and third is not None
+        assert first.verification_id == second.verification_id == third.verification_id
+        assert count_active_session_verifications(db, uid, "amex") == 1
+        active = get_active_session_verification(db, uid, "amex")
+        assert active is not None
+        assert active.verification_id == first.verification_id
+
+
+def test_duplicate_starts_reuse_same_verification(client):
+    """dashboard refresh / repeated clicks reuse the same verification_id."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        ids = [
+            request_provider_access_check(db, uid, "amex").verification_id
+            for _ in range(5)
+        ]
+        assert len(set(ids)) == 1
+        n = db.execute(
+            """
+            SELECT COUNT(*) AS n FROM provider_session_verification
+            WHERE user_id=? AND provider='amex'
+              AND lifecycle IN ('requested','running','session_verified','extracting')
+            """,
+            (uid,),
+        ).fetchone()["n"]
+        assert n == 1
+
+
+def test_timeout_clears_active_pointer_server(client):
+    """timeout clears active verification (no active remains)."""
+    import app as mighty
+    from mighty.session_verification import (
+        count_active_session_verifications,
+        expire_timed_out_verifications,
+        get_active_session_verification,
+    )
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, _api = _start_mid_cycle(mighty, uid)
+        db = mighty.get_db()
+        assert get_active_session_verification(db, uid, "amex") is not None
+        old = datetime.now(timezone.utc) - timedelta(seconds=120)
+        db.execute(
+            "UPDATE provider_session_verification SET requested_at=? WHERE verification_id=?",
+            (old.isoformat(), vid),
+        )
+        db.commit()
+        expire_timed_out_verifications(db, uid)
+        assert get_active_session_verification(db, uid, "amex") is None
+        assert count_active_session_verifications(db, uid, "amex") == 0
+        assert get_latest_session_verification(db, uid, "amex").lifecycle == "timed_out"
+
+
+def test_signed_out_clears_active_verification(client):
+    """signed_out terminal clears active verification."""
+    import app as mighty
+    from mighty.session_verification import get_active_session_verification
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        verification = request_provider_access_check(db, uid, "amex")
+        vid = verification.verification_id
+        complete_provider_access_check(
+            db,
+            uid,
+            _probe(auth_state=AUTH_LOGIN_PAGE, failure_reason="login_required"),
+            verification_id=vid,
+        )
+        assert get_active_session_verification(db, uid, "amex") is None
+        assert get_latest_session_verification(db, uid, "amex").terminal_reason == "signed_out"
+
+
+def test_authenticated_completion_clears_active_verification(client):
+    """authenticated completion clears active verification."""
+    import app as mighty
+    from mighty.session_verification import get_active_session_verification
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, api_key = _start_mid_cycle(mighty, uid)
+        assert get_active_session_verification(mighty.get_db(), uid, "amex") is not None
+
+    assert client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "33,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
+    ).status_code == 200
+
+    with mighty.app.app_context():
+        assert get_active_session_verification(mighty.get_db(), uid, "amex") is None
+        latest = get_latest_session_verification(mighty.get_db(), uid, "amex")
+        assert latest.lifecycle == "completed"
+        assert latest.terminal_reason == "authenticated"
+
+
+def test_cancelled_clears_active_verification(client):
+    """cancelled clears active verification."""
+    import app as mighty
+    from mighty.provider_access_manager import finish_provider_access_check
+    from mighty.session_verification import get_active_session_verification
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        verification = request_provider_access_check(db, uid, "amex")
+        vid = verification.verification_id
+        mark_provider_access_check_running(db, uid, vid)
+        finish_provider_access_check(
+            db,
+            uid,
+            vid,
+            lifecycle="failed",
+            error_message="verification cancelled — tab closed",
+            terminal_reason="cancelled",
+            terminal_source="extension_tab_closed",
+        )
+        assert get_active_session_verification(db, uid, "amex") is None
+        assert get_latest_session_verification(db, uid, "amex").terminal_reason == "cancelled"
+
+
+def test_navigation_failure_clears_active_verification(client):
+    """navigation failure clears active verification."""
+    import app as mighty
+    from mighty.provider_access_manager import fail_provider_access_check
+    from mighty.session_verification import get_active_session_verification
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        _seed_amex_connected(mighty, uid)
+        verification = request_provider_access_check(db, uid, "amex")
+        vid = verification.verification_id
+        mark_provider_access_check_running(db, uid, vid)
+        fail_provider_access_check(
+            db,
+            uid,
+            error_message="probe_navigation_error",
+            verification_id=vid,
+            terminal_reason="navigation_failed",
+            terminal_source="extension_navigation",
+        )
+        assert get_active_session_verification(db, uid, "amex") is None
+        assert (
+            get_latest_session_verification(db, uid, "amex").terminal_reason
+            == "navigation_failed"
+        )
+
+
+def test_extension_reload_clears_active_verification(client):
+    """extension reload cancels active cycles and forces a clean verification."""
+    import app as mighty
+    from mighty.session_verification import get_active_session_verification
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        vid, api_key = _start_mid_cycle(mighty, uid)
+        assert get_active_session_verification(mighty.get_db(), uid, "amex") is not None
+
+    r = client.post(
+        "/api/extension/session-verification/reset-on-reload",
+        headers={"X-Mighty-Key": api_key},
+    )
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["count"] == 1
+    assert vid in body["cancelled"]
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        assert get_active_session_verification(db, uid, "amex") is None
+        latest = get_latest_session_verification(db, uid, "amex")
+        assert latest.lifecycle == "failed"
+        assert latest.terminal_source == "extension_reload"
+
+    # A new start after reload creates a fresh verification_id.
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        fresh = request_provider_access_check(db, uid, "amex", throttle_seconds=0)
+        assert fresh is not None
+        assert fresh.verification_id != vid
+
+
+def test_second_extraction_cannot_attach_to_older_verification(client):
+    """second extraction cannot attach to an older verification."""
+    import app as mighty
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        old_vid, api_key = _start_mid_cycle(mighty, uid)
+
+    assert client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "11,000",
+            "verification_id": old_vid,
+            "access_cycle_id": old_vid,
+        },
+    ).status_code == 200
+
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        new_vid, api_key = _start_mid_cycle(mighty, uid)
+        assert new_vid != old_vid
+
+    late_old = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "22,000",
+            "verification_id": old_vid,
+            "access_cycle_id": old_vid,
+        },
+    )
+    assert late_old.status_code == 409
+    assert late_old.get_json()["error"] == "active_verification_required"
+
+    ok = client.post(
+        "/api/extension/amex/extract",
+        headers={"X-Mighty-Key": api_key},
+        json={
+            "session_verified": True,
+            "value": "22,000",
+            "verification_id": new_vid,
+            "access_cycle_id": new_vid,
+        },
+    )
+    assert ok.status_code == 200
+    body = ok.get_json()
+    assert body["verification_id"] == new_vid
+    assert body["access_cycle_id"] == new_vid
+
+
+def test_extension_active_pointer_fsm_contract():
+    """Extension active pointer clears on terminal/reload; never resurrects stale ids."""
+    from pathlib import Path
+
+    bg = (Path(__file__).resolve().parents[1] / "extension" / "background.js").read_text()
+    assert "function _clearActiveSessionVerification" in bg
+    assert "function _resetVerificationsAfterExtensionReload" in bg
+    assert "/api/extension/session-verification/reset-on-reload" in bg
+    assert "_clearActiveSessionVerification('tab_closed')" in bg
+    assert "_clearActiveSessionVerification('verification_finished')" in bg
+    assert "_resetVerificationsAfterExtensionReload" in bg
+    # onInstalled / onStartup must force clean verification.
+    assert "_resetVerificationsAfterExtensionReload(`install:" in bg
+    assert "_resetVerificationsAfterExtensionReload('browser_startup')" in bg
+    # runSessionVerification finally clears via the FSM helper.
+    run_fn = bg.split("async function runSessionVerification(")[1].split(
+        "function _isAmexAccessCycleAuthenticated"
+    )[0]
+    assert "_clearActiveSessionVerification('verification_finished')" in run_fn

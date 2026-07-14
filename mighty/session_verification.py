@@ -94,27 +94,65 @@ SESSION_VERIFICATION_ENTRY_URLS: dict[str, str] = {
 }
 
 
+def _cycle_age_ms(
+    requested_at: str | datetime | None,
+    *,
+    now: datetime | None = None,
+) -> int | None:
+    """Milliseconds since cycle request, or None if unknown."""
+    if requested_at is None:
+        return None
+    if isinstance(requested_at, datetime):
+        started = requested_at if requested_at.tzinfo else requested_at.replace(tzinfo=timezone.utc)
+    else:
+        started = _parse_iso(str(requested_at))
+    if started is None:
+        return None
+    now = now or utc_now()
+    return max(0, int((now - started).total_seconds() * 1000))
+
+
 def log_access_cycle_event(
     event: str,
     *,
     provider: str,
     verification_id: str | None,
     access_cycle_id: str | None = None,
+    verification_state: str | None = None,
+    cycle_age_ms: int | None = None,
+    requested_at: str | datetime | None = None,
     **extra: Any,
 ) -> None:
-    """Concise structured log for one access cycle. Never logs secrets/bodies."""
+    """Concise structured log for one access cycle. Never logs secrets/bodies.
+
+    Always emits verification_id, access_cycle_id, verification_state, cycle_age_ms.
+    """
     cycle_id = access_cycle_id or verification_id or ""
+    state = (
+        verification_state
+        or extra.get("lifecycle")
+        or extra.get("cycle_state")
+        or ""
+    )
+    age = cycle_age_ms
+    if age is None:
+        age = _cycle_age_ms(requested_at)
     parts = [
         f"[access_cycle] event={event}",
         f"provider={provider}",
         f"verification_id={verification_id or ''}",
         f"access_cycle_id={cycle_id}",
+        f"verification_state={state or ''}",
+        f"cycle_age_ms={age if age is not None else ''}",
     ]
     for key, value in extra.items():
         if value is None:
             continue
         # Never log payloads / tokens / cookie-like values.
         if key in {"cookies", "token", "body", "password", "authorization"}:
+            continue
+        # Already emitted as first-class fields.
+        if key in {"lifecycle", "cycle_state", "verification_state", "cycle_age_ms"}:
             continue
         parts.append(f"{key}={value}")
     print(" ".join(parts), flush=True)
@@ -272,6 +310,32 @@ def ensure_session_verification_tables(db: Any) -> None:
         "CREATE INDEX IF NOT EXISTS idx_psv_user_lifecycle "
         "ON provider_session_verification(user_id, lifecycle, requested_at DESC)"
     )
+    # At most one active verification per user/provider — DB-enforced.
+    try:
+        db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_psv_one_active_per_user_provider
+            ON provider_session_verification(user_id, provider)
+            WHERE lifecycle IN (
+                'requested', 'running', 'session_verified', 'extracting'
+            )
+            """
+        )
+    except Exception as exc:
+        # Collapse legacy duplicates then retry once.
+        if "unique" in str(exc).lower() or "constraint" in str(exc).lower():
+            _collapse_all_duplicate_active_verifications(db)
+            db.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_psv_one_active_per_user_provider
+                ON provider_session_verification(user_id, provider)
+                WHERE lifecycle IN (
+                    'requested', 'running', 'session_verified', 'extracting'
+                )
+                """
+            )
+        else:
+            raise
     db.commit()
 
 
@@ -600,16 +664,174 @@ def get_pending_session_verification(
 
 
 def _has_active_verification(db: Any, user_id: str, provider: str) -> bool:
+    return get_active_session_verification(db, user_id, provider) is not None
+
+
+def get_active_session_verification(
+    db: Any,
+    user_id: str,
+    provider: str,
+) -> SessionVerification | None:
+    """Return the single active verification for user/provider, if any.
+
+    When legacy duplicates exist, keeps the newest and terminals the rest.
+    """
+    provider = provider.strip().lower()
+    ensure_session_verification_tables(db)
+    enforce_single_active_verification(db, user_id, provider)
     row = db.execute(
-        """
-        SELECT 1 FROM provider_session_verification
+        f"""
+        SELECT {_VERIFICATION_SELECT_COLUMNS}
+        FROM provider_session_verification
         WHERE user_id = ? AND provider = ?
-          AND lifecycle IN ('requested', 'running', 'session_verified', 'extracting')
+          AND lifecycle IN (
+              'requested', 'running', 'session_verified', 'extracting'
+          )
+        ORDER BY requested_at DESC
         LIMIT 1
         """,
         (user_id, provider),
     ).fetchone()
-    return row is not None
+    return _row_to_verification(dict(row) if row else None)
+
+
+def count_active_session_verifications(
+    db: Any,
+    user_id: str,
+    provider: str,
+) -> int:
+    provider = provider.strip().lower()
+    ensure_session_verification_tables(db)
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS n FROM provider_session_verification
+        WHERE user_id = ? AND provider = ?
+          AND lifecycle IN (
+              'requested', 'running', 'session_verified', 'extracting'
+          )
+        """,
+        (user_id, provider),
+    ).fetchone()
+    return int(row["n"] if row else 0)
+
+
+def enforce_single_active_verification(
+    db: Any,
+    user_id: str,
+    provider: str,
+    *,
+    now: datetime | None = None,
+) -> SessionVerification | None:
+    """Ensure at most one active verification exists; return the survivor.
+
+    Does not call ensure_session_verification_tables (safe during table bootstrap).
+    """
+    provider = provider.strip().lower()
+    now = now or utc_now()
+    now_iso = now.isoformat()
+    rows = db.execute(
+        f"""
+        SELECT {_VERIFICATION_SELECT_COLUMNS}
+        FROM provider_session_verification
+        WHERE user_id = ? AND provider = ?
+          AND lifecycle IN (
+              'requested', 'running', 'session_verified', 'extracting'
+          )
+        ORDER BY requested_at DESC
+        """,
+        (user_id, provider),
+    ).fetchall()
+    if not rows:
+        return None
+    keeper = _row_to_verification(dict(rows[0]))
+    for row in rows[1:]:
+        dup = dict(row)
+        db.execute(
+            """
+            UPDATE provider_session_verification
+            SET lifecycle = 'failed',
+                error_message = 'duplicate_active_verification_collapsed',
+                completed_at = ?,
+                terminal_reason = 'cancelled',
+                terminal_source = 'single_active_invariant'
+            WHERE verification_id = ? AND user_id = ?
+              AND lifecycle IN (
+                  'requested', 'running', 'session_verified', 'extracting'
+              )
+            """,
+            (now_iso, dup["verification_id"], user_id),
+        )
+        log_access_cycle_event(
+            "verification_terminal",
+            provider=provider,
+            verification_id=str(dup["verification_id"]),
+            access_cycle_id=str(dup["verification_id"]),
+            verification_state="failed",
+            requested_at=dup.get("requested_at"),
+            terminal_reason="cancelled",
+            terminal_source="single_active_invariant",
+            prior_lifecycle=dup.get("lifecycle"),
+        )
+    if len(rows) > 1:
+        db.commit()
+    return keeper
+
+
+def _collapse_all_duplicate_active_verifications(db: Any) -> None:
+    """Collapse duplicate actives across all users (index bootstrap only)."""
+    pairs = db.execute(
+        """
+        SELECT user_id, provider
+        FROM provider_session_verification
+        WHERE lifecycle IN (
+            'requested', 'running', 'session_verified', 'extracting'
+        )
+        GROUP BY user_id, provider
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for pair in pairs:
+        enforce_single_active_verification(
+            db, str(pair["user_id"]), str(pair["provider"])
+        )
+
+
+def cancel_active_session_verifications(
+    db: Any,
+    user_id: str,
+    *,
+    providers: list[str] | tuple[str, ...] | None = None,
+    terminal_reason: VerificationTerminalReason = "cancelled",
+    terminal_source: str = "extension_reload",
+    error_message: str = "verification cancelled — extension reload",
+    now: datetime | None = None,
+) -> list[SessionVerification]:
+    """Terminalize every active verification (clean start after extension reload)."""
+    ensure_session_verification_tables(db)
+    now = now or utc_now()
+    provider_list = (
+        [p.strip().lower() for p in providers]
+        if providers is not None
+        else sorted(PROBE_PROVIDERS)
+    )
+    cancelled: list[SessionVerification] = []
+    for provider in provider_list:
+        active = get_active_session_verification(db, user_id, provider)
+        if active is None:
+            continue
+        done = complete_session_verification(
+            db,
+            user_id,
+            active.verification_id,
+            lifecycle="failed",
+            error_message=error_message,
+            terminal_reason=terminal_reason,
+            terminal_source=terminal_source,
+            now=now,
+        )
+        if done is not None:
+            cancelled.append(done)
+    return cancelled
 
 
 def _seconds_since_latest_request(
@@ -646,6 +868,9 @@ def request_session_verification(
 ) -> SessionVerification | None:
     """Enqueue a background verification if not already active / throttled.
 
+    Invariant: at most one active verification per user/provider. Duplicate
+    starts reuse the existing active verification_id — never create another.
+
     Returns the active or newly created verification, or None when the provider
     has no verification entry URL (unsupported). Prefer
     ensure_provider_session_verification_if_stale for product callers.
@@ -659,8 +884,17 @@ def request_session_verification(
     now = now or utc_now()
     expire_timed_out_verifications(db, user_id, now=now)
 
-    if _has_active_verification(db, user_id, provider):
-        return get_latest_session_verification(db, user_id, provider)
+    active = get_active_session_verification(db, user_id, provider)
+    if active is not None:
+        log_access_cycle_event(
+            "verification_reused",
+            provider=provider,
+            verification_id=active.verification_id,
+            access_cycle_id=active.verification_id,
+            verification_state=active.lifecycle,
+            requested_at=active.requested_at,
+        )
+        return active
 
     age = _seconds_since_latest_request(db, user_id, provider, now=now)
     if age is not None and age < throttle_seconds:
@@ -668,20 +902,47 @@ def request_session_verification(
 
     verification_id = str(uuid.uuid4())
     requested_at = now.isoformat()
-    db.execute(
-        """
-        INSERT INTO provider_session_verification (
-            verification_id, user_id, provider, lifecycle, entry_url, requested_at
-        ) VALUES (?, ?, ?, 'requested', ?, ?)
-        """,
-        (verification_id, user_id, provider, entry_url, requested_at),
-    )
-    db.commit()
+    try:
+        db.execute(
+            """
+            INSERT INTO provider_session_verification (
+                verification_id, user_id, provider, lifecycle, entry_url, requested_at
+            ) VALUES (?, ?, ?, 'requested', ?, ?)
+            """,
+            (verification_id, user_id, provider, entry_url, requested_at),
+        )
+        db.commit()
+    except Exception as exc:
+        # Unique active index race: another writer created the active cycle.
+        db.rollback()
+        raced = get_active_session_verification(db, user_id, provider)
+        if raced is not None:
+            log_access_cycle_event(
+                "verification_reused",
+                provider=provider,
+                verification_id=raced.verification_id,
+                access_cycle_id=raced.verification_id,
+                verification_state=raced.lifecycle,
+                requested_at=raced.requested_at,
+                race="insert_conflict",
+            )
+            return raced
+        raise exc
     log_access_cycle_event(
         "access_cycle_created",
         provider=provider,
         verification_id=verification_id,
         access_cycle_id=verification_id,
+        verification_state="requested",
+        requested_at=requested_at,
+    )
+    log_access_cycle_event(
+        "verification started",
+        provider=provider,
+        verification_id=verification_id,
+        access_cycle_id=verification_id,
+        verification_state="requested",
+        requested_at=requested_at,
     )
     return SessionVerification(
         verification_id=verification_id,

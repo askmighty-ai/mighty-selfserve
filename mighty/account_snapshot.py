@@ -466,8 +466,21 @@ def create_account_snapshot_from_extraction(
     """Create + persist a snapshot from a successful extraction.
 
     Returns None (and writes nothing) when fields are incomplete.
+    Amex snapshots require a correlated ``access_cycle_id`` — late / uncorrelated
+    writes must fail closed.
     """
     if not has_normalized_data(fields):
+        return None
+
+    provider_key = str(provider or "").strip().lower()
+    cycle_id = (access_cycle_id or correlation_id or "").strip() or None
+    if provider_key == "amex" and not cycle_id:
+        print(
+            "ARCHITECTURE VIOLATION: uncorrelated extraction"
+            f" snapshot_refused provider={provider_key}"
+            f" access_cycle_id={access_cycle_id or ''}",
+            flush=True,
+        )
         return None
 
     field_keys = tuple(

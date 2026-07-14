@@ -21339,12 +21339,40 @@ def api_extension_amex_connected():
     })
 
 
+def _reject_uncorrelated_amex_extraction(
+    *,
+    verification_id: str | None = None,
+    access_cycle_id: str | None = None,
+    reason: str = "missing_active_cycle",
+    lifecycle: str | None = None,
+):
+    """Reject extraction that is not bound to an active Amex verification cycle."""
+    print(
+        "ARCHITECTURE VIOLATION: uncorrelated extraction"
+        f" reason={reason}"
+        f" verification_id={verification_id or ''}"
+        f" access_cycle_id={access_cycle_id or ''}"
+        f" lifecycle={lifecycle or ''}",
+        flush=True,
+    )
+    body = {
+        "ok": False,
+        "error": "active_verification_required",
+        "reason": reason,
+        "verification_id": verification_id,
+        "access_cycle_id": access_cycle_id or verification_id,
+    }
+    if lifecycle is not None:
+        body["lifecycle"] = lifecycle
+    return jsonify(body), 409
+
+
 @app.route("/api/extension/amex/extract", methods=["POST"])
 def api_extension_amex_extract():
     """Extension adapter: store Membership Rewards points as normalized provider data.
 
-    When verification_id / access_cycle_id is present, this closes the Amex access
-    cycle: extraction must succeed for the cycle to complete as Connected-capable.
+    Extraction is owned by an active Amex access cycle. Requests without a mid-cycle
+    verification_id / access_cycle_id are rejected — never silently accepted.
     """
     user, body = api_user()
     if not user:
@@ -21372,41 +21400,70 @@ def api_extension_amex_extract():
         mark_access_check_extracting,
         record_amex_extension_connected,
     )
-    from mighty.session_verification import TERMINAL_VERIFICATION_LIFECYCLES
+    from mighty.session_verification import (
+        MID_CYCLE_VERIFICATION_LIFECYCLES,
+        get_active_session_verification,
+    )
 
-    if verification_id:
-        # Reject extract against a terminal / missing cycle so a late extract
-        # cannot overwrite a no-qualifying or failed completion for this id.
-        row = db.execute(
-            """
-            SELECT lifecycle, provider, error_message
-            FROM provider_session_verification
-            WHERE verification_id = ? AND user_id = ?
-            """,
-            (verification_id, uid),
-        ).fetchone()
-        if row is None:
-            return jsonify({
-                "ok": False,
-                "error": "verification_not_found",
-                "verification_id": verification_id,
-            }), 404
-        lifecycle = str(row["lifecycle"] or "")
-        provider = str(row["provider"] or "").strip().lower()
-        if provider != "amex":
-            return jsonify({
-                "ok": False,
-                "error": "provider_mismatch",
-                "verification_id": verification_id,
-            }), 409
-        if lifecycle in TERMINAL_VERIFICATION_LIFECYCLES:
-            return jsonify({
-                "ok": False,
-                "error": "cycle_already_terminal",
-                "lifecycle": lifecycle,
-                "verification_id": verification_id,
-                "access_cycle_id": verification_id,
-            }), 409
+    # Invariant: every Amex extraction belongs to exactly one active access cycle.
+    if not verification_id or not access_cycle_id:
+        return _reject_uncorrelated_amex_extraction(
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            reason="missing_cycle_ids",
+        )
+    if access_cycle_id != verification_id:
+        return _reject_uncorrelated_amex_extraction(
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            reason="cycle_id_mismatch",
+        )
+
+    row = db.execute(
+        """
+        SELECT lifecycle, provider, error_message, requested_at
+        FROM provider_session_verification
+        WHERE verification_id = ? AND user_id = ?
+        """,
+        (verification_id, uid),
+    ).fetchone()
+    if row is None:
+        return _reject_uncorrelated_amex_extraction(
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            reason="verification_not_found",
+        )
+    lifecycle = str(row["lifecycle"] or "")
+    provider = str(row["provider"] or "").strip().lower()
+    requested_at = row["requested_at"] if row else None
+    if provider != "amex":
+        return jsonify({
+            "ok": False,
+            "error": "provider_mismatch",
+            "verification_id": verification_id,
+            "access_cycle_id": access_cycle_id,
+        }), 409
+    if lifecycle not in MID_CYCLE_VERIFICATION_LIFECYCLES:
+        return _reject_uncorrelated_amex_extraction(
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            reason=(
+                "cycle_already_terminal"
+                if lifecycle in {"completed", "failed", "timed_out"}
+                else "cycle_not_extractable"
+            ),
+            lifecycle=lifecycle,
+        )
+
+    # Second extraction cannot attach to an older / non-current active cycle.
+    active = get_active_session_verification(db, uid, "amex")
+    if active is None or active.verification_id != verification_id:
+        return _reject_uncorrelated_amex_extraction(
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            reason="not_current_active_cycle",
+            lifecycle=lifecycle,
+        )
 
     input_source = str(body.get("input_source") or body.get("source") or "extension").strip()
     value_len = len(raw_value)
@@ -21414,14 +21471,15 @@ def api_extension_amex_extract():
         "extraction_request_received",
         provider="amex",
         verification_id=verification_id,
-        access_cycle_id=access_cycle_id or verification_id,
+        access_cycle_id=access_cycle_id,
+        verification_state=lifecycle,
+        requested_at=requested_at,
         input_source_types=input_source,
         input_count=1,
         input_value_len=value_len,
     )
 
-    if verification_id:
-        mark_access_check_extracting(db, uid, verification_id)
+    mark_access_check_extracting(db, uid, verification_id)
 
     try:
         result = apply_amex_membership_rewards_extraction(
@@ -21433,112 +21491,110 @@ def api_extension_amex_extract():
             **_amex_conn_ctx(),
         )
     except ValueError as e:
-        if verification_id:
-            from mighty.provider_account import EXTRACTION_FAILED, persist_provider_state
+        from mighty.provider_account import EXTRACTION_FAILED, persist_provider_state
 
-            row = db.execute(
-                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
-                (uid, AMEX_SOURCE),
-            ).fetchone()
-            if row:
-                ad_data = decrypt_account_data(uid, row["data_enc"] or "")
-                persist_provider_state(
-                    db,
-                    uid,
-                    AMEX_SOURCE,
-                    ad_data,
-                    encrypt_fn=encrypt_account_data,
-                    extraction_status=EXTRACTION_FAILED,
-                    iso_fn=iso,
-                )
-                db.commit()
-            complete_access_check_after_extraction(
+        row = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+            (uid, AMEX_SOURCE),
+        ).fetchone()
+        if row:
+            ad_data = decrypt_account_data(uid, row["data_enc"] or "")
+            persist_provider_state(
                 db,
                 uid,
-                verification_id,
-                success=False,
-                error_message=str(e),
+                AMEX_SOURCE,
+                ad_data,
+                encrypt_fn=encrypt_account_data,
+                extraction_status=EXTRACTION_FAILED,
+                iso_fn=iso,
             )
-            log_access_cycle_event(
-                "extraction_result",
-                provider="amex",
-                verification_id=verification_id,
-                access_cycle_id=access_cycle_id or verification_id,
-                attempted=True,
-                outcome="failed",
-                non_empty_field_count=0,
-                failure_code="invalid_value",
-            )
-            log_access_cycle_event(
-                "snapshot_result",
-                provider="amex",
-                verification_id=verification_id,
-                access_cycle_id=access_cycle_id or verification_id,
-                attempted=False,
-                published=False,
-                reason="extraction_failed",
-            )
-            log_access_cycle_event(
-                "readiness_result",
-                provider="amex",
-                verification_id=verification_id,
-                access_cycle_id=access_cycle_id or verification_id,
-                readiness="unverified",
-            )
+            db.commit()
+        complete_access_check_after_extraction(
+            db,
+            uid,
+            verification_id,
+            success=False,
+            error_message=str(e),
+        )
+        log_access_cycle_event(
+            "extraction_result",
+            provider="amex",
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            attempted=True,
+            outcome="failed",
+            non_empty_field_count=0,
+            failure_code="invalid_value",
+        )
+        log_access_cycle_event(
+            "snapshot_result",
+            provider="amex",
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            attempted=False,
+            published=False,
+            reason="extraction_failed",
+        )
+        log_access_cycle_event(
+            "readiness_result",
+            provider="amex",
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            readiness="unverified",
+        )
         return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
-        if verification_id:
-            from mighty.provider_account import EXTRACTION_FAILED, persist_provider_state
+        from mighty.provider_account import EXTRACTION_FAILED, persist_provider_state
 
-            row = db.execute(
-                "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
-                (uid, AMEX_SOURCE),
-            ).fetchone()
-            if row:
-                ad_data = decrypt_account_data(uid, row["data_enc"] or "")
-                persist_provider_state(
-                    db,
-                    uid,
-                    AMEX_SOURCE,
-                    ad_data,
-                    encrypt_fn=encrypt_account_data,
-                    extraction_status=EXTRACTION_FAILED,
-                    iso_fn=iso,
-                )
-                db.commit()
-            complete_access_check_after_extraction(
+        row = db.execute(
+            "SELECT data_enc FROM account_data WHERE user_id=? AND source=?",
+            (uid, AMEX_SOURCE),
+        ).fetchone()
+        if row:
+            ad_data = decrypt_account_data(uid, row["data_enc"] or "")
+            persist_provider_state(
                 db,
                 uid,
-                verification_id,
-                success=False,
-                error_message=str(e),
+                AMEX_SOURCE,
+                ad_data,
+                encrypt_fn=encrypt_account_data,
+                extraction_status=EXTRACTION_FAILED,
+                iso_fn=iso,
             )
-            log_access_cycle_event(
-                "extraction_result",
-                provider="amex",
-                verification_id=verification_id,
-                access_cycle_id=access_cycle_id or verification_id,
-                attempted=True,
-                outcome="failed",
-                non_empty_field_count=0,
-                failure_code="adapter_error",
-            )
-            log_access_cycle_event(
-                "snapshot_result",
-                provider="amex",
-                verification_id=verification_id,
-                access_cycle_id=access_cycle_id or verification_id,
-                attempted=False,
-                published=False,
-                reason="adapter_error",
-            )
-            log_access_cycle_event(
-                "readiness_result",
-                provider="amex",
-                verification_id=verification_id,
-                access_cycle_id=access_cycle_id or verification_id,
-                readiness="unverified",
-            )
+            db.commit()
+        complete_access_check_after_extraction(
+            db,
+            uid,
+            verification_id,
+            success=False,
+            error_message=str(e),
+        )
+        log_access_cycle_event(
+            "extraction_result",
+            provider="amex",
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            attempted=True,
+            outcome="failed",
+            non_empty_field_count=0,
+            failure_code="adapter_error",
+        )
+        log_access_cycle_event(
+            "snapshot_result",
+            provider="amex",
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            attempted=False,
+            published=False,
+            reason="adapter_error",
+        )
+        log_access_cycle_event(
+            "readiness_result",
+            provider="amex",
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+            readiness="unverified",
+        )
         return jsonify({"ok": False, "error": str(e)}), 500
 
     # Session verified flag on this request updates session state; MR value does not.
@@ -21557,25 +21613,34 @@ def api_extension_amex_extract():
         field_names = [str(field.get("key"))]
     non_empty = 1 if field_names else 0
     snapshot_id = None
-    if verification_id or access_cycle_id:
-        try:
-            from mighty.account_snapshot import load_latest_snapshots_by_provider
+    try:
+        from mighty.account_snapshot import load_latest_snapshots_by_provider
 
-            snaps = load_latest_snapshots_by_provider(db, uid, providers=[AMEX_SOURCE])
-            snap = snaps.get(AMEX_SOURCE)
-            if snap is not None and snap.access_cycle_id in {
-                verification_id,
-                access_cycle_id,
-            }:
-                snapshot_id = snap.snapshot_id
-        except Exception:
-            snapshot_id = None
+        snaps = load_latest_snapshots_by_provider(db, uid, providers=[AMEX_SOURCE])
+        snap = snaps.get(AMEX_SOURCE)
+        if snap is not None and snap.access_cycle_id in {
+            verification_id,
+            access_cycle_id,
+        }:
+            snapshot_id = snap.snapshot_id
+    except Exception:
+        snapshot_id = None
 
+    log_access_cycle_event(
+        "extraction accepted",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id,
+        verification_state="extracting",
+        requested_at=requested_at,
+    )
     log_access_cycle_event(
         "extraction_result",
         provider="amex",
         verification_id=verification_id,
-        access_cycle_id=access_cycle_id or verification_id,
+        access_cycle_id=access_cycle_id,
+        verification_state="extracting",
+        requested_at=requested_at,
         attempted=True,
         outcome="success",
         extracted_field_names=",".join(field_names) if field_names else "",
@@ -21585,27 +21650,57 @@ def api_extension_amex_extract():
         "snapshot_result",
         provider="amex",
         verification_id=verification_id,
-        access_cycle_id=access_cycle_id or verification_id,
+        access_cycle_id=access_cycle_id,
+        verification_state="extracting",
+        requested_at=requested_at,
         attempted=True,
-        published=bool(snapshot_id or non_empty),
+        published=bool(snapshot_id),
         snapshot_id=snapshot_id or "",
-        reason="published" if (snapshot_id or non_empty) else "not_published",
+        reason="published" if snapshot_id else "not_published",
     )
-
-    if verification_id:
-        complete_access_check_after_extraction(
-            db,
-            uid,
-            verification_id,
-            success=True,
-        )
+    if snapshot_id:
         log_access_cycle_event(
-            "readiness_result",
+            "snapshot written",
             provider="amex",
             verification_id=verification_id,
-            access_cycle_id=access_cycle_id or verification_id,
-            readiness="ready",
+            access_cycle_id=access_cycle_id,
+            verification_state="extracting",
+            requested_at=requested_at,
+            snapshot_id=snapshot_id,
         )
+
+    complete_access_check_after_extraction(
+        db,
+        uid,
+        verification_id,
+        success=True,
+    )
+    log_access_cycle_event(
+        "readiness_result",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id,
+        verification_state="completed",
+        requested_at=requested_at,
+        readiness="ready",
+    )
+    log_access_cycle_event(
+        "customer published",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id,
+        verification_state="completed",
+        requested_at=requested_at,
+        readiness="ready",
+    )
+    log_access_cycle_event(
+        "verification completed",
+        provider="amex",
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id,
+        verification_state="completed",
+        requested_at=requested_at,
+    )
 
     return jsonify({
         "ok": True,
@@ -22415,6 +22510,30 @@ def api_extension_session_verification_pending():
     ensure_stale_provider_access_checks(db, user["id"])
     pending = get_pending_session_verification(db, user["id"], ensure_stale=False)
     return jsonify(session_verification_to_json(pending))
+
+
+@app.route("/api/extension/session-verification/reset-on-reload", methods=["POST"])
+def api_extension_session_verification_reset_on_reload():
+    """Cancel all active verifications after extension reload / browser restart.
+
+    Forces a clean verification — never resurrect stale in-flight access cycles.
+    """
+    from mighty.session_verification import cancel_active_session_verifications
+
+    user = api_user()[0]
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+    cancelled = cancel_active_session_verifications(
+        get_db(),
+        user["id"],
+        terminal_source="extension_reload",
+        error_message="verification cancelled — extension reload",
+    )
+    return jsonify({
+        "ok": True,
+        "cancelled": [v.verification_id for v in cancelled],
+        "count": len(cancelled),
+    })
 
 
 @app.route("/api/extension/session-verification/running", methods=["POST"])

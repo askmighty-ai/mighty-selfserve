@@ -210,8 +210,18 @@ def advance_provider_access_check(
             provider=verification.provider,
             verification_id=verification.verification_id,
             access_cycle_id=verification.verification_id,
-            lifecycle=verification.lifecycle,
+            verification_state=verification.lifecycle,
+            requested_at=verification.requested_at,
         )
+        if lifecycle == "session_verified":
+            log_access_cycle_event(
+                "verification authenticated",
+                provider=verification.provider,
+                verification_id=verification.verification_id,
+                access_cycle_id=verification.verification_id,
+                verification_state="session_verified",
+                requested_at=verification.requested_at,
+            )
     return verification
 
 
@@ -626,6 +636,14 @@ def complete_provider_access_check(
                     if private_observed
                     else "authenticated_awaiting_qualifying_private_data"
                 ),
+                private_data_detected=private_observed,
+            )
+            log_access_cycle_event(
+                "extraction dispatched",
+                provider="amex",
+                verification_id=verification_id,
+                access_cycle_id=verification_id,
+                verification_state="session_verified",
                 private_data_detected=private_observed,
             )
             result["private_data_detected"] = private_observed

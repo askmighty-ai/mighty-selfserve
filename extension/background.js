@@ -86,7 +86,8 @@ chrome.tabs.onRemoved.addListener((id, info) => {
     && !_activeSessionVerificationPastProbe
   ) {
     const verificationId = _activeSessionVerificationId;
-    _activeSessionVerificationTabId = null;
+    // Clear active pointer immediately — never leave a stale verification id.
+    _clearActiveSessionVerification('tab_closed');
     chrome.storage.local.get('api_key').then(({ api_key }) => {
       if (!api_key) return;
       _completeSessionVerification(
@@ -1033,7 +1034,7 @@ async function handleInterceptedApi(url, data, { graphql = false } = {}) {
 const KEEPALIVE_ALARM    = 'mighty-keepalive';
 const KEEPALIVE_INTERVAL = 20; // minutes — short enough to beat most session timeouts
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   // Always recreate alarms on install/reload to fix any stale periods from old versions.
   // onStartup keeps existing alarms (browser restart shouldn't reset timing).
   chrome.alarms.clear(SYNC_ALARM, () => {
@@ -1043,6 +1044,8 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
   });
   console.log('[Mighty] Extension installed/reloaded, sync every', SYNC_INTERVAL, 'min, keepalive every', KEEPALIVE_INTERVAL, 'min');
+  // Do not resurrect stale access cycles after reload — force a clean verification.
+  _resetVerificationsAfterExtensionReload(`install:${details?.reason || 'unknown'}`);
   // In manual-probe/dev mode, defer automatic sync so reload does not open provider tabs.
   setTimeout(() => runSyncIfAllowed('install-reload'), 3000);
 });
@@ -1055,6 +1058,8 @@ chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.get(KEEPALIVE_ALARM, (a) => {
     if (!a) chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
   });
+  // Browser restart drops verification tabs — cancel orphaned active cycles.
+  _resetVerificationsAfterExtensionReload('browser_startup');
   setTimeout(() => runSyncIfAllowed('browser-startup'), 3000);
 });
 
@@ -1273,8 +1278,22 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
       }
       const { api_key } = await chrome.storage.local.get('api_key');
       if (!api_key || !msg.value) return;
-      console.log('[Mighty Amex] content script reported MR balance:', msg.value, tabUrl);
-      await _pushAmexExtraction(api_key, msg.value, 'content-script');
+      // Passive DOM sightings are local evidence only. POST only when an active
+      // verification/access cycle owns extraction for this session.
+      const vid = _activeSessionVerificationId;
+      if (!vid || !_sessionVerificationInProgress) {
+        console.log(
+          '[Mighty Amex] content extract ignored — no active verification cycle',
+          msg.value,
+          tabUrl,
+        );
+        return;
+      }
+      console.log('[Mighty Amex] content script reported MR balance:', msg.value, tabUrl, `cycle=${vid}`);
+      await _pushAmexExtraction(api_key, msg.value, 'content-script', {
+        verificationId: vid,
+        accessCycleId: vid,
+      });
     })();
     return false;
   }
@@ -2053,26 +2072,30 @@ async function _pushAmexExtraction(apiKey, value, source = 'extension', opts = {
   if (!apiKey || !value) return false;
   const verificationId = opts.verificationId || opts.accessCycleId || null;
   const accessCycleId = opts.accessCycleId || opts.verificationId || verificationId;
-  const cacheKey = verificationId
-    ? `${verificationId}:${String(value).replace(/\D/g, '')}`
-    : String(value).replace(/\D/g, '');
+  // No fallback: extraction may only POST inside an active verification cycle.
+  if (!verificationId || !accessCycleId) {
+    console.warn(
+      '[Mighty Amex] refuse extract POST — no active verification/access cycle',
+      `(${source})`,
+    );
+    return false;
+  }
+  const cacheKey = `${verificationId}:${String(value).replace(/\D/g, '')}`;
   const now = Date.now();
   if (_amexExtractReportedAt[cacheKey] && now - _amexExtractReportedAt[cacheKey] < 300_000) {
-    console.log('[Mighty Amex] extract unchanged — skip post', value);
+    console.log('[Mighty Amex] extract unchanged — skip post', value, `cycle=${verificationId}`);
     return true;
   }
   console.log('[Mighty Amex] posting Membership Rewards →', value, `(${source})`,
-    verificationId ? `cycle=${verificationId}` : '');
+    `cycle=${verificationId}`);
   try {
     const body = {
       session_verified: true,
       value,
       adapter: _EXTENSION_ADAPTER,
+      verification_id: verificationId,
+      access_cycle_id: accessCycleId,
     };
-    if (verificationId) {
-      body.verification_id = verificationId;
-      body.access_cycle_id = accessCycleId;
-    }
     const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
@@ -2081,9 +2104,22 @@ async function _pushAmexExtraction(apiKey, value, source = 'extension', opts = {
     const data = await resp.json().catch(() => ({}));
     if (resp.ok) {
       _amexExtractReportedAt[cacheKey] = now;
-      console.log('[Mighty Amex] extract stored on server:', data);
+      console.log('[Mighty Amex] extract stored on server:', {
+        verification_id: verificationId,
+        access_cycle_id: accessCycleId,
+        cycle_state: 'extracting',
+        ok: true,
+        field: data?.field?.key || null,
+      });
       chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
       return true;
+    }
+    if (resp.status === 409 && data?.error === 'active_verification_required') {
+      console.warn(
+        '[Mighty Amex] extract rejected — active verification required',
+        { verification_id: verificationId, access_cycle_id: accessCycleId, reason: data?.reason },
+      );
+      return false;
     }
     console.warn('[Mighty Amex] extract POST failed', resp.status, data);
   } catch (e) {
@@ -2502,6 +2538,49 @@ let _activeSessionVerificationPastProbe = false;
 let _lastProcessedSessionVerificationId = null;
 const AMEX_SESSION_VERIFICATION_ENTRY =
   'https://global.americanexpress.com/overview';
+
+/**
+ * Finite-state clear of the local active verification pointer.
+ * Must run on every terminal path so no stale verification_id survives.
+ */
+function _clearActiveSessionVerification(reason) {
+  if (_activeSessionVerificationId || _sessionVerificationInProgress) {
+    console.log(
+      '[Mighty] clear active verification pointer',
+      reason || 'unspecified',
+      'verification_id=',
+      _activeSessionVerificationId,
+    );
+  }
+  _sessionVerificationInProgress = false;
+  _activeSessionVerificationTabId = null;
+  _activeSessionVerificationId = null;
+  _activeSessionVerificationPastProbe = false;
+}
+
+/** After reload/restart: cancel server-side actives and drop local pointers. */
+async function _resetVerificationsAfterExtensionReload(reason) {
+  _clearActiveSessionVerification(reason || 'extension_reload');
+  _lastProcessedSessionVerificationId = null;
+  try {
+    const { api_key } = await chrome.storage.local.get('api_key');
+    if (!api_key) return;
+    const resp = await fetch(
+      `${MIGHTY_URL}/api/extension/session-verification/reset-on-reload`,
+      { method: 'POST', headers: { 'X-Mighty-Key': api_key } },
+    );
+    const data = await resp.json().catch(() => ({}));
+    console.log(
+      '[Mighty] verification reset-on-reload',
+      reason,
+      resp.status,
+      data?.count ?? 0,
+      'cancelled',
+    );
+  } catch (e) {
+    console.warn('[Mighty] verification reset-on-reload failed:', e.message);
+  }
+}
 
 async function fetchAutomaticProbesEnabled(apiKey) {
   if (!apiKey) return true;
@@ -4095,10 +4174,7 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
     // Clear active markers before closing the tab so the intentional close
     // does not emit a spurious cancelled terminal over a finished cycle.
     const tabIdToClose = tab?.id;
-    _sessionVerificationInProgress = false;
-    _activeSessionVerificationTabId = null;
-    _activeSessionVerificationId = null;
-    _activeSessionVerificationPastProbe = false;
+    _clearActiveSessionVerification('verification_finished');
     if (tabIdToClose) chrome.tabs.remove(tabIdToClose).catch(() => {});
   }
 }

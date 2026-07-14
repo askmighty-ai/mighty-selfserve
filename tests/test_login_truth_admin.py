@@ -134,7 +134,12 @@ def test_mr_balance_only_unknown_current_access_with_fresh_cache(client):
         start_amex_connect(db, uid, **ctx)
         advance_amex_to_waiting(db, uid, **ctx)
         amex_extension_connected(db, uid, session_verified=True, **ctx)
-        apply_amex_membership_rewards_extraction(db, uid, "142,500", **ctx)
+        apply_amex_membership_rewards_extraction(
+            db, uid, "142,500",
+            access_cycle_id="test-cycle",
+            verification_id="test-cycle",
+            **ctx,
+        )
 
         rows = compute_current_account_access_rows(
             db, uid, decrypt_account_fn=mighty.decrypt_account_data
@@ -159,7 +164,12 @@ def test_fresh_mr_balance_plus_newer_login_page_signed_out_fresh_cache(client):
         start_amex_connect(db, uid, **ctx)
         advance_amex_to_waiting(db, uid, **ctx)
         amex_extension_connected(db, uid, session_verified=True, **ctx)
-        apply_amex_membership_rewards_extraction(db, uid, "99,000", **ctx)
+        apply_amex_membership_rewards_extraction(
+            db, uid, "99,000",
+            access_cycle_id="test-cycle",
+            verification_id="test-cycle",
+            **ctx,
+        )
 
         older_private_at = _iso_minutes_ago(30)
         db.execute(
@@ -541,7 +551,12 @@ def test_mr_extraction_without_session_endpoint_does_not_write_connected(client)
         start_amex_connect(db, uid, **ctx)
         advance_amex_to_waiting(db, uid, **ctx)
         amex_extension_connected(db, uid, session_verified=True, **ctx)
-        apply_amex_membership_rewards_extraction(db, uid, "55,000", **ctx)
+        apply_amex_membership_rewards_extraction(
+            db, uid, "55,000",
+            access_cycle_id="test-cycle",
+            verification_id="test-cycle",
+            **ctx,
+        )
 
         session = get_provider_session_state(db, uid, "amex")
         assert session is None
@@ -586,6 +601,11 @@ def test_admin_login_truth_reflects_extension_session_state_immediately(admin_cl
 
 def test_extension_amex_extract_with_session_verified_writes_connected(client):
     import app as mighty
+    from mighty.provider_access_manager import (
+        complete_provider_access_check,
+        request_provider_access_check,
+    )
+    from mighty.provider_access_probe import AUTH_AUTHENTICATED_NO_PRIVATE_DATA
     from mighty.provider_session_state import get_provider_session_state
 
     api_key = _prepare_amex_waiting(client, mighty)
@@ -595,14 +615,42 @@ def test_extension_amex_extract_with_session_verified_writes_connected(client):
         headers={"X-Mighty-Key": api_key},
         json={"session_verified": True},
     ).status_code == 200
+
+    uid = _uid(client)
+    with mighty.app.app_context():
+        db = mighty.get_db()
+        verification = request_provider_access_check(db, uid, "amex")
+        assert verification is not None
+        vid = verification.verification_id
+        complete_provider_access_check(
+            db,
+            uid,
+            {
+                "provider": "amex",
+                "status": "ok",
+                "auth_state": AUTH_AUTHENTICATED_NO_PRIVATE_DATA,
+                "url_visited": "https://global.americanexpress.com/overview",
+                "signed_in_detected": True,
+                "private_data_detected": False,
+                "evidence_type": "page",
+                "evidence_snippet": "test",
+                "probed_at": datetime.now(timezone.utc).isoformat(),
+            },
+            verification_id=vid,
+        )
+
     r = client.post(
         "/api/extension/amex/extract",
         headers={"X-Mighty-Key": api_key},
-        json={"session_verified": True, "value": "88,000"},
+        json={
+            "session_verified": True,
+            "value": "88,000",
+            "verification_id": vid,
+            "access_cycle_id": vid,
+        },
     )
     assert r.status_code == 200
 
-    uid = _uid(client)
     with mighty.app.app_context():
         session = get_provider_session_state(mighty.get_db(), uid, "amex")
         assert session is not None
@@ -694,7 +742,12 @@ def test_amex_evidence_text(client):
         start_amex_connect(db, uid, **ctx)
         advance_amex_to_waiting(db, uid, **ctx)
         amex_extension_connected(db, uid, session_verified=True, **ctx)
-        apply_amex_membership_rewards_extraction(db, uid, "55,000", **ctx)
+        apply_amex_membership_rewards_extraction(
+            db, uid, "55,000",
+            access_cycle_id="test-cycle",
+            verification_id="test-cycle",
+            **ctx,
+        )
 
         rows = compute_login_truth_rows(db, uid, decrypt_account_fn=mighty.decrypt_account_data)
         amex = next(r for r in rows if r.provider == "amex")
@@ -993,7 +1046,12 @@ def test_session_evidence_cached_data_not_connected_evidence(client):
         start_amex_connect(db, uid, **ctx)
         advance_amex_to_waiting(db, uid, **ctx)
         amex_extension_connected(db, uid, session_verified=True, **ctx)
-        apply_amex_membership_rewards_extraction(db, uid, "142,500", **ctx)
+        apply_amex_membership_rewards_extraction(
+            db, uid, "142,500",
+            access_cycle_id="test-cycle",
+            verification_id="test-cycle",
+            **ctx,
+        )
 
         sections = gather_session_evidence_timeline(
             db,
@@ -1094,7 +1152,12 @@ def test_admin_session_evidence_page_shows_winner_and_cached(admin_client):
         ctx = _ctx(mighty)
         start_amex_connect(db, uid, **ctx)
         advance_amex_to_waiting(db, uid, **ctx)
-        apply_amex_membership_rewards_extraction(db, uid, "50,000", **ctx)
+        apply_amex_membership_rewards_extraction(
+            db, uid, "50,000",
+            access_cycle_id="test-cycle",
+            verification_id="test-cycle",
+            **ctx,
+        )
         upsert_provider_session_state(
             db,
             uid,
@@ -1207,7 +1270,12 @@ def test_session_evidence_cached_data_never_explains_connected(client):
         ctx = _ctx(mighty)
         start_amex_connect(db, uid, **ctx)
         advance_amex_to_waiting(db, uid, **ctx)
-        apply_amex_membership_rewards_extraction(db, uid, "77,000", **ctx)
+        apply_amex_membership_rewards_extraction(
+            db, uid, "77,000",
+            access_cycle_id="test-cycle",
+            verification_id="test-cycle",
+            **ctx,
+        )
 
         section = gather_session_evidence_timeline(
             db,
@@ -1509,7 +1577,12 @@ def test_cached_data_never_changes_current_session_state(client):
         ctx = _ctx(mighty)
         start_amex_connect(db, uid, **ctx)
         advance_amex_to_waiting(db, uid, **ctx)
-        apply_amex_membership_rewards_extraction(db, uid, "88,000", **ctx)
+        apply_amex_membership_rewards_extraction(
+            db, uid, "88,000",
+            access_cycle_id="test-cycle",
+            verification_id="test-cycle",
+            **ctx,
+        )
         before = get_provider_session_state(db, uid, "amex")
         rows = compute_current_account_access_rows(
             db, uid, decrypt_account_fn=mighty.decrypt_account_data

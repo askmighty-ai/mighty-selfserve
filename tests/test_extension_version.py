@@ -65,7 +65,7 @@ def _api_key(mighty, uid):
 
 def test_manifest_version_incremented_in_this_pr():
     version = json.loads(MANIFEST.read_text(encoding="utf-8"))["version"]
-    assert version == "1.3.15"
+    assert version == "1.3.18"
     assert re.fullmatch(r"\d+(?:\.\d+){1,3}", version)
 
 
@@ -145,11 +145,11 @@ def test_server_payload_exposes_reported_version(client):
         record_extension_version(
             mighty.get_db(),
             uid,
-            "1.3.15",
+            expected,
             seen_at=newer_seen,
         )
     body2 = c.get("/api/debug/extension-version").get_json()
-    assert body2["extension_version"] == "1.3.15"
+    assert body2["extension_version"] == expected
     assert body2["extension_update_required"] is False
 
     # Out-of-order older heartbeat cannot replace newer state.
@@ -162,7 +162,7 @@ def test_server_payload_exposes_reported_version(client):
         )
         assert updated is False
         status = get_extension_version_status(mighty.get_db(), uid)
-    assert status["extension_version"] == "1.3.15"
+    assert status["extension_version"] == expected
     assert status["extension_last_seen_at"] == body2["extension_last_seen_at"]
 
 
