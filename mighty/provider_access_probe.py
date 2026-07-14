@@ -307,6 +307,9 @@ PROVIDER_PROBE_CONFIG: dict[str, ProviderProbeConfig] = {
             "account services",
             "statement balance",
         ),
+        # Observational/historical only. Account-data presence is decided solely
+        # by the Amex extractor (extractAmexAccountDataPage). These rules must
+        # not gate extraction or independently conclude "no account data."
         private_data_rules=(
             PrivateDataRule("membership_rewards_balance", _rx(r"membership rewards[^0-9\n]{0,120}([\d][\d,]*)")),
             PrivateDataRule("points_balance", _rx(r"(?:points|rewards)\s*(?:balance|:)?\s*([\d][\d,]*)")),
@@ -314,6 +317,9 @@ PROVIDER_PROBE_CONFIG: dict[str, ProviderProbeConfig] = {
             PrivateDataRule("card_ending", _rx(r"card\s+ending\s+(?:in\s+)?[\d*]{4,}")),
             PrivateDataRule("statement_balance", _rx(r"statement\s+balance[^$\d]{0,40}\$?([\d][\d,]*(?:\.\d{2})?)")),
         ),
+        # NOTE: private_data_rules above remain for probe DB / login-truth
+        # evidence labeling when DOM text is submitted. Extension probe no
+        # longer pre-answers account-data presence before extraction.
         login_rules=(
             ProbeRule("login_url", _rx(r"(?!)"), _rx(r"/en-us/account/log-?in|/(?:login|sign-?in|logon)(?:/|$|\?)")),
             ProbeRule("sign_in_heading", _rx(r"sign in to your account")),

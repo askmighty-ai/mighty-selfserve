@@ -9,10 +9,18 @@ function _mightyExtensionVersion() {
 }
 const MIGHTY_EXT_VERSION = _mightyExtensionVersion();
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
-// Bounded post-auth wait for qualifying private DOM evidence before extraction.
-const AMEX_PRIVATE_DATA_OBSERVATION_MS = 20000;
-const AMEX_PRIVATE_DATA_POLL_MS = 1000;
+// One short SPA hydration delay before a single extraction retry (no polling loop).
+const AMEX_HYDRATION_RETRY_DELAY_MS = 1500;
 const AMEX_MUTATION_OBSERVE_MS = 10000;
+// ExtractionResult.status — extractor is the sole account-data authority.
+const AMEX_EXTRACTION_STATUS = {
+  EXTRACTION_SUCCESS: 'EXTRACTION_SUCCESS',
+  NO_ACCOUNT_DATA: 'NO_ACCOUNT_DATA',
+  NOT_READY: 'NOT_READY',
+  EXTRACTION_FAILED: 'EXTRACTION_FAILED',
+};
+// Exactly one extraction attempt (+ optional hydration retry) per verification.
+const _amexExtractionCyclesStarted = new Set();
 const AMEX_BOOTSTRAP_TRACE_MS = 20000;
 // Hard ceiling for a single session-verification cycle (matches server
 // VERIFICATION_MAX_DURATION_SECONDS). After this the server forces timeout;
@@ -2069,7 +2077,9 @@ const _amexConnReportedAt = {};
 const _amexExtractReportedAt = {};
 
 async function _pushAmexExtraction(apiKey, value, source = 'extension', opts = {}) {
-  if (!apiKey || !value) return false;
+  if (!apiKey) return false;
+  const fields = Array.isArray(opts.fields) ? opts.fields : null;
+  if (!value && !(fields && fields.length)) return false;
   const verificationId = opts.verificationId || opts.accessCycleId || null;
   const accessCycleId = opts.accessCycleId || opts.verificationId || verificationId;
   // No fallback: extraction may only POST inside an active verification cycle.
@@ -2080,18 +2090,30 @@ async function _pushAmexExtraction(apiKey, value, source = 'extension', opts = {
     );
     return false;
   }
-  const cacheKey = `${verificationId}:${String(value).replace(/\D/g, '')}`;
+  const cacheToken = value
+    ? String(value).replace(/\D/g, '')
+    : (fields || []).map((f) => f.key).join(',');
+  const cacheKey = `${verificationId}:${cacheToken}`;
   const now = Date.now();
   if (_amexExtractReportedAt[cacheKey] && now - _amexExtractReportedAt[cacheKey] < 300_000) {
-    console.log('[Mighty Amex] extract unchanged — skip post', value, `cycle=${verificationId}`);
+    console.log('[Mighty Amex] extract unchanged — skip post', `cycle=${verificationId}`);
     return true;
   }
-  console.log('[Mighty Amex] posting Membership Rewards →', value, `(${source})`,
-    `cycle=${verificationId}`);
+  console.log(
+    '[Mighty Amex] posting extraction →',
+    `(${source})`,
+    `cycle=${verificationId}`,
+    'reason=',
+    opts.extractionReason || 'membership_rewards_found',
+  );
   try {
     const body = {
       session_verified: true,
-      value,
+      value: value || (fields && fields[0] && fields[0].value) || '',
+      fields: fields || undefined,
+      extraction_status: opts.extractionStatus || AMEX_EXTRACTION_STATUS.EXTRACTION_SUCCESS,
+      extraction_reason: opts.extractionReason || 'membership_rewards_found',
+      publishable_fields: opts.publishableFields || (fields || []).map((f) => f.key),
       adapter: _EXTENSION_ADAPTER,
       verification_id: verificationId,
       access_cycle_id: accessCycleId,
@@ -2110,6 +2132,7 @@ async function _pushAmexExtraction(apiKey, value, source = 'extension', opts = {
         cycle_state: 'extracting',
         ok: true,
         field: data?.field?.key || null,
+        extraction_reason: opts.extractionReason || null,
       });
       chrome.tabs.query({ url: `${MIGHTY_URL}/*` }, ts => ts.forEach(t => chrome.tabs.reload(t.id)));
       return true;
@@ -2128,40 +2151,187 @@ async function _pushAmexExtraction(apiKey, value, source = 'extension', opts = {
   return false;
 }
 
-async function extractAmexRewardsInTab(tabId, apiKey, opts = {}) {
+/**
+ * Run the Amex extractor once in a tab. Returns structured ExtractionResult.
+ * Observation layers must not pre-decide "no account data" — only this path.
+ */
+async function runAmexExtractorInTab(tabId) {
   console.log('[Mighty Amex] running DOM extraction in tab', tabId);
   try {
     const [r] = await chrome.scripting.executeScript({
       target: { tabId },
-      func: extractAmexMembershipRewardsPage,
+      func: extractAmexAccountDataPage,
     });
     const result = r?.result;
-    console.log('[Mighty Amex] tab extract result:', result);
-    if (result?.loggedIn && result?.value) {
-      return _pushAmexExtraction(apiKey, result.value, 'tab', opts);
+    if (!result || !result.status) {
+      return {
+        status: AMEX_EXTRACTION_STATUS.EXTRACTION_FAILED,
+        reason: 'dom_changed',
+        publishable_fields: [],
+        diagnostics: { labels: ['dom_changed'] },
+        fields: [],
+        value: null,
+        loggedIn: false,
+      };
     }
-    if (result && result.loggedIn === false) {
-      console.log('[Mighty Amex] tab not logged in during extraction');
-      if (!opts.verificationId) {
-        await _postAmexNeedsLogin(apiKey);
-      }
-    } else if (result?.loggedIn) {
-      console.log('[Mighty Amex] logged in but Membership Rewards balance not found in DOM');
-    }
+    console.log('[Mighty Amex] extraction_result', {
+      status: result.status,
+      reason: result.reason,
+      publishable_fields: result.publishable_fields || [],
+    });
+    return result;
   } catch (e) {
     console.warn('[Mighty Amex] tab extraction failed:', e.message);
+    return {
+      status: AMEX_EXTRACTION_STATUS.EXTRACTION_FAILED,
+      reason: 'dom_changed',
+      publishable_fields: [],
+      diagnostics: { labels: ['dom_changed'] },
+      fields: [],
+      value: null,
+      loggedIn: false,
+    };
   }
+}
+
+/** @deprecated Prefer runAmexExtractorInTab — kept for non-cycle callers. */
+async function extractAmexRewardsInTab(tabId, apiKey, opts = {}) {
+  const result = await runAmexExtractorInTab(tabId);
+  if (result.status === AMEX_EXTRACTION_STATUS.EXTRACTION_SUCCESS) {
+    return _pushAmexExtraction(apiKey, result.value, 'tab', {
+      ...opts,
+      fields: result.fields,
+      extractionStatus: result.status,
+      extractionReason: result.reason,
+      publishableFields: result.publishable_fields,
+    });
+  }
+  if (result.loggedIn === false && !opts.verificationId) {
+    await _postAmexNeedsLogin(apiKey);
+  }
+  return false;
+}
+
+async function _amexTabStillOnExtractionSurface(tabId, baselineUrl) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || tab.id == null) {
+    console.log('[Mighty Amex] hydration retry cancelled — tab closed');
+    return { ok: false, reason: 'tab_closed' };
+  }
+  const url = String(tab.url || '');
+  if (url && !/americanexpress\.com/i.test(url)) {
+    console.log('[Mighty Amex] hydration retry cancelled — left Amex surface');
+    return { ok: false, reason: 'navigated_away' };
+  }
+  if (/\/account\/log-?in/i.test(url)) {
+    console.log('[Mighty Amex] hydration retry cancelled — login page');
+    return { ok: false, reason: 'login_page' };
+  }
+  if (baselineUrl) {
+    try {
+      const a = new URL(baselineUrl);
+      const b = new URL(url);
+      if (a.origin !== b.origin || a.pathname !== b.pathname) {
+        console.log('[Mighty Amex] hydration retry cancelled — navigation occurred');
+        return { ok: false, reason: 'navigation_during_retry' };
+      }
+    } catch (_) {}
+  }
+  return { ok: true, url };
+}
+
+/**
+ * One extraction attempt + at most one hydration retry on the same tab/cycle.
+ * No polling loop. Extractor alone decides success / no data / failure.
+ */
+async function attemptAmexExtractionWithHydrationRetry(tabId) {
+  const tab0 = await chrome.tabs.get(tabId).catch(() => null);
+  const baselineUrl = tab0?.url || null;
+  let result = await runAmexExtractorInTab(tabId);
+  if (result.status !== AMEX_EXTRACTION_STATUS.NOT_READY) {
+    return result;
+  }
+  console.log('[Mighty Amex] page not ready — one hydration retry', result.reason);
+  await sleep(AMEX_HYDRATION_RETRY_DELAY_MS);
+  const surface = await _amexTabStillOnExtractionSurface(tabId, baselineUrl);
+  if (!surface.ok) {
+    return {
+      status: AMEX_EXTRACTION_STATUS.EXTRACTION_FAILED,
+      reason: surface.reason || 'navigation_during_retry',
+      publishable_fields: [],
+      diagnostics: { labels: [surface.reason || 'navigation_during_retry'] },
+      fields: [],
+      value: null,
+      loggedIn: false,
+    };
+  }
+  result = await runAmexExtractorInTab(tabId);
+  if (result.status === AMEX_EXTRACTION_STATUS.NOT_READY) {
+    // After the single retry, empty/not-ready becomes no account data.
+    return {
+      status: AMEX_EXTRACTION_STATUS.NO_ACCOUNT_DATA,
+      reason: 'no_publishable_widgets',
+      publishable_fields: [],
+      diagnostics: { labels: ['no_publishable_widgets', 'hydration_retry_exhausted'] },
+      fields: [],
+      value: null,
+      loggedIn: !!result.loggedIn,
+    };
+  }
+  return result;
+}
+
+async function _applyAmexExtractionResult(apiKey, verificationId, result) {
+  const opts = { verificationId, accessCycleId: verificationId };
+  if (result.status === AMEX_EXTRACTION_STATUS.EXTRACTION_SUCCESS) {
+    const ok = await _pushAmexExtraction(apiKey, result.value, 'access-cycle', {
+      ...opts,
+      fields: result.fields,
+      extractionStatus: result.status,
+      extractionReason: result.reason,
+      publishableFields: result.publishable_fields,
+    });
+    if (!ok) {
+      await _completeSessionVerification(
+        apiKey, verificationId, 'failed', 'extraction_failed',
+        { terminalReason: 'unknown', terminalSource: 'extension_extraction_failed' },
+      );
+    }
+    return ok;
+  }
+  if (result.status === AMEX_EXTRACTION_STATUS.NO_ACCOUNT_DATA) {
+    await _postAmexNoAccountData(apiKey, verificationId, {
+      reason: result.reason || 'no_publishable_widgets',
+      observation_counts: {
+        authenticated_private_api_responses: 0,
+        qualifying_dom_observations: 0,
+        candidate_payloads: 0,
+        rejection_reason: result.reason || 'no_publishable_widgets',
+      },
+    });
+    return false;
+  }
+  // EXTRACTION_FAILED (and any unexpected status)
+  await _completeSessionVerification(
+    apiKey, verificationId, 'failed', result.reason || 'extraction_failed',
+    { terminalReason: 'unknown', terminalSource: 'extension_extraction_failed' },
+  );
   return false;
 }
 
 /**
  * Access-cycle owned Amex private-data extraction.
- * Always runs after authenticated session verification — ignores is_synced /
- * automatic-probe gates so correlated extraction can complete the cycle.
+ * After authentication, always attempts extraction — the extractor is the sole
+ * authority for account-data presence. At most one hydration retry.
  */
 async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingTabId) {
   if (!apiKey || !verificationId) return false;
-  const opts = { verificationId, accessCycleId: verificationId };
+  if (_amexExtractionCyclesStarted.has(verificationId)) {
+    console.log('[Mighty Amex] duplicate extraction prevented for cycle', verificationId);
+    return false;
+  }
+  _amexExtractionCyclesStarted.add(verificationId);
+
   try {
     await fetch(`${MIGHTY_URL}/api/extension/session-verification/advance`, {
       method: 'POST',
@@ -2172,59 +2342,62 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
     console.warn('[Mighty Amex] extracting advance failed:', e.message);
   }
 
-  if (existingTabId) {
-    const ok = await extractAmexRewardsInTab(existingTabId, apiKey, opts);
-    if (ok) return true;
-  }
+  const tryTab = async (tabId) => {
+    if (!tabId) return null;
+    const result = await attemptAmexExtractionWithHydrationRetry(tabId);
+    if (result.status === AMEX_EXTRACTION_STATUS.EXTRACTION_SUCCESS
+        || result.status === AMEX_EXTRACTION_STATUS.NO_ACCOUNT_DATA
+        || result.status === AMEX_EXTRACTION_STATUS.EXTRACTION_FAILED) {
+      return result;
+    }
+    return result;
+  };
 
-  const openTabs = await chrome.tabs.query({ url: '*://*.americanexpress.com/*' });
-  for (const tab of openTabs) {
-    if (!tab.id || !tab.url || /\/account\/log-?in/i.test(tab.url)) continue;
-    if (existingTabId && tab.id === existingTabId) continue;
-    const ok = await extractAmexRewardsInTab(tab.id, apiKey, opts);
-    if (ok) return true;
-  }
-
-  console.log('[Mighty Amex] opening account tab for access-cycle extraction');
-  let tab;
   try {
-    tab = await createProviderTab(
-      ACCOUNT_ENTRY.amex,
-      { active: false },
-      SESSION_VERIFICATION_TAB_REASON,
-    );
-    if (!tab?.id) {
-      await _completeSessionVerification(
-        apiKey, verificationId, 'failed', 'extraction_tab_blocked',
-        { terminalReason: 'navigation_failed', terminalSource: 'extension_extraction_tab_blocked' },
+    if (existingTabId) {
+      const result = await tryTab(existingTabId);
+      if (result) return _applyAmexExtractionResult(apiKey, verificationId, result);
+    }
+
+    const openTabs = await chrome.tabs.query({ url: '*://*.americanexpress.com/*' });
+    for (const tab of openTabs) {
+      if (!tab.id || !tab.url || /\/account\/log-?in/i.test(tab.url)) continue;
+      if (existingTabId && tab.id === existingTabId) continue;
+      const result = await tryTab(tab.id);
+      if (result && result.status === AMEX_EXTRACTION_STATUS.EXTRACTION_SUCCESS) {
+        return _applyAmexExtractionResult(apiKey, verificationId, result);
+      }
+      if (result && (
+        result.status === AMEX_EXTRACTION_STATUS.NO_ACCOUNT_DATA
+        || result.status === AMEX_EXTRACTION_STATUS.EXTRACTION_FAILED
+      )) {
+        // Prefer opening a dedicated overview tab before terminalizing on a
+        // random open Amex tab that may not be the account surface.
+        break;
+      }
+    }
+
+    console.log('[Mighty Amex] opening account tab for access-cycle extraction');
+    let tab;
+    try {
+      tab = await createProviderTab(
+        ACCOUNT_ENTRY.amex,
+        { active: false },
+        SESSION_VERIFICATION_TAB_REASON,
       );
-      return false;
+      if (!tab?.id) {
+        await _completeSessionVerification(
+          apiKey, verificationId, 'failed', 'extraction_tab_blocked',
+          { terminalReason: 'navigation_failed', terminalSource: 'extension_extraction_tab_blocked' },
+        );
+        return false;
+      }
+      await waitForTabLoad(tab.id, 25_000);
+      const result = await attemptAmexExtractionWithHydrationRetry(tab.id);
+      return _applyAmexExtractionResult(apiKey, verificationId, result);
+    } finally {
+      if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
     }
-    await waitForTabLoad(tab.id, 25_000);
-    // Bounded wait for qualifying private DOM evidence on the extraction tab.
-    const found = await waitForAmexQualifyingPrivateData(tab.id, {
-      timeoutMs: AMEX_PRIVATE_DATA_OBSERVATION_MS,
-    });
-    if (!found) {
-      console.log('[Mighty Amex] extraction tab had no qualifying private data');
-      await _postAmexNoQualifyingPrivateData(apiKey, verificationId, {
-        observation_counts: {
-          authenticated_private_api_responses: 0,
-          qualifying_dom_observations: 0,
-          candidate_payloads: 0,
-          rejection_reason: 'no_qualifying_private_data',
-        },
-      });
-      return false;
-    }
-    const ok = await extractAmexRewardsInTab(tab.id, apiKey, opts);
-    if (!ok) {
-      await _completeSessionVerification(
-        apiKey, verificationId, 'failed', 'extraction_failed',
-        { terminalReason: 'unknown', terminalSource: 'extension_extraction_failed' },
-      );
-    }
-    return ok;
   } catch (e) {
     console.warn('[Mighty Amex] access-cycle extraction failed:', e.message);
     await _completeSessionVerification(
@@ -2232,72 +2405,12 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
       { terminalReason: 'unknown', terminalSource: 'extension_extraction_exception' },
     );
     return false;
-  } finally {
-    if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
   }
 }
 
-async function waitForAmexQualifyingPrivateData(tabId, { timeoutMs = AMEX_PRIVATE_DATA_OBSERVATION_MS } = {}) {
-  if (!tabId) return false;
-  const deadline = Date.now() + Math.max(0, timeoutMs);
-  while (Date.now() <= deadline) {
-    try {
-      const tab = await chrome.tabs.get(tabId).catch(() => null);
-      if (!tab || tab.id == null) {
-        console.log('[Mighty Amex] private-data wait cancelled — tab closed');
-        return false;
-      }
-      // Navigation away from Amex account surfaces ends the wait for this cycle.
-      const url = String(tab.url || '');
-      if (url && !/americanexpress\.com/i.test(url)) {
-        console.log('[Mighty Amex] private-data wait cancelled — left Amex surface');
-        return false;
-      }
-      if (/\/account\/log-?in/i.test(url)) {
-        console.log('[Mighty Amex] private-data wait cancelled — login page');
-        return false;
-      }
-      const [r] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => {
-          const body = (document.body && (document.body.innerText || document.body.textContent)) || '';
-          if (/\/account\/log-?in/i.test(location.pathname)) return { ok: false, reason: 'login_page' };
-          const patterns = [
-            /membership rewards[^0-9\n]{0,120}([\d][\d,]*)/i,
-            /statement\s+balance[^$\d]{0,40}\$?([\d][\d,]*(?:\.\d{2})?)/i,
-            /card\s+ending\s+(?:in\s+)?[\d*]{4,}/i,
-            /(?:points|rewards)\s*(?:balance|:)?\s*([\d][\d,]*)/i,
-          ];
-          for (const re of patterns) {
-            if (re.test(body)) return { ok: true, reason: 'dom_private_pattern' };
-          }
-          return { ok: false, reason: 'no_qualifying_private_data' };
-        },
-      });
-      if (r?.result?.ok) {
-        console.log('[Mighty Amex] qualifying private data observed:', r.result.reason);
-        return true;
-      }
-      if (r?.result?.reason === 'login_page') {
-        return false;
-      }
-    } catch (e) {
-      const msg = String(e?.message || e || '');
-      // Tab gone / navigated away — do not burn the full deadline.
-      if (/no tab|invalid tab|cannot access|receiving end does not exist/i.test(msg)) {
-        console.log('[Mighty Amex] private-data wait cancelled — tab unavailable');
-        return false;
-      }
-      console.warn('[Mighty Amex] private-data poll failed:', msg);
-    }
-    if (Date.now() > deadline) break;
-    await sleep(AMEX_PRIVATE_DATA_POLL_MS);
-  }
-  return false;
-}
-
-async function _postAmexNoQualifyingPrivateData(apiKey, verificationId, opts = {}) {
+async function _postAmexNoAccountData(apiKey, verificationId, opts = {}) {
   if (!apiKey || !verificationId) return false;
+  const reason = opts.reason || 'no_publishable_widgets';
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/amex/no-qualifying-private-data`, {
       method: 'POST',
@@ -2306,28 +2419,36 @@ async function _postAmexNoQualifyingPrivateData(apiKey, verificationId, opts = {
         verification_id: verificationId,
         access_cycle_id: verificationId,
         observation_counts: opts.observation_counts || {},
-        reason: 'no_qualifying_private_data',
+        reason,
+        extraction_status: AMEX_EXTRACTION_STATUS.NO_ACCOUNT_DATA,
+        extraction_reason: reason,
+        extraction_attempted: true,
       }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      console.warn('[Mighty Amex] no-qualifying-private-data POST failed', resp.status, data);
+      console.warn('[Mighty Amex] no-account-data POST failed', resp.status, data);
       await _completeSessionVerification(
         apiKey, verificationId, 'completed', 'no_qualifying_private_data',
-        { terminalReason: 'authenticated', terminalSource: 'extension_no_qualifying_fallback' },
+        { terminalReason: 'authenticated', terminalSource: 'extension_no_account_data_fallback' },
       );
       return false;
     }
-    console.log('[Mighty Amex] cycle completed with extraction NOT RUN', data);
+    console.log('[Mighty Amex] extraction_result status=NO_ACCOUNT_DATA reason=', reason, data);
     return true;
   } catch (e) {
-    console.warn('[Mighty Amex] no-qualifying-private-data POST error:', e.message);
+    console.warn('[Mighty Amex] no-account-data POST error:', e.message);
     await _completeSessionVerification(
       apiKey, verificationId, 'completed', 'no_qualifying_private_data',
-      { terminalReason: 'authenticated', terminalSource: 'extension_no_qualifying_fallback' },
+      { terminalReason: 'authenticated', terminalSource: 'extension_no_account_data_fallback' },
     );
     return false;
   }
+}
+
+/** @deprecated Use _postAmexNoAccountData — kept name for older call sites. */
+async function _postAmexNoQualifyingPrivateData(apiKey, verificationId, opts = {}) {
+  return _postAmexNoAccountData(apiKey, verificationId, opts);
 }
 
 async function runAmexExtraction(apiKey, accounts) {
@@ -4026,7 +4147,7 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
   _activeSessionVerificationTabId = null;
   _activeSessionVerificationPastProbe = false;
   // Probe-phase deadline only — once authenticated, extraction uses its own
-  // bounded waits (AMEX_PRIVATE_DATA_OBSERVATION_MS) and server mid-cycle timeout.
+  // hydration retry (AMEX_HYDRATION_RETRY_DELAY_MS) and server mid-cycle timeout.
   const deadlineMs = Date.now() + SESSION_VERIFICATION_MAX_MS;
   console.log(`[Mighty] session verification for ${provider} via ${entry}`);
   try {
@@ -4116,44 +4237,31 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
     // Probe result accepted by server (or at least posted) — probe phase done.
     _activeSessionVerificationPastProbe = true;
 
-    // Amex access cycle owns private-data extraction after definitive auth.
+    // Amex access cycle: after auth, always attempt extraction. The extractor
+    // alone decides success / no account data / failure — observation never
+    // independently answers "there is no account data."
     const probeData = posted?.data || {};
     const authenticated = _isAmexAccessCycleAuthenticated(payload, probeData);
     if (provider === 'amex' && authenticated && verificationId) {
-      const privateObserved = !!(
-        payload.private_data_detected
-        || probeData.private_data_detected
-        || (probeData.observation_counts
-            && Number(probeData.observation_counts.qualifying_dom_observations || 0) > 0)
-      );
+      const safeToExtract = _isAmexSafeToAttemptExtraction(payload, probeData);
       console.log(
-        '[Mighty] Amex session verified — access-cycle private-data gate',
+        '[Mighty] Amex session verified — attempting extraction',
         verificationId,
-        'privateObserved=',
-        privateObserved,
+        'safeToExtract=',
+        safeToExtract,
       );
-      let qualifying = privateObserved;
-      if (!qualifying && tab?.id) {
-        // Full private-data observation budget — not truncated by probe deadline.
-        qualifying = await waitForAmexQualifyingPrivateData(tab.id, {
-          timeoutMs: AMEX_PRIVATE_DATA_OBSERVATION_MS,
-        });
-      }
-      if (!qualifying) {
+      if (!safeToExtract) {
         console.log(
-          '[Mighty] Amex authenticated but no qualifying private data by deadline — extraction NOT RUN',
+          '[Mighty] Amex authenticated but page not safe for extraction',
           verificationId,
+          payload.failure_reason || probeData.failure_reason || 'unsafe',
         );
-        await _postAmexNoQualifyingPrivateData(apiKey, verificationId, {
-          observation_counts: probeData.observation_counts || {
-            authenticated_private_api_responses: 0,
-            qualifying_dom_observations: 0,
-            candidate_payloads: 0,
-            rejection_reason: 'no_qualifying_private_data',
-          },
-        });
+        await _completeSessionVerification(
+          apiKey, verificationId, 'failed',
+          payload.failure_reason || probeData.failure_reason || 'extraction_surface_unsafe',
+          { terminalReason: 'unknown', terminalSource: 'extension_extraction_surface_unsafe' },
+        );
       } else {
-        console.log('[Mighty] Amex session verified — starting access-cycle extraction', verificationId);
         await runAmexExtractionForAccessCycle(apiKey, verificationId, tab?.id);
       }
     }
@@ -4197,6 +4305,21 @@ function _isAmexAccessCycleAuthenticated(payload, probeData) {
     if (!authState || authState === 'unknown') return !!payload.signed_in_detected;
   }
   return false;
+}
+
+/**
+ * Observation-layer gate only: is it safe to attempt extraction?
+ * Must never independently answer "there is no account data."
+ */
+function _isAmexSafeToAttemptExtraction(payload, probeData) {
+  const failure = String(
+    probeData.failure_reason || payload.failure_reason || '',
+  ).toLowerCase();
+  if (failure === 'login_required' || failure === 'marketing_page_only') return false;
+  if (failure === 'access_blocked' || failure === 'blank_or_unloaded_page') return false;
+  if (payload.blocked || probeData.blocked) return false;
+  // Authenticated / session_verified is sufficient — do not require private_data_detected.
+  return true;
 }
 
 function ensureManualProbePolling() {
@@ -6160,13 +6283,26 @@ function dismissSessionTimeouts() {
   return false;
 }
 
-// Runs inside Amex account pages — extract Membership Rewards points balance
-function extractAmexMembershipRewardsPage() {
+// Runs inside Amex account pages — single source of truth for account-data detection.
+// Returns ExtractionResult: status / reason / publishable_fields / diagnostics.
+function extractAmexAccountDataPage() {
   const LOG = '[Mighty Amex Page]';
+  const STATUS = {
+    EXTRACTION_SUCCESS: 'EXTRACTION_SUCCESS',
+    NO_ACCOUNT_DATA: 'NO_ACCOUNT_DATA',
+    NOT_READY: 'NOT_READY',
+    EXTRACTION_FAILED: 'EXTRACTION_FAILED',
+  };
   function formatPoints(numStr) {
     const n = parseInt(String(numStr).replace(/[^\d]/g, ''), 10);
     if (!n || n <= 0) return null;
     return n.toLocaleString('en-US');
+  }
+  function formatMoney(numStr) {
+    const cleaned = String(numStr).replace(/[^\d.]/g, '');
+    const n = parseFloat(cleaned);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   function pickBestNumber(text) {
     if (!text) return null;
@@ -6184,65 +6320,191 @@ function extractAmexMembershipRewardsPage() {
     if (!root) return null;
     return pickBestNumber(root.innerText || root.textContent || '');
   }
-  const path = location.pathname.toLowerCase();
-  if (/\/account\/log-?in/.test(path)) {
-    console.log(LOG, 'login page');
-    return { loggedIn: false, value: null };
+  function buildResult(status, reason, opts) {
+    opts = opts || {};
+    const fields = opts.fields || [];
+    const publishable = fields.map((f) => f.key).filter(Boolean);
+    const primary = fields.find((f) => f.key === 'points_balance') || fields[0] || null;
+    return {
+      status,
+      reason,
+      publishable_fields: publishable,
+      diagnostics: { labels: opts.labels || [reason] },
+      fields,
+      value: primary ? primary.value : null,
+      loggedIn: opts.loggedIn !== undefined ? !!opts.loggedIn : status !== STATUS.EXTRACTION_FAILED,
+    };
   }
-  const sample = (document.body?.innerText || '').slice(0, 2500).toLowerCase();
-  const loginHits = ['sign in to your account', 'user id', 'show password', 'forgot password']
-    .filter(s => sample.includes(s)).length;
-  if (loginHits >= 2 && !sample.includes('membership rewards')) {
-    console.log(LOG, 'login form detected');
-    return { loggedIn: false, value: null };
-  }
-  const sels = [
-    '[data-testid*="membership-rewards" i]',
-    '[data-testid*="rewards-balance" i]',
-    '[data-automation-id*="rewards" i]',
-    '[class*="membership-rewards" i]',
-    '[class*="rewards-balance" i]',
-    'a[href*="/rewards"]',
-  ];
-  for (const sel of sels) {
-    try {
-      for (const node of document.querySelectorAll(sel)) {
-        const num = findInRoot(node);
-        const formatted = formatPoints(num);
+  try {
+    const path = location.pathname.toLowerCase();
+    const bodyEl = document.body;
+    const bodyText = (bodyEl && (bodyEl.innerText || bodyEl.textContent)) || '';
+    const sample = bodyText.slice(0, 2500).toLowerCase();
+    const bodyLen = bodyText.trim().length;
+    const loginHits = ['sign in to your account', 'user id', 'show password', 'forgot password']
+      .filter((s) => sample.includes(s)).length;
+    const marketingPath = /\/en-us\/(?:credit-cards|business|prepaid|gift-cards|benefits|offers)(?:\/|$)/i.test(path);
+    const signedInChrome = (
+      sample.includes('membership rewards')
+      || sample.includes('account home')
+      || sample.includes('recent activity')
+      || sample.includes('manage account')
+      || sample.includes('statement balance')
+      || sample.includes('card ending')
+    );
+
+    if (/\/account\/log-?in/.test(path) || (loginHits >= 2 && !sample.includes('membership rewards'))) {
+      console.log(LOG, 'login page');
+      return buildResult(STATUS.EXTRACTION_FAILED, 'login_page', { loggedIn: false, labels: ['login_page'] });
+    }
+    if (marketingPath && !signedInChrome) {
+      console.log(LOG, 'marketing page');
+      return buildResult(STATUS.EXTRACTION_FAILED, 'marketing_page', { loggedIn: false, labels: ['marketing_page'] });
+    }
+    if (!bodyEl || bodyLen < 40 || document.readyState === 'loading') {
+      console.log(LOG, 'spa not hydrated');
+      return buildResult(STATUS.NOT_READY, 'spa_not_hydrated', { loggedIn: false, labels: ['spa_not_hydrated'] });
+    }
+
+    const fields = [];
+    let mrValue = null;
+    const sels = [
+      '[data-testid*="membership-rewards" i]',
+      '[data-testid*="rewards-balance" i]',
+      '[data-automation-id*="rewards" i]',
+      '[class*="membership-rewards" i]',
+      '[class*="rewards-balance" i]',
+      'a[href*="/rewards"]',
+    ];
+    for (const sel of sels) {
+      try {
+        for (const node of document.querySelectorAll(sel)) {
+          const formatted = formatPoints(findInRoot(node));
+          if (formatted) { mrValue = formatted; break; }
+        }
+      } catch (_) {}
+      if (mrValue) break;
+    }
+    if (!mrValue) {
+      for (const node of document.querySelectorAll('h1,h2,h3,h4,span,div,p,a,button')) {
+        const t = (node.textContent || '').trim();
+        if (!/membership rewards/i.test(t)) continue;
+        let scope = node.closest('section,article,li,div') || node.parentElement;
+        for (let d = 0; d < 4 && scope; d++) {
+          const formatted = formatPoints(findInRoot(scope));
+          if (formatted) { mrValue = formatted; break; }
+          scope = scope.parentElement;
+        }
+        if (mrValue) break;
+      }
+    }
+    if (!mrValue) {
+      const m = bodyText.match(/Membership Rewards[^0-9\n]{0,120}([\d][\d,]*)/i);
+      if (m) mrValue = formatPoints(m[1]);
+    }
+    if (mrValue) {
+      fields.push({
+        key: 'points_balance',
+        label: 'Membership Rewards Points',
+        value: mrValue,
+        _type: 'points_balance',
+      });
+    }
+
+    let balIdx = 0;
+    const balRe = /statement\s+balance[^$\d]{0,40}\$?([\d][\d,]*(?:\.\d{2})?)/gi;
+    let bm;
+    while ((bm = balRe.exec(bodyText)) !== null) {
+      const formatted = formatMoney(bm[1]);
+      if (!formatted) continue;
+      balIdx += 1;
+      fields.push({
+        key: balIdx === 1 ? 'statement_balance' : `statement_balance_${balIdx}`,
+        label: balIdx === 1 ? 'Statement Balance' : `Statement Balance ${balIdx}`,
+        value: formatted,
+        _type: 'currency',
+      });
+      if (balIdx >= 8) break;
+    }
+
+    let cardIdx = 0;
+    const seenCards = {};
+    const cardRe = /card\s+ending\s+(?:in\s+)?([\d*]{4,})/gi;
+    let cm;
+    while ((cm = cardRe.exec(bodyText)) !== null) {
+      const ending = String(cm[1] || '').replace(/[^\d*]/g, '');
+      if (!ending || seenCards[ending]) continue;
+      seenCards[ending] = true;
+      cardIdx += 1;
+      fields.push({
+        key: cardIdx === 1 ? 'card_ending' : `card_ending_${cardIdx}`,
+        label: cardIdx === 1 ? 'Card Ending' : `Card Ending ${cardIdx}`,
+        value: ending.slice(-4),
+        _type: 'card_ending',
+      });
+      if (cardIdx >= 8) break;
+    }
+
+    if (!mrValue) {
+      const pm = bodyText.match(/(?:points|rewards)\s*(?:balance|:)?\s*([\d][\d,]*)/i);
+      if (pm && !/membership rewards/i.test(bodyText)) {
+        const formatted = formatPoints(pm[1]);
         if (formatted) {
-          console.log(LOG, 'selector', sel, formatted);
-          return { loggedIn: true, value: formatted };
+          fields.push({
+            key: 'points_balance',
+            label: 'Rewards Points',
+            value: formatted,
+            _type: 'points_balance',
+          });
         }
       }
-    } catch (_) {}
-  }
-  for (const node of document.querySelectorAll('h1,h2,h3,h4,span,div,p,a,button')) {
-    const t = (node.textContent || '').trim();
-    if (!/membership rewards/i.test(t)) continue;
-    let scope = node.closest('section,article,li,div') || node.parentElement;
-    for (let d = 0; d < 4 && scope; d++) {
-      const formatted = formatPoints(findInRoot(scope));
-      if (formatted) {
-        console.log(LOG, 'heading walk', formatted);
-        return { loggedIn: true, value: formatted };
-      }
-      scope = scope.parentElement;
     }
-  }
-  const body = document.body?.innerText || '';
-  const m = body.match(/Membership Rewards[^0-9\n]{0,120}([\d][\d,]*)/i);
-  if (m) {
-    const formatted = formatPoints(m[1]);
-    if (formatted) {
-      console.log(LOG, 'regex', formatted);
-      return { loggedIn: true, value: formatted };
+
+    if (fields.length) {
+      const reason = mrValue
+        ? 'membership_rewards_found'
+        : (fields[0].key.indexOf('statement_balance') === 0
+          ? 'statement_balance_found'
+          : (fields[0].key.indexOf('card_ending') === 0
+            ? 'card_ending_found'
+            : 'publishable_fields_found'));
+      console.log(LOG, 'extraction_result', reason);
+      return buildResult(STATUS.EXTRACTION_SUCCESS, reason, {
+        fields,
+        loggedIn: true,
+        labels: [reason].concat(fields.map((f) => f.key)),
+      });
     }
+
+    if (signedInChrome) {
+      console.log(LOG, 'no publishable widgets');
+      return buildResult(STATUS.NO_ACCOUNT_DATA, 'no_publishable_widgets', {
+        loggedIn: true,
+        labels: ['no_publishable_widgets'],
+      });
+    }
+    if (/\/overview|\/account|\/rewards/i.test(path) && bodyLen < 200) {
+      return buildResult(STATUS.NOT_READY, 'spa_not_hydrated', {
+        loggedIn: false,
+        labels: ['spa_not_hydrated'],
+      });
+    }
+    return buildResult(STATUS.NO_ACCOUNT_DATA, 'no_publishable_widgets', {
+      loggedIn: false,
+      labels: ['no_publishable_widgets'],
+    });
+  } catch (e) {
+    console.warn(LOG, 'dom_changed', e && e.message);
+    return buildResult(STATUS.EXTRACTION_FAILED, 'dom_changed', {
+      loggedIn: false,
+      labels: ['dom_changed'],
+    });
   }
-  const loggedIn = sample.includes('membership rewards')
-    || sample.includes('account home')
-    || sample.includes('recent activity');
-  console.log(LOG, loggedIn ? 'balance not found' : 'not logged in');
-  return { loggedIn, value: null };
+}
+
+/** @deprecated Alias — callers should use extractAmexAccountDataPage. */
+function extractAmexMembershipRewardsPage() {
+  return extractAmexAccountDataPage();
 }
 
 // Amex live session comparison snapshot (metadata only)
@@ -6808,37 +7070,22 @@ function runProviderAccessProbeInPage(provider, classifierStartedAt) {
   }
 
   if (provider === 'amex') {
+    // Observation only: is the page safe to attempt extraction?
+    // Account-data presence is decided solely by extractAmexAccountDataPage.
     const loginPath = /\/account\/log-?in/.test(path);
     const marketingPath = /\/en-us\/(?:credit-cards|business|prepaid|gift-cards|benefits|offers)(?:\/|$)/i.test(path);
-    const accountPath = /\/en-us\/account/.test(path) || /\/en-us\/rewards/.test(path);
+    const accountPath = /\/en-us\/account/.test(path)
+      || /\/en-us\/rewards/.test(path)
+      || /\/overview(?:\/|$|\?)/.test(path);
     const loginHits = ['sign in to your account', 'user id', 'show password', 'forgot password']
       .filter(s => lower.includes(s)).length;
     const signedInSignals = [
       'membership rewards', 'account home', 'recent activity', 'card ending',
       'payment due', 'available credit', 'manage account', 'statement balance',
     ];
-    let signedIn = !loginPath && !marketingPath && loginHits < 2
+    const signedIn = !loginPath && !marketingPath && loginHits < 2
       && signedInSignals.some(s => lower.includes(s))
       && (accountPath || signedInSignals.filter(s => lower.includes(s)).length >= 2);
-
-    let privateData = false;
-    let evidenceType = 'dom_text';
-    let snippet = null;
-
-    const privatePatterns = [
-      { re: /membership rewards[^0-9\n]{0,120}([\d][\d,]*)/i, label: 'membership_rewards_balance' },
-      { re: /statement\s+balance[^$\d]{0,40}\$?([\d][\d,]*(?:\.\d{2})?)/i, label: 'statement_balance' },
-      { re: /card\s+ending\s+(?:in\s+)?[\d*]{4,}/i, label: 'card_ending' },
-      { re: /(?:points|rewards)\s*(?:balance|:)?\s*([\d][\d,]*)/i, label: 'points_balance' },
-    ];
-    for (const p of privatePatterns) {
-      const m = bodyText.match(p.re);
-      if (m) {
-        privateData = true;
-        snippet = m[0].trim().slice(0, 240);
-        break;
-      }
-    }
 
     if (loginPath || (loginHits >= 2 && !lower.includes('membership rewards'))) {
       return finish({ signed_in_detected: false, private_data_detected: false, failure_reason: 'login_required' });
@@ -6846,12 +7093,15 @@ function runProviderAccessProbeInPage(provider, classifierStartedAt) {
     if (marketingPath && !accountPath) {
       return finish({ signed_in_detected: false, private_data_detected: false, failure_reason: 'marketing_page_only' });
     }
+    // Never answer "no account data" here — leave private_data_detected unset.
+    // Extractor owns Membership Rewards / balance / card-ending detection.
     return finish({
       signed_in_detected: signedIn,
-      private_data_detected: privateData,
-      evidence_type: privateData ? evidenceType : null,
-      evidence_snippet: snippet,
-      failure_reason: signedIn ? (privateData ? null : 'signed_in_no_private_evidence') : 'login_required',
+      private_data_detected: false,
+      evidence_type: signedIn ? 'signed_in_chrome' : null,
+      evidence_snippet: null,
+      failure_reason: signedIn ? null : 'login_required',
+      extraction_safe: signedIn,
     });
   }
 

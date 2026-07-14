@@ -328,13 +328,15 @@ def complete_amex_cycle_no_qualifying_private_data(
     private_api_count: int = 0,
     qualifying_dom_count: int = 0,
     candidate_payload_count: int = 0,
-    rejection_reason: str = "no_qualifying_private_data",
+    rejection_reason: str = "no_publishable_widgets",
+    extraction_attempted: bool = True,
+    extraction_reason: str = "no_publishable_widgets",
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Authenticated Amex cycle finished observation with no extractable private data.
+    """Authenticated Amex cycle: extractor returned NO_ACCOUNT_DATA.
 
-    Extraction is intentionally NOT RUN. Cycle completes (not failed) so Truth
-    Validation can show Extraction/Snapshot NOT RUN rather than a parser failure.
+    Cycle completes (not failed) so Truth Validation shows LOGGED_IN_NO_ACCOUNT_DATA
+    rather than a parser failure. Snapshot is not published.
 
     Ownership / idempotency:
       - verification must exist for this user
@@ -378,10 +380,11 @@ def complete_amex_cycle_no_qualifying_private_data(
             return {
                 "ok": True,
                 "idempotent": True,
-                "extraction": "not_run",
+                "extraction": "no_account_data",
                 "lifecycle": lifecycle,
                 "verification_id": verification_id,
                 "access_cycle_id": verification_id,
+                "reason": extraction_reason or rejection_reason,
             }
         return {
             "ok": False,
@@ -398,6 +401,7 @@ def complete_amex_cycle_no_qualifying_private_data(
             "lifecycle": lifecycle,
         }
 
+    reason = str(extraction_reason or rejection_reason or "no_publishable_widgets")
     log_access_cycle_event(
         "observation_summary",
         provider="amex",
@@ -406,17 +410,20 @@ def complete_amex_cycle_no_qualifying_private_data(
         authenticated_private_api_responses=int(private_api_count),
         qualifying_dom_observations=int(qualifying_dom_count),
         candidate_payloads=int(candidate_payload_count),
-        rejection_reason=rejection_reason,
+        rejection_reason=reason,
     )
+    # Exactly one terminal extraction_result — extractor decided NO_ACCOUNT_DATA.
     log_access_cycle_event(
         "extraction_result",
         provider="amex",
         verification_id=verification_id,
         access_cycle_id=verification_id,
-        attempted=False,
-        outcome="not_run",
+        attempted=bool(extraction_attempted),
+        outcome="no_account_data",
+        status="NO_ACCOUNT_DATA",
+        reason=reason,
         non_empty_field_count=0,
-        failure_code="no_qualifying_private_data",
+        failure_code=reason,
     )
     log_access_cycle_event(
         "snapshot_result",
@@ -425,7 +432,7 @@ def complete_amex_cycle_no_qualifying_private_data(
         access_cycle_id=verification_id,
         attempted=False,
         published=False,
-        reason="no_qualifying_private_data",
+        reason=reason,
     )
     finish_provider_access_check(
         db,
@@ -448,16 +455,22 @@ def complete_amex_cycle_no_qualifying_private_data(
     return {
         "ok": True,
         "idempotent": False,
-        "extraction": "not_run",
+        "extraction": "no_account_data",
         "lifecycle": "completed",
         "verification_id": verification_id,
         "access_cycle_id": verification_id,
         "capability_hint": "logged_in_no_account_data",
+        "reason": reason,
+        "status": "NO_ACCOUNT_DATA",
     }
 
 
 def _sanitized_observation_counts(result: dict[str, Any]) -> dict[str, int | str]:
-    """Counts only — never bodies, balances, cookies, or tokens."""
+    """Counts only — never bodies, balances, cookies, or tokens.
+
+    Observation counts are informational. Account-data presence is decided by
+    the extractor, not by these counters.
+    """
     deep = result.get("deep_inspect") if isinstance(result.get("deep_inspect"), dict) else {}
     auth_trace = deep.get("auth_network_trace") if isinstance(deep, dict) else {}
     if not isinstance(auth_trace, dict):
@@ -471,18 +484,13 @@ def _sanitized_observation_counts(result: dict[str, Any]) -> dict[str, int | str
         bucket = auth_trace.get(key) or []
         if isinstance(bucket, list):
             private_api += len(bucket)
-    qualifying_dom = 1 if result.get("private_data_detected") else 0
-    candidates = qualifying_dom + (1 if private_api else 0)
-    rejection = ""
-    if not qualifying_dom and private_api == 0:
-        rejection = "no_qualifying_private_data"
-    elif not result.get("private_data_detected"):
-        rejection = str(result.get("failure_reason") or "signed_in_no_private_evidence")
+    # Do not treat probe private_data_detected as authoritative account data.
     return {
         "authenticated_private_api_responses": private_api,
-        "qualifying_dom_observations": qualifying_dom,
-        "candidate_payloads": candidates,
-        "rejection_reason": rejection,
+        "qualifying_dom_observations": 0,
+        "candidate_payloads": 1 if private_api else 0,
+        "rejection_reason": "",
+        "extraction_dispatch": "authenticated_attempt_extraction",
     }
 
 
@@ -616,7 +624,8 @@ def complete_provider_access_check(
             )
             result["access_cycle_lifecycle"] = "session_verified"
             result["extraction_required"] = True
-            private_observed = bool(result.get("private_data_detected"))
+            # Observation may report chrome signals; account-data authority is
+            # the extractor. Always dispatch extraction after authentication.
             obs = _sanitized_observation_counts(result)
             log_access_cycle_event(
                 "observation_summary",
@@ -631,12 +640,7 @@ def complete_provider_access_check(
                 verification_id=verification_id,
                 access_cycle_id=verification_id,
                 extraction_required=True,
-                reason=(
-                    "authenticated_private_data_visible"
-                    if private_observed
-                    else "authenticated_awaiting_qualifying_private_data"
-                ),
-                private_data_detected=private_observed,
+                reason="authenticated_attempt_extraction",
             )
             log_access_cycle_event(
                 "extraction dispatched",
@@ -644,9 +648,8 @@ def complete_provider_access_check(
                 verification_id=verification_id,
                 access_cycle_id=verification_id,
                 verification_state="session_verified",
-                private_data_detected=private_observed,
+                reason="authenticated_attempt_extraction",
             )
-            result["private_data_detected"] = private_observed
             result["observation_counts"] = obs
         else:
             # Signed-out, non-Amex auth, or definitive terminal without extraction.
