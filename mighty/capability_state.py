@@ -49,6 +49,7 @@ _PLACEHOLDER_VALUES = frozenset({
 })
 
 StageVerdict = Literal["PASS", "FAIL", "UNKNOWN", "NOT_RUN"]
+PresentationPhase = Literal["determining", "terminal"]
 
 
 class CapabilityState(str, Enum):
@@ -81,6 +82,23 @@ class ExtractedField:
 
 
 @dataclass(frozen=True)
+class PresentationTimelineEvent:
+    """One Truth Timeline row for customer presentation (not CapabilityState)."""
+
+    description: str
+    timestamp: str | None = None
+    outcome: str = "UNKNOWN"  # PASS | FAIL | UNKNOWN | NOT_RUN
+
+
+@dataclass(frozen=True)
+class PresentationTimelineSection:
+    """Labeled timeline group — keeps previous and current cycles separate."""
+
+    label: str
+    events: tuple[PresentationTimelineEvent, ...]
+
+
+@dataclass(frozen=True)
 class CapabilityView:
     """Everything the customer Truth Dashboard / API need for one provider."""
 
@@ -101,15 +119,36 @@ class CapabilityView:
     # Presentation-only: prior stable card held while verification runs.
     is_refreshing: bool = False
     refresh_label: str | None = None
+    # Explicit temporal presentation (Dashboard + /api/account-status share this).
+    presentation_phase: PresentationPhase = "terminal"
+    current_verification_active: bool = False
+    current_verification_id: str | None = None
+    current_check_started_at: str | None = None
+    terminal_capability_state: str | None = None
+    previous_capability_state: str | None = None
+    previous_confirmed_at: str | None = None
+    status_is_historical: bool = False
+    primary_headline: str | None = None
+    primary_explanation: str | None = None
+    timestamp_label: str | None = None
+    historical_summary: str | None = None
+    historical_timestamp_label: str | None = None
+    timeline_sections: tuple[PresentationTimelineSection, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
+        primary_headline = self.primary_headline if self.primary_headline is not None else self.headline
+        primary_explanation = (
+            self.primary_explanation
+            if self.primary_explanation is not None
+            else (" ".join(self.explanations) if self.explanations else None)
+        )
         payload: dict[str, Any] = {
             "provider": self.provider,
             "display_name": self.display_name,
             "capability_state": self.state.value,
             "state": self.state.value,
-            "title": self.headline,
-            "headline": self.headline,
+            "title": primary_headline,
+            "headline": primary_headline,
             "explanation": list(self.explanations),
             "explanations": list(self.explanations),
             "evidence": [
@@ -123,6 +162,33 @@ class CapabilityView:
             "confidence": self.confidence,
             "is_refreshing": self.is_refreshing,
             "refresh_label": self.refresh_label,
+            "presentation_phase": self.presentation_phase,
+            "current_verification_active": self.current_verification_active,
+            "current_verification_id": self.current_verification_id,
+            "current_check_started_at": self.current_check_started_at,
+            "terminal_capability_state": self.terminal_capability_state,
+            "previous_capability_state": self.previous_capability_state,
+            "previous_confirmed_at": self.previous_confirmed_at,
+            "status_is_historical": self.status_is_historical,
+            "primary_headline": primary_headline,
+            "primary_explanation": primary_explanation,
+            "timestamp_label": self.timestamp_label,
+            "historical_summary": self.historical_summary,
+            "historical_timestamp_label": self.historical_timestamp_label,
+            "timeline_sections": [
+                {
+                    "label": section.label,
+                    "events": [
+                        {
+                            "description": event.description,
+                            "timestamp": event.timestamp,
+                            "outcome": event.outcome,
+                        }
+                        for event in section.events
+                    ],
+                }
+                for section in self.timeline_sections
+            ],
             "action_required": self.action_required,
             "action_label": self.action_label,
             "action_url": self.action_url,
@@ -156,7 +222,7 @@ _HEADLINES: dict[CapabilityState, str] = {
         "⚠️ Mighty can tell you are logged in, but cannot see your account information."
     ),
     CapabilityState.LOGIN_UNKNOWN: (
-        "⚪ Mighty cannot determine whether you are logged in."
+        "⚪ Mighty could not determine your login state during the latest check."
     ),
     CapabilityState.SIGNED_OUT: "🔒 You are signed out.",
 }
@@ -173,8 +239,7 @@ _EXPLANATIONS: dict[CapabilityState, tuple[str, ...]] = {
         "Private account data not observable.",
     ),
     CapabilityState.LOGIN_UNKNOWN: (
-        "Current evidence is insufficient.",
-        "Any cached data may be stale.",
+        "Verification completed without sufficient evidence.",
     ),
     CapabilityState.SIGNED_OUT: (
         "Please sign in to American Express.",
@@ -737,14 +802,17 @@ def build_capability_view(
             or AMEX_OPEN_URL
         )
 
+    headline = _HEADLINES[state]
+    explanations = _EXPLANATIONS[state]
+    last_verified = _fmt_ts(view.last_confirmed_at if view else None)
     capability = CapabilityView(
         provider=provider,
         display_name=display_name,
         state=state,
-        headline=_HEADLINES[state],
-        explanations=_EXPLANATIONS[state],
+        headline=headline,
+        explanations=explanations,
         evidence=evidence,
-        last_verified=_fmt_ts(view.last_confirmed_at if view else None),
+        last_verified=last_verified,
         confidence=_confidence_label(session_confidence, state),
         action_label=action_label,
         action_url=action_url,
@@ -752,6 +820,20 @@ def build_capability_view(
         extracted_fields=show_fields,
         pipeline=pipeline,
         truth_validation=None,
+        presentation_phase="terminal",
+        current_verification_active=False,
+        current_verification_id=verification_id,
+        current_check_started_at=None,
+        terminal_capability_state=state.value,
+        previous_capability_state=None,
+        previous_confirmed_at=None,
+        status_is_historical=False,
+        primary_headline=headline,
+        primary_explanation=(" ".join(explanations) if explanations else None),
+        timestamp_label="Latest check completed" if last_verified else None,
+        historical_summary=None,
+        historical_timestamp_label=None,
+        timeline_sections=(),
     )
     # Observability only — lazy import avoids circular dependency at module load.
     from mighty.truth_validation import attach_truth_validation

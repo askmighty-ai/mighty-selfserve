@@ -200,10 +200,12 @@ class TestTruthDashboardStates:
         )
         result, rendered = _render([_status_from_view(view, canonical="checking")])
         assert result.capability.state == CapabilityState.LOGIN_UNKNOWN
-        # First-ever in-flight: neutral checking face, not a completed conclusion.
-        assert "verifying account access" in rendered.lower()
+        # First-ever in-flight: determining, not a completed conclusion.
+        assert "determining your login state" in rendered.lower()
         assert "cannot determine whether you are logged in" not in rendered.lower()
-        assert result.capability.headline == "Verifying account access…"
+        assert "could not determine your login state during the latest check" not in rendered.lower()
+        assert result.capability.headline == "Determining your login state…"
+        assert result.capability.presentation_phase == "determining"
         assert not any(
             "in progress" in e.text.lower() for e in result.capability.evidence
         )

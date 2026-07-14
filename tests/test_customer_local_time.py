@@ -126,9 +126,9 @@ def test_truth_dashboard_emits_local_time_elements_not_raw_space_ts():
     assert result.capability.last_verified == "2026-07-14T00:41:10Z"
     assert f'class="{CUSTOMER_LOCAL_TIME_CLASS}"' in rendered
     assert 'datetime="2026-07-14T00:41:10Z"' in rendered
-    assert "Last verified:" in rendered
+    assert "Latest check completed:" in rendered
     # Raw UTC-looking customer display must not appear as primary text.
-    assert "Last verified: 2026-07-14 00:41:10" not in rendered
+    assert "Latest check completed: 2026-07-14 00:41:10" not in rendered
     assert "Truth Timeline" in rendered
     assert rendered.count(CUSTOMER_LOCAL_TIME_CLASS) >= 2
 

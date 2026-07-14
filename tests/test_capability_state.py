@@ -392,7 +392,8 @@ class TestUiStates:
         rendered = render_home_page(
             result, first_name="Alex", today_label="Mon", escape=_escape,
         )
-        assert "cannot determine whether you are logged in" in rendered.lower()
+        assert "could not determine your login state during the latest check" in rendered.lower()
+        assert "cannot determine whether you are logged in" not in rendered.lower()
         assert "Open American Express" not in rendered
         assert "Summary" not in rendered
         assert "System Health" not in rendered
