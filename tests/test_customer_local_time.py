@@ -6,6 +6,7 @@ import html
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,9 @@ from mighty.home_state import resolve_home_state
 from mighty.home_ui import render_home_page
 from mighty import user_copy
 
+# Fresh within CUSTOMER_TRUTH_FRESHNESS_SECONDS so terminal present-tense copy applies.
+_FRESH_CONFIRMED_AT = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 ROOT = Path(__file__).resolve().parents[1]
 JS_PATH = ROOT / "static" / "customer_local_time.js"
 
@@ -48,12 +52,12 @@ def _readiness(**kwargs) -> AccountReadiness:
         session_state="connected",
         access_cycle_id=None,
         session_evidence_at=None,
-        extraction_at="2026-07-13T15:00:00+00:00",
+        extraction_at=_FRESH_CONFIRMED_AT,
         extraction_ok=True,
         extraction_correlated=True,
         verification_id=None,
         cached_data_label=None,
-        last_confirmed_ready_at="2026-07-14T00:41:10+00:00",
+        last_confirmed_ready_at=_FRESH_CONFIRMED_AT,
         last_confirmed_access_cycle_id="cycle-1",
         background_verification=False,
         secondary_label=None,
@@ -123,12 +127,12 @@ def test_truth_dashboard_emits_local_time_elements_not_raw_space_ts():
     )
     assert result.capability is not None
     assert result.capability.state == CapabilityState.EXTRACTION_SUCCESS
-    assert result.capability.last_verified == "2026-07-14T00:41:10Z"
+    assert result.capability.last_verified == _FRESH_CONFIRMED_AT
     assert f'class="{CUSTOMER_LOCAL_TIME_CLASS}"' in rendered
-    assert 'datetime="2026-07-14T00:41:10Z"' in rendered
-    assert "Last verified:" in rendered
+    assert f'datetime="{_FRESH_CONFIRMED_AT}"' in rendered
+    assert "Latest check completed:" in rendered
     # Raw UTC-looking customer display must not appear as primary text.
-    assert "Last verified: 2026-07-14 00:41:10" not in rendered
+    assert f"Latest check completed: {_FRESH_CONFIRMED_AT.replace('T', ' ').rstrip('Z')}" not in rendered
     assert "Truth Timeline" in rendered
     assert rendered.count(CUSTOMER_LOCAL_TIME_CLASS) >= 2
 

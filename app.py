@@ -6274,6 +6274,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-truth-empty{margin:0;font-size:13px;color:#a8a29e}
 .dash-truth-meta{margin:10px 0 0;font-size:12px;color:#78716c}
 .dash-truth-refresh{margin:8px 0 0;font-size:12px;color:#a8a29e;font-style:italic}
+.dash-truth-historical{margin:12px 0 0;padding:10px 12px;background:rgba(0,0,0,0.03);border-radius:8px}
+.dash-truth-historical-summary{margin:0;font-size:13px;color:#57534e}
+.dash-truth-historical-meta{margin:4px 0 0;font-size:12px;color:#78716c}
+.dash-truth-timeline-section{margin-top:10px}
+.dash-truth-timeline-section .dash-truth-section-label{margin-bottom:6px}
 .dash-truth-cta{display:inline-block;margin-top:14px}
 .dash-truth-tech{margin-top:18px;border-top:0.5px solid rgba(0,0,0,0.06);padding-top:12px}
 .dash-truth-tech summary{cursor:pointer;font-size:13px;font-weight:600;color:#57534e}

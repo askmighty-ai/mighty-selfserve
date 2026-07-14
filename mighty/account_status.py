@@ -876,6 +876,7 @@ def _apply_stable_customer_capability(
         enrich_order_meta_from_db,
         load_stable_capability,
         order_meta_from_capability,
+        persistable_terminal_capability,
         present_customer_capability,
         resolve_account_identity,
         save_stable_capability,
@@ -888,17 +889,19 @@ def _apply_stable_customer_capability(
         previous = load_stable_capability(
             db, user_id, acct.source, account_identity=identity,
         )
+        live = acct.capability
         presented = present_customer_capability(
-            acct.capability,
+            live,
             previous_stable=previous,
             access_view=acct.customer_access,
             verification_lifecycle=acct.verification_lifecycle,
             background_verification=acct.background_verification,
         )
         acct.capability = presented
-        if not presented.is_refreshing:
+        persist_view = persistable_terminal_capability(live, presented)
+        if persist_view is not None:
             meta = order_meta_from_capability(
-                presented,
+                persist_view,
                 access_view=acct.customer_access,
                 verification_lifecycle=acct.verification_lifecycle,
                 account_identity=identity,
@@ -909,7 +912,7 @@ def _apply_stable_customer_capability(
             save_stable_capability(
                 db,
                 user_id,
-                presented,
+                persist_view,
                 order_meta=meta,
                 access_view=acct.customer_access,
                 force_unknown=False,

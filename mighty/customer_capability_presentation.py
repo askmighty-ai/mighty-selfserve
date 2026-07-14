@@ -4,17 +4,21 @@ mighty.customer_capability_presentation
 Presentation-layer gate for the Truth Dashboard.
 
 Capability resolution (resolve_capability_state / build_capability_view) still
-computes live pipeline truth. This module decides *when* that truth becomes
-customer-visible:
+computes live pipeline truth. This module decides *how* that truth is phrased
+for the customer:
 
-  • While verification is in flight and a prior stable card exists → hold it
-    and show only a subtle refresh indicator.
-  • When verification reaches a terminal conclusion → atomic swap to the new
-    card (or keep the prior card visually identical if the result is unchanged).
-  • Login Unknown is exceptional during refresh — never the intermediate face
-    of a normal re-check.
-  • First-ever in-flight shows a neutral checking face (not a completed
-    Login Unknown conclusion).
+  • presentation_phase ``determining`` while the newest relevant verification
+    is active — never present-tense CapabilityState conclusions.
+  • A prior completed result may appear only as explicitly historical copy
+    (“Last confirmed…”, “Previous check was inconclusive”).
+  • presentation_phase ``terminal`` atomically replaces determining when the
+    current cycle completes. CapabilityState remains the terminal answer.
+
+Freshness rule: a prior result may be stated as *current* only when no newer
+verification is active and the result is still inside
+CUSTOMER_TRUTH_FRESHNESS_SECONDS. Once a new verification begins, the prior
+result becomes “last confirmed” and the primary status becomes determining.
+Stale-while-revalidate must not convert historical truth into present tense.
 
 Persistence is monotonic: an older verification/access cycle must never
 overwrite a newer published presentation. Ordering uses canonical completion
@@ -39,16 +43,33 @@ from mighty.capability_state import (
     EvidenceItem,
     ExtractedField,
     PipelineStage,
+    PresentationTimelineEvent,
+    PresentationTimelineSection,
 )
 from mighty.session_verification import (
     ACTIVE_VERIFICATION_LIFECYCLES,
+    READY_RESULT_GRACE_SECONDS,
     TERMINAL_VERIFICATION_LIFECYCLES,
 )
 
-REFRESH_LABEL = "Refreshing…"
-REFRESH_LABEL_VERBOSE = "Verifying account access…"
-FIRST_EVER_CHECKING_HEADLINE = "Verifying account access…"
-FIRST_EVER_CHECKING_EVIDENCE = "Mighty is checking your current account state."
+# Customer-truth freshness window — aligns with ready-result grace.
+CUSTOMER_TRUTH_FRESHNESS_SECONDS = READY_RESULT_GRACE_SECONDS
+
+DETERMINING_HEADLINE = "Determining your login state…"
+DETERMINING_HEADLINE_CURRENT = "Determining your current login state…"
+DETERMINING_BODY = (
+    "Mighty is checking whether your American Express session is signed in."
+)
+REFRESHING_STATUS_HEADLINE = "Refreshing current status…"
+STALE_RECONFIRM_EXPLANATION = (
+    "Mighty has not reconfirmed this result within the current freshness window."
+)
+
+# Backward-compatible aliases (tests / callers from PR #102).
+REFRESH_LABEL = DETERMINING_HEADLINE_CURRENT
+REFRESH_LABEL_VERBOSE = DETERMINING_HEADLINE
+FIRST_EVER_CHECKING_HEADLINE = DETERMINING_HEADLINE
+FIRST_EVER_CHECKING_EVIDENCE = DETERMINING_BODY
 
 _LIVE_CHECKING = "Checking"
 
@@ -344,15 +365,18 @@ def is_customer_refresh_in_flight(
 def customer_visible_signature(view: CapabilityView) -> tuple[Any, ...]:
     """Identity of customer-visible card content (excludes timestamps / IDs)."""
     return (
+        view.presentation_phase,
         view.state.value,
-        view.headline,
+        view.primary_headline or view.headline,
         view.explanations,
+        view.historical_summary,
         tuple((e.text, e.ok) for e in view.evidence),
         view.confidence,
         tuple((f.label, f.value) for f in view.extracted_fields),
         view.action_required,
         view.action_label,
         view.action_url,
+        view.status_is_historical,
     )
 
 
@@ -360,34 +384,321 @@ def customer_visible_same(left: CapabilityView, right: CapabilityView) -> bool:
     return customer_visible_signature(left) == customer_visible_signature(right)
 
 
-def _with_refresh(view: CapabilityView, *, first_ever: bool) -> CapabilityView:
-    return replace(
-        view,
-        is_refreshing=True,
-        refresh_label=REFRESH_LABEL_VERBOSE if first_ever else REFRESH_LABEL,
+def is_result_within_customer_truth_freshness(
+    confirmed_at: str | None,
+    *,
+    now: datetime | None = None,
+    freshness_seconds: int = CUSTOMER_TRUTH_FRESHNESS_SECONDS,
+) -> bool:
+    """True when a completed result may still be phrased as current truth."""
+    dt = parse_admin_timestamp(confirmed_at)
+    if dt is None:
+        return False
+    clock = now or datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=timezone.utc)
+    age = (clock - dt).total_seconds()
+    return 0 <= age <= freshness_seconds
+
+
+def _verification_id_from(
+    view: CapabilityView,
+    access_view: Any | None,
+) -> str | None:
+    ids: dict[str, Any] = {}
+    if view.truth_validation is not None:
+        ids = dict(view.truth_validation.developer_ids or {})
+    return _norm_id(
+        ids.get("verification_id")
+        or view.current_verification_id
+        or (getattr(access_view, "verification_id", None) if access_view else None)
+        or (
+            getattr(access_view, "access_cycle_id", None) if access_view else None
+        )
+    )
+
+
+def _check_started_at(access_view: Any | None, live: CapabilityView) -> str | None:
+    if access_view is not None:
+        for attr in (
+            "verification_requested_at",
+            "verification_started_at",
+            "current_attempt_at",
+            "session_evidence_at",
+        ):
+            value = getattr(access_view, attr, None)
+            if value:
+                return str(value)
+    return live.current_check_started_at
+
+
+def _historical_copy(state: CapabilityState) -> tuple[str, str]:
+    """Return (historical_summary, timestamp_label_verb)."""
+    if state == CapabilityState.SIGNED_OUT:
+        return "Last confirmed: Signed out", "Confirmed"
+    if state == CapabilityState.EXTRACTION_SUCCESS:
+        return (
+            "Last confirmed: Mighty could access and extract your account data",
+            "Confirmed",
+        )
+    if state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA:
+        return (
+            "Last confirmed: Mighty could tell you were logged in, "
+            "but could not see account information",
+            "Confirmed",
+        )
+    if state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED:
+        return (
+            "Last confirmed: Mighty could tell you were logged in, "
+            "but could not extract account information",
+            "Confirmed",
+        )
+    return "Previous check was inconclusive", "Checked"
+
+
+def _determining_headline(previous: CapabilityView | None) -> str:
+    if previous is None:
+        return DETERMINING_HEADLINE
+    if previous.state == CapabilityState.EXTRACTION_SUCCESS:
+        return REFRESHING_STATUS_HEADLINE
+    return DETERMINING_HEADLINE_CURRENT
+
+
+def _events_from_truth_timeline(
+    view: CapabilityView,
+) -> tuple[PresentationTimelineEvent, ...]:
+    truth = view.truth_validation
+    if truth is None or not truth.timeline:
+        return ()
+    return tuple(
+        PresentationTimelineEvent(
+            description=item.description,
+            timestamp=item.timestamp,
+            outcome=item.outcome.value,
+        )
+        for item in truth.timeline
+    )
+
+
+def _current_check_timeline(
+    *,
+    started_at: str | None,
+) -> PresentationTimelineSection:
+    return PresentationTimelineSection(
+        label="Current check",
+        events=(
+            PresentationTimelineEvent(
+                description="Verification started",
+                timestamp=started_at,
+                outcome="UNKNOWN",
+            ),
+            PresentationTimelineEvent(
+                description="Determining login state",
+                timestamp=started_at,
+                outcome="UNKNOWN",
+            ),
+        ),
+    )
+
+
+def _previous_check_timeline(
+    previous: CapabilityView,
+) -> PresentationTimelineSection | None:
+    events = _events_from_truth_timeline(previous)
+    if not events:
+        return None
+    return PresentationTimelineSection(
+        label="Previous completed check",
+        events=events,
     )
 
 
 def _as_stable(view: CapabilityView) -> CapabilityView:
-    return replace(view, is_refreshing=False, refresh_label=None)
+    explanations = view.explanations
+    return replace(
+        view,
+        is_refreshing=False,
+        refresh_label=None,
+        presentation_phase="terminal",
+        current_verification_active=False,
+        terminal_capability_state=view.state.value,
+        previous_capability_state=None,
+        previous_confirmed_at=None,
+        status_is_historical=False,
+        primary_headline=view.headline,
+        primary_explanation=(" ".join(explanations) if explanations else None),
+        timestamp_label="Latest check completed" if view.last_verified else None,
+        historical_summary=None,
+        historical_timestamp_label=None,
+        timeline_sections=(),
+    )
 
 
-def _first_ever_checking_view(live: CapabilityView) -> CapabilityView:
-    """Neutral checking face — not a completed Login Unknown conclusion."""
+def _needs_freshness_demotion(
+    view: CapabilityView,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """True when a completed definitive result is too old to phrase as current."""
+    # Terminal inconclusive copy is already about the latest check, not a live claim.
+    if view.state == CapabilityState.LOGIN_UNKNOWN:
+        return False
+    # Without a completion timestamp the freshness window cannot be applied here.
+    if not view.last_verified:
+        return False
+    return not is_result_within_customer_truth_freshness(
+        view.last_verified,
+        now=now,
+    )
+
+
+def persistable_terminal_capability(
+    live: CapabilityView,
+    presented: CapabilityView,
+) -> CapabilityView | None:
+    """Canonical terminal card to persist, or None while determining/in-flight.
+
+    Freshness demotion is presentation-only and must not be written back.
+    """
+    if presented.is_refreshing or presented.presentation_phase == "determining":
+        return None
+    if presented.status_is_historical and not presented.current_verification_active:
+        return _as_stable(live)
+    return presented
+
+
+def _stale_historical_presentation(view: CapabilityView) -> CapabilityView:
+    """Completed but stale — historical wording only, never present-tense current truth."""
+    summary, verb = _historical_copy(view.state)
+    # Last confirmed signed-out may still offer sign-in; other stale states must not
+    # imply a fresh current conclusion via CTA or extracted "current" fields.
+    keep_signed_out_cta = (
+        view.state == CapabilityState.SIGNED_OUT
+        and bool(view.action_required)
+        and bool(view.action_label)
+        and bool(view.action_url)
+    )
+    return replace(
+        view,
+        headline=summary,
+        explanations=(STALE_RECONFIRM_EXPLANATION,),
+        evidence=(EvidenceItem(STALE_RECONFIRM_EXPLANATION, None),),
+        confidence=None,
+        action_required=keep_signed_out_cta,
+        action_label=view.action_label if keep_signed_out_cta else None,
+        action_url=view.action_url if keep_signed_out_cta else None,
+        extracted_fields=(),
+        is_refreshing=False,
+        refresh_label=None,
+        presentation_phase="terminal",
+        current_verification_active=False,
+        terminal_capability_state=view.state.value,
+        previous_capability_state=view.state.value,
+        previous_confirmed_at=view.last_verified,
+        status_is_historical=True,
+        primary_headline=summary,
+        primary_explanation=STALE_RECONFIRM_EXPLANATION,
+        timestamp_label="Last confirmed" if view.last_verified else None,
+        historical_summary=summary,
+        historical_timestamp_label=verb,
+        timeline_sections=(),
+    )
+
+
+def _determining_view(
+    live: CapabilityView,
+    *,
+    previous: CapabilityView | None,
+    access_view: Any | None,
+) -> CapabilityView:
+    """Primary status is determining; prior result is historical only."""
+    headline = _determining_headline(previous)
+    started_at = _check_started_at(access_view, live)
+    verification_id = _verification_id_from(live, access_view)
+    sections: list[PresentationTimelineSection] = []
+    if previous is not None:
+        prev_section = _previous_check_timeline(previous)
+        if prev_section is not None:
+            sections.append(prev_section)
+    sections.append(_current_check_timeline(started_at=started_at))
+
+    historical_summary = None
+    historical_timestamp_label = None
+    previous_state = None
+    previous_confirmed_at = None
+    retained_state = CapabilityState.LOGIN_UNKNOWN
+    if previous is not None:
+        historical_summary, historical_timestamp_label = _historical_copy(previous.state)
+        previous_state = previous.state.value
+        previous_confirmed_at = previous.last_verified
+        retained_state = previous.state
+
     return replace(
         live,
-        state=CapabilityState.LOGIN_UNKNOWN,
-        headline=FIRST_EVER_CHECKING_HEADLINE,
-        explanations=(),
-        evidence=(EvidenceItem(FIRST_EVER_CHECKING_EVIDENCE, None),),
+        state=retained_state,
+        headline=headline,
+        explanations=(DETERMINING_BODY,),
+        evidence=(EvidenceItem(DETERMINING_BODY, None),),
         confidence=None,
         action_required=False,
         action_label=None,
         action_url=None,
         extracted_fields=(),
+        last_verified=previous_confirmed_at if previous is not None else started_at,
         is_refreshing=True,
-        refresh_label=REFRESH_LABEL_VERBOSE,
+        refresh_label=headline,
+        presentation_phase="determining",
+        current_verification_active=True,
+        current_verification_id=verification_id,
+        current_check_started_at=started_at,
+        terminal_capability_state=None,
+        previous_capability_state=previous_state,
+        previous_confirmed_at=previous_confirmed_at,
+        status_is_historical=previous is not None,
+        primary_headline=headline,
+        primary_explanation=DETERMINING_BODY,
+        timestamp_label="Checking started" if started_at else None,
+        historical_summary=historical_summary,
+        historical_timestamp_label=historical_timestamp_label,
+        timeline_sections=tuple(sections),
+        # Current-check timeline only on the live truth object — never a terminal
+        # capability event while determining.
+        truth_validation=_determining_truth_validation(live, started_at=started_at),
     )
+
+
+def _determining_truth_validation(
+    live: CapabilityView,
+    *,
+    started_at: str | None,
+) -> Any:
+    """Replace terminal capability timeline with in-flight current-check events."""
+    truth = live.truth_validation
+    if truth is None:
+        return None
+    from mighty.truth_validation import EvidenceCategory, EvidenceOutcome, TruthEvidence
+
+    events = (
+        TruthEvidence(
+            id="current-verification-started",
+            timestamp=started_at,
+            category=EvidenceCategory.VERIFICATION,
+            description="Verification started",
+            outcome=EvidenceOutcome.UNKNOWN,
+            confidence_contribution=0,
+        ),
+        TruthEvidence(
+            id="current-determining-login",
+            timestamp=started_at,
+            category=EvidenceCategory.VERIFICATION,
+            description="Determining login state",
+            outcome=EvidenceOutcome.UNKNOWN,
+            confidence_contribution=0,
+        ),
+    )
+    return replace(truth, timeline=events, capability_state="determining")
 
 
 def merge_unchanged_presentation(
@@ -416,13 +727,17 @@ def merge_unchanged_presentation(
     else:
         pipeline = previous.pipeline
 
-    return replace(
-        previous,
-        last_verified=live.last_verified or previous.last_verified,
-        pipeline=pipeline,
-        truth_validation=truth,
-        is_refreshing=False,
-        refresh_label=None,
+    last_verified = live.last_verified or previous.last_verified
+    return _as_stable(
+        replace(
+            previous,
+            last_verified=last_verified,
+            pipeline=pipeline,
+            truth_validation=truth,
+            current_verification_id=(
+                live.current_verification_id or previous.current_verification_id
+            ),
+        )
     )
 
 
@@ -434,11 +749,15 @@ def present_customer_capability(
     verification_lifecycle: str | None = None,
     background_verification: bool | None = None,
     force_unknown: bool = False,
+    now: datetime | None = None,
 ) -> CapabilityView:
     """Gate live capability into the customer-visible Truth card.
 
     force_unknown: developer override — show live immediately. Never persisted
     by callers that honor ``persist=False`` / ``force_unknown`` on save.
+
+    Freshness: a completed definitive result may be phrased as current only while
+    inside CUSTOMER_TRUTH_FRESHNESS_SECONDS and no newer verification is active.
     """
     if force_unknown:
         return _as_stable(live)
@@ -450,18 +769,25 @@ def present_customer_capability(
     )
 
     if refreshing:
-        if previous_stable is not None:
-            return _with_refresh(previous_stable, first_ever=False)
-        # No prior published card. If live already resolved to a non-unknown
-        # face (e.g. readiness SWR kept EXTRACTION_SUCCESS), keep it with a
-        # refresh indicator — do not invent first-ever checking.
-        if live.state != CapabilityState.LOGIN_UNKNOWN:
-            return _with_refresh(live, first_ever=False)
-        return _first_ever_checking_view(live)
+        # A retained prior (persisted or SWR live face) is historical only.
+        prior = previous_stable
+        if prior is None and live.state != CapabilityState.LOGIN_UNKNOWN:
+            # SWR/live non-unknown during an active check is not current truth.
+            prior = _as_stable(live)
+        return _determining_view(live, previous=prior, access_view=access_view)
 
-    if previous_stable is not None and customer_visible_same(previous_stable, live):
-        return merge_unchanged_presentation(previous_stable, live)
-    return _as_stable(live)
+    if previous_stable is not None and customer_visible_same(
+        _as_stable(previous_stable), _as_stable(live)
+    ):
+        merged = merge_unchanged_presentation(previous_stable, live)
+        if _needs_freshness_demotion(merged, now=now):
+            return _stale_historical_presentation(merged)
+        return merged
+
+    stable = _as_stable(live)
+    if _needs_freshness_demotion(stable, now=now):
+        return _stale_historical_presentation(stable)
+    return stable
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -529,6 +855,18 @@ def capability_view_to_payload(view: CapabilityView) -> dict[str, Any]:
     payload = view.to_dict()
     payload["is_refreshing"] = False
     payload["refresh_label"] = None
+    payload["presentation_phase"] = "terminal"
+    payload["current_verification_active"] = False
+    payload["status_is_historical"] = False
+    payload["historical_summary"] = None
+    payload["historical_timestamp_label"] = None
+    payload["timeline_sections"] = []
+    payload["previous_capability_state"] = None
+    payload["previous_confirmed_at"] = None
+    payload["terminal_capability_state"] = view.state.value
+    payload["timestamp_label"] = (
+        "Latest check completed" if view.last_verified else None
+    )
     return payload
 
 
@@ -657,6 +995,32 @@ def capability_view_from_payload(payload: dict[str, Any]) -> CapabilityView:
         explanations = (explanations,)
     explanations = tuple(str(x) for x in explanations)
     headline = str(payload.get("headline") or payload.get("title") or "")
+    primary_headline = payload.get("primary_headline")
+    if primary_headline is None:
+        primary_headline = headline
+    primary_explanation = payload.get("primary_explanation")
+    if primary_explanation is None and explanations:
+        primary_explanation = " ".join(explanations)
+
+    timeline_sections: list[PresentationTimelineSection] = []
+    for section in payload.get("timeline_sections") or []:
+        if not isinstance(section, dict):
+            continue
+        events = tuple(
+            PresentationTimelineEvent(
+                description=str(event.get("description") or ""),
+                timestamp=event.get("timestamp"),
+                outcome=str(event.get("outcome") or "UNKNOWN"),
+            )
+            for event in (section.get("events") or [])
+            if isinstance(event, dict)
+        )
+        timeline_sections.append(
+            PresentationTimelineSection(
+                label=str(section.get("label") or ""),
+                events=events,
+            )
+        )
 
     return CapabilityView(
         provider=str(payload.get("provider") or "amex"),
@@ -675,6 +1039,24 @@ def capability_view_from_payload(payload: dict[str, Any]) -> CapabilityView:
         truth_validation=truth,
         is_refreshing=False,
         refresh_label=None,
+        presentation_phase="terminal",
+        current_verification_active=False,
+        current_verification_id=payload.get("current_verification_id"),
+        current_check_started_at=None,
+        terminal_capability_state=payload.get("terminal_capability_state") or state.value,
+        previous_capability_state=None,
+        previous_confirmed_at=None,
+        status_is_historical=False,
+        primary_headline=str(primary_headline) if primary_headline is not None else None,
+        primary_explanation=(
+            str(primary_explanation) if primary_explanation is not None else None
+        ),
+        timestamp_label=payload.get("timestamp_label") or (
+            "Latest check completed" if payload.get("last_verified") else None
+        ),
+        historical_summary=None,
+        historical_timestamp_label=None,
+        timeline_sections=tuple(timeline_sections),
     )
 
 
@@ -787,7 +1169,7 @@ def save_stable_capability(
     Uses BEGIN IMMEDIATE so concurrent writers serialize the compare-and-swap
     against first-class ordering metadata.
     """
-    if force_unknown or view.is_refreshing:
+    if force_unknown or view.is_refreshing or view.presentation_phase == "determining":
         return False
 
     ensure_customer_capability_presentation_tables(db)
@@ -929,14 +1311,12 @@ def build_presented_capability_view(
         access_view=access_view,
         force_unknown=force_unknown,
     )
-    if (
-        persist_db is not None
-        and persist_user_id
-        and not presented.is_refreshing
-        and not force_unknown
-    ):
+    persist_view = None if force_unknown else persistable_terminal_capability(
+        live, presented,
+    )
+    if persist_db is not None and persist_user_id and persist_view is not None:
         meta = order_meta or order_meta_from_capability(
-            presented,
+            persist_view,
             access_view=access_view,
             account_identity=account_identity,
         )
@@ -953,12 +1333,12 @@ def build_presented_capability_view(
             persist_db,
             persist_user_id,
             meta,
-            provider=presented.provider,
+            provider=persist_view.provider,
         )
         save_stable_capability(
             persist_db,
             persist_user_id,
-            presented,
+            persist_view,
             order_meta=meta,
             access_view=access_view,
             force_unknown=False,

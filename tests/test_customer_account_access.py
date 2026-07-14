@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from datetime import datetime, timezone
 
 from mighty.account_lifecycle import resolve_account_lifecycle
 from mighty.account_readiness import (
@@ -140,7 +141,7 @@ class TestCustomerAccountAccessView:
             session_state="connected",
             extraction_ok=True,
             extraction_correlated=True,
-            last_confirmed_ready_at="2026-07-13T15:00:00+00:00",
+            last_confirmed_ready_at=datetime.now(timezone.utc).isoformat(),
             access_cycle_id="cycle-1",
             last_confirmed_access_cycle_id="cycle-1",
         )
@@ -193,7 +194,8 @@ class TestCustomerAccountAccessView:
         rendered = render_home_page(
             result, first_name="Alex", today_label="Monday, July 13", escape=_escape,
         )
-        assert "cannot determine whether you are logged in" in rendered.lower()
+        assert "could not determine your login state during the latest check" in rendered.lower()
+        assert "cannot determine whether you are logged in" not in rendered.lower()
         assert 'data-capability="login_unknown"' in rendered
         assert 'data-capability="extraction_success"' not in rendered
         assert "✓ Watching" not in rendered
@@ -231,7 +233,12 @@ class TestCustomerAccountAccessView:
             today_label="Monday, July 13",
             escape=_escape,
         )
-        assert "can see and extract" in rendered.lower()
+        # Active verification → determining; prior extraction is historical only.
+        assert "refreshing current status" in rendered.lower()
+        assert "last confirmed:" in rendered.lower()
+        assert "could access and extract" in rendered.lower()
+        assert "mighty can see and extract your logged-in account data" not in rendered.lower()
+        assert 'data-presentation-phase="determining"' in rendered
         assert 'data-capability="extraction_success"' in rendered
         assert "Waiting for first verification" not in rendered
         assert "Awaiting first check" not in rendered
@@ -243,7 +250,7 @@ class TestCustomerAccountAccessView:
             session_state="connected",
             extraction_ok=True,
             extraction_correlated=True,
-            last_confirmed_ready_at="2026-07-13T15:00:00+00:00",
+            last_confirmed_ready_at=datetime.now(timezone.utc).isoformat(),
         )
         view = build_customer_account_access_view(
             provider="amex",
@@ -341,7 +348,8 @@ class TestCustomerAccountAccessView:
             escape=_escape,
         )
         assert "Open American Express" not in rendered
-        assert "cannot determine whether you are logged in" in rendered.lower()
+        assert "could not determine your login state during the latest check" in rendered.lower()
+        assert "cannot determine whether you are logged in" not in rendered.lower()
         assert (
             "No definitive current login evidence" in rendered
             or "Verification" in rendered

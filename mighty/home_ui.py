@@ -12,6 +12,8 @@ from mighty.capability_state import (
     CapabilityState,
     CapabilityView,
     EvidenceItem,
+    PresentationTimelineEvent,
+    PresentationTimelineSection,
     TRUTH_PROVIDER_DISPLAY,
     build_capability_view,
 )
@@ -73,6 +75,8 @@ def _render_extracted(
     capability: CapabilityView,
     escape: Callable[[Any], str],
 ) -> str:
+    if capability.presentation_phase == "determining":
+        return ""
     if capability.state != CapabilityState.EXTRACTION_SUCCESS:
         return ""
     if not capability.extracted_fields:
@@ -80,7 +84,6 @@ def _render_extracted(
             f'<section class="dash-truth-extracted" aria-label="Extracted data">'
             f'<p class="dash-truth-section-label">Extracted data</p>'
             f'<p class="dash-truth-empty">No field values in the latest snapshot.</p>'
-            f"{_render_refresh_indicator(capability, escape)}"
             f"</section>"
         )
     rows = "".join(
@@ -91,36 +94,44 @@ def _render_extracted(
         for f in capability.extracted_fields
     )
     meta_bits: list[str] = []
+    ts_label = capability.timestamp_label or "Latest check completed"
     if capability.last_verified:
-        meta_bits.append(f"Last verified: {_ts_html(capability.last_verified)}")
+        meta_bits.append(f"{escape(ts_label)}: {_ts_html(capability.last_verified)}")
     if capability.confidence:
         meta_bits.append(f"Confidence: {escape(capability.confidence)}")
     meta_html = ""
     if meta_bits:
         meta_html = f'<p class="dash-truth-meta">{" · ".join(meta_bits)}</p>'
-    refresh = _render_refresh_indicator(capability, escape)
     return (
         f'<section class="dash-truth-extracted" aria-label="Extracted data">'
         f'<p class="dash-truth-section-label">Extracted data</p>'
         f'<dl class="dash-truth-fields">{rows}</dl>'
         f"{meta_html}"
-        f"{refresh}"
         f"</section>"
     )
 
 
-def _render_refresh_indicator(
+def _render_historical(
     capability: CapabilityView,
     escape: Callable[[Any], str],
 ) -> str:
-    """Subtle in-place refresh cue — never replaces the stable card body."""
-    if not capability.is_refreshing:
+    """Explicitly labeled prior result — never present-tense current truth."""
+    if not capability.status_is_historical or not capability.historical_summary:
         return ""
-    label = (capability.refresh_label or "Refreshing…").strip() or "Refreshing…"
+    parts = [
+        f'<p class="dash-truth-historical-summary">'
+        f"{escape(capability.historical_summary)}</p>"
+    ]
+    if capability.previous_confirmed_at:
+        verb = (capability.historical_timestamp_label or "Confirmed").strip()
+        parts.append(
+            f'<p class="dash-truth-historical-meta">'
+            f"{escape(verb)} {_ts_html(capability.previous_confirmed_at)}</p>"
+        )
     return (
-        f'<p class="dash-truth-refresh" data-refreshing="1" aria-live="polite">'
-        f"{escape(label)}"
-        f"</p>"
+        f'<section class="dash-truth-historical" aria-label="Previous confirmed result">'
+        f'{"".join(parts)}'
+        f"</section>"
     )
 
 
@@ -128,19 +139,27 @@ def _render_meta_only(
     capability: CapabilityView,
     escape: Callable[[Any], str],
 ) -> str:
-    """Last verified / confidence when not showing the extracted-data block."""
-    if capability.state == CapabilityState.EXTRACTION_SUCCESS:
-        # Refresh indicator is rendered inside the extracted-data block.
+    """Timestamp / confidence when not showing the extracted-data block."""
+    if (
+        capability.presentation_phase == "terminal"
+        and capability.state == CapabilityState.EXTRACTION_SUCCESS
+    ):
         return ""
     parts: list[str] = []
-    if capability.last_verified:
-        parts.append(f"Last verified: {_ts_html(capability.last_verified)}")
-    if capability.confidence:
+    if capability.presentation_phase == "determining":
+        if capability.current_check_started_at:
+            label = capability.timestamp_label or "Checking started"
+            parts.append(
+                f"{escape(label)}: {_ts_html(capability.current_check_started_at)}"
+            )
+    elif capability.last_verified:
+        label = capability.timestamp_label or "Latest check completed"
+        parts.append(f"{escape(label)}: {_ts_html(capability.last_verified)}")
+    if capability.confidence and capability.presentation_phase == "terminal":
         parts.append(f"Confidence: {escape(capability.confidence)}")
-    meta = ""
-    if parts:
-        meta = f'<p class="dash-truth-meta">{" · ".join(parts)}</p>'
-    return meta + _render_refresh_indicator(capability, escape)
+    if not parts:
+        return ""
+    return f'<p class="dash-truth-meta">{" · ".join(parts)}</p>'
 
 
 def _render_action(
@@ -192,11 +211,53 @@ def _timeline_row(item: TruthEvidence, escape: Callable[[Any], str]) -> str:
     )
 
 
-def _render_truth_timeline(
-    truth: TruthValidation,
+def _presentation_timeline_row(
+    item: PresentationTimelineEvent,
     escape: Callable[[Any], str],
 ) -> str:
-    if not truth.timeline:
+    ts_html = _ts_html(item.timestamp) if item.timestamp else "—"
+    return (
+        f'<div class="dash-truth-timeline-row" data-outcome="{escape(item.outcome)}">'
+        f'<span class="dash-truth-timeline-ts">{ts_html}</span>'
+        f'<span class="dash-truth-timeline-desc">{escape(item.description)}</span>'
+        f'<span class="dash-truth-timeline-outcome">{escape(item.outcome)}</span>'
+        f"</div>"
+    )
+
+
+def _render_timeline_sections(
+    sections: tuple[PresentationTimelineSection, ...],
+    escape: Callable[[Any], str],
+) -> str:
+    if not sections:
+        return ""
+    bodies: list[str] = []
+    for section in sections:
+        rows = "".join(
+            _presentation_timeline_row(event, escape) for event in section.events
+        )
+        bodies.append(
+            f'<div class="dash-truth-timeline-section">'
+            f'<p class="dash-truth-section-label">{escape(section.label)}</p>'
+            f'<div class="dash-truth-timeline-body">{rows}</div>'
+            f"</div>"
+        )
+    return (
+        f'<details class="dash-truth-timeline">'
+        f"<summary>Truth Timeline</summary>"
+        f'{"".join(bodies)}'
+        f"</details>"
+    )
+
+
+def _render_truth_timeline(
+    capability: CapabilityView,
+    escape: Callable[[Any], str],
+) -> str:
+    if capability.timeline_sections:
+        return _render_timeline_sections(capability.timeline_sections, escape)
+    truth = capability.truth_validation
+    if truth is None or not truth.timeline:
         return ""
     rows = "".join(_timeline_row(e, escape) for e in truth.timeline)
     return (
@@ -379,15 +440,22 @@ def render_capability_panel(
     extension_info: dict[str, Any] | None = None,
 ) -> str:
     """Render one provider Truth panel from CapabilityView only."""
-    truth = capability.truth_validation
-    timeline = _render_truth_timeline(truth, escape) if truth else ""
+    timeline = _render_truth_timeline(capability, escape)
+    phase = capability.presentation_phase or "terminal"
     refreshing_attr = ' data-refreshing="1"' if capability.is_refreshing else ""
+    phase_attr = f' data-presentation-phase="{escape(phase)}"'
+    historical_attr = (
+        ' data-status-historical="1"' if capability.status_is_historical else ""
+    )
+    headline = capability.primary_headline or capability.headline
     return (
         f'<article class="dash-truth-panel" data-provider="{escape(capability.provider)}" '
-        f'data-capability="{escape(capability.state.value)}"{refreshing_attr}>'
+        f'data-capability="{escape(capability.state.value)}"'
+        f"{phase_attr}{historical_attr}{refreshing_attr}>"
         f'<h2 class="dash-truth-provider">{escape(capability.display_name)}</h2>'
-        f'<p class="dash-truth-headline">{escape(capability.headline)}</p>'
+        f'<p class="dash-truth-headline">{escape(headline)}</p>'
         f"{_render_explanations(capability.explanations, escape)}"
+        f"{_render_historical(capability, escape)}"
         f"{_render_evidence(capability.evidence, escape)}"
         f"{_render_extracted(capability, escape)}"
         f"{_render_meta_only(capability, escape)}"
