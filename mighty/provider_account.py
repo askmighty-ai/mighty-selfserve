@@ -274,7 +274,13 @@ def apply_adapter_payload(
     adapter = normalize_data_source(data_source)
 
     cycle_id = access_cycle_id
-    if cycle_id is None and extraction == EXTRACTION_COMPLETE:
+    # Amex extraction/snapshots must come from an explicit active access cycle —
+    # never invent a cycle id from stale session evidence (passive sync).
+    if (
+        cycle_id is None
+        and extraction == EXTRACTION_COMPLETE
+        and str(source or "").strip().lower() != "amex"
+    ):
         try:
             from mighty.account_readiness import make_access_cycle_id
             from mighty.provider_session_state import get_provider_session_states

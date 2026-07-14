@@ -189,6 +189,7 @@ def test_partial_and_running_extraction_do_not_replace_snapshot(snap_db):
         provider="amex",
         fields=[_points_item("90,000")],
         verified_at="2026-07-12T16:00:00+00:00",
+        access_cycle_id="cycle-test",
     )
     assert first is not None
 
@@ -205,6 +206,7 @@ def test_partial_and_running_extraction_do_not_replace_snapshot(snap_db):
             }
         ],
         verified_at="2026-07-12T17:00:00+00:00",
+        access_cycle_id="cycle-test",
     )
     assert partial is None
 
@@ -280,6 +282,7 @@ def test_customer_ui_renders_latest_snapshot_not_live_blob(snap_db):
         provider="amex",
         fields=[_points_item("77,000")],
         verified_at="2026-07-12T14:00:00+00:00",
+        access_cycle_id="cycle-test",
     )
     snap_db.execute(
         "UPDATE account_data SET data_enc=?, extraction_status=? WHERE user_id=? AND source=?",

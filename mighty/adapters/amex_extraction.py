@@ -55,12 +55,21 @@ def apply_amex_membership_rewards_extraction(
 ) -> dict:
     """Persist a single Membership Rewards balance as the normalized provider field.
 
-    When ``verification_id`` / ``access_cycle_id`` is provided, stores that id on
-    the account_data blob so readiness can require same-cycle correlation.
+    Requires ``verification_id`` / ``access_cycle_id`` so every extraction is
+    correlated to exactly one access cycle. Uncorrelated writes are rejected.
     """
     from mighty.pipeline_inspector import record_adapter_extraction_run
 
     cycle_id = (access_cycle_id or verification_id or "").strip() or None
+    verification_id = (verification_id or access_cycle_id or "").strip() or None
+    if not cycle_id or not verification_id:
+        print(
+            "ARCHITECTURE VIOLATION: uncorrelated extraction"
+            f" verification_id={verification_id or ''}"
+            f" access_cycle_id={access_cycle_id or ''}",
+            flush=True,
+        )
+        raise ValueError("active_verification_required")
 
     invalid_value = False
     try:
@@ -141,5 +150,5 @@ def apply_amex_membership_rewards_extraction(
         "synced_at": now,
         "data_source": data_source,
         "access_cycle_id": cycle_id,
-        "verification_id": (verification_id or cycle_id),
+        "verification_id": verification_id,
     }
