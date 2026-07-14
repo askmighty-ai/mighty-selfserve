@@ -856,6 +856,13 @@ def init_db():
             ensure_session_verification_tables(db)
         except Exception:
             pass
+        try:
+            from mighty.customer_capability_presentation import (
+                ensure_customer_capability_presentation_tables,
+            )
+            ensure_customer_capability_presentation_tables(db)
+        except Exception:
+            pass
 
 init_db()
 
@@ -6266,6 +6273,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-truth-field dd{margin:0;font-size:13px;font-weight:600;color:#1c1917}
 .dash-truth-empty{margin:0;font-size:13px;color:#a8a29e}
 .dash-truth-meta{margin:10px 0 0;font-size:12px;color:#78716c}
+.dash-truth-refresh{margin:8px 0 0;font-size:12px;color:#a8a29e;font-style:italic}
 .dash-truth-cta{display:inline-block;margin-top:14px}
 .dash-truth-tech{margin-top:18px;border-top:0.5px solid rgba(0,0,0,0.06);padding-top:12px}
 .dash-truth-tech summary{cursor:pointer;font-size:13px;font-weight:600;color:#57534e}
@@ -9912,6 +9920,11 @@ def dashboard():
             extracted_items=_truth_extracted_items,
             session_confidence=_truth_session_confidence,
             extraction_status=_truth_extraction_status,
+            persist_db=get_db(),
+            persist_user_id=session["user_id"],
+            force_unknown=bool(
+                _is_dev_debug(user) and request.args.get("force_capability_unknown")
+            ),
         )
         _extension_info = None
         try:

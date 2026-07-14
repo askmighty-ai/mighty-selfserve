@@ -28,8 +28,11 @@ from mighty.capability_state import (
     CapabilityView,
     TRUTH_PROVIDER,
     TRUTH_PROVIDER_DISPLAY,
-    build_capability_view,
     filter_customer_accounts,
+)
+from mighty.customer_capability_presentation import (
+    build_presented_capability_view,
+    load_stable_capability,
 )
 from mighty.customer_account_access import (
     DISCOVERED_MANUAL,
@@ -289,11 +292,18 @@ def resolve_home_state(
     extracted_items: list[dict] | None = None,
     session_confidence: str | None = None,
     extraction_status: str | None = None,
+    previous_stable_capability: CapabilityView | None = None,
+    persist_db: object | None = None,
+    persist_user_id: str | None = None,
+    force_unknown: bool = False,
 ) -> HomeStateResult:
     """Pick the dominant Home state and featured content.
 
     CapabilityView is always Amex-first (Truth Dashboard). Callers that want a
     single-provider customer home should pass only Amex accounts (dashboard does).
+
+    Customer-visible capability is gated: while verification is in flight the
+    prior stable card is held (see customer_capability_presentation).
     """
     actions = list(actions or [])
     access_views = _access_views_from_accounts(accounts)
@@ -354,18 +364,28 @@ def resolve_home_state(
             user_action_text=truth_acct.user_action_label,
             user_action_url=truth_acct.user_action_url or provider_open_url,
         )
-    capability = build_capability_view(
+
+    provider_key = (
+        truth_view.provider if truth_view else (
+            truth_acct.source if truth_acct else TRUTH_PROVIDER
+        )
+    )
+    previous = previous_stable_capability
+    if previous is None and persist_db is not None and persist_user_id:
+        previous = load_stable_capability(persist_db, persist_user_id, provider_key)
+
+    capability = build_presented_capability_view(
         truth_view,
+        previous_stable=previous,
+        force_unknown=force_unknown,
+        persist_db=persist_db,
+        persist_user_id=persist_user_id,
         display_name=(
             truth_view.display_name if truth_view else (
                 truth_acct.display_name if truth_acct else TRUTH_PROVIDER_DISPLAY
             )
         ),
-        provider=(
-            truth_view.provider if truth_view else (
-                truth_acct.source if truth_acct else TRUTH_PROVIDER
-            )
-        ),
+        provider=provider_key,
         extracted_items=extracted_items,
         session_confidence=session_confidence,
         extraction_status=extraction_status,

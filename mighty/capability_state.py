@@ -98,6 +98,9 @@ class CapabilityView:
     extracted_fields: tuple[ExtractedField, ...]
     pipeline: tuple[PipelineStage, ...]
     truth_validation: TruthValidation | None = None
+    # Presentation-only: prior stable card held while verification runs.
+    is_refreshing: bool = False
+    refresh_label: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -118,6 +121,8 @@ class CapabilityView:
             ],
             "last_verified": self.last_verified,
             "confidence": self.confidence,
+            "is_refreshing": self.is_refreshing,
+            "refresh_label": self.refresh_label,
             "action_required": self.action_required,
             "action_label": self.action_label,
             "action_url": self.action_url,
