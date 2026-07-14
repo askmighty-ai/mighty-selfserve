@@ -57,11 +57,14 @@ chrome.tabs.onRemoved.addListener((id, info) => {
   _dbg('TAB_REMOVED', { id, windowId: info.windowId });
   _newTabsSeen.delete(id); // prune — Set would otherwise grow for every tab ever opened
   _amexMrTabEvidenceByTabId.delete(id);
-  // Active session-verification tab closed → terminal cancelled (never leave running).
+  // Active probe-phase verification tab closed → terminal cancelled.
+  // Once past probe (authenticated mid-cycle), do not cancel — extraction /
+  // no-qualifying / server mid-cycle timeout own terminalization.
   if (
     _sessionVerificationInProgress
     && _activeSessionVerificationId
     && _activeSessionVerificationTabId === id
+    && !_activeSessionVerificationPastProbe
   ) {
     const verificationId = _activeSessionVerificationId;
     _activeSessionVerificationTabId = null;
@@ -2474,6 +2477,9 @@ let _manualProbePollTimer = null;
 let _sessionVerificationInProgress = false;
 let _activeSessionVerificationTabId = null;
 let _activeSessionVerificationId = null;
+// True after probe evidence has been accepted server-side (session_verified /
+ // signed_out / failed). Tab-close must not cancel an authenticated mid-cycle.
+let _activeSessionVerificationPastProbe = false;
 let _lastProcessedSessionVerificationId = null;
 const AMEX_SESSION_VERIFICATION_ENTRY =
   'https://global.americanexpress.com/overview';
@@ -3920,6 +3926,9 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
   _sessionVerificationInProgress = true;
   _activeSessionVerificationId = verificationId || null;
   _activeSessionVerificationTabId = null;
+  _activeSessionVerificationPastProbe = false;
+  // Probe-phase deadline only — once authenticated, extraction uses its own
+  // bounded waits (AMEX_PRIVATE_DATA_OBSERVATION_MS) and server mid-cycle timeout.
   const deadlineMs = Date.now() + SESSION_VERIFICATION_MAX_MS;
   console.log(`[Mighty] session verification for ${provider} via ${entry}`);
   try {
@@ -3967,7 +3976,7 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
       _lastProcessedSessionVerificationId = verificationId;
       return;
     }
-    // Cap load + observation inside the finite verification budget.
+    // Cap load + observation inside the finite probe-phase budget.
     const loadBudgetMs = Math.min(12_000, Math.max(2_000, remainingBeforeWait - 3_000));
     const observationBudgetMs = Math.min(
       deepInspect ? AMEX_MANUAL_PROBE_OBSERVATION_MS : 5000,
@@ -4006,6 +4015,8 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
     payload.access_cycle_id = verificationId;
     const posted = await _postProviderAccessProbe(apiKey, payload, { skipDedup: true });
     _lastProcessedSessionVerificationId = verificationId;
+    // Probe result accepted by server (or at least posted) — probe phase done.
+    _activeSessionVerificationPastProbe = true;
 
     // Amex access cycle owns private-data extraction after definitive auth.
     const probeData = posted?.data || {};
@@ -4025,18 +4036,10 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
       );
       let qualifying = privateObserved;
       if (!qualifying && tab?.id) {
-        // Explicit bounded wait for qualifying private DOM evidence — not an arbitrary sleep.
-        // Extraction path keeps AMEX_PRIVATE_DATA_OBSERVATION_MS; verification
-        // budget may already be exhausted after the probe.
-        const privateWaitMs = Math.min(
-          AMEX_PRIVATE_DATA_OBSERVATION_MS,
-          Math.max(0, deadlineMs - Date.now()),
-        );
-        if (privateWaitMs > 0) {
-          qualifying = await waitForAmexQualifyingPrivateData(tab.id, {
-            timeoutMs: privateWaitMs,
-          });
-        }
+        // Full private-data observation budget — not truncated by probe deadline.
+        qualifying = await waitForAmexQualifyingPrivateData(tab.id, {
+          timeoutMs: AMEX_PRIVATE_DATA_OBSERVATION_MS,
+        });
       }
       if (!qualifying) {
         console.log(
@@ -4068,6 +4071,7 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
       access_cycle_id: verificationId,
     }, { skipDedup: true });
     _lastProcessedSessionVerificationId = verificationId;
+    _activeSessionVerificationPastProbe = true;
   } finally {
     // Clear active markers before closing the tab so the intentional close
     // does not emit a spurious cancelled terminal over a finished cycle.
@@ -4075,6 +4079,7 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
     _sessionVerificationInProgress = false;
     _activeSessionVerificationTabId = null;
     _activeSessionVerificationId = null;
+    _activeSessionVerificationPastProbe = false;
     if (tabIdToClose) chrome.tabs.remove(tabIdToClose).catch(() => {});
   }
 }

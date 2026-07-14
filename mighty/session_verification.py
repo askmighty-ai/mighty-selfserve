@@ -414,9 +414,17 @@ def expire_timed_out_verifications(
     """Mark overdue active jobs as timed_out. Returns count updated.
 
     Does not mutate provider_session_state — timeouts never imply signed_out.
-    requested/running use VERIFICATION_MAX_DURATION_SECONDS; session_verified/
-    extracting use the extraction window so private-data pull can finish.
-    Every overdue active row becomes terminal (timed_out / timeout).
+
+    Timeout ownership (canonical policy — all callers funnel here):
+      A. Queue timeout (``requested``): anchored on ``requested_at``.
+      B. Execution timeout (``running``): anchored on ``started_at``
+         (falls back to ``requested_at`` only if claim never stamped started_at).
+      C. Mid-cycle extraction (``session_verified`` / ``extracting``): longer
+         extraction window anchored on ``requested_at``. Probe-phase ceiling
+         does **not** apply once the cycle has advanced past running.
+
+    Every overdue active row becomes terminal (timed_out / timeout) via this
+    single writer — timers elsewhere must call this or ``complete_session_verification``.
     """
     ensure_session_verification_tables(db)
     now = now or utc_now()
@@ -431,24 +439,45 @@ def expire_timed_out_verifications(
         FROM provider_session_verification
         WHERE user_id = ?
           AND (
-            (lifecycle IN ('requested', 'running') AND requested_at < ?)
-            OR (lifecycle IN ('session_verified', 'extracting') AND requested_at < ?)
+            (lifecycle = 'requested' AND requested_at < ?)
+            OR (
+              lifecycle = 'running'
+              AND COALESCE(started_at, requested_at) < ?
+            )
+            OR (
+              lifecycle IN ('session_verified', 'extracting')
+              AND requested_at < ?
+            )
           )
         """,
-        (user_id, probe_cutoff, extract_cutoff),
+        (user_id, probe_cutoff, probe_cutoff, extract_cutoff),
     ).fetchall()
 
-    cur_probe = db.execute(
+    cur_queue = db.execute(
+        """
+        UPDATE provider_session_verification
+        SET lifecycle = 'timed_out',
+            completed_at = ?,
+            error_message = COALESCE(error_message, 'verification timed out — never claimed'),
+            terminal_reason = 'timeout',
+            terminal_source = COALESCE(terminal_source, 'server_timeout_queue')
+        WHERE user_id = ?
+          AND lifecycle = 'requested'
+          AND requested_at < ?
+        """,
+        (now_iso, user_id, probe_cutoff),
+    )
+    cur_exec = db.execute(
         """
         UPDATE provider_session_verification
         SET lifecycle = 'timed_out',
             completed_at = ?,
             error_message = COALESCE(error_message, 'verification timed out'),
             terminal_reason = 'timeout',
-            terminal_source = COALESCE(terminal_source, 'expire_watchdog')
+            terminal_source = COALESCE(terminal_source, 'server_timeout')
         WHERE user_id = ?
-          AND lifecycle IN ('requested', 'running')
-          AND requested_at < ?
+          AND lifecycle = 'running'
+          AND COALESCE(started_at, requested_at) < ?
         """,
         (now_iso, user_id, probe_cutoff),
     )
@@ -459,7 +488,7 @@ def expire_timed_out_verifications(
             completed_at = ?,
             error_message = COALESCE(error_message, 'extraction timed out'),
             terminal_reason = 'timeout',
-            terminal_source = COALESCE(terminal_source, 'expire_watchdog')
+            terminal_source = COALESCE(terminal_source, 'server_timeout_extraction')
         WHERE user_id = ?
           AND lifecycle IN ('session_verified', 'extracting')
           AND requested_at < ?
@@ -467,7 +496,11 @@ def expire_timed_out_verifications(
         (now_iso, user_id, extract_cutoff),
     )
     db.commit()
-    updated = int(cur_probe.rowcount or 0) + int(cur_extract.rowcount or 0)
+    updated = (
+        int(cur_queue.rowcount or 0)
+        + int(cur_exec.rowcount or 0)
+        + int(cur_extract.rowcount or 0)
+    )
     for row in due_rows or []:
         row_dict = dict(row)
         duration = verification_duration_ms(
@@ -476,6 +509,13 @@ def expire_timed_out_verifications(
             completed_at=now_iso,
             now=now,
         )
+        prior = str(row_dict.get("lifecycle") or "")
+        if prior == "requested":
+            source = "server_timeout_queue"
+        elif prior == "running":
+            source = "server_timeout"
+        else:
+            source = "server_timeout_extraction"
         log_access_cycle_event(
             "verification_terminal",
             provider=str(row_dict.get("provider") or ""),
@@ -483,9 +523,9 @@ def expire_timed_out_verifications(
             access_cycle_id=str(row_dict.get("verification_id") or ""),
             lifecycle="timed_out",
             terminal_reason="timeout",
-            terminal_source="expire_watchdog",
+            terminal_source=source,
             duration_ms=duration,
-            prior_lifecycle=row_dict.get("lifecycle"),
+            prior_lifecycle=prior,
         )
     return updated
 
@@ -875,7 +915,7 @@ def complete_session_verification(
         now=now,
     )
 
-    db.execute(
+    cur = db.execute(
         """
         UPDATE provider_session_verification
         SET lifecycle = ?,
@@ -899,6 +939,17 @@ def complete_session_verification(
         ),
     )
     db.commit()
+    # Exactly-once: if another writer won the race, keep the first terminal row.
+    if int(cur.rowcount or 0) == 0:
+        row = db.execute(
+            f"""
+            SELECT {_VERIFICATION_SELECT_COLUMNS}
+            FROM provider_session_verification
+            WHERE verification_id = ? AND user_id = ?
+            """,
+            (verification_id, user_id),
+        ).fetchone()
+        return _row_to_verification(dict(row) if row else None)
     log_access_cycle_event(
         "verification_terminal",
         provider=str(existing_dict.get("provider") or ""),

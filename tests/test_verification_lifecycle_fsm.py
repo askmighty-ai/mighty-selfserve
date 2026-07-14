@@ -179,9 +179,11 @@ def test_timeout_becomes_terminal_timeout():
         datetime.now(timezone.utc)
         - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS + 1)
     ).isoformat()
+    # Execution timeout is anchored on started_at once claimed.
     db.execute(
-        "UPDATE provider_session_verification SET requested_at=? WHERE verification_id=?",
-        (old, vid),
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=? WHERE verification_id=?",
+        (old, old, vid),
     )
     db.commit()
     n = expire_timed_out_verifications(db, UID)
@@ -190,7 +192,7 @@ def test_timeout_becomes_terminal_timeout():
     assert final is not None
     assert final.lifecycle == "timed_out"
     assert final.terminal_reason == "timeout"
-    assert final.terminal_source == "expire_watchdog"
+    assert final.terminal_source == "server_timeout"
     assert final.completed_at is not None
     payload = session_verification_to_json(final)
     assert payload["duration_ms"] is not None
@@ -283,8 +285,9 @@ def test_no_verification_remains_running_past_timeout():
         - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS - 1)
     ).isoformat()
     db.execute(
-        "UPDATE provider_session_verification SET requested_at=? WHERE verification_id=?",
-        (almost, vid),
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=? WHERE verification_id=?",
+        (almost, almost, vid),
     )
     db.commit()
     assert expire_timed_out_verifications(db, UID) == 0
@@ -295,8 +298,9 @@ def test_no_verification_remains_running_past_timeout():
         - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS + 5)
     ).isoformat()
     db.execute(
-        "UPDATE provider_session_verification SET requested_at=? WHERE verification_id=?",
-        (overdue, vid),
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=? WHERE verification_id=?",
+        (overdue, overdue, vid),
     )
     db.commit()
     assert expire_timed_out_verifications(db, UID) == 1
@@ -343,3 +347,310 @@ def test_complete_is_idempotent_once_terminal():
     assert first.terminal_reason == "cancelled"
     assert second.terminal_reason == "cancelled"
     assert second.terminal_source == "test"
+    assert second.completed_at == first.completed_at
+
+
+def test_authenticated_near_deadline_beats_timeout():
+    """Authenticated result accepted just before execution timeout wins."""
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    almost = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS - 0.1)
+    ).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=? WHERE verification_id=?",
+        (almost, almost, vid),
+    )
+    db.commit()
+    assert expire_timed_out_verifications(db, UID) == 0
+    complete_provider_access_check(
+        db, UID, _probe(private_data_detected=True), verification_id=vid
+    )
+    mid = get_latest_session_verification(db, UID, "amex")
+    assert mid.lifecycle == "session_verified"
+    # Probe ceiling must not kill mid-cycle extraction work.
+    assert expire_timed_out_verifications(db, UID) == 0
+    complete_access_check_after_extraction(db, UID, vid, success=True)
+    final = get_latest_session_verification(db, UID, "amex")
+    assert final.terminal_reason == "authenticated"
+    # Late timeout attempt rejected.
+    assert expire_timed_out_verifications(db, UID) == 0
+    assert get_latest_session_verification(db, UID, "amex").terminal_reason == "authenticated"
+
+
+def test_signed_out_near_deadline_beats_timeout():
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    almost = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS - 0.1)
+    ).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=? WHERE verification_id=?",
+        (almost, almost, vid),
+    )
+    db.commit()
+    assert expire_timed_out_verifications(db, UID) == 0
+    complete_provider_access_check(
+        db,
+        UID,
+        _probe(auth_state=AUTH_LOGIN_PAGE, failure_reason="login_required"),
+        verification_id=vid,
+    )
+    final = get_latest_session_verification(db, UID, "amex")
+    assert final.terminal_reason == "signed_out"
+    assert expire_timed_out_verifications(db, UID) == 0
+    assert get_latest_session_verification(db, UID, "amex").terminal_reason == "signed_out"
+
+
+def test_timeout_wins_then_late_authenticated_rejected():
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    overdue = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS + 2)
+    ).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=? WHERE verification_id=?",
+        (overdue, overdue, vid),
+    )
+    db.commit()
+    assert expire_timed_out_verifications(db, UID) == 1
+    assert get_latest_session_verification(db, UID, "amex").terminal_reason == "timeout"
+    complete_provider_access_check(
+        db, UID, _probe(private_data_detected=True), verification_id=vid
+    )
+    final = get_latest_session_verification(db, UID, "amex")
+    assert final.lifecycle == "timed_out"
+    assert final.terminal_reason == "timeout"
+    assert final.terminal_source == "server_timeout"
+
+
+def test_authenticated_wins_then_timeout_rejected():
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    complete_provider_access_check(
+        db, UID, _probe(private_data_detected=True), verification_id=vid
+    )
+    complete_access_check_after_extraction(db, UID, vid, success=True)
+    assert get_latest_session_verification(db, UID, "amex").terminal_reason == "authenticated"
+    overdue = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS + 5)
+    ).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=? WHERE verification_id=?",
+        (overdue, overdue, vid),
+    )
+    db.commit()
+    assert expire_timed_out_verifications(db, UID) == 0
+    final = get_latest_session_verification(db, UID, "amex")
+    assert final.terminal_reason == "authenticated"
+    assert final.lifecycle == "completed"
+
+
+def test_cancel_cannot_overwrite_authenticated():
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    complete_provider_access_check(
+        db, UID, _probe(private_data_detected=True), verification_id=vid
+    )
+    complete_access_check_after_extraction(db, UID, vid, success=True)
+    finish_provider_access_check(
+        db,
+        UID,
+        vid,
+        terminal_reason="cancelled",
+        terminal_source="extension_tab_closed",
+    )
+    final = get_latest_session_verification(db, UID, "amex")
+    assert final.terminal_reason == "authenticated"
+    assert final.terminal_source != "extension_tab_closed"
+
+
+def test_duplicate_conflicting_terminal_first_wins():
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    finish_provider_access_check(
+        db, UID, vid, terminal_reason="signed_out", terminal_source="first"
+    )
+    finish_provider_access_check(
+        db, UID, vid, terminal_reason="timeout", terminal_source="second"
+    )
+    finish_provider_access_check(
+        db, UID, vid, terminal_reason="navigation_failed", terminal_source="third"
+    )
+    final = get_latest_session_verification(db, UID, "amex")
+    assert final.terminal_reason == "signed_out"
+    assert final.terminal_source == "first"
+    assert final.lifecycle == "completed"
+
+
+def test_extension_crash_after_claim_server_terminates():
+    """Extension claims then disappears — server execution timeout recovers."""
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    overdue = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS + 1)
+    ).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification SET started_at=? WHERE verification_id=?",
+        (overdue, vid),
+    )
+    db.commit()
+    assert expire_timed_out_verifications(db, UID) == 1
+    final = get_latest_session_verification(db, UID, "amex")
+    assert final.lifecycle == "timed_out"
+    assert final.terminal_reason == "timeout"
+    assert final.terminal_source == "server_timeout"
+
+
+def test_requested_never_claimed_queue_timeout():
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    assert get_latest_session_verification(db, UID, "amex").lifecycle == "requested"
+    overdue = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS + 1)
+    ).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification SET requested_at=? WHERE verification_id=?",
+        (overdue, vid),
+    )
+    db.commit()
+    assert expire_timed_out_verifications(db, UID) == 1
+    final = get_latest_session_verification(db, UID, "amex")
+    assert final.lifecycle == "timed_out"
+    assert final.terminal_reason == "timeout"
+    assert final.terminal_source == "server_timeout_queue"
+
+
+def test_queue_wait_does_not_consume_execution_budget():
+    """Old requested_at must not expire a freshly claimed running job."""
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    old_request = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS + 5)
+    ).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification SET requested_at=? WHERE verification_id=?",
+        (old_request, vid),
+    )
+    db.commit()
+    mark_provider_access_check_running(db, UID, vid)
+    # Fresh started_at — execution budget still open.
+    assert expire_timed_out_verifications(db, UID) == 0
+    assert get_latest_session_verification(db, UID, "amex").lifecycle == "running"
+
+
+def test_authenticated_advances_without_probe_timeout_killing_extraction():
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    # Make probe-phase timestamps look overdue.
+    overdue = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS + 5)
+    ).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=? WHERE verification_id=?",
+        (overdue, overdue, vid),
+    )
+    db.commit()
+    complete_provider_access_check(
+        db, UID, _probe(private_data_detected=True), verification_id=vid
+    )
+    mid = get_latest_session_verification(db, UID, "amex")
+    assert mid.lifecycle == "session_verified"
+    # Probe timeout must not apply; extraction window still open.
+    assert expire_timed_out_verifications(db, UID) == 0
+    complete_access_check_after_extraction(db, UID, vid, success=True)
+    assert get_latest_session_verification(db, UID, "amex").terminal_reason == "authenticated"
+
+
+def test_old_stuck_production_row_reconciled():
+    """Pre-deploy stuck running rows terminalize via server timeout path."""
+    db = _db()
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    stuck = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=?, terminal_reason=NULL, terminal_source=NULL, "
+        "completed_at=NULL WHERE verification_id=?",
+        (stuck, stuck, vid),
+    )
+    db.commit()
+    assert expire_timed_out_verifications(db, UID) == 1
+    final = get_latest_session_verification(db, UID, "amex")
+    assert final.lifecycle == "timed_out"
+    assert final.terminal_reason == "timeout"
+    assert final.completed_at is not None
+
+
+def test_timeout_maps_to_login_unknown_never_signed_out():
+    from mighty.provider_session_state import (
+        get_provider_session_state,
+        upsert_provider_session_state,
+        SessionEvidence,
+    )
+
+    db = _db()
+    upsert_provider_session_state(
+        db,
+        UID,
+        SessionEvidence(
+            provider="amex",
+            state="connected",
+            evidence_type="session_verified",
+            evidence_summary="prior connected",
+            observed_at=datetime.now(timezone.utc),
+            source="test",
+            confidence="high",
+        ),
+    )
+    verification = request_provider_access_check(db, UID, "amex")
+    vid = verification.verification_id
+    mark_provider_access_check_running(db, UID, vid)
+    overdue = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=VERIFICATION_MAX_DURATION_SECONDS + 1)
+    ).isoformat()
+    db.execute(
+        "UPDATE provider_session_verification "
+        "SET requested_at=?, started_at=? WHERE verification_id=?",
+        (overdue, overdue, vid),
+    )
+    db.commit()
+    expire_timed_out_verifications(db, UID)
+    assert get_provider_session_state(db, UID, "amex").state == "connected"
+    cap = build_capability_view(_timeout_view())
+    assert cap.state == CapabilityState.LOGIN_UNKNOWN
+    assert cap.state != CapabilityState.SIGNED_OUT
+
