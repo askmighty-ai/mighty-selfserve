@@ -699,21 +699,33 @@ def test_no_qualifying_rejects_after_successful_extraction(client):
 
 
 def test_extension_private_data_wait_contract():
-    """Bounded wait: hard deadline, tab-close cancel, DOM-only qualifying rules."""
+    """Bounded wait: hard deadline, tab-close cancel, DOM qualifying + extraction preview."""
     from pathlib import Path
 
     bg = (Path(__file__).resolve().parents[1] / "extension" / "background.js").read_text()
     assert "AMEX_PRIVATE_DATA_OBSERVATION_MS = 20000" in bg
     assert "AMEX_PRIVATE_DATA_POLL_MS = 1000" in bg
     assert "waitForAmexQualifyingPrivateData" in bg
+    assert "evaluateAmexQualifyingPrivateDataPage" in bg
     assert "private-data wait cancelled — tab closed" in bg
     assert "private-data wait cancelled — left Amex surface" in bg
     assert "Date.now() + Math.max(0, timeoutMs)" in bg
-    # Qualifying = value-bearing DOM patterns, not session API alone / static chrome.
-    assert "membership rewards[^0-9\\n]{0,120}([\\d][\\d,]*)" in bg
-    assert "session_api" not in bg.split("waitForAmexQualifyingPrivateData")[1].split(
+    # Qualifying = value-bearing DOM patterns (+ extraction preview), not session API alone.
+    assert "membership rewards(?:®)?" in bg
+    assert "points|balance|:" in bg
+    assert "available_credit" in bg
+    assert "heading_walk_hit" in bg
+    assert "skipped_marketing_page" in bg
+    assert "total_balance" in bg
+    assert "transfer)" in bg  # negative lookahead excludes Balance Transfer offers
+    assert "[Mighty Amex][diag] observation_start" in bg
+    assert "LOGGED_IN_NO_ACCOUNT_DATA" in bg
+    wait_fn = bg.split("async function waitForAmexQualifyingPrivateData")[1].split(
         "async function _postAmexNoQualifyingPrivateData"
     )[0]
+    assert "session_api" not in wait_fn
     # Gate uses current-cycle probe private_data_detected, not prior-cycle cache.
     assert "payload.private_data_detected" in bg
     assert "probeData.private_data_detected" in bg
+    # Entry overview must count as an account path in the in-page probe.
+    assert "/overview(?:\\/|$|\\?)" in bg

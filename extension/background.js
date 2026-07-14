@@ -2166,11 +2166,16 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
     }
     await waitForTabLoad(tab.id, 25_000);
     // Bounded wait for qualifying private DOM evidence on the extraction tab.
-    const found = await waitForAmexQualifyingPrivateData(tab.id, {
+    const waitResult = await waitForAmexQualifyingPrivateData(tab.id, {
       timeoutMs: AMEX_PRIVATE_DATA_OBSERVATION_MS,
     });
-    if (!found) {
+    if (!waitResult?.ok) {
       console.log('[Mighty Amex] extraction tab had no qualifying private data');
+      console.log('[Mighty Amex][diag] extraction_dispatch=no', {
+        source: 'extraction_tab_wait',
+        reason: waitResult?.diagnostics?.reason || waitResult?.diagnostics?.early_exit || 'no_qualifying_private_data',
+        diagnostics: waitResult?.diagnostics || null,
+      });
       await _postAmexNoQualifyingPrivateData(apiKey, verificationId, {
         observation_counts: {
           authenticated_private_api_responses: 0,
@@ -2201,63 +2206,311 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
   }
 }
 
+/**
+ * In-page Amex qualifying private-data evaluation (sanitized).
+ * Aligns the extraction gate with extractAmexMembershipRewardsPage strategies
+ * plus value-bearing overview patterns. Never returns balances / PAN / tokens.
+ */
+function evaluateAmexQualifyingPrivateDataPage() {
+  const path = (location.pathname || '').toLowerCase();
+  const url = location.href || '';
+  const body = (document.body && (document.body.innerText || document.body.textContent)) || '';
+  const bodyLen = body.length;
+  const iframeCount = document.querySelectorAll('iframe').length;
+  let shadowRootCount = 0;
+  try {
+    document.querySelectorAll('*').forEach((el) => {
+      if (el.shadowRoot) shadowRootCount += 1;
+    });
+  } catch (_) {}
+
+  let pageClass = 'other';
+  if (/\/account\/log-?in/i.test(path) || /\/account\/log-?in/i.test(url)) pageClass = 'login';
+  else if (/\/overview(?:\/|$|\?)/i.test(path)) pageClass = 'overview';
+  else if (/\/en-us\/rewards/i.test(path)) pageClass = 'rewards';
+  else if (/\/en-us\/account/i.test(path)) pageClass = 'account';
+  else if (/\/en-us\/(?:credit-cards|business|prepaid|gift-cards|benefits|offers|travel)(?:\/|$)/i.test(path)) {
+    pageClass = 'marketing';
+  }
+
+  if (pageClass === 'login') {
+    return {
+      ok: false,
+      reason: 'login_page',
+      page_class: pageClass,
+      body_text_length: bodyLen,
+      iframe_count: iframeCount,
+      shadow_root_count: shadowRootCount,
+      patterns_evaluated: [],
+      patterns_matched: [],
+      patterns_failed: [],
+      extraction_preview: 'skipped_login_page',
+    };
+  }
+  if (pageClass === 'marketing') {
+    return {
+      ok: false,
+      reason: 'marketing_page',
+      page_class: pageClass,
+      body_text_length: bodyLen,
+      iframe_count: iframeCount,
+      shadow_root_count: shadowRootCount,
+      patterns_evaluated: [],
+      patterns_matched: [],
+      patterns_failed: [],
+      extraction_preview: 'skipped_marketing_page',
+    };
+  }
+
+  // Value-bearing private patterns (must stay aligned with server
+  // PROVIDER_PROBE_CONFIG.amex.private_data_rules). Newlines/whitespace OK;
+  // arbitrary prose between label and digits is NOT (rejects Earn/Call/©/years).
+  const POINTS_NUM = '(?:[\\d]{1,3}(?:,\\d{3})+|(?!19\\d{2}\\b|20\\d{2}\\b)\\d{4,7})';
+  const MONEY_NUM = '(?:[\\d]{1,3}(?:,\\d{3})+(?:\\.\\d{2})?|\\d+\\.\\d{2})';
+  const patterns = [
+    {
+      label: 'membership_rewards_balance',
+      re: new RegExp(
+        'membership rewards(?:®)?(?:\\s*(?:points|balance|:))*\\s*(' + POINTS_NUM + ')',
+        'i',
+      ),
+    },
+    {
+      label: 'statement_balance',
+      re: new RegExp('statement\\s+balance(?:\\s|:)*\\$?\\s*' + MONEY_NUM, 'i'),
+    },
+    {
+      label: 'card_ending',
+      re: /card\s+ending\s+(?:in\s+)?(?:[•*]{2,4}\s*)?\d{4}\b/i,
+    },
+    {
+      label: 'points_balance',
+      re: new RegExp(
+        '(?:(?:points|rewards)\\s+balance(?:\\s*:)?|(?:points|rewards)\\s*:)\\s*(' + POINTS_NUM + ')',
+        'i',
+      ),
+    },
+    {
+      label: 'available_credit',
+      re: new RegExp('available\\s+credit(?:\\s|:)*\\$?\\s*' + MONEY_NUM, 'i'),
+    },
+    {
+      label: 'total_balance',
+      re: new RegExp('total\\s+balance(?!\\s*transfer)(?:\\s|:)*\\$?\\s*' + MONEY_NUM, 'i'),
+    },
+  ];
+  const patternsEvaluated = patterns.map((p) => p.label);
+  const patternsMatched = [];
+  const patternsFailed = [];
+  for (const p of patterns) {
+    if (p.re.test(body)) patternsMatched.push(p.label);
+    else patternsFailed.push(p.label);
+  }
+
+  // Extraction preview — same strategies as extractAmexMembershipRewardsPage,
+  // but only reports whether a value was found (never the value).
+  let extractionPreview = 'no_value';
+  const pickBestNumber = (text) => {
+    if (!text) return null;
+    const matches = String(text).match(/\b[\d]{1,3}(?:,\d{3})+\b|\b[\d]{4,}\b/g);
+    if (!matches) return null;
+    let best = null;
+    let bestN = 0;
+    for (const m of matches) {
+      const n = parseInt(m.replace(/,/g, ''), 10);
+      if (n > bestN && n < 100000000) {
+        bestN = n;
+        best = m;
+      }
+    }
+    return best;
+  };
+  const findInRoot = (root) => {
+    if (!root) return null;
+    return pickBestNumber(root.innerText || root.textContent || '');
+  };
+  const sels = [
+    '[data-testid*="membership-rewards" i]',
+    '[data-testid*="rewards-balance" i]',
+    '[data-automation-id*="rewards" i]',
+    '[class*="membership-rewards" i]',
+    '[class*="rewards-balance" i]',
+    'a[href*="/rewards"]',
+  ];
+  for (const sel of sels) {
+    try {
+      for (const node of document.querySelectorAll(sel)) {
+        if (findInRoot(node)) {
+          extractionPreview = 'selector_hit';
+          break;
+        }
+      }
+    } catch (_) {}
+    if (extractionPreview === 'selector_hit') break;
+  }
+  if (extractionPreview === 'no_value') {
+    for (const node of document.querySelectorAll('h1,h2,h3,h4,span,div,p,a,button')) {
+      const t = (node.textContent || '').trim();
+      if (!/membership rewards/i.test(t)) continue;
+      let scope = node.closest('section,article,li,div') || node.parentElement;
+      for (let d = 0; d < 4 && scope; d++) {
+        if (findInRoot(scope)) {
+          extractionPreview = 'heading_walk_hit';
+          break;
+        }
+        scope = scope.parentElement;
+      }
+      if (extractionPreview === 'heading_walk_hit') break;
+    }
+  }
+  if (extractionPreview === 'no_value') {
+    // Same value-bearing MR rule as patterns above (not open [^0-9]{0,N}).
+    const mrRe = new RegExp(
+      'membership rewards(?:®)?(?:\\s*(?:points|balance|:))*\\s*'
+      + '(?:[\\d]{1,3}(?:,\\d{3})+|(?!19\\d{2}\\b|20\\d{2}\\b)\\d{4,7})',
+      'i',
+    );
+    if (mrRe.test(body)) {
+      extractionPreview = 'body_regex_hit';
+    }
+  }
+
+  const ok = patternsMatched.length > 0 || extractionPreview !== 'no_value';
+  return {
+    ok,
+    reason: ok
+      ? (patternsMatched[0] ? `dom_private_pattern:${patternsMatched[0]}` : `extraction_preview:${extractionPreview}`)
+      : 'no_qualifying_private_data',
+    page_class: pageClass,
+    body_text_length: bodyLen,
+    iframe_count: iframeCount,
+    shadow_root_count: shadowRootCount,
+    patterns_evaluated: patternsEvaluated,
+    patterns_matched: patternsMatched,
+    patterns_failed: patternsFailed,
+    extraction_preview: extractionPreview,
+  };
+}
+
 async function waitForAmexQualifyingPrivateData(tabId, { timeoutMs = AMEX_PRIVATE_DATA_OBSERVATION_MS } = {}) {
-  if (!tabId) return false;
+  if (!tabId) {
+    console.log('[Mighty Amex][diag] observation_start skipped — no tabId');
+    return { ok: false, diagnostics: { early_exit: 'no_tab_id' } };
+  }
   const deadline = Date.now() + Math.max(0, timeoutMs);
+  const startedAt = Date.now();
+  console.log('[Mighty Amex][diag] observation_start', {
+    tabId,
+    timeout_ms: timeoutMs,
+    deadline_iso: new Date(deadline).toISOString(),
+  });
+  let lastDiag = null;
+  let pollCount = 0;
   while (Date.now() <= deadline) {
     try {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (!tab || tab.id == null) {
         console.log('[Mighty Amex] private-data wait cancelled — tab closed');
-        return false;
+        console.log('[Mighty Amex][diag] LOGGED_IN_NO_ACCOUNT_DATA reason=tab_closed', {
+          polls: pollCount,
+          elapsed_ms: Date.now() - startedAt,
+        });
+        return { ok: false, diagnostics: { early_exit: 'tab_closed', polls: pollCount, last: lastDiag } };
       }
       // Navigation away from Amex account surfaces ends the wait for this cycle.
       const url = String(tab.url || '');
       if (url && !/americanexpress\.com/i.test(url)) {
         console.log('[Mighty Amex] private-data wait cancelled — left Amex surface');
-        return false;
+        console.log('[Mighty Amex][diag] LOGGED_IN_NO_ACCOUNT_DATA reason=left_amex_surface', {
+          polls: pollCount,
+          elapsed_ms: Date.now() - startedAt,
+        });
+        return { ok: false, diagnostics: { early_exit: 'left_amex_surface', polls: pollCount, last: lastDiag } };
       }
       if (/\/account\/log-?in/i.test(url)) {
         console.log('[Mighty Amex] private-data wait cancelled — login page');
-        return false;
+        console.log('[Mighty Amex][diag] LOGGED_IN_NO_ACCOUNT_DATA reason=login_page', {
+          polls: pollCount,
+          elapsed_ms: Date.now() - startedAt,
+        });
+        return { ok: false, diagnostics: { early_exit: 'login_page', polls: pollCount, last: lastDiag } };
       }
       const [r] = await chrome.scripting.executeScript({
         target: { tabId },
-        func: () => {
-          const body = (document.body && (document.body.innerText || document.body.textContent)) || '';
-          if (/\/account\/log-?in/i.test(location.pathname)) return { ok: false, reason: 'login_page' };
-          const patterns = [
-            /membership rewards[^0-9\n]{0,120}([\d][\d,]*)/i,
-            /statement\s+balance[^$\d]{0,40}\$?([\d][\d,]*(?:\.\d{2})?)/i,
-            /card\s+ending\s+(?:in\s+)?[\d*]{4,}/i,
-            /(?:points|rewards)\s*(?:balance|:)?\s*([\d][\d,]*)/i,
-          ];
-          for (const re of patterns) {
-            if (re.test(body)) return { ok: true, reason: 'dom_private_pattern' };
-          }
-          return { ok: false, reason: 'no_qualifying_private_data' };
-        },
+        func: evaluateAmexQualifyingPrivateDataPage,
       });
-      if (r?.result?.ok) {
-        console.log('[Mighty Amex] qualifying private data observed:', r.result.reason);
-        return true;
+      pollCount += 1;
+      const result = r?.result || {};
+      lastDiag = {
+        page_url_class: result.page_class || 'unknown',
+        body_text_length: result.body_text_length || 0,
+        iframe_count: result.iframe_count || 0,
+        shadow_root_count: result.shadow_root_count || 0,
+        patterns_evaluated: result.patterns_evaluated || [],
+        patterns_matched: result.patterns_matched || [],
+        patterns_failed: result.patterns_failed || [],
+        extraction_preview: result.extraction_preview || 'unknown',
+        reason: result.reason || 'unknown',
+        poll: pollCount,
+        elapsed_ms: Date.now() - startedAt,
+      };
+      // Sanitize: never log URL query strings / path that might embed account ids.
+      console.log('[Mighty Amex][diag] observation_poll', lastDiag);
+      if (result.ok) {
+        console.log('[Mighty Amex] qualifying private data observed:', result.reason);
+        console.log('[Mighty Amex][diag] extraction_dispatch=yes', {
+          reason: result.reason,
+          patterns_matched: result.patterns_matched,
+          extraction_preview: result.extraction_preview,
+          polls: pollCount,
+          elapsed_ms: Date.now() - startedAt,
+          budget_ms: timeoutMs,
+          budget_fully_used: false,
+        });
+        return { ok: true, diagnostics: lastDiag };
       }
-      if (r?.result?.reason === 'login_page') {
-        return false;
+      if (result.reason === 'login_page') {
+        console.log('[Mighty Amex][diag] LOGGED_IN_NO_ACCOUNT_DATA reason=login_page_dom', {
+          polls: pollCount,
+          elapsed_ms: Date.now() - startedAt,
+        });
+        return { ok: false, diagnostics: { early_exit: 'login_page_dom', polls: pollCount, last: lastDiag } };
       }
     } catch (e) {
       const msg = String(e?.message || e || '');
       // Tab gone / navigated away — do not burn the full deadline.
       if (/no tab|invalid tab|cannot access|receiving end does not exist/i.test(msg)) {
         console.log('[Mighty Amex] private-data wait cancelled — tab unavailable');
-        return false;
+        console.log('[Mighty Amex][diag] LOGGED_IN_NO_ACCOUNT_DATA reason=tab_unavailable', {
+          polls: pollCount,
+          elapsed_ms: Date.now() - startedAt,
+        });
+        return { ok: false, diagnostics: { early_exit: 'tab_unavailable', polls: pollCount, last: lastDiag } };
       }
       console.warn('[Mighty Amex] private-data poll failed:', msg);
     }
     if (Date.now() > deadline) break;
     await sleep(AMEX_PRIVATE_DATA_POLL_MS);
   }
-  return false;
+  const elapsed = Date.now() - startedAt;
+  console.log('[Mighty Amex][diag] LOGGED_IN_NO_ACCOUNT_DATA reason=no_qualifying_private_data_by_deadline', {
+    polls: pollCount,
+    elapsed_ms: elapsed,
+    budget_ms: timeoutMs,
+    budget_fully_used: elapsed >= timeoutMs - AMEX_PRIVATE_DATA_POLL_MS,
+    last: lastDiag,
+  });
+  return {
+    ok: false,
+    diagnostics: {
+      early_exit: null,
+      reason: 'no_qualifying_private_data_by_deadline',
+      polls: pollCount,
+      elapsed_ms: elapsed,
+      budget_ms: timeoutMs,
+      last: lastDiag,
+    },
+  };
 }
 
 async function _postAmexNoQualifyingPrivateData(apiKey, verificationId, opts = {}) {
@@ -4047,34 +4300,68 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
         || (probeData.observation_counts
             && Number(probeData.observation_counts.qualifying_dom_observations || 0) > 0)
       );
+      const apiResponseCount = Number(
+        (probeData.observation_counts && probeData.observation_counts.authenticated_private_api_responses) || 0,
+      );
       console.log(
         '[Mighty] Amex session verified — access-cycle private-data gate',
         verificationId,
         'privateObserved=',
         privateObserved,
       );
+      console.log('[Mighty Amex][diag] gate_start', {
+        verification_id: verificationId,
+        private_observed_from_probe: privateObserved,
+        authenticated_private_api_responses: apiResponseCount,
+        // Session APIs authenticate the cycle; they do not alone qualify extraction.
+        api_evidence_qualifies_extraction: false,
+        page_url_host_class: 'amex',
+      });
       let qualifying = privateObserved;
+      let waitDiagnostics = null;
       if (!qualifying && tab?.id) {
         // Full private-data observation budget — not truncated by probe deadline.
-        qualifying = await waitForAmexQualifyingPrivateData(tab.id, {
+        const waitResult = await waitForAmexQualifyingPrivateData(tab.id, {
           timeoutMs: AMEX_PRIVATE_DATA_OBSERVATION_MS,
         });
+        qualifying = !!waitResult?.ok;
+        waitDiagnostics = waitResult?.diagnostics || null;
       }
       if (!qualifying) {
+        const noDataReason = waitDiagnostics?.reason
+          || waitDiagnostics?.early_exit
+          || (privateObserved ? 'unexpected_gate_false' : 'no_qualifying_private_data');
         console.log(
           '[Mighty] Amex authenticated but no qualifying private data by deadline — extraction NOT RUN',
           verificationId,
         );
+        console.log('[Mighty Amex][diag] extraction_dispatch=no', {
+          verification_id: verificationId,
+          reason: noDataReason,
+          LOGGED_IN_NO_ACCOUNT_DATA: true,
+          authenticated_private_api_responses: apiResponseCount,
+          wait_diagnostics: waitDiagnostics,
+        });
+        const baseCounts = probeData.observation_counts || {
+          authenticated_private_api_responses: apiResponseCount,
+          qualifying_dom_observations: 0,
+          candidate_payloads: 0,
+          rejection_reason: 'no_qualifying_private_data',
+        };
         await _postAmexNoQualifyingPrivateData(apiKey, verificationId, {
-          observation_counts: probeData.observation_counts || {
-            authenticated_private_api_responses: 0,
+          observation_counts: {
+            ...baseCounts,
             qualifying_dom_observations: 0,
-            candidate_payloads: 0,
-            rejection_reason: 'no_qualifying_private_data',
+            rejection_reason: noDataReason,
           },
         });
       } else {
         console.log('[Mighty] Amex session verified — starting access-cycle extraction', verificationId);
+        console.log('[Mighty Amex][diag] extraction_dispatch=yes', {
+          verification_id: verificationId,
+          reason: privateObserved ? 'probe_private_data_detected' : (waitDiagnostics?.reason || 'wait_qualifying'),
+          wait_diagnostics: waitDiagnostics,
+        });
         await runAmexExtractionForAccessCycle(apiKey, verificationId, tab?.id);
       }
     }
@@ -6154,7 +6441,9 @@ function extractAmexMembershipRewardsPage() {
     }
   }
   const body = document.body?.innerText || '';
-  const m = body.match(/Membership Rewards[^0-9\n]{0,120}([\d][\d,]*)/i);
+  const m = body.match(
+    /Membership Rewards(?:®)?(?:\s*(?:points|balance|:))*\s*((?:[\d]{1,3}(?:,\d{3})+|(?!19\d{2}\b|20\d{2}\b)\d{4,7}))/i,
+  );
   if (m) {
     const formatted = formatPoints(m[1]);
     if (formatted) {
@@ -6734,7 +7023,10 @@ function runProviderAccessProbeInPage(provider, classifierStartedAt) {
   if (provider === 'amex') {
     const loginPath = /\/account\/log-?in/.test(path);
     const marketingPath = /\/en-us\/(?:credit-cards|business|prepaid|gift-cards|benefits|offers)(?:\/|$)/i.test(path);
-    const accountPath = /\/en-us\/account/.test(path) || /\/en-us\/rewards/.test(path);
+    // Must include /overview — server is_account_url and ACCOUNT_ENTRY.amex use it.
+    const accountPath = /\/overview(?:\/|$|\?)/i.test(path)
+      || /\/en-us\/account/.test(path)
+      || /\/en-us\/rewards/.test(path);
     const loginHits = ['sign in to your account', 'user id', 'show password', 'forgot password']
       .filter(s => lower.includes(s)).length;
     const signedInSignals = [
@@ -6749,16 +7041,46 @@ function runProviderAccessProbeInPage(provider, classifierStartedAt) {
     let evidenceType = 'dom_text';
     let snippet = null;
 
+    // Keep aligned with evaluateAmexQualifyingPrivateDataPage + server private_data_rules.
+    const POINTS_NUM = '(?:[\\d]{1,3}(?:,\\d{3})+|(?!19\\d{2}\\b|20\\d{2}\\b)\\d{4,7})';
+    const MONEY_NUM = '(?:[\\d]{1,3}(?:,\\d{3})+(?:\\.\\d{2})?|\\d+\\.\\d{2})';
     const privatePatterns = [
-      { re: /membership rewards[^0-9\n]{0,120}([\d][\d,]*)/i, label: 'membership_rewards_balance' },
-      { re: /statement\s+balance[^$\d]{0,40}\$?([\d][\d,]*(?:\.\d{2})?)/i, label: 'statement_balance' },
-      { re: /card\s+ending\s+(?:in\s+)?[\d*]{4,}/i, label: 'card_ending' },
-      { re: /(?:points|rewards)\s*(?:balance|:)?\s*([\d][\d,]*)/i, label: 'points_balance' },
+      {
+        re: new RegExp(
+          'membership rewards(?:®)?(?:\\s*(?:points|balance|:))*\\s*(' + POINTS_NUM + ')',
+          'i',
+        ),
+        label: 'membership_rewards_balance',
+      },
+      {
+        re: new RegExp('statement\\s+balance(?:\\s|:)*\\$?\\s*' + MONEY_NUM, 'i'),
+        label: 'statement_balance',
+      },
+      {
+        re: /card\s+ending\s+(?:in\s+)?(?:[•*]{2,4}\s*)?\d{4}\b/i,
+        label: 'card_ending',
+      },
+      {
+        re: new RegExp(
+          '(?:(?:points|rewards)\\s+balance(?:\\s*:)?|(?:points|rewards)\\s*:)\\s*(' + POINTS_NUM + ')',
+          'i',
+        ),
+        label: 'points_balance',
+      },
+      {
+        re: new RegExp('available\\s+credit(?:\\s|:)*\\$?\\s*' + MONEY_NUM, 'i'),
+        label: 'available_credit',
+      },
+      {
+        re: new RegExp('total\\s+balance(?!\\s*transfer)(?:\\s|:)*\\$?\\s*' + MONEY_NUM, 'i'),
+        label: 'total_balance',
+      },
     ];
     for (const p of privatePatterns) {
       const m = bodyText.match(p.re);
       if (m) {
         privateData = true;
+        // Keep snippet for server-side probe classification; never log it here.
         snippet = m[0].trim().slice(0, 240);
         break;
       }
