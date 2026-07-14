@@ -21380,7 +21380,8 @@ def api_extension_amex_extract():
     if not body.get("session_verified"):
         return jsonify({"ok": False, "error": "session_verified required"}), 400
     raw_value = (body.get("value") or "").strip()
-    if not raw_value:
+    raw_fields = body.get("fields") if isinstance(body.get("fields"), list) else None
+    if not raw_value and not raw_fields:
         return jsonify({"ok": False, "error": "value required"}), 400
 
     uid = user["id"]
@@ -21394,6 +21395,7 @@ def api_extension_amex_extract():
         or None
     )
 
+    from mighty.extraction_result import parse_extraction_result_payload
     from mighty.provider_access_manager import (
         complete_access_check_after_extraction,
         log_access_cycle_event,
@@ -21404,6 +21406,7 @@ def api_extension_amex_extract():
         MID_CYCLE_VERIFICATION_LIFECYCLES,
         get_active_session_verification,
     )
+    extraction_meta = parse_extraction_result_payload(body)
 
     # Invariant: every Amex extraction belongs to exactly one active access cycle.
     if not verification_id or not access_cycle_id:
@@ -21467,6 +21470,7 @@ def api_extension_amex_extract():
 
     input_source = str(body.get("input_source") or body.get("source") or "extension").strip()
     value_len = len(raw_value)
+    field_count = len(raw_fields) if raw_fields else (1 if raw_value else 0)
     log_access_cycle_event(
         "extraction_request_received",
         provider="amex",
@@ -21475,7 +21479,7 @@ def api_extension_amex_extract():
         verification_state=lifecycle,
         requested_at=requested_at,
         input_source_types=input_source,
-        input_count=1,
+        input_count=field_count,
         input_value_len=value_len,
     )
 
@@ -21488,6 +21492,7 @@ def api_extension_amex_extract():
             raw_value,
             access_cycle_id=access_cycle_id,
             verification_id=verification_id,
+            fields=raw_fields,
             **_amex_conn_ctx(),
         )
     except ValueError as e:
@@ -21608,10 +21613,13 @@ def api_extension_amex_extract():
     )
 
     field = result.get("field") if isinstance(result, dict) else None
+    fields_out = result.get("fields") if isinstance(result, dict) else None
     field_names = []
-    if isinstance(field, dict) and field.get("key"):
+    if isinstance(fields_out, list):
+        field_names = [str(f.get("key")) for f in fields_out if isinstance(f, dict) and f.get("key")]
+    elif isinstance(field, dict) and field.get("key"):
         field_names = [str(field.get("key"))]
-    non_empty = 1 if field_names else 0
+    non_empty = len(field_names)
     snapshot_id = None
     try:
         from mighty.account_snapshot import load_latest_snapshots_by_provider
@@ -21626,6 +21634,11 @@ def api_extension_amex_extract():
     except Exception:
         snapshot_id = None
 
+    success_reason = (
+        extraction_meta.reason
+        if extraction_meta is not None
+        else ("membership_rewards_found" if "points_balance" in field_names else "publishable_fields_found")
+    )
     log_access_cycle_event(
         "extraction accepted",
         provider="amex",
@@ -21634,6 +21647,7 @@ def api_extension_amex_extract():
         verification_state="extracting",
         requested_at=requested_at,
     )
+    # Exactly one terminal extraction_result diagnostic per extraction.
     log_access_cycle_event(
         "extraction_result",
         provider="amex",
@@ -21643,6 +21657,8 @@ def api_extension_amex_extract():
         requested_at=requested_at,
         attempted=True,
         outcome="success",
+        status="EXTRACTION_SUCCESS",
+        reason=success_reason,
         extracted_field_names=",".join(field_names) if field_names else "",
         non_empty_field_count=non_empty,
     )
@@ -21739,9 +21755,9 @@ def api_extension_session_verification_advance():
 
 @app.route("/api/extension/amex/no-qualifying-private-data", methods=["POST"])
 def api_extension_amex_no_qualifying_private_data():
-    """Authenticated Amex cycle: observation finished with no extractable private data.
+    """Authenticated Amex cycle: extractor returned NO_ACCOUNT_DATA.
 
-    Extraction is NOT RUN. Does not publish a snapshot. Does not mark EXTRACTION_FAILED.
+    Does not publish a snapshot. Does not mark EXTRACTION_FAILED.
     Rejects unknown, non-Amex, and already-terminal cycles (except idempotent no-data replay).
     """
     from mighty.provider_access_manager import complete_amex_cycle_no_qualifying_private_data
@@ -21765,8 +21781,13 @@ def api_extension_amex_no_qualifying_private_data():
         candidate_payload_count=int(counts.get("candidate_payloads") or 0),
         rejection_reason=str(
             counts.get("rejection_reason")
+            or body.get("extraction_reason")
             or body.get("reason")
-            or "no_qualifying_private_data"
+            or "no_publishable_widgets"
+        ),
+        extraction_attempted=bool(body.get("extraction_attempted", True)),
+        extraction_reason=str(
+            body.get("extraction_reason") or body.get("reason") or "no_publishable_widgets"
         ),
     )
     if not result.get("ok"):
@@ -21780,12 +21801,14 @@ def api_extension_amex_no_qualifying_private_data():
         }), status
     return jsonify({
         "ok": True,
-        "extraction": "not_run",
+        "extraction": result.get("extraction") or "no_account_data",
         "capability_hint": "logged_in_no_account_data",
         "idempotent": bool(result.get("idempotent")),
         "verification_id": verification_id,
         "access_cycle_id": verification_id,
         "lifecycle": result.get("lifecycle") or "completed",
+        "status": "NO_ACCOUNT_DATA",
+        "reason": result.get("reason") or "no_publishable_widgets",
     })
 
 

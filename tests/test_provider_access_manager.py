@@ -555,7 +555,7 @@ def test_extension_verification_triggers_amex_extraction_in_background_js():
     assert "access_cycle_id" in bg
     assert "verification_id" in bg
     # Production path: session verification owns extraction for Amex.
-    assert "Amex session verified — starting access-cycle extraction" in bg
+    assert "Amex session verified — attempting extraction" in bg
     assert "runAmexExtractionForAccessCycle(apiKey, verificationId, tab?.id)" in bg
     # Passive needs-login suppressed during active verification.
     assert "needs-login suppressed during active verification" in bg

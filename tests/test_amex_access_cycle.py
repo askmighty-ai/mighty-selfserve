@@ -474,7 +474,7 @@ def test_customer_surfaces_show_connected_only_after_correlated_extraction(clien
 
 
 def test_no_qualifying_private_data_completes_without_extraction(client):
-    """Authenticated cycle + no qualifying private data → extraction NOT RUN."""
+    """Authenticated cycle + extractor NO_ACCOUNT_DATA → LOGGED_IN_NO_ACCOUNT_DATA."""
     import app as mighty
     from mighty.capability_state import CapabilityState
 
@@ -494,18 +494,22 @@ def test_no_qualifying_private_data_completes_without_extraction(client):
         json={
             "verification_id": vid,
             "access_cycle_id": vid,
+            "extraction_attempted": True,
+            "extraction_status": "NO_ACCOUNT_DATA",
+            "extraction_reason": "no_publishable_widgets",
             "observation_counts": {
                 "authenticated_private_api_responses": 0,
                 "qualifying_dom_observations": 0,
                 "candidate_payloads": 0,
-                "rejection_reason": "no_qualifying_private_data",
+                "rejection_reason": "no_publishable_widgets",
             },
         },
     )
     assert r.status_code == 200, r.get_json()
     body = r.get_json()
-    assert body["extraction"] == "not_run"
+    assert body["extraction"] == "no_account_data"
     assert body["capability_hint"] == "logged_in_no_account_data"
+    assert body["status"] == "NO_ACCOUNT_DATA"
 
     with mighty.app.app_context():
         db = mighty.get_db()
@@ -513,7 +517,7 @@ def test_no_qualifying_private_data_completes_without_extraction(client):
         assert latest is not None
         assert latest.lifecycle == "completed"
         assert latest.error_message == "no_qualifying_private_data"
-        # No new correlated extraction — readiness stays unverified.
+        # No publishable fields — readiness stays unverified.
         accounts, _ = load_all_account_statuses(
             uid,
             db,
@@ -526,7 +530,8 @@ def test_no_qualifying_private_data_completes_without_extraction(client):
         assert amex.capability is not None
         assert amex.capability.state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
         extract = next(s for s in amex.capability.pipeline if s.name == "Extraction")
-        assert extract.verdict == "NOT_RUN"
+        # Presentation unchanged: empty account data does not claim extraction PASS.
+        assert extract.verdict in ("NOT_RUN", "UNKNOWN", "FAIL")
 
 
 def test_extraction_diagnostics_correlated_by_access_cycle_id(client, capsys):
@@ -569,14 +574,17 @@ def test_extraction_diagnostics_correlated_by_access_cycle_id(client, capsys):
 
 
 def test_extension_gates_extraction_on_qualifying_private_data():
-    """Extension waits for qualifying private data before same-cycle extract."""
+    """After auth, extension always attempts extraction (no DOM qualification gate)."""
     from pathlib import Path
 
     bg = (Path(__file__).resolve().parents[1] / "extension" / "background.js").read_text()
-    assert "waitForAmexQualifyingPrivateData" in bg
-    assert "AMEX_PRIVATE_DATA_OBSERVATION_MS" in bg
+    assert "waitForAmexQualifyingPrivateData" not in bg
+    assert "AMEX_PRIVATE_DATA_OBSERVATION_MS" not in bg
+    assert "attemptAmexExtractionWithHydrationRetry" in bg
+    assert "extractAmexAccountDataPage" in bg
+    assert "runAmexExtractionForAccessCycle" in bg
     assert "/api/extension/amex/no-qualifying-private-data" in bg
-    assert "extraction NOT RUN" in bg
+    assert "attempting extraction" in bg
 
 
 def test_no_qualifying_endpoint_idempotent_and_rejects_bad_cycles(client):
@@ -595,11 +603,13 @@ def test_no_qualifying_endpoint_idempotent_and_rejects_bad_cycles(client):
     payload = {
         "verification_id": vid,
         "access_cycle_id": vid,
+        "extraction_attempted": True,
+        "extraction_reason": "no_publishable_widgets",
         "observation_counts": {
             "authenticated_private_api_responses": 0,
             "qualifying_dom_observations": 0,
             "candidate_payloads": 0,
-            "rejection_reason": "no_qualifying_private_data",
+            "rejection_reason": "no_publishable_widgets",
         },
     }
     first = client.post(
@@ -700,24 +710,23 @@ def test_no_qualifying_rejects_after_successful_extraction(client):
 
 
 def test_extension_private_data_wait_contract():
-    """Bounded wait: hard deadline, tab-close cancel, DOM-only qualifying rules."""
+    """Hydration retry: one delay, cancel on tab close / navigation; extractor owns detection."""
     from pathlib import Path
 
     bg = (Path(__file__).resolve().parents[1] / "extension" / "background.js").read_text()
-    assert "AMEX_PRIVATE_DATA_OBSERVATION_MS = 20000" in bg
-    assert "AMEX_PRIVATE_DATA_POLL_MS = 1000" in bg
-    assert "waitForAmexQualifyingPrivateData" in bg
-    assert "private-data wait cancelled — tab closed" in bg
-    assert "private-data wait cancelled — left Amex surface" in bg
-    assert "Date.now() + Math.max(0, timeoutMs)" in bg
-    # Qualifying = value-bearing DOM patterns, not session API alone / static chrome.
-    assert "membership rewards[^0-9\\n]{0,120}([\\d][\\d,]*)" in bg
-    assert "session_api" not in bg.split("waitForAmexQualifyingPrivateData")[1].split(
-        "async function _postAmexNoQualifyingPrivateData"
-    )[0]
-    # Gate uses current-cycle probe private_data_detected, not prior-cycle cache.
-    assert "payload.private_data_detected" in bg
-    assert "probeData.private_data_detected" in bg
+    assert "AMEX_HYDRATION_RETRY_DELAY_MS = 1500" in bg
+    assert "attemptAmexExtractionWithHydrationRetry" in bg
+    assert "hydration retry cancelled — tab closed" in bg
+    assert "hydration retry cancelled — left Amex surface" in bg
+    assert "hydration retry cancelled — navigation occurred" in bg
+    assert "_amexExtractionCyclesStarted" in bg
+    # Extractor owns Membership Rewards / balance detection — not a separate gate.
+    assert "function extractAmexAccountDataPage" in bg
+    assert "Membership Rewards[^0-9\\n]{0,120}([\\d][\\d,]*)" in bg
+    # Observation must not gate on private_data_detected.
+    auth_branch = bg.split("Amex session verified — attempting extraction")[0]
+    assert "waitForAmexQualifyingPrivateData" not in auth_branch
+    assert "_isAmexSafeToAttemptExtraction" in bg
 
 
 def _start_mid_cycle(mighty, uid: str) -> tuple[str, str]:

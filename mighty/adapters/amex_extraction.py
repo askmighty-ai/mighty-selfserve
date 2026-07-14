@@ -1,10 +1,14 @@
 """
-Amex Membership Rewards extraction — normalized field storage.
+Amex account-data extraction — normalized field storage.
+
+The extension extractor is the sole authority for whether publishable account
+data exists. This adapter persists extractor-supplied fields.
 """
 
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from mighty.connection_state import AMEX_SOURCE
 from mighty.provider_account import (
@@ -29,6 +33,21 @@ def normalize_points_value(raw: str) -> str | None:
     return f"{int(digits):,}"
 
 
+def normalize_money_value(raw: str) -> str | None:
+    if raw is None:
+        return None
+    cleaned = re.sub(r"[^\d.]", "", str(raw))
+    if not cleaned:
+        return None
+    try:
+        amount = float(cleaned)
+    except ValueError:
+        return None
+    if amount < 0:
+        return None
+    return f"{amount:,.2f}"
+
+
 def build_amex_mr_item(value: str) -> dict:
     display = normalize_points_value(value)
     if not display:
@@ -39,6 +58,68 @@ def build_amex_mr_item(value: str) -> dict:
         "value": display,
         "_type": AMEX_MR_TYPE,
     }
+
+
+def normalize_extracted_fields(raw_fields: list[dict[str, Any]] | None, raw_value: str | None = None) -> list[dict]:
+    """Normalize extractor fields; fall back to a single MR value."""
+    items: list[dict] = []
+    seen: set[str] = set()
+    for raw in raw_fields or []:
+        if not isinstance(raw, dict):
+            continue
+        key = str(raw.get("key") or "").strip()
+        label = str(raw.get("label") or key).strip()
+        value = raw.get("value")
+        ftype = str(raw.get("_type") or "").strip()
+        if not key or value is None:
+            continue
+        if key in seen:
+            continue
+        if key == AMEX_MR_KEY or ftype == "points_balance" or "points" in key:
+            display = normalize_points_value(str(value))
+            if not display:
+                continue
+            item = {
+                "key": AMEX_MR_KEY if key == AMEX_MR_KEY else key,
+                "label": label or AMEX_MR_LABEL,
+                "value": display,
+                "_type": "points_balance",
+            }
+        elif "statement_balance" in key or ftype == "currency":
+            display = normalize_money_value(str(value))
+            if not display:
+                continue
+            item = {
+                "key": key,
+                "label": label or "Statement Balance",
+                "value": display,
+                "_type": "currency",
+            }
+        elif "card_ending" in key or ftype == "card_ending":
+            ending = re.sub(r"[^\d*]", "", str(value))[-4:]
+            if len(ending) < 4:
+                continue
+            item = {
+                "key": key,
+                "label": label or "Card Ending",
+                "value": ending,
+                "_type": "card_ending",
+            }
+        else:
+            text = str(value).strip()
+            if not text:
+                continue
+            item = {
+                "key": key,
+                "label": label or key,
+                "value": text,
+                "_type": ftype or "text",
+            }
+        seen.add(item["key"])
+        items.append(item)
+    if not items and raw_value:
+        items.append(build_amex_mr_item(raw_value))
+    return items
 
 
 def apply_amex_membership_rewards_extraction(
@@ -52,8 +133,9 @@ def apply_amex_membership_rewards_extraction(
     data_source: str = DATA_SOURCE_EXTENSION,
     access_cycle_id: str | None = None,
     verification_id: str | None = None,
+    fields: list[dict[str, Any]] | None = None,
 ) -> dict:
-    """Persist a single Membership Rewards balance as the normalized provider field.
+    """Persist extractor publishable fields for one access cycle.
 
     Requires ``verification_id`` / ``access_cycle_id`` so every extraction is
     correlated to exactly one access cycle. Uncorrelated writes are rejected.
@@ -73,10 +155,13 @@ def apply_amex_membership_rewards_extraction(
 
     invalid_value = False
     try:
-        item = build_amex_mr_item(raw_value)
+        items = normalize_extracted_fields(fields, raw_value)
+        if not items:
+            raise ValueError("no publishable fields")
     except ValueError:
         invalid_value = True
-        item = None
+        items = []
+    item = items[0] if items else None
     now = iso_fn()
 
     row = db.execute(
@@ -86,7 +171,7 @@ def apply_amex_membership_rewards_extraction(
     if not row:
         raise ValueError("amex account not found")
 
-    if invalid_value:
+    if invalid_value or item is None:
         record_adapter_extraction_run(
             db,
             user_id=uid,
@@ -99,7 +184,7 @@ def apply_amex_membership_rewards_extraction(
         raise ValueError("invalid Membership Rewards value")
 
     ad_data = decrypt_fn(uid, row["data_enc"] or "")
-    ad_data["items"] = [item]
+    ad_data["items"] = items
     ad_data["sync_status"] = "ok"
     ad_data.pop("sync_failure_reason", None)
 
@@ -124,7 +209,7 @@ def apply_amex_membership_rewards_extraction(
             db,
             user_id=uid,
             provider=AMEX_SOURCE,
-            fields=[item],
+            fields=items,
             verified_at=now,
             access_cycle_id=cycle_id,
             correlation_id=cycle_id,
@@ -145,8 +230,9 @@ def apply_amex_membership_rewards_extraction(
     return {
         "source": AMEX_SOURCE,
         "field": item,
+        "fields": items,
         "extraction_status": EXTRACTION_COMPLETE,
-        "is_synced": has_normalized_data([item]),
+        "is_synced": has_normalized_data(items),
         "synced_at": now,
         "data_source": data_source,
         "access_cycle_id": cycle_id,
