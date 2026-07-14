@@ -61,6 +61,9 @@ DETERMINING_BODY = (
     "Mighty is checking whether your American Express session is signed in."
 )
 REFRESHING_STATUS_HEADLINE = "Refreshing current status…"
+STALE_RECONFIRM_EXPLANATION = (
+    "Mighty has not reconfirmed this result within the current freshness window."
+)
 
 # Backward-compatible aliases (tests / callers from PR #102).
 REFRESH_LABEL = DETERMINING_HEADLINE_CURRENT
@@ -533,6 +536,77 @@ def _as_stable(view: CapabilityView) -> CapabilityView:
     )
 
 
+def _needs_freshness_demotion(
+    view: CapabilityView,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """True when a completed definitive result is too old to phrase as current."""
+    # Terminal inconclusive copy is already about the latest check, not a live claim.
+    if view.state == CapabilityState.LOGIN_UNKNOWN:
+        return False
+    # Without a completion timestamp the freshness window cannot be applied here.
+    if not view.last_verified:
+        return False
+    return not is_result_within_customer_truth_freshness(
+        view.last_verified,
+        now=now,
+    )
+
+
+def persistable_terminal_capability(
+    live: CapabilityView,
+    presented: CapabilityView,
+) -> CapabilityView | None:
+    """Canonical terminal card to persist, or None while determining/in-flight.
+
+    Freshness demotion is presentation-only and must not be written back.
+    """
+    if presented.is_refreshing or presented.presentation_phase == "determining":
+        return None
+    if presented.status_is_historical and not presented.current_verification_active:
+        return _as_stable(live)
+    return presented
+
+
+def _stale_historical_presentation(view: CapabilityView) -> CapabilityView:
+    """Completed but stale — historical wording only, never present-tense current truth."""
+    summary, verb = _historical_copy(view.state)
+    # Last confirmed signed-out may still offer sign-in; other stale states must not
+    # imply a fresh current conclusion via CTA or extracted "current" fields.
+    keep_signed_out_cta = (
+        view.state == CapabilityState.SIGNED_OUT
+        and bool(view.action_required)
+        and bool(view.action_label)
+        and bool(view.action_url)
+    )
+    return replace(
+        view,
+        headline=summary,
+        explanations=(STALE_RECONFIRM_EXPLANATION,),
+        evidence=(EvidenceItem(STALE_RECONFIRM_EXPLANATION, None),),
+        confidence=None,
+        action_required=keep_signed_out_cta,
+        action_label=view.action_label if keep_signed_out_cta else None,
+        action_url=view.action_url if keep_signed_out_cta else None,
+        extracted_fields=(),
+        is_refreshing=False,
+        refresh_label=None,
+        presentation_phase="terminal",
+        current_verification_active=False,
+        terminal_capability_state=view.state.value,
+        previous_capability_state=view.state.value,
+        previous_confirmed_at=view.last_verified,
+        status_is_historical=True,
+        primary_headline=summary,
+        primary_explanation=STALE_RECONFIRM_EXPLANATION,
+        timestamp_label="Last confirmed" if view.last_verified else None,
+        historical_summary=summary,
+        historical_timestamp_label=verb,
+        timeline_sections=(),
+    )
+
+
 def _determining_view(
     live: CapabilityView,
     *,
@@ -675,11 +749,15 @@ def present_customer_capability(
     verification_lifecycle: str | None = None,
     background_verification: bool | None = None,
     force_unknown: bool = False,
+    now: datetime | None = None,
 ) -> CapabilityView:
     """Gate live capability into the customer-visible Truth card.
 
     force_unknown: developer override — show live immediately. Never persisted
     by callers that honor ``persist=False`` / ``force_unknown`` on save.
+
+    Freshness: a completed definitive result may be phrased as current only while
+    inside CUSTOMER_TRUTH_FRESHNESS_SECONDS and no newer verification is active.
     """
     if force_unknown:
         return _as_stable(live)
@@ -701,8 +779,15 @@ def present_customer_capability(
     if previous_stable is not None and customer_visible_same(
         _as_stable(previous_stable), _as_stable(live)
     ):
-        return merge_unchanged_presentation(previous_stable, live)
-    return _as_stable(live)
+        merged = merge_unchanged_presentation(previous_stable, live)
+        if _needs_freshness_demotion(merged, now=now):
+            return _stale_historical_presentation(merged)
+        return merged
+
+    stable = _as_stable(live)
+    if _needs_freshness_demotion(stable, now=now):
+        return _stale_historical_presentation(stable)
+    return stable
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -1226,15 +1311,12 @@ def build_presented_capability_view(
         access_view=access_view,
         force_unknown=force_unknown,
     )
-    if (
-        persist_db is not None
-        and persist_user_id
-        and not presented.is_refreshing
-        and presented.presentation_phase != "determining"
-        and not force_unknown
-    ):
+    persist_view = None if force_unknown else persistable_terminal_capability(
+        live, presented,
+    )
+    if persist_db is not None and persist_user_id and persist_view is not None:
         meta = order_meta or order_meta_from_capability(
-            presented,
+            persist_view,
             access_view=access_view,
             account_identity=account_identity,
         )
@@ -1251,12 +1333,12 @@ def build_presented_capability_view(
             persist_db,
             persist_user_id,
             meta,
-            provider=presented.provider,
+            provider=persist_view.provider,
         )
         save_stable_capability(
             persist_db,
             persist_user_id,
-            presented,
+            persist_view,
             order_meta=meta,
             access_view=access_view,
             force_unknown=False,

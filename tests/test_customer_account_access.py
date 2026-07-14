@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from datetime import datetime, timezone
 
 from mighty.account_lifecycle import resolve_account_lifecycle
 from mighty.account_readiness import (
@@ -140,7 +141,7 @@ class TestCustomerAccountAccessView:
             session_state="connected",
             extraction_ok=True,
             extraction_correlated=True,
-            last_confirmed_ready_at="2026-07-13T15:00:00+00:00",
+            last_confirmed_ready_at=datetime.now(timezone.utc).isoformat(),
             access_cycle_id="cycle-1",
             last_confirmed_access_cycle_id="cycle-1",
         )
@@ -249,7 +250,7 @@ class TestCustomerAccountAccessView:
             session_state="connected",
             extraction_ok=True,
             extraction_correlated=True,
-            last_confirmed_ready_at="2026-07-13T15:00:00+00:00",
+            last_confirmed_ready_at=datetime.now(timezone.utc).isoformat(),
         )
         view = build_customer_account_access_view(
             provider="amex",

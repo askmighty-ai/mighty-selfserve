@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import re
+from datetime import datetime, timezone
 
 from mighty.account_readiness import AccountReadiness, READY, CHECKING, SIGNED_OUT, UNVERIFIED
 from mighty.account_status import AccountStatus
@@ -63,7 +64,9 @@ def _readiness(provider: str, state: str, **kwargs) -> AccountReadiness:
         extraction_correlated=state == READY,
         verification_id=None,
         cached_data_label=None,
-        last_confirmed_ready_at="2026-07-13T15:48:00+00:00" if state == READY else None,
+        last_confirmed_ready_at=(
+            datetime.now(timezone.utc).isoformat() if state == READY else None
+        ),
         last_confirmed_access_cycle_id="cycle-1" if state == READY else None,
         background_verification=False,
         secondary_label=None,
