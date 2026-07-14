@@ -22353,6 +22353,13 @@ def api_extension_session_verification_running():
 @app.route("/api/extension/session-verification/complete", methods=["POST"])
 def api_extension_session_verification_complete():
     from mighty.provider_access_manager import finish_provider_access_check
+    from mighty.session_verification import (
+        TERMINAL_VERIFICATION_LIFECYCLES,
+        VERIFICATION_TERMINAL_REASONS,
+        lifecycle_for_terminal_reason,
+        normalize_terminal_reason,
+        terminal_reason_from_error_message,
+    )
 
     user, body = api_user()
     if not user:
@@ -22361,17 +22368,47 @@ def api_extension_session_verification_complete():
     verification_id = str(body.get("verification_id") or "").strip()
     if not verification_id:
         return jsonify({"error": "verification_id required"}), 400
-    lifecycle = str(body.get("lifecycle") or "completed").strip().lower()
-    if lifecycle not in {"completed", "failed", "timed_out"}:
-        return jsonify({"error": "invalid lifecycle"}), 400
+
+    raw_reason = str(body.get("terminal_reason") or "").strip().lower() or None
+    error_message = body.get("error_message") or None
+    terminal_source = str(body.get("terminal_source") or "extension").strip() or "extension"
+
+    if raw_reason and raw_reason not in VERIFICATION_TERMINAL_REASONS:
+        return jsonify({"error": "invalid terminal_reason"}), 400
+
+    lifecycle_raw = str(body.get("lifecycle") or "").strip().lower() or None
+    if lifecycle_raw and lifecycle_raw not in TERMINAL_VERIFICATION_LIFECYCLES:
+        # Allow semantic outcome names as lifecycle for extension convenience.
+        if lifecycle_raw in VERIFICATION_TERMINAL_REASONS:
+            raw_reason = raw_reason or lifecycle_raw
+            lifecycle_raw = None
+        else:
+            return jsonify({"error": "invalid lifecycle"}), 400
+
+    if raw_reason:
+        terminal_reason = normalize_terminal_reason(raw_reason)
+    elif error_message:
+        terminal_reason = terminal_reason_from_error_message(str(error_message))
+    elif lifecycle_raw == "timed_out":
+        terminal_reason = "timeout"
+    elif lifecycle_raw == "failed":
+        terminal_reason = "unknown"
+    elif lifecycle_raw == "completed":
+        terminal_reason = "authenticated"
+    else:
+        terminal_reason = "unknown"
+
+    lifecycle = lifecycle_raw or lifecycle_for_terminal_reason(terminal_reason)
     finish_provider_access_check(
         get_db(),
         user["id"],
         verification_id,
         lifecycle=lifecycle,  # type: ignore[arg-type]
-        error_message=(body.get("error_message") or None),
+        error_message=error_message,
+        terminal_reason=terminal_reason,
+        terminal_source=terminal_source,
     )
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "lifecycle": lifecycle, "terminal_reason": terminal_reason})
 
 
 @app.route("/api/extension/provider-access-probe", methods=["POST"])

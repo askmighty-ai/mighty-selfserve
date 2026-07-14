@@ -440,7 +440,12 @@ def _evidence_for_state(
     # LOGIN_UNKNOWN
     lifecycle = (verification_lifecycle or "").strip()
     if lifecycle == "timed_out":
-        return (EvidenceItem("Verification timed out — login inconclusive", None),)
+        return (
+            EvidenceItem("Verification timed out.", None),
+            EvidenceItem("No authenticated session observed.", None),
+            EvidenceItem("No definitive signed-out evidence observed.", None),
+            EvidenceItem("Verification completed without sufficient evidence.", None),
+        )
     if lifecycle == "failed":
         return (EvidenceItem("Verification inconclusive", None),)
     if lifecycle in ACTIVE_VERIFICATION_LIFECYCLES:

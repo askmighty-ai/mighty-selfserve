@@ -45,6 +45,7 @@ from mighty.session_verification import (
     SessionVerification,
     TERMINAL_VERIFICATION_LIFECYCLES,
     VerificationLifecycle,
+    VerificationTerminalReason,
     advance_session_verification,
     complete_session_verification,
     ensure_provider_session_verification_if_stale,
@@ -53,6 +54,7 @@ from mighty.session_verification import (
     log_access_cycle_event,
     mark_session_verification_running,
     request_session_verification,
+    terminal_reason_from_error_message,
 )
 
 # Providers whose authenticated access cycle must also extract private data
@@ -218,17 +220,21 @@ def finish_provider_access_check(
     user_id: str,
     verification_id: str,
     *,
-    lifecycle: VerificationLifecycle = "completed",
+    lifecycle: VerificationLifecycle | None = None,
     error_message: str | None = None,
+    terminal_reason: VerificationTerminalReason | str | None = None,
+    terminal_source: str | None = None,
     now: datetime | None = None,
-) -> None:
+) -> SessionVerification | None:
     """Terminal lifecycle update for an access check (no PSS write by itself)."""
-    complete_session_verification(
+    return complete_session_verification(
         db,
         user_id,
         verification_id,
         lifecycle=lifecycle,
         error_message=error_message,
+        terminal_reason=terminal_reason,
+        terminal_source=terminal_source or "provider_access_manager",
         now=now,
     )
 
@@ -280,6 +286,8 @@ def complete_access_check_after_extraction(
             user_id,
             verification_id,
             lifecycle="completed",
+            terminal_reason="authenticated",
+            terminal_source="extraction_success",
             now=now,
         )
     else:
@@ -296,6 +304,8 @@ def complete_access_check_after_extraction(
             verification_id,
             lifecycle="failed",
             error_message=error_message or "extraction_failed",
+            terminal_reason="unknown",
+            terminal_source="extraction_failed",
             now=now,
         )
 
@@ -413,6 +423,8 @@ def complete_amex_cycle_no_qualifying_private_data(
         verification_id,
         lifecycle="completed",
         error_message="no_qualifying_private_data",
+        terminal_reason="authenticated",
+        terminal_source="no_qualifying_private_data",
         now=now,
     )
     log_access_cycle_event(
@@ -555,12 +567,17 @@ def complete_provider_access_check(
 
     if verification_id:
         if result.get("status") == "error" and not write_session_state:
+            failure = str(result.get("failure_reason") or "probe error")
             finish_provider_access_check(
                 db,
                 user_id,
                 verification_id,
                 lifecycle="failed",
-                error_message=result.get("failure_reason") or "probe error",
+                error_message=failure,
+                terminal_reason=terminal_reason_from_error_message(
+                    failure, default="unknown"
+                ),
+                terminal_source="probe_error",
             )
         elif (
             decision is not None
@@ -572,6 +589,8 @@ def complete_provider_access_check(
                 verification_id,
                 lifecycle="failed",
                 error_message=decision.decision_reason or "inconclusive",
+                terminal_reason="unknown",
+                terminal_source="inconclusive_decision",
             )
         elif (
             evidence is not None
@@ -613,13 +632,26 @@ def complete_provider_access_check(
             result["observation_counts"] = obs
         else:
             # Signed-out, non-Amex auth, or definitive terminal without extraction.
+            signed_out = evidence is not None and evidence.state == "signed_out"
+            connected = evidence is not None and evidence.state == "connected"
+            if signed_out:
+                reason: VerificationTerminalReason = "signed_out"
+                source = "signed_out_evidence"
+            elif connected:
+                reason = "authenticated"
+                source = "authenticated_evidence"
+            else:
+                reason = "unknown"
+                source = "probe_complete_without_definitive_evidence"
             finish_provider_access_check(
                 db,
                 user_id,
                 verification_id,
-                lifecycle="completed",
+                lifecycle="completed" if reason != "unknown" else "failed",
+                terminal_reason=reason,
+                terminal_source=source,
             )
-            if evidence is not None and evidence.state == "signed_out":
+            if signed_out:
                 log_access_cycle_event(
                     "session_verified",
                     provider=provider or "unknown",
@@ -645,6 +677,8 @@ def fail_provider_access_check(
     error_message: str,
     verification_id: str | None = None,
     manual_run_id: str | None = None,
+    terminal_reason: VerificationTerminalReason | str | None = None,
+    terminal_source: str | None = None,
 ) -> None:
     """Finish related jobs when probe payload evaluation fails."""
     if manual_run_id:
@@ -662,6 +696,9 @@ def fail_provider_access_check(
             verification_id,
             lifecycle="failed",
             error_message=error_message,
+            terminal_reason=terminal_reason
+            or terminal_reason_from_error_message(error_message),
+            terminal_source=terminal_source or "fail_provider_access_check",
         )
 
 

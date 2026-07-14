@@ -33,6 +33,18 @@ VerificationLifecycle = Literal[
     "timed_out",
 ]
 
+# Semantic terminal outcomes. Every verification cycle must end in exactly one.
+# Lifecycle storage stays completed/failed/timed_out for compatibility; this is
+# the canonical reason the cycle became terminal.
+VerificationTerminalReason = Literal[
+    "authenticated",
+    "signed_out",
+    "timeout",
+    "navigation_failed",
+    "cancelled",
+    "unknown",
+]
+
 # In-flight access-cycle stages (not yet terminal).
 ACTIVE_VERIFICATION_LIFECYCLES = frozenset(
     {"requested", "running", "session_verified", "extracting"}
@@ -42,6 +54,16 @@ CLAIMABLE_VERIFICATION_LIFECYCLES = frozenset({"requested", "running"})
 # Non-terminal mid-cycle stages after session evidence is known.
 MID_CYCLE_VERIFICATION_LIFECYCLES = frozenset({"session_verified", "extracting"})
 TERMINAL_VERIFICATION_LIFECYCLES = frozenset({"completed", "failed", "timed_out"})
+VERIFICATION_TERMINAL_REASONS = frozenset(
+    {
+        "authenticated",
+        "signed_out",
+        "timeout",
+        "navigation_failed",
+        "cancelled",
+        "unknown",
+    }
+)
 
 # Live-session freshness for Current Access / verification scheduling.
 # Retain this short window for session-evidence display; ready-result
@@ -49,9 +71,13 @@ TERMINAL_VERIFICATION_LIFECYCLES = frozenset({"completed", "failed", "timed_out"
 CURRENT_SESSION_FRESHNESS_SECONDS = 120
 # Do not enqueue another verification for the same provider within this window.
 VERIFICATION_THROTTLE_SECONDS = 60
-# Mark requested/running jobs as timed_out after this period.
-VERIFICATION_TIMEOUT_SECONDS = 25
+# Hard ceiling for probe-phase (requested/running). After this the lifecycle
+# MUST become terminal — verification is a finite operation.
+VERIFICATION_MAX_DURATION_SECONDS = 20
+# Alias kept for callers/tests that still reference the older name.
+VERIFICATION_TIMEOUT_SECONDS = VERIFICATION_MAX_DURATION_SECONDS
 # Allow session_verified → extracting → complete enough time for private-data pull.
+# Still finite: expire_timed_out_verifications always terminals overdue mid-cycles.
 VERIFICATION_EXTRACTION_TIMEOUT_SECONDS = 90
 # After a confirmed ready extraction, wait this long before requesting another
 # routine revalidation cycle (prevents ~120s session-freshness churn).
@@ -104,6 +130,8 @@ class SessionVerification:
     completed_at: str | None = None
     error_message: str | None = None
     entry_url: str | None = None
+    terminal_reason: str | None = None
+    terminal_source: str | None = None
 
 
 def utc_now() -> datetime:
@@ -127,6 +155,85 @@ def _parse_iso(value: str | None) -> datetime | None:
     return dt
 
 
+def verification_duration_ms(
+    *,
+    requested_at: str | None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    now: datetime | None = None,
+) -> int | None:
+    """Duration from cycle enqueue (requested_at) to completion (or now).
+
+    Uses requested_at as the anchor so queued + running time are included —
+    matching the timeout deadline. started_at is retained for diagnostics only.
+    """
+    del started_at  # Exposed separately; duration is cycle-wide from enqueue.
+    start = _parse_iso(requested_at)
+    end = _parse_iso(completed_at) or (now or utc_now())
+    if start is None:
+        return None
+    return max(0, int((end - start).total_seconds() * 1000))
+
+
+def lifecycle_for_terminal_reason(
+    terminal_reason: VerificationTerminalReason,
+) -> VerificationLifecycle:
+    """Map semantic terminal outcome → stored lifecycle."""
+    if terminal_reason == "timeout":
+        return "timed_out"
+    if terminal_reason in {"authenticated", "signed_out"}:
+        return "completed"
+    return "failed"
+
+
+def normalize_terminal_reason(
+    value: str | None,
+    *,
+    default: VerificationTerminalReason = "unknown",
+) -> VerificationTerminalReason:
+    reason = (value or "").strip().lower()
+    if reason in VERIFICATION_TERMINAL_REASONS:
+        return reason  # type: ignore[return-value]
+    return default
+
+
+def terminal_reason_from_error_message(
+    error_message: str | None,
+    *,
+    default: VerificationTerminalReason = "unknown",
+) -> VerificationTerminalReason:
+    """Best-effort map of failure strings → terminal outcome."""
+    text = (error_message or "").strip().lower()
+    if not text:
+        return default
+    if "timed out" in text or text == "timeout" or "verification timed out" in text:
+        return "timeout"
+    if (
+        "navigation" in text
+        or "tab_creation_blocked" in text
+        or text == "probe_navigation_error"
+        or "no_entry_url" in text
+    ):
+        return "navigation_failed"
+    if "cancelled" in text or "canceled" in text or "tab closed" in text:
+        return "cancelled"
+    if "signed_out" in text or "login_required" in text or "needs_login" in text:
+        return "signed_out"
+    return default
+
+
+_VERIFICATION_SELECT_COLUMNS = (
+    "verification_id, user_id, provider, lifecycle, entry_url, "
+    "error_message, requested_at, started_at, completed_at, "
+    "terminal_reason, terminal_source"
+)
+
+_VERIFICATION_DIAGNOSTIC_COLUMNS = (
+    ("terminal_reason", "TEXT"),
+    ("terminal_source", "TEXT"),
+)
+
+
 def ensure_session_verification_tables(db: Any) -> None:
     db.execute(
         """
@@ -139,10 +246,24 @@ def ensure_session_verification_tables(db: Any) -> None:
             error_message    TEXT,
             requested_at     TEXT NOT NULL,
             started_at       TEXT,
-            completed_at     TEXT
+            completed_at     TEXT,
+            terminal_reason  TEXT,
+            terminal_source  TEXT
         )
         """
     )
+    existing = {
+        row[1] for row in db.execute("PRAGMA table_info(provider_session_verification)").fetchall()
+    }
+    for col, coltype in _VERIFICATION_DIAGNOSTIC_COLUMNS:
+        if col not in existing:
+            try:
+                db.execute(
+                    f"ALTER TABLE provider_session_verification ADD COLUMN {col} {coltype}"
+                )
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_psv_user_provider_requested "
         "ON provider_session_verification(user_id, provider, requested_at DESC)"
@@ -166,6 +287,8 @@ def _row_to_verification(row: dict[str, Any] | None) -> SessionVerification | No
         completed_at=row.get("completed_at"),
         error_message=row.get("error_message"),
         entry_url=row.get("entry_url"),
+        terminal_reason=row.get("terminal_reason"),
+        terminal_source=row.get("terminal_source"),
     )
 
 
@@ -285,29 +408,76 @@ def expire_timed_out_verifications(
     user_id: str,
     *,
     now: datetime | None = None,
-    timeout_seconds: int = VERIFICATION_TIMEOUT_SECONDS,
+    timeout_seconds: int = VERIFICATION_MAX_DURATION_SECONDS,
     extraction_timeout_seconds: int = VERIFICATION_EXTRACTION_TIMEOUT_SECONDS,
 ) -> int:
     """Mark overdue active jobs as timed_out. Returns count updated.
 
     Does not mutate provider_session_state — timeouts never imply signed_out.
-    requested/running use the short probe timeout; session_verified/extracting
-    use a longer window so private-data extraction can finish.
+
+    Timeout ownership (canonical policy — all callers funnel here):
+      A. Queue timeout (``requested``): anchored on ``requested_at``.
+      B. Execution timeout (``running``): anchored on ``started_at``
+         (falls back to ``requested_at`` only if claim never stamped started_at).
+      C. Mid-cycle extraction (``session_verified`` / ``extracting``): longer
+         extraction window anchored on ``requested_at``. Probe-phase ceiling
+         does **not** apply once the cycle has advanced past running.
+
+    Every overdue active row becomes terminal (timed_out / timeout) via this
+    single writer — timers elsewhere must call this or ``complete_session_verification``.
     """
     ensure_session_verification_tables(db)
     now = now or utc_now()
     now_iso = now.isoformat()
     probe_cutoff = (now - timedelta(seconds=timeout_seconds)).isoformat()
     extract_cutoff = (now - timedelta(seconds=extraction_timeout_seconds)).isoformat()
-    cur_probe = db.execute(
+
+    # Collect rows about to expire so we can log diagnostics with duration_ms.
+    due_rows = db.execute(
+        """
+        SELECT verification_id, provider, lifecycle, requested_at, started_at
+        FROM provider_session_verification
+        WHERE user_id = ?
+          AND (
+            (lifecycle = 'requested' AND requested_at < ?)
+            OR (
+              lifecycle = 'running'
+              AND COALESCE(started_at, requested_at) < ?
+            )
+            OR (
+              lifecycle IN ('session_verified', 'extracting')
+              AND requested_at < ?
+            )
+          )
+        """,
+        (user_id, probe_cutoff, probe_cutoff, extract_cutoff),
+    ).fetchall()
+
+    cur_queue = db.execute(
         """
         UPDATE provider_session_verification
         SET lifecycle = 'timed_out',
             completed_at = ?,
-            error_message = COALESCE(error_message, 'verification timed out')
+            error_message = COALESCE(error_message, 'verification timed out — never claimed'),
+            terminal_reason = 'timeout',
+            terminal_source = COALESCE(terminal_source, 'server_timeout_queue')
         WHERE user_id = ?
-          AND lifecycle IN ('requested', 'running')
+          AND lifecycle = 'requested'
           AND requested_at < ?
+        """,
+        (now_iso, user_id, probe_cutoff),
+    )
+    cur_exec = db.execute(
+        """
+        UPDATE provider_session_verification
+        SET lifecycle = 'timed_out',
+            completed_at = ?,
+            error_message = COALESCE(error_message, 'verification timed out'),
+            terminal_reason = 'timeout',
+            terminal_source = COALESCE(terminal_source, 'server_timeout')
+        WHERE user_id = ?
+          AND lifecycle = 'running'
+          AND COALESCE(started_at, requested_at) < ?
         """,
         (now_iso, user_id, probe_cutoff),
     )
@@ -316,7 +486,9 @@ def expire_timed_out_verifications(
         UPDATE provider_session_verification
         SET lifecycle = 'timed_out',
             completed_at = ?,
-            error_message = COALESCE(error_message, 'extraction timed out')
+            error_message = COALESCE(error_message, 'extraction timed out'),
+            terminal_reason = 'timeout',
+            terminal_source = COALESCE(terminal_source, 'server_timeout_extraction')
         WHERE user_id = ?
           AND lifecycle IN ('session_verified', 'extracting')
           AND requested_at < ?
@@ -324,7 +496,38 @@ def expire_timed_out_verifications(
         (now_iso, user_id, extract_cutoff),
     )
     db.commit()
-    return int(cur_probe.rowcount or 0) + int(cur_extract.rowcount or 0)
+    updated = (
+        int(cur_queue.rowcount or 0)
+        + int(cur_exec.rowcount or 0)
+        + int(cur_extract.rowcount or 0)
+    )
+    for row in due_rows or []:
+        row_dict = dict(row)
+        duration = verification_duration_ms(
+            requested_at=row_dict.get("requested_at"),
+            started_at=row_dict.get("started_at"),
+            completed_at=now_iso,
+            now=now,
+        )
+        prior = str(row_dict.get("lifecycle") or "")
+        if prior == "requested":
+            source = "server_timeout_queue"
+        elif prior == "running":
+            source = "server_timeout"
+        else:
+            source = "server_timeout_extraction"
+        log_access_cycle_event(
+            "verification_terminal",
+            provider=str(row_dict.get("provider") or ""),
+            verification_id=str(row_dict.get("verification_id") or ""),
+            access_cycle_id=str(row_dict.get("verification_id") or ""),
+            lifecycle="timed_out",
+            terminal_reason="timeout",
+            terminal_source=source,
+            duration_ms=duration,
+            prior_lifecycle=prior,
+        )
+    return updated
 
 
 def get_latest_session_verification(
@@ -334,9 +537,8 @@ def get_latest_session_verification(
 ) -> SessionVerification | None:
     ensure_session_verification_tables(db)
     row = db.execute(
-        """
-        SELECT verification_id, user_id, provider, lifecycle, entry_url,
-               error_message, requested_at, started_at, completed_at
+        f"""
+        SELECT {_VERIFICATION_SELECT_COLUMNS}
         FROM provider_session_verification
         WHERE user_id = ? AND provider = ?
         ORDER BY requested_at DESC
@@ -385,9 +587,8 @@ def get_pending_session_verification(
     else:
         expire_timed_out_verifications(db, user_id, now=now)
     row = db.execute(
-        """
-        SELECT verification_id, user_id, provider, lifecycle, entry_url,
-               error_message, requested_at, started_at, completed_at
+        f"""
+        SELECT {_VERIFICATION_SELECT_COLUMNS}
         FROM provider_session_verification
         WHERE user_id = ? AND lifecycle IN ('requested', 'running')
         ORDER BY requested_at ASC
@@ -505,9 +706,9 @@ def ensure_provider_session_verification_if_stale(
     """Enqueue verification when session evidence is stale; otherwise no-op.
 
     Owns: staleness check, ready-result revalidation interval, active-job reuse,
-    60s throttle, 25s timeout, duplicate prevention. Never writes
-    provider_session_state. Does not enqueue while an active job already exists
-    (request_session_verification reuses it).
+    60s throttle, VERIFICATION_MAX_DURATION_SECONDS timeout, duplicate prevention.
+    Never writes provider_session_state. Does not enqueue while an active job
+    already exists (request_session_verification reuses it).
     """
     provider = provider.strip().lower()
     ensure_session_verification_tables(db)
@@ -596,9 +797,8 @@ def mark_session_verification_running(
     )
     db.commit()
     row = db.execute(
-        """
-        SELECT verification_id, user_id, provider, lifecycle, entry_url,
-               error_message, requested_at, started_at, completed_at
+        f"""
+        SELECT {_VERIFICATION_SELECT_COLUMNS}
         FROM provider_session_verification
         WHERE verification_id = ? AND user_id = ?
         """,
@@ -645,9 +845,8 @@ def advance_session_verification(
     )
     db.commit()
     row = db.execute(
-        """
-        SELECT verification_id, user_id, provider, lifecycle, entry_url,
-               error_message, requested_at, started_at, completed_at
+        f"""
+        SELECT {_VERIFICATION_SELECT_COLUMNS}
         FROM provider_session_verification
         WHERE verification_id = ? AND user_id = ?
         """,
@@ -661,26 +860,116 @@ def complete_session_verification(
     user_id: str,
     verification_id: str,
     *,
-    lifecycle: VerificationLifecycle = "completed",
+    lifecycle: VerificationLifecycle | None = None,
     error_message: str | None = None,
+    terminal_reason: VerificationTerminalReason | str | None = None,
+    terminal_source: str | None = None,
     now: datetime | None = None,
-) -> None:
-    if lifecycle not in TERMINAL_VERIFICATION_LIFECYCLES:
-        raise ValueError(f"invalid verification completion lifecycle: {lifecycle!r}")
+) -> SessionVerification | None:
+    """Transition an active verification to a terminal lifecycle.
+
+    Prefer ``terminal_reason`` — lifecycle is derived when omitted. Always sets
+    completed_at, terminal_reason, and terminal_source. No-ops if already
+    terminal (returns the existing row).
+    """
     ensure_session_verification_tables(db)
     now = now or utc_now()
-    db.execute(
+    now_iso = now.isoformat()
+
+    existing = db.execute(
+        f"""
+        SELECT {_VERIFICATION_SELECT_COLUMNS}
+        FROM provider_session_verification
+        WHERE verification_id = ? AND user_id = ?
+        """,
+        (verification_id, user_id),
+    ).fetchone()
+    if existing is None:
+        return None
+    existing_dict = dict(existing)
+    if existing_dict.get("lifecycle") in TERMINAL_VERIFICATION_LIFECYCLES:
+        return _row_to_verification(existing_dict)
+
+    if terminal_reason:
+        reason = normalize_terminal_reason(terminal_reason)
+    elif error_message:
+        reason = terminal_reason_from_error_message(error_message)
+    elif lifecycle == "timed_out":
+        reason = "timeout"
+    elif lifecycle == "failed":
+        reason = "unknown"
+    elif lifecycle == "completed":
+        reason = "authenticated"
+    else:
+        reason = "unknown"
+    final_lifecycle = lifecycle if lifecycle in TERMINAL_VERIFICATION_LIFECYCLES else None
+    if final_lifecycle is None:
+        final_lifecycle = lifecycle_for_terminal_reason(reason)
+    source = (terminal_source or "complete_session_verification").strip() or (
+        "complete_session_verification"
+    )
+    duration = verification_duration_ms(
+        requested_at=existing_dict.get("requested_at"),
+        started_at=existing_dict.get("started_at"),
+        completed_at=now_iso,
+        now=now,
+    )
+
+    cur = db.execute(
         """
         UPDATE provider_session_verification
-        SET lifecycle = ?, error_message = ?, completed_at = ?
+        SET lifecycle = ?,
+            error_message = ?,
+            completed_at = ?,
+            terminal_reason = ?,
+            terminal_source = ?
         WHERE verification_id = ? AND user_id = ?
           AND lifecycle IN (
               'requested', 'running', 'session_verified', 'extracting'
           )
         """,
-        (lifecycle, error_message, now.isoformat(), verification_id, user_id),
+        (
+            final_lifecycle,
+            error_message,
+            now_iso,
+            reason,
+            source,
+            verification_id,
+            user_id,
+        ),
     )
     db.commit()
+    # Exactly-once: if another writer won the race, keep the first terminal row.
+    if int(cur.rowcount or 0) == 0:
+        row = db.execute(
+            f"""
+            SELECT {_VERIFICATION_SELECT_COLUMNS}
+            FROM provider_session_verification
+            WHERE verification_id = ? AND user_id = ?
+            """,
+            (verification_id, user_id),
+        ).fetchone()
+        return _row_to_verification(dict(row) if row else None)
+    log_access_cycle_event(
+        "verification_terminal",
+        provider=str(existing_dict.get("provider") or ""),
+        verification_id=verification_id,
+        access_cycle_id=verification_id,
+        lifecycle=final_lifecycle,
+        terminal_reason=reason,
+        terminal_source=source,
+        duration_ms=duration,
+        prior_lifecycle=existing_dict.get("lifecycle"),
+    )
+    row = db.execute(
+        f"""
+        SELECT {_VERIFICATION_SELECT_COLUMNS}
+        FROM provider_session_verification
+        WHERE verification_id = ? AND user_id = ?
+        """,
+        (verification_id, user_id),
+    ).fetchone()
+    return _row_to_verification(dict(row) if row else None)
 
 
 def session_verification_to_json(verification: SessionVerification | None) -> dict[str, Any]:
@@ -694,7 +983,18 @@ def session_verification_to_json(verification: SessionVerification | None) -> di
             "requested_at": None,
             "started_at": None,
             "completed_at": None,
+            "terminal_reason": None,
+            "terminal_source": None,
+            "duration_ms": None,
+            "verification_started_at": None,
+            "verification_completed_at": None,
         }
+    duration = verification_duration_ms(
+        requested_at=verification.requested_at,
+        started_at=verification.started_at,
+        completed_at=verification.completed_at,
+    )
+    started_at = verification.started_at or verification.requested_at
     return {
         "verification_id": verification.verification_id,
         "provider": verification.provider,
@@ -704,4 +1004,9 @@ def session_verification_to_json(verification: SessionVerification | None) -> di
         "requested_at": verification.requested_at,
         "started_at": verification.started_at,
         "completed_at": verification.completed_at,
+        "terminal_reason": verification.terminal_reason,
+        "terminal_source": verification.terminal_source,
+        "duration_ms": duration,
+        "verification_started_at": started_at,
+        "verification_completed_at": verification.completed_at,
     }
