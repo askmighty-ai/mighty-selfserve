@@ -1,6 +1,13 @@
 // Mighty Sync — background service worker
 // Opens account pages as background tabs, extracts text, pushes to Railway.
-const MIGHTY_EXT_VERSION = '1.4.11-passive-admin-session-verify';
+function _mightyExtensionVersion() {
+  try {
+    return chrome.runtime.getManifest().version;
+  } catch (e) {
+    return '';
+  }
+}
+const MIGHTY_EXT_VERSION = _mightyExtensionVersion();
 const AMEX_MANUAL_PROBE_OBSERVATION_MS = 15000;
 // Bounded post-auth wait for qualifying private DOM evidence before extraction.
 const AMEX_PRIVATE_DATA_OBSERVATION_MS = 20000;
@@ -24,6 +31,18 @@ const AMEX_LIVE_SESSION_COMPARISON_ENTRY_URLS = [
 console.log('[Mighty] background.js loaded — version', MIGHTY_EXT_VERSION);
 // Write version to storage so popup.js can display it without DevTools
 chrome.storage.local.set({ ext_version: MIGHTY_EXT_VERSION });
+
+function _mightyAuthHeaders(apiKey, extra) {
+  const headers = Object.assign(
+    { 'X-Mighty-Key': apiKey },
+    extra || {}
+  );
+  if (MIGHTY_EXT_VERSION) {
+    headers['X-Mighty-Extension-Version'] = MIGHTY_EXT_VERSION;
+  }
+  return headers;
+}
+
 // Clear the persistent sync lock on every service worker startup.
 // When the SW restarts (extension reload or 5-min idle kill), any in-progress
 // sync is already dead — the lock just blocks the next sync forever if left set.
@@ -1072,7 +1091,7 @@ async function runSessionKeepalive() {
   let accounts = [];
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
-      headers: { 'X-Mighty-Key': api_key },
+      headers: _mightyAuthHeaders(api_key),
     });
     if (resp.ok) accounts = await resp.json();
   } catch (e) {
@@ -1997,7 +2016,7 @@ async function syncSingleAccount(source, apiKey) {
   console.log(`[Mighty] Post-login sync for ${source}`);
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
-      headers: { 'X-Mighty-Key': apiKey }
+      headers: _mightyAuthHeaders(apiKey),
     });
     if (!resp.ok) return;
     const accounts = await resp.json();
@@ -2321,7 +2340,7 @@ async function runAmexExtraction(apiKey, accounts) {
 async function _fetchExtensionAccounts(apiKey) {
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
-      headers: { 'X-Mighty-Key': apiKey },
+      headers: _mightyAuthHeaders(apiKey),
     });
     if (!resp.ok) return [];
     return await resp.json();
@@ -4270,7 +4289,7 @@ async function runSync() {
   let accounts;
   try {
     const resp = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
-      headers: { 'X-Mighty-Key': api_key }
+      headers: _mightyAuthHeaders(api_key),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     accounts = await resp.json();
@@ -4684,7 +4703,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       chrome.storage.local.set({ api_key: key }, () => {
         console.log('[Mighty] API key auto-configured from /extension-setup — starting sync');
         fetch(`${MIGHTY_URL}/api/extension/accounts`, {
-          headers: { 'X-Mighty-Key': key },
+          headers: _mightyAuthHeaders(key),
         })
           .then(r => r.ok ? r.json() : [])
           .then(async (accts) => {
@@ -4963,7 +4982,7 @@ async function syncAccountViaTab(apiKey, account, urls, syncSessionTime) {
 
   // Remember the synced_at before we open the tab so we can detect a fresh capture.
   const before = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
-    headers: { 'X-Mighty-Key': apiKey }
+    headers: _mightyAuthHeaders(apiKey),
   }).then(r => r.json()).then(list => {
     const acct = list.find(a => a.source === source);
     return acct ? acct.synced_at : null;
@@ -4983,7 +5002,7 @@ async function syncAccountViaTab(apiKey, account, urls, syncSessionTime) {
       // Check if the account's synced_at has updated (meaning SUPPLEMENT_WATCH fired).
       try {
         const list = await fetch(`${MIGHTY_URL}/api/extension/accounts`, {
-          headers: { 'X-Mighty-Key': apiKey }
+          headers: _mightyAuthHeaders(apiKey),
         }).then(r => r.json());
         const acct = list.find(a => a.source === source);
         if (acct && acct.synced_at && acct.synced_at !== before) {

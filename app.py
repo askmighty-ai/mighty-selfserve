@@ -795,6 +795,11 @@ def init_db():
         except Exception:
             pass
         try:
+            from mighty.extension_version import ensure_extension_version_columns
+            ensure_extension_version_columns(db)
+        except Exception:
+            pass
+        try:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS ai_request_log (
                     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -7327,6 +7332,7 @@ function toggleSnippet(el) {
 </script>
 {onboarding_modal}
 {dash_modals}
+<script src="/static/customer_local_time.js" defer></script>
 </body>
 </html>"""
 
@@ -9907,12 +9913,21 @@ def dashboard():
             session_confidence=_truth_session_confidence,
             extraction_status=_truth_extraction_status,
         )
+        _extension_info = None
+        try:
+            from mighty.extension_version import get_extension_version_status
+            _extension_info = get_extension_version_status(
+                get_db(), session["user_id"],
+            )
+        except Exception:
+            _extension_info = None
         return render_home_page(
             _home_result,
             first_name=_first_name,
             today_label=_today_label,
             last_checked=_last_checked,
             escape=he,
+            extension_info=_extension_info,
         )
 
     hero_section_html = _render_home_hero()
@@ -16051,6 +16066,15 @@ def api_debug_sync_status():
     return jsonify({"accounts": result})
 
 
+@app.route("/api/debug/extension-version", methods=["GET"])
+@require_login
+def api_debug_extension_version():
+    """Safe customer/debug payload: reported vs expected extension version."""
+    from mighty.extension_version import get_extension_version_status
+
+    return jsonify(get_extension_version_status(get_db(), session["user_id"]))
+
+
 @app.route("/api/admin/force-ok/<source>", methods=["POST"])
 @require_login
 def api_admin_force_ok(source):
@@ -18832,10 +18856,25 @@ def api_extension_accounts():
     The extension calls this to discover which accounts to sync and what
     name/icon/color to use when pushing results back via /api/data/sync.
     Auth: X-API-Key header.
+
+    Also records the optional X-Mighty-Extension-Version heartbeat so the
+    Truth Dashboard can show which build is actually running.
     """
     user, _ = api_user()
     if not user:
         return jsonify({"error": "Invalid or missing api_key"}), 401
+
+    reported_version = (
+        request.headers.get("X-Mighty-Extension-Version")
+        or request.args.get("extension_version")
+        or ""
+    ).strip()
+    if reported_version:
+        try:
+            from mighty.extension_version import record_extension_version
+            record_extension_version(get_db(), user["id"], reported_version)
+        except Exception as _ext_ver_err:
+            print(f"[ExtensionVersion] record failed: {_ext_ver_err}", flush=True)
 
     db = get_db()
     rows = db.execute(

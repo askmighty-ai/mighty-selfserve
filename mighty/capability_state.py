@@ -344,12 +344,16 @@ def resolve_capability_state_from_view(
 
 
 def _fmt_ts(value: str | None) -> str | None:
+    """Canonical UTC ISO-8601 (Z) for customer/API surfaces; UI localizes."""
     if not value:
         return None
-    text = value.replace("T", " ").replace("+00:00", " UTC")
-    if len(text) > 19:
-        text = text[:19]
-    return text
+    # Local import keeps capability resolution free of presentation deps at import time.
+    from mighty.admin_local_time import parse_admin_timestamp, to_utc_iso_z
+
+    dt = parse_admin_timestamp(value)
+    if dt is None:
+        return str(value).strip() or None
+    return to_utc_iso_z(dt)
 
 
 def _confidence_label(raw: str | None, state: CapabilityState) -> str | None:
