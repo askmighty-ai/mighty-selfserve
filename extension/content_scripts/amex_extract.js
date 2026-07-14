@@ -91,7 +91,10 @@
       },
       function bodyRegex() {
         const body = document.body?.innerText || '';
-        const m = body.match(/Membership Rewards[^0-9\n]{0,120}([\d][\d,]*)/i);
+        // Value-bearing MR only — whitespace / points|balance|: between label and digits.
+        const m = body.match(
+          /Membership Rewards(?:®)?(?:\s*(?:points|balance|:))*\s*((?:[\d]{1,3}(?:,\d{3})+|(?!19\d{2}\b|20\d{2}\b)\d{4,7}))/i,
+        );
         if (m) {
           console.log(LOG, 'body regex found', m[1]);
           return m[1];

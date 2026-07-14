@@ -308,11 +308,50 @@ PROVIDER_PROBE_CONFIG: dict[str, ProviderProbeConfig] = {
             "statement balance",
         ),
         private_data_rules=(
-            PrivateDataRule("membership_rewards_balance", _rx(r"membership rewards[^0-9\n]{0,120}([\d][\d,]*)")),
-            PrivateDataRule("points_balance", _rx(r"(?:points|rewards)\s*(?:balance|:)?\s*([\d][\d,]*)")),
+            # Value-bearing only. Between MR label and digits: whitespace / optional
+            # points|balance|: — not arbitrary prose (rejects Earn/Call/©/years).
+            # Points-like number: comma-grouped, or 4–7 digits excluding 19xx/20xx years.
+            PrivateDataRule(
+                "membership_rewards_balance",
+                _rx(
+                    r"membership rewards(?:®)?(?:\s*(?:points|balance|:))*\s*"
+                    r"((?:[\d]{1,3}(?:,\d{3})+|(?!19\d{2}\b|20\d{2}\b)\d{4,7}))"
+                ),
+            ),
+            PrivateDataRule(
+                "points_balance",
+                _rx(
+                    r"(?:(?:points|rewards)\s+balance(?:\s*:)?|(?:points|rewards)\s*:)\s*"
+                    r"((?:[\d]{1,3}(?:,\d{3})+|(?!19\d{2}\b|20\d{2}\b)\d{4,7}))"
+                ),
+            ),
             PrivateDataRule("card_name", _rx(r"(?:card(?:\s+name)?|product)\s*:\s*([^\n]{4,60})")),
-            PrivateDataRule("card_ending", _rx(r"card\s+ending\s+(?:in\s+)?[\d*]{4,}")),
-            PrivateDataRule("statement_balance", _rx(r"statement\s+balance[^$\d]{0,40}\$?([\d][\d,]*(?:\.\d{2})?)")),
+            PrivateDataRule(
+                "card_ending",
+                _rx(r"card\s+ending\s+(?:in\s+)?(?:[•*]{2,4}\s*)?\d{4}\b"),
+            ),
+            # Money fields require $ and/or decimal / comma-grouped amount.
+            PrivateDataRule(
+                "statement_balance",
+                _rx(
+                    r"statement\s+balance(?:\s|:)*\$?\s*"
+                    r"(?:[\d]{1,3}(?:,\d{3})+(?:\.\d{2})?|\d+\.\d{2})"
+                ),
+            ),
+            PrivateDataRule(
+                "available_credit",
+                _rx(
+                    r"available\s+credit(?:\s|:)*\$?\s*"
+                    r"(?:[\d]{1,3}(?:,\d{3})+(?:\.\d{2})?|\d+\.\d{2})"
+                ),
+            ),
+            PrivateDataRule(
+                "total_balance",
+                _rx(
+                    r"total\s+balance(?!\s*transfer)(?:\s|:)*\$?\s*"
+                    r"(?:[\d]{1,3}(?:,\d{3})+(?:\.\d{2})?|\d+\.\d{2})"
+                ),
+            ),
         ),
         login_rules=(
             ProbeRule("login_url", _rx(r"(?!)"), _rx(r"/en-us/account/log-?in|/(?:login|sign-?in|logon)(?:/|$|\?)")),

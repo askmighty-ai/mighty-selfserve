@@ -209,12 +209,132 @@ class TestAmexPrivateData:
         found, _, _, _ = detect_private_data("amex", dom_text=AMEX_LOGGED_IN_NO_PRIVATE)
         assert not found
 
+    def test_membership_rewards_newline_stack_qualifies(self):
+        """Overview SPA often stacks the MR label above the balance on separate lines."""
+        text = "Account Home\nMembership Rewards\n125,430\nRecent Activity"
+        found, _, snippet, rules = detect_private_data("amex", dom_text=text)
+        assert found
+        assert "membership_rewards_balance" in rules or "points_balance" in rules
+        assert "125,430" in (snippet or "")
+
+    def test_available_credit_on_overview_qualifies(self):
+        text = "Account Home\nAvailable Credit $5,000.00\nPayment Due Jul 14\nRecent Activity"
+        found, _, snippet, rules = detect_private_data(
+            "amex", url=AMEX_ACCOUNT_URL, dom_text=text,
+        )
+        assert found
+        assert "available_credit" in rules
+        assert "5,000" in (snippet or "")
+
+    def test_card_ending_with_bullets_qualifies(self):
+        text = "Account Home\nCard ending •••• 1234\nRecent Activity"
+        found, _, snippet, rules = detect_private_data("amex", dom_text=text)
+        assert found
+        assert "card_ending" in rules
+
+    def test_marketing_earn_points_near_mr_does_not_qualify(self):
+        text = "Membership Rewards\nEarn 125,000 points when you apply"
+        found, _, _, _ = detect_private_data("amex", url=AMEX_ACCOUNT_URL, dom_text=text)
+        assert not found
+
+    def test_mr_phone_and_copyright_year_do_not_qualify(self):
+        assert detect_private_data(
+            "amex", dom_text="Membership Rewards\nCall 1-800-528-4800",
+        )[0] is False
+        assert detect_private_data(
+            "amex", dom_text="Membership Rewards\n© 2026",
+        )[0] is False
+
+    def test_total_balance_transfer_offer_does_not_qualify(self):
+        text = "Total Balance Transfer Offer\n0% APR"
+        found, _, _, _ = detect_private_data("amex", url=AMEX_ACCOUNT_URL, dom_text=text)
+        assert not found
+
     def test_marketing_page_does_not_claim_private_data(self):
         text = "SkyMiles Number: 1234567890\nBook flights today"
         found, _, _, _ = detect_private_data(
             "delta", url=DELTA_MARKETING_URL, dom_text=text,
         )
         assert not found
+
+
+# Shared corpus — server detect_private_data is authoritative for classification;
+# extension patterns are kept in sync via string contract + these examples.
+AMEX_QUALIFYING_CORPUS = [
+    # (name, text, expect_qualify)
+    ("mr_same_line", "Membership Rewards Points 125,430", True),
+    ("mr_newline", "Membership Rewards\n125,430", True),
+    ("mr_points_stack", "Membership Rewards®\nPoints\n125,430", True),
+    ("available_credit", "Available Credit\n$12,345.67", True),
+    ("total_balance", "Total Balance\n$1,234.56", True),
+    ("statement_balance", "Statement balance $2,500.00", True),
+    ("card_ending", "Card ending 1234", True),
+    ("card_ending_in", "Card ending in 1234", True),
+    ("card_ending_bullets", "Card ending •••• 1234", True),
+    ("points_balance", "Points Balance: 125,430", True),
+    ("bare_mr", "Account Home\nMembership Rewards\nRecent Activity\nManage Account", False),
+    ("marketing_earn", "Membership Rewards\nEarn 125,000 points when you apply", False),
+    ("mr_call", "Membership Rewards\nCall 1-800-528-4800", False),
+    ("mr_copyright", "Membership Rewards\n© 2026", False),
+    ("avail_learn_more", "Available Credit\nLearn more", False),
+    ("balance_transfer", "Total Balance Transfer Offer\n0% APR", False),
+    ("balance_tips", "Balance your finances with these tips", False),
+    ("year_near_mr", "Membership Rewards\nSince 2026", False),
+    ("promo_points", "Earn 100,000 Membership Rewards points", False),
+    ("four_digit_ref", "Reference code 4521", False),
+    ("phone_only", "Call 1-800-528-4800 for support", False),
+    ("account_home_chrome", "Account Home\nManage Account\nRewards", False),
+]
+
+
+class TestAmexQualifyingCorpus:
+    """Server + extension pattern contract for Amex qualifying private data."""
+
+    def test_server_classifies_corpus(self):
+        for name, text, expect in AMEX_QUALIFYING_CORPUS:
+            found, _, _, _ = detect_private_data(
+                "amex", url=AMEX_ACCOUNT_URL, dom_text=text,
+            )
+            assert found is expect, f"{name}: expected {expect}, got {found} for {text!r}"
+
+    def test_extension_patterns_match_server_corpus(self):
+        """Replicate extension gate regexes in Python — must agree with server."""
+        import re
+
+        points = r"(?:[\d]{1,3}(?:,\d{3})+|(?!19\d{2}\b|20\d{2}\b)\d{4,7})"
+        money = r"(?:[\d]{1,3}(?:,\d{3})+(?:\.\d{2})?|\d+\.\d{2})"
+        ext_patterns = [
+            re.compile(
+                rf"membership rewards(?:®)?(?:\s*(?:points|balance|:))*\s*({points})",
+                re.I,
+            ),
+            re.compile(rf"statement\s+balance(?:\s|:)*\$?\s*{money}", re.I),
+            re.compile(r"card\s+ending\s+(?:in\s+)?(?:[•*]{2,4}\s*)?\d{4}\b", re.I),
+            re.compile(
+                rf"(?:(?:points|rewards)\s+balance(?:\s*:)?|(?:points|rewards)\s*:)\s*({points})",
+                re.I,
+            ),
+            re.compile(rf"available\s+credit(?:\s|:)*\$?\s*{money}", re.I),
+            re.compile(rf"total\s+balance(?!\s*transfer)(?:\s|:)*\$?\s*{money}", re.I),
+        ]
+        for name, text, expect in AMEX_QUALIFYING_CORPUS:
+            ext_hit = any(rx.search(text) for rx in ext_patterns)
+            server_hit = detect_private_data(
+                "amex", url=AMEX_ACCOUNT_URL, dom_text=text,
+            )[0]
+            assert ext_hit is expect, f"extension {name}: expected {expect}"
+            assert server_hit is expect, f"server {name}: expected {expect}"
+            assert ext_hit is server_hit, f"drift on {name}"
+
+    def test_extension_source_contains_tight_mr_rule(self):
+        from pathlib import Path
+
+        bg = (Path(__file__).resolve().parents[1] / "extension" / "background.js").read_text()
+        assert "membership rewards(?:®)?" in bg
+        assert "points|balance|:" in bg
+        assert "total_balance" in bg
+        assert "transfer)" in bg
+        assert "skipped_marketing_page" in bg
 
 
 class TestDeltaSignedInDetection:
