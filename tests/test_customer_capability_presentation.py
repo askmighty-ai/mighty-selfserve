@@ -27,6 +27,7 @@ from mighty.customer_capability_presentation import (
     REFRESHING_STATUS_HEADLINE,
     STALE_RECONFIRM_EXPLANATION,
     PresentationOrderMeta,
+    apply_selected_verification_timestamp,
     build_presented_capability_view,
     clear_stable_capability,
     customer_visible_same,
@@ -37,9 +38,13 @@ from mighty.customer_capability_presentation import (
     load_stable_capability,
     load_stable_order_meta,
     present_customer_capability,
+    resolve_order_meta_for_view,
     save_stable_capability,
 )
-from mighty.session_verification import READY_RESULT_GRACE_SECONDS
+from mighty.session_verification import (
+    READY_RESULT_GRACE_SECONDS,
+    ensure_session_verification_tables,
+)
 from mighty.home_state import resolve_home_state
 from mighty.home_ui import render_capability_panel, render_home_page
 from mighty.provider_account import EXTRACTION_COMPLETE, EXTRACTION_PENDING
@@ -795,6 +800,338 @@ class TestTemporallyAccuratePresentation:
             if step.status_is_historical and step.historical_summary:
                 assert payload["historical_summary"] == step.historical_summary
                 assert step.historical_summary in html_panel
+
+
+class TestSelectedVerificationTimestampWiring:
+    """Production: correct verification selected, Last confirmed showed 11:29 AM.
+
+    capability.last_verified was sourced from last_confirmed_ready_at while
+    verification_completed_at on the selected row was ~3:11 PM.
+    """
+
+    STALE_1129 = "2026-07-14T18:29:00Z"  # 11:29 AM PT
+    SELECTED_311 = "2026-07-14T22:11:00Z"  # ~3:11 PM PT
+    PRIOR_HISTORICAL = "2026-07-14T17:00:00Z"
+
+    def _seed_verification(
+        self,
+        db,
+        *,
+        vid: str,
+        completed_at: str | None,
+        lifecycle: str = "completed",
+        requested_at: str | None = None,
+        started_at: str | None = None,
+        terminal_reason: str = "signed_out",
+    ) -> None:
+        ensure_session_verification_tables(db)
+        req = requested_at or completed_at or "2026-07-14T22:00:00Z"
+        start = started_at or req
+        db.execute(
+            """
+            INSERT INTO provider_session_verification (
+                verification_id, user_id, provider, lifecycle,
+                requested_at, started_at, completed_at,
+                terminal_reason, terminal_source
+            ) VALUES (?, ?, 'amex', ?, ?, ?, ?, ?, 'test')
+            """,
+            (vid, "u1", lifecycle, req, start, completed_at, terminal_reason),
+        )
+        db.commit()
+
+    def _stale_readiness_access(self, *, verification_id: str = "ver-311"):
+        return _view(
+            SIGNED_OUT,
+            verification_lifecycle="completed",
+            verification_id=verification_id,
+            last_confirmed_ready_at="2026-07-14T18:29:00+00:00",
+        )
+
+    def _seed_stale_prior(self, db) -> None:
+        prior = replace(
+            _stable(SIGNED_OUT, verification_id="ver-1129"),
+            last_verified=self.STALE_1129,
+        )
+        save_stable_capability(
+            db,
+            "u1",
+            prior,
+            order_meta=_meta(
+                verification_id="ver-1129",
+                completed_at=self.STALE_1129,
+                terminal_reason="signed_out",
+            ),
+        )
+
+    def test_last_verified_follows_selected_verification_completed_at(self):
+        db = _memory_db()
+        self._seed_verification(
+            db, vid="ver-311", completed_at=self.SELECTED_311,
+        )
+        self._seed_stale_prior(db)
+        access = self._stale_readiness_access()
+        clock = datetime(2026, 7, 14, 22, 36, tzinfo=timezone.utc)
+        live = build_capability_view(access, verification_id="ver-311")
+        assert live.last_verified == self.STALE_1129  # from last_confirmed_ready_at
+        meta = resolve_order_meta_for_view(
+            live, db=db, user_id="u1", access_view=access,
+        )
+        live = apply_selected_verification_timestamp(live, meta)
+        assert live.last_verified == self.SELECTED_311
+        previous = load_stable_capability(db, "u1", "amex")
+        presented = present_customer_capability(
+            live,
+            previous_stable=previous,
+            access_view=access,
+            now=clock,
+        )
+        assert presented.last_verified == self.SELECTED_311
+        assert presented.timestamp_label == "Latest check completed"
+        assert presented.status_is_historical is False
+        rendered = render_capability_panel(presented, escape=_escape)
+        assert "Latest check completed" in rendered
+        assert "Last confirmed" not in rendered
+
+        # Persist path (Dashboard / API) must store the selected completion time.
+        presented_persisted = build_presented_capability_view(
+            access,
+            previous_stable=previous,
+            persist_db=db,
+            persist_user_id="u1",
+            verification_id="ver-311",
+        )
+        assert presented_persisted.last_verified == self.SELECTED_311
+        loaded = load_stable_capability(db, "u1", "amex")
+        assert loaded is not None
+        assert loaded.last_verified == self.SELECTED_311
+        stored_meta = load_stable_order_meta(db, "u1", "amex")
+        assert stored_meta is not None
+        assert stored_meta.verification_id == "ver-311"
+        assert stored_meta.verification_completed_at == self.SELECTED_311
+
+    def test_dashboard_and_api_both_return_selected_completed_at(self):
+        """Dashboard build_presented + API _apply_stable share 3:11 PM."""
+        from mighty.account_status import _apply_stable_customer_capability
+
+        db = _memory_db()
+        self._seed_verification(
+            db, vid="ver-311", completed_at=self.SELECTED_311,
+        )
+        self._seed_stale_prior(db)
+        access = self._stale_readiness_access()
+        live = build_capability_view(access, verification_id="ver-311")
+        assert live.last_verified == self.STALE_1129
+
+        dash = build_presented_capability_view(
+            access,
+            persist_db=db,
+            persist_user_id="u1",
+            verification_id="ver-311",
+        )
+        assert dash.last_verified == self.SELECTED_311
+
+        # Reset persist so API path re-applies independently.
+        clear_stable_capability(db, "u1", "amex")
+        self._seed_stale_prior(db)
+        api_live = build_capability_view(access, verification_id="ver-311")
+        accounts = [
+            AccountStatus(
+                source="amex",
+                display_name="American Express",
+                status="needs_login",
+                presentation_key="needs_sign_in",
+                presentation_label="Sign in required",
+                last_successful_sync_at=None,
+                current_attempt_at=None,
+                last_error=None,
+                user_action_label=None,
+                user_action_url=None,
+                customer_access=access,
+                capability=api_live,
+                verification_lifecycle="completed",
+                background_verification=False,
+            )
+        ]
+        _apply_stable_customer_capability(accounts, db=db, user_id="u1")
+        api = accounts[0].capability
+        assert api is not None
+        assert api.last_verified == self.SELECTED_311
+        assert dash.last_verified == api.last_verified == self.SELECTED_311
+        assert dash.timestamp_label == api.timestamp_label
+        assert dash.state == api.state
+
+    def test_freshness_demotion_keeps_selected_completed_at(self):
+        """Stale demotion labels Last confirmed with 3:11, never 11:29."""
+        db = _memory_db()
+        self._seed_verification(
+            db, vid="ver-311", completed_at=self.SELECTED_311,
+        )
+        access = self._stale_readiness_access()
+        # Clock far past the freshness window relative to 3:11 PM.
+        clock = datetime(2026, 7, 14, 23, 0, tzinfo=timezone.utc)
+        presented = build_presented_capability_view(
+            access,
+            persist_db=db,
+            persist_user_id="u1",
+            verification_id="ver-311",
+        )
+        # Re-present with an old clock via the same wired last_verified.
+        live = build_capability_view(access, verification_id="ver-311")
+        meta = resolve_order_meta_for_view(
+            live, db=db, user_id="u1", access_view=access,
+        )
+        live = apply_selected_verification_timestamp(live, meta)
+        demoted = present_customer_capability(
+            live,
+            previous_stable=None,
+            access_view=access,
+            now=clock + timedelta(seconds=CUSTOMER_TRUTH_FRESHNESS_SECONDS + 1),
+        )
+        assert demoted.status_is_historical is True
+        assert demoted.timestamp_label == "Last confirmed"
+        assert demoted.last_verified == self.SELECTED_311
+        assert demoted.previous_confirmed_at == self.SELECTED_311
+        assert demoted.last_verified != self.STALE_1129
+        rendered = render_capability_panel(demoted, escape=_escape)
+        assert "Last confirmed" in rendered
+        # Must not surface the readiness/extraction 11:29 stamp.
+        assert "11:29" not in rendered
+        assert presented.last_verified == self.SELECTED_311
+
+    def test_historical_prior_keeps_own_completion_time(self):
+        """Active check retains prior card's completion, not readiness lag."""
+        db = _memory_db()
+        self._seed_verification(
+            db,
+            vid="ver-prior",
+            completed_at=self.PRIOR_HISTORICAL,
+        )
+        self._seed_verification(
+            db,
+            vid="ver-active",
+            completed_at=None,
+            lifecycle="running",
+            requested_at="2026-07-14T22:30:00Z",
+            started_at="2026-07-14T22:30:05Z",
+            terminal_reason="none",
+        )
+        prior = replace(
+            _stable(SIGNED_OUT, verification_id="ver-prior"),
+            last_verified=self.PRIOR_HISTORICAL,
+        )
+        save_stable_capability(
+            db,
+            "u1",
+            prior,
+            order_meta=_meta(
+                verification_id="ver-prior",
+                completed_at=self.PRIOR_HISTORICAL,
+                terminal_reason="signed_out",
+            ),
+        )
+        active_access = _inflight_checking(verification_id="ver-active")
+        held = build_presented_capability_view(
+            active_access,
+            previous_stable=prior,
+            persist_db=db,
+            persist_user_id="u1",
+            verification_id="ver-active",
+        )
+        assert held.presentation_phase == "determining"
+        assert held.is_refreshing is True
+        assert held.previous_confirmed_at == self.PRIOR_HISTORICAL
+        # Active check must not rewrite current-check stamps from readiness.
+        assert held.last_verified != self.STALE_1129
+
+    def test_active_verification_does_not_overwrite_from_completed_at(self):
+        """No completed_at → leave live last_verified alone (requested/started path)."""
+        db = _memory_db()
+        self._seed_verification(
+            db,
+            vid="ver-active",
+            completed_at=None,
+            lifecycle="running",
+            requested_at="2026-07-14T22:30:00Z",
+            started_at="2026-07-14T22:30:05Z",
+            terminal_reason="none",
+        )
+        access = _inflight_checking(verification_id="ver-active")
+        live = build_capability_view(access, verification_id="ver-active")
+        before = live.last_verified
+        meta = resolve_order_meta_for_view(
+            live, db=db, user_id="u1", access_view=access,
+        )
+        assert meta.verification_completed_at is None
+        wired = apply_selected_verification_timestamp(live, meta)
+        assert wired.last_verified == before
+        assert wired is live
+
+    def test_legacy_without_verification_completion_keeps_readiness_timestamp(self):
+        """No verification identity/completed_at → degrade to readiness timestamp."""
+        live = replace(
+            build_capability_view(
+                _view(
+                    SIGNED_OUT,
+                    verification_lifecycle="completed",
+                    last_confirmed_ready_at="2026-07-14T18:29:00+00:00",
+                ),
+            ),
+            last_verified=self.STALE_1129,
+            current_verification_id=None,
+        )
+        meta = PresentationOrderMeta(
+            verification_id=None,
+            access_cycle_id=None,
+            verification_completed_at=None,
+            lifecycle=None,
+            terminal_reason=None,
+            account_identity=None,
+        )
+        wired = apply_selected_verification_timestamp(live, meta)
+        assert wired.last_verified == self.STALE_1129
+        assert wired is live
+
+    def test_apply_selected_verification_timestamp_helper(self):
+        view = replace(
+            _stable(SIGNED_OUT, verification_id="ver-311"),
+            last_verified=self.STALE_1129,
+        )
+        meta = _meta(
+            verification_id="ver-311",
+            completed_at=self.SELECTED_311,
+            terminal_reason="signed_out",
+        )
+        wired = apply_selected_verification_timestamp(view, meta)
+        assert wired.last_verified == self.SELECTED_311
+        assert view.last_verified == self.STALE_1129
+
+    def test_resolve_order_meta_reads_verification_completed_at(self):
+        db = _memory_db()
+        self._seed_verification(
+            db, vid="ver-311", completed_at=self.SELECTED_311,
+        )
+        live = replace(
+            build_capability_view(
+                _view(
+                    SIGNED_OUT,
+                    verification_lifecycle="completed",
+                    verification_id="ver-311",
+                    last_confirmed_ready_at="2026-07-14T18:29:00+00:00",
+                ),
+                verification_id="ver-311",
+            ),
+            last_verified=self.STALE_1129,
+        )
+        meta = resolve_order_meta_for_view(
+            live, db=db, user_id="u1",
+        )
+        assert meta.verification_completed_at == self.SELECTED_311
+        assert meta.verification_id == "ver-311"
+        assert meta.access_cycle_id == "ver-311"
+        assert meta.lifecycle == "completed"
+        assert apply_selected_verification_timestamp(live, meta).last_verified == (
+            self.SELECTED_311
+        )
 
 
 class TestMonotonicPersistence:
