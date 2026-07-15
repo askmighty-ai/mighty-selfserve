@@ -51,8 +51,10 @@ from mighty.session_verification import (
     ensure_provider_session_verification_if_stale,
     ensure_session_verification_tables,
     ensure_stale_session_verifications_for_user,
+    expire_timed_out_verifications,
     log_access_cycle_event,
     mark_session_verification_running,
+    normalize_trigger_source,
     request_session_verification,
     terminal_reason_from_error_message,
 )
@@ -102,6 +104,38 @@ def _observed_at(value: datetime | str | None) -> datetime:
 # ── Active verification scheduling ────────────────────────────────────────────
 
 
+def request_provider_verification(
+    db: Any,
+    user_id: str,
+    provider: str,
+    trigger_source: str,
+    requested_by: str | None = None,
+    *,
+    now: datetime | None = None,
+    throttle_seconds: int | None = None,
+) -> SessionVerification | None:
+    """Canonical command-side verification enqueue.
+
+    Reuses the current active verification when one exists; otherwise creates
+    exactly one. Records trigger_source. Idempotent under concurrent requests.
+
+    Allowed trigger_source values:
+      user_check_now, scheduled_recheck, extension_startup,
+      provider_page_observed, internal_recovery, admin_debug
+
+    Forbidden: dashboard_reload, account_status_poll (and other GET-implied sources).
+    """
+    source = normalize_trigger_source(trigger_source)
+    kwargs: dict[str, Any] = {
+        "now": now,
+        "trigger_source": source,
+        "requested_by": requested_by,
+    }
+    if throttle_seconds is not None:
+        kwargs["throttle_seconds"] = throttle_seconds
+    return request_session_verification(db, user_id, provider, **kwargs)
+
+
 def request_provider_access_check(
     db: Any,
     user_id: str,
@@ -109,15 +143,22 @@ def request_provider_access_check(
     *,
     now: datetime | None = None,
     throttle_seconds: int | None = None,
+    trigger_source: str = "internal_recovery",
+    requested_by: str | None = None,
 ) -> SessionVerification | None:
     """Enqueue an active access check (session verification job).
 
-    Preserves session_verification throttle / active-job reuse semantics.
+    Compatibility wrapper around ``request_provider_verification``.
     """
-    kwargs: dict[str, Any] = {"now": now}
-    if throttle_seconds is not None:
-        kwargs["throttle_seconds"] = throttle_seconds
-    return request_session_verification(db, user_id, provider, **kwargs)
+    return request_provider_verification(
+        db,
+        user_id,
+        provider,
+        trigger_source=trigger_source,
+        requested_by=requested_by,
+        now=now,
+        throttle_seconds=throttle_seconds,
+    )
 
 
 def ensure_provider_access_check_if_stale(
@@ -128,6 +169,8 @@ def ensure_provider_access_check_if_stale(
     session_state: ProviderSessionState | None = None,
     now: datetime | None = None,
     freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+    trigger_source: str = "scheduled_recheck",
+    requested_by: str | None = None,
 ) -> SessionVerification | None:
     """Request an access check only when current session evidence is stale."""
     return ensure_provider_session_verification_if_stale(
@@ -137,7 +180,25 @@ def ensure_provider_access_check_if_stale(
         session_state=session_state,
         now=now,
         freshness_seconds=freshness_seconds,
+        trigger_source=trigger_source,
+        requested_by=requested_by,
     )
+
+
+def run_verification_maintenance(
+    db: Any,
+    user_id: str,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Canonical command-side verification maintenance.
+
+    Expires overdue queue / running / extraction-phase rows. Idempotent.
+    Call from ensure-due, keepalive/startup, or dedicated schedulers — never
+    from customer-facing GET handlers.
+    """
+    ensure_session_verification_tables(db)
+    return expire_timed_out_verifications(db, user_id, now=now)
 
 
 def ensure_stale_provider_access_checks(
@@ -147,14 +208,23 @@ def ensure_stale_provider_access_checks(
     providers: list[str] | tuple[str, ...] | None = None,
     now: datetime | None = None,
     freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+    trigger_source: str = "scheduled_recheck",
+    requested_by: str | None = None,
 ) -> dict[str, SessionVerification]:
-    """Product trigger: enqueue access checks for all stale probe providers."""
+    """Scheduled/command trigger: enqueue access checks for stale probe providers.
+
+    Must not be called from customer-facing GET endpoints.
+    Runs verification maintenance (expire overdue actives) before enqueue.
+    """
+    run_verification_maintenance(db, user_id, now=now)
     return ensure_stale_session_verifications_for_user(
         db,
         user_id,
         providers=providers,
         now=now,
         freshness_seconds=freshness_seconds,
+        trigger_source=trigger_source,
+        requested_by=requested_by,
     )
 
 
@@ -237,7 +307,7 @@ def finish_provider_access_check(
     now: datetime | None = None,
 ) -> SessionVerification | None:
     """Terminal lifecycle update for an access check (no PSS write by itself)."""
-    return complete_session_verification(
+    verification = complete_session_verification(
         db,
         user_id,
         verification_id,
@@ -247,6 +317,19 @@ def finish_provider_access_check(
         terminal_source=terminal_source or "provider_access_manager",
         now=now,
     )
+    if (
+        verification is not None
+        and verification.lifecycle in TERMINAL_VERIFICATION_LIFECYCLES
+    ):
+        try:
+            from mighty.account_status import persist_customer_presentation_for_provider
+
+            persist_customer_presentation_for_provider(
+                db, user_id, verification.provider,
+            )
+        except Exception:
+            pass
+    return verification
 
 
 def mark_access_check_extracting(

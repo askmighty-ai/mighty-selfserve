@@ -1,5 +1,6 @@
 """Tests for Login Truth / Current Account Access diagnostic model and admin page."""
 
+import json
 import os
 import secrets
 import sys
@@ -1769,7 +1770,8 @@ def test_admin_login_truth_and_session_evidence_are_passive(admin_client):
         assert get_latest_session_verification(db, uid, "amex") is None
 
 
-def test_account_status_creates_one_stale_verification_job(client):
+def test_account_status_does_not_create_stale_verification_job(client):
+    """GET /api/account-status is read-only — stale evidence alone does not enqueue."""
     import app as mighty
     from mighty.session_verification import get_latest_session_verification
 
@@ -1783,11 +1785,8 @@ def test_account_status_creates_one_stale_verification_job(client):
 
     with mighty.app.app_context():
         db = mighty.get_db()
-        latest = get_latest_session_verification(db, uid, "amex")
-        assert latest is not None
-        assert latest.lifecycle == "requested"
-        assert latest.entry_url == "https://global.americanexpress.com/overview"
-        assert _verification_count(db, uid) == 1
+        assert get_latest_session_verification(db, uid, "amex") is None
+        assert _verification_count(db, uid) == 0
 
 
 def test_fresh_evidence_creates_no_verification_job(client):
@@ -1844,13 +1843,18 @@ def test_active_verification_job_is_reused(client):
 
 def test_extension_pending_poll_sees_queued_job(client):
     import app as mighty
+    from mighty.provider_access_manager import request_provider_verification
 
     uid = _uid(client)
     api_key = _api_key(mighty, client)
     with mighty.app.app_context():
-        _seed_stale_amex_connected(mighty.get_db(), uid)
-
-    assert client.get("/api/account-status").status_code == 200
+        db = mighty.get_db()
+        _seed_stale_amex_connected(db, uid)
+        job = request_provider_verification(
+            db, uid, "amex", "scheduled_recheck", throttle_seconds=0,
+        )
+        assert job is not None
+        vid = job.verification_id
 
     pending = client.get(
         "/api/extension/session-verification/pending",
@@ -1861,11 +1865,11 @@ def test_extension_pending_poll_sees_queued_job(client):
     assert data["lifecycle"] == "requested"
     assert data["provider"] == "amex"
     assert data["entry_url"] == "https://global.americanexpress.com/overview"
-    assert data["verification_id"]
+    assert data["verification_id"] == vid
 
 
-def test_extension_pending_ensure_stale_enqueues_without_account_status(client):
-    """Extension lifecycle poll can enqueue stale work without a webpage view."""
+def test_extension_ensure_due_enqueues_without_account_status(client):
+    """Extension scheduled POST can enqueue stale work without a webpage view."""
     import app as mighty
 
     uid = _uid(client)
@@ -1873,6 +1877,14 @@ def test_extension_pending_ensure_stale_enqueues_without_account_status(client):
     with mighty.app.app_context():
         _seed_stale_amex_connected(mighty.get_db(), uid)
         assert _verification_count(mighty.get_db(), uid) == 0
+
+    due = client.post(
+        "/api/extension/session-verification/ensure-due",
+        headers={"X-Mighty-Key": api_key, "Content-Type": "application/json"},
+        data=json.dumps({"trigger_source": "scheduled_recheck"}),
+    )
+    assert due.status_code == 200
+    assert "amex" in due.get_json()["created"]
 
     pending = client.get(
         "/api/extension/session-verification/pending",
@@ -1882,6 +1894,7 @@ def test_extension_pending_ensure_stale_enqueues_without_account_status(client):
     data = pending.get_json()
     assert data["lifecycle"] == "requested"
     assert data["provider"] == "amex"
+    assert data["trigger_source"] == "scheduled_recheck"
 
     pending2 = client.get(
         "/api/extension/session-verification/pending",

@@ -169,15 +169,25 @@ def _render_action(
     capability: CapabilityView,
     escape: Callable[[Any], str],
 ) -> str:
-    if not capability.action_required or not capability.action_label or not capability.action_url:
-        return ""
-    external = capability.action_url.startswith("http")
-    target = ' target="_blank" rel="noopener noreferrer"' if external else ""
-    return (
-        f'<a href="{escape(capability.action_url)}" '
-        f'class="dash-brief-featured-cta dash-truth-cta"{target}>'
-        f'{escape(capability.action_label)}</a>'
+    parts: list[str] = []
+    # Explicit command — never fired by reload / GET polls.
+    checking = bool(capability.is_refreshing) or capability.presentation_phase == "determining"
+    disabled = " disabled" if checking else ""
+    label = "Checking…" if checking else "Check now"
+    parts.append(
+        f'<button type="button" class="dash-truth-check-now" '
+        f'id="amex-check-now-btn" data-provider="amex"{disabled}>'
+        f"{escape(label)}</button>"
     )
+    if capability.action_required and capability.action_label and capability.action_url:
+        external = capability.action_url.startswith("http")
+        target = ' target="_blank" rel="noopener noreferrer"' if external else ""
+        parts.append(
+            f'<a href="{escape(capability.action_url)}" '
+            f'class="dash-brief-featured-cta dash-truth-cta"{target}>'
+            f"{escape(capability.action_label)}</a>"
+        )
+    return "".join(parts)
 
 
 def _pipeline_row(stage: TruthPipelineStage, escape: Callable[[Any], str]) -> str:
@@ -567,10 +577,22 @@ def render_home_page(
         )
 
     footer = ""
-    if last_checked:
+    # Prefer explicit last_checked from the caller (Dashboard wires selected
+    # verification completed_at). Fall back to capability.last_verified.
+    # Never use browser reload / poll response time.
+    checked_at = last_checked or (
+        capability.last_verified if capability is not None else ""
+    )
+    if checked_at:
+        display = (
+            _ts_html(checked_at)
+            if "T" in str(checked_at)
+            else escape(str(checked_at))
+        )
         footer = (
-            f'<footer class="dash-home-footer">'
-            f'Last checked: {escape(last_checked)}'
+            f'<footer class="dash-home-footer" id="dash-last-checked" '
+            f'data-last-checked="{escape(checked_at)}">'
+            f"Last checked: {display}"
             f"</footer>"
         )
 

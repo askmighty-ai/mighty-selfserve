@@ -856,7 +856,9 @@ def load_all_account_statuses(
             )
         )
 
-    _apply_stable_customer_capability(accounts, db=db, user_id=uid)
+    _apply_stable_customer_capability(
+        accounts, db=db, user_id=uid, write_persist=False,
+    )
 
     accounts.sort(key=lambda a: a.display_name.lower())
     summary_presentations = [
@@ -876,12 +878,16 @@ def _apply_stable_customer_capability(
     *,
     db,
     user_id: str,
+    write_persist: bool = False,
 ) -> None:
-    """Hold prior Truth card while verification is in flight (customer providers)."""
+    """Hold prior Truth card while verification is in flight (customer providers).
+
+    Customer-facing GET paths must keep ``write_persist=False``.
+    """
     from mighty.capability_state import is_customer_visible_provider
     from mighty.customer_capability_presentation import (
         apply_selected_verification_timestamp,
-        load_stable_capability,
+        load_valid_stable_capability,
         persistable_terminal_capability,
         present_customer_capability,
         resolve_account_identity,
@@ -893,7 +899,7 @@ def _apply_stable_customer_capability(
         if not is_customer_visible_provider(acct.source) or acct.capability is None:
             continue
         identity = resolve_account_identity(db, user_id, acct.source)
-        previous = load_stable_capability(
+        previous = load_valid_stable_capability(
             db, user_id, acct.source, account_identity=identity,
         )
         live = acct.capability
@@ -916,6 +922,8 @@ def _apply_stable_customer_capability(
             background_verification=acct.background_verification,
         )
         acct.capability = presented
+        if not write_persist:
+            continue
         persist_view = persistable_terminal_capability(live, presented)
         if persist_view is not None:
             persist_view = apply_selected_verification_timestamp(persist_view, meta)
@@ -927,6 +935,42 @@ def _apply_stable_customer_capability(
                 access_view=acct.customer_access,
                 force_unknown=False,
             )
+
+
+def persist_customer_presentation_for_provider(
+    db,
+    user_id: str,
+    provider: str,
+    *,
+    decrypt_fn=None,
+    display_names: dict[str, str] | None = None,
+    login_url_fn=None,
+) -> None:
+    """Command-path: rebuild and persist customer presentation after a terminal cycle."""
+    from mighty.capability_state import filter_customer_accounts
+
+    def _noop_decrypt(_uid, _blob):
+        return {}
+
+    def _noop_login_url(_source):
+        return ""
+
+    accounts, _summary = load_all_account_statuses(
+        user_id,
+        db,
+        decrypt_fn=decrypt_fn or _noop_decrypt,
+        display_names=display_names or {},
+        login_url_fn=login_url_fn or _noop_login_url,
+    )
+    accounts = [
+        a for a in filter_customer_accounts(accounts)
+        if a.source == provider.strip().lower()
+    ]
+    if not accounts:
+        return
+    _apply_stable_customer_capability(
+        accounts, db=db, user_id=user_id, write_persist=True,
+    )
 
 
 def _load_lifecycle_signals(uid: str, db) -> dict[str, tuple[bool, bool, bool]]:

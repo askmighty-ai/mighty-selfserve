@@ -1,16 +1,19 @@
 """Background session verification lifecycle — separate from provider_session_state.
 
 Freshness of Current Access is a read-model concern. When session evidence is
-stale, product surfaces and the extension may request a background verification.
+stale, **command-side** callers may request a background verification.
 That request is recorded here; it must not rewrite provider_session_state by
 itself. Only explicit session evidence from the verifier may update PSS.
 
-Enqueue ownership lives here via ensure_provider_session_verification_if_stale —
-callers must not duplicate staleness / throttle / timeout rules.
+Enqueue ownership lives here via ensure_provider_session_verification_if_stale /
+request_session_verification — callers must not duplicate staleness / throttle /
+timeout rules.
 
 Production scheduling entry point: ``mighty.provider_access_manager``
-(``request_provider_access_check`` / ``ensure_stale_provider_access_checks``).
+(``request_provider_verification`` / ``ensure_stale_provider_access_checks``).
 Prefer those wrappers over calling this module directly from new product code.
+
+Customer-facing GETs must never enqueue. Use explicit trigger_source values only.
 """
 
 from __future__ import annotations
@@ -93,6 +96,39 @@ SESSION_VERIFICATION_ENTRY_URLS: dict[str, str] = {
     "amex": AMEX_SESSION_VERIFICATION_ENTRY_URL,
 }
 
+# Explicit command-side trigger sources. Reads (GET) must never create work and
+# must never invent a trigger_source. dashboard_reload / account_status_poll
+# are intentionally invalid.
+VerificationTriggerSource = Literal[
+    "user_check_now",
+    "scheduled_recheck",
+    "extension_startup",
+    "provider_page_observed",
+    "internal_recovery",
+    "admin_debug",
+]
+
+VERIFICATION_TRIGGER_SOURCES: frozenset[str] = frozenset(
+    {
+        "user_check_now",
+        "scheduled_recheck",
+        "extension_startup",
+        "provider_page_observed",
+        "internal_recovery",
+        "admin_debug",
+    }
+)
+
+# Forbidden — these imply hidden GET-side enqueue and must never be stored.
+FORBIDDEN_VERIFICATION_TRIGGER_SOURCES: frozenset[str] = frozenset(
+    {
+        "dashboard_reload",
+        "account_status_poll",
+        "pending_poll",
+        "page_load",
+    }
+)
+
 
 def _cycle_age_ms(
     requested_at: str | datetime | None,
@@ -170,6 +206,8 @@ class SessionVerification:
     entry_url: str | None = None
     terminal_reason: str | None = None
     terminal_source: str | None = None
+    trigger_source: str | None = None
+    requested_by: str | None = None
 
 
 def utc_now() -> datetime:
@@ -263,16 +301,33 @@ def terminal_reason_from_error_message(
 _VERIFICATION_SELECT_COLUMNS = (
     "verification_id, user_id, provider, lifecycle, entry_url, "
     "error_message, requested_at, started_at, completed_at, "
-    "terminal_reason, terminal_source"
+    "terminal_reason, terminal_source, trigger_source, requested_by"
 )
 
 _VERIFICATION_DIAGNOSTIC_COLUMNS = (
     ("terminal_reason", "TEXT"),
     ("terminal_source", "TEXT"),
+    ("trigger_source", "TEXT"),
+    ("requested_by", "TEXT"),
 )
 
 
-def ensure_session_verification_tables(db: Any) -> None:
+def ensure_session_verification_tables(db: Any, *, commit: bool = True) -> bool:
+    """Create/migrate provider_session_verification schema.
+
+    Returns True when DDL was applied. After normal init_db / startup,
+    subsequent calls are no-ops and do not commit when ``commit=False``
+    or when no schema change occurred.
+    """
+    mutated = False
+    existing_tables = {
+        row[0]
+        for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "provider_session_verification" not in existing_tables:
+        mutated = True
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS provider_session_verification (
@@ -286,7 +341,9 @@ def ensure_session_verification_tables(db: Any) -> None:
             started_at       TEXT,
             completed_at     TEXT,
             terminal_reason  TEXT,
-            terminal_source  TEXT
+            terminal_source  TEXT,
+            trigger_source   TEXT,
+            requested_by     TEXT
         )
         """
     )
@@ -295,6 +352,7 @@ def ensure_session_verification_tables(db: Any) -> None:
     }
     for col, coltype in _VERIFICATION_DIAGNOSTIC_COLUMNS:
         if col not in existing:
+            mutated = True
             try:
                 db.execute(
                     f"ALTER TABLE provider_session_verification ADD COLUMN {col} {coltype}"
@@ -302,6 +360,8 @@ def ensure_session_verification_tables(db: Any) -> None:
             except Exception as exc:
                 if "duplicate column" not in str(exc).lower():
                     raise
+    # Indexes: CREATE IF NOT EXISTS is idempotent; only force commit when
+    # the table/columns were just created/migrated.
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_psv_user_provider_requested "
         "ON provider_session_verification(user_id, provider, requested_at DESC)"
@@ -324,6 +384,7 @@ def ensure_session_verification_tables(db: Any) -> None:
     except Exception as exc:
         # Collapse legacy duplicates then retry once.
         if "unique" in str(exc).lower() or "constraint" in str(exc).lower():
+            mutated = True
             _collapse_all_duplicate_active_verifications(db)
             db.execute(
                 """
@@ -336,7 +397,39 @@ def ensure_session_verification_tables(db: Any) -> None:
             )
         else:
             raise
-    db.commit()
+    if commit and mutated:
+        db.commit()
+    return mutated
+
+
+def verification_is_effectively_overdue(
+    verification: SessionVerification | None,
+    *,
+    now: datetime | None = None,
+    timeout_seconds: int = VERIFICATION_MAX_DURATION_SECONDS,
+    extraction_timeout_seconds: int = VERIFICATION_EXTRACTION_TIMEOUT_SECONDS,
+) -> bool:
+    """Non-persisted derived overdue signal — does not mutate lifecycle."""
+    if verification is None:
+        return False
+    if verification.lifecycle not in ACTIVE_VERIFICATION_LIFECYCLES:
+        return False
+    now = now or utc_now()
+    if verification.lifecycle in {"requested"}:
+        started = _parse_iso(verification.requested_at)
+        if started is None:
+            return False
+        return (now - started).total_seconds() > timeout_seconds
+    if verification.lifecycle == "running":
+        started = _parse_iso(verification.started_at) or _parse_iso(verification.requested_at)
+        if started is None:
+            return False
+        return (now - started).total_seconds() > timeout_seconds
+    # session_verified / extracting
+    started = _parse_iso(verification.requested_at)
+    if started is None:
+        return False
+    return (now - started).total_seconds() > extraction_timeout_seconds
 
 
 def _row_to_verification(row: dict[str, Any] | None) -> SessionVerification | None:
@@ -353,6 +446,8 @@ def _row_to_verification(row: dict[str, Any] | None) -> SessionVerification | No
         entry_url=row.get("entry_url"),
         terminal_reason=row.get("terminal_reason"),
         terminal_source=row.get("terminal_source"),
+        trigger_source=row.get("trigger_source"),
+        requested_by=row.get("requested_by"),
     )
 
 
@@ -599,7 +694,11 @@ def get_latest_session_verification(
     user_id: str,
     provider: str,
 ) -> SessionVerification | None:
-    ensure_session_verification_tables(db)
+    """Pure read of the latest verification row for user/provider.
+
+    Does not ensure schema, expire, or reconcile. Callers that need schema
+    must run ensure_session_verification_tables at startup / command paths.
+    """
     row = db.execute(
         f"""
         SELECT {_VERIFICATION_SELECT_COLUMNS}
@@ -613,16 +712,15 @@ def get_latest_session_verification(
     return _row_to_verification(dict(row) if row else None)
 
 
-def get_session_verifications(
+def read_session_verifications(
     db: Any,
     user_id: str,
     *,
     providers: list[str] | tuple[str, ...] | None = None,
     now: datetime | None = None,
 ) -> dict[str, SessionVerification]:
-    """Latest verification per provider, after applying timeouts."""
-    ensure_session_verification_tables(db)
-    expire_timed_out_verifications(db, user_id, now=now)
+    """Pure read: latest verification per provider. Never expires or mutates."""
+    del now  # Reserved for derived overdue helpers at call sites.
     provider_list = list(providers) if providers is not None else sorted(PROBE_PROVIDERS)
     result: dict[str, SessionVerification] = {}
     for provider in provider_list:
@@ -632,24 +730,61 @@ def get_session_verifications(
     return result
 
 
+def maintain_and_read_session_verifications(
+    db: Any,
+    user_id: str,
+    *,
+    providers: list[str] | tuple[str, ...] | None = None,
+    now: datetime | None = None,
+) -> dict[str, SessionVerification]:
+    """Command-side: expire overdue actives, then read latest per provider."""
+    ensure_session_verification_tables(db)
+    expire_timed_out_verifications(db, user_id, now=now)
+    return read_session_verifications(db, user_id, providers=providers, now=now)
+
+
+def get_session_verifications(
+    db: Any,
+    user_id: str,
+    *,
+    providers: list[str] | tuple[str, ...] | None = None,
+    now: datetime | None = None,
+    apply_maintenance: bool = False,
+) -> dict[str, SessionVerification]:
+    """Latest verification per provider.
+
+    ``apply_maintenance`` defaults to False (pure read). Customer GET paths
+    must never pass True. Command/scheduled paths that need expiration must
+    pass ``apply_maintenance=True`` or call ``run_verification_maintenance``.
+    """
+    if apply_maintenance:
+        return maintain_and_read_session_verifications(
+            db, user_id, providers=providers, now=now,
+        )
+    return read_session_verifications(db, user_id, providers=providers, now=now)
+
+
 def get_pending_session_verification(
     db: Any,
     user_id: str,
     *,
     ensure_stale: bool = False,
     now: datetime | None = None,
+    mutate: bool = False,
 ) -> SessionVerification | None:
-    """Oldest active verification for the extension to execute.
+    """Oldest claimable verification for the extension to execute.
 
-    When ensure_stale is True, enqueue verification for stale providers first
-    (extension lifecycle trigger). Does not write provider_session_state.
+    Read-only by default: does not enqueue, expire, reconcile, or ensure schema.
+    When mutate=True (command paths only), may expire timed-out jobs and
+    optionally enqueue stale work via ensure_stale.
     """
-    ensure_session_verification_tables(db)
     now = now or utc_now()
-    if ensure_stale:
-        ensure_stale_session_verifications_for_user(db, user_id, now=now)
-    else:
-        expire_timed_out_verifications(db, user_id, now=now)
+    if mutate:
+        ensure_session_verification_tables(db)
+        if ensure_stale:
+            ensure_stale_session_verifications_for_user(db, user_id, now=now)
+        else:
+            expire_timed_out_verifications(db, user_id, now=now)
     row = db.execute(
         f"""
         SELECT {_VERIFICATION_SELECT_COLUMNS}
@@ -661,6 +796,22 @@ def get_pending_session_verification(
         (user_id,),
     ).fetchone()
     return _row_to_verification(dict(row) if row else None)
+
+
+def normalize_trigger_source(
+    value: str | None,
+    *,
+    default: VerificationTriggerSource | None = None,
+) -> VerificationTriggerSource:
+    """Validate an explicit command-side trigger_source."""
+    source = (value or "").strip().lower()
+    if source in FORBIDDEN_VERIFICATION_TRIGGER_SOURCES:
+        raise ValueError(f"forbidden trigger_source: {source}")
+    if source in VERIFICATION_TRIGGER_SOURCES:
+        return source  # type: ignore[return-value]
+    if default is not None:
+        return default
+    raise ValueError(f"invalid trigger_source: {value!r}")
 
 
 def _has_active_verification(db: Any, user_id: str, provider: str) -> bool:
@@ -865,6 +1016,8 @@ def request_session_verification(
     *,
     now: datetime | None = None,
     throttle_seconds: int = VERIFICATION_THROTTLE_SECONDS,
+    trigger_source: str | None = None,
+    requested_by: str | None = None,
 ) -> SessionVerification | None:
     """Enqueue a background verification if not already active / throttled.
 
@@ -873,12 +1026,17 @@ def request_session_verification(
 
     Returns the active or newly created verification, or None when the provider
     has no verification entry URL (unsupported). Prefer
-    ensure_provider_session_verification_if_stale for product callers.
+    ``request_provider_verification`` (Access Manager) for product callers.
     """
     provider = provider.strip().lower()
     entry_url = verification_entry_url(provider)
     if entry_url is None:
         return None
+
+    normalized_trigger: str | None = None
+    if trigger_source is not None:
+        normalized_trigger = normalize_trigger_source(trigger_source)
+    requested_by_value = (requested_by or "").strip() or None
 
     ensure_session_verification_tables(db)
     now = now or utc_now()
@@ -893,6 +1051,8 @@ def request_session_verification(
             access_cycle_id=active.verification_id,
             verification_state=active.lifecycle,
             requested_at=active.requested_at,
+            trigger_source=active.trigger_source or normalized_trigger,
+            requested_by=active.requested_by or requested_by_value,
         )
         return active
 
@@ -906,10 +1066,19 @@ def request_session_verification(
         db.execute(
             """
             INSERT INTO provider_session_verification (
-                verification_id, user_id, provider, lifecycle, entry_url, requested_at
-            ) VALUES (?, ?, ?, 'requested', ?, ?)
+                verification_id, user_id, provider, lifecycle, entry_url,
+                requested_at, trigger_source, requested_by
+            ) VALUES (?, ?, ?, 'requested', ?, ?, ?, ?)
             """,
-            (verification_id, user_id, provider, entry_url, requested_at),
+            (
+                verification_id,
+                user_id,
+                provider,
+                entry_url,
+                requested_at,
+                normalized_trigger,
+                requested_by_value,
+            ),
         )
         db.commit()
     except Exception as exc:
@@ -925,6 +1094,7 @@ def request_session_verification(
                 verification_state=raced.lifecycle,
                 requested_at=raced.requested_at,
                 race="insert_conflict",
+                trigger_source=raced.trigger_source or normalized_trigger,
             )
             return raced
         raise exc
@@ -935,6 +1105,8 @@ def request_session_verification(
         access_cycle_id=verification_id,
         verification_state="requested",
         requested_at=requested_at,
+        trigger_source=normalized_trigger,
+        requested_by=requested_by_value,
     )
     log_access_cycle_event(
         "verification started",
@@ -943,6 +1115,8 @@ def request_session_verification(
         access_cycle_id=verification_id,
         verification_state="requested",
         requested_at=requested_at,
+        trigger_source=normalized_trigger,
+        requested_by=requested_by_value,
     )
     return SessionVerification(
         verification_id=verification_id,
@@ -950,6 +1124,8 @@ def request_session_verification(
         lifecycle="requested",
         requested_at=requested_at,
         entry_url=entry_url,
+        trigger_source=normalized_trigger,
+        requested_by=requested_by_value,
     )
 
 
@@ -963,6 +1139,8 @@ def ensure_provider_session_verification_if_stale(
     freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
     last_ready_at: str | None = None,
     revalidation_interval_seconds: int = READY_REVALIDATION_INTERVAL_SECONDS,
+    trigger_source: str = "scheduled_recheck",
+    requested_by: str | None = None,
 ) -> SessionVerification | None:
     """Enqueue verification when session evidence is stale; otherwise no-op.
 
@@ -993,7 +1171,14 @@ def ensure_provider_session_verification_if_stale(
     ):
         return None
 
-    return request_session_verification(db, user_id, provider, now=now)
+    return request_session_verification(
+        db,
+        user_id,
+        provider,
+        now=now,
+        trigger_source=trigger_source,
+        requested_by=requested_by,
+    )
 
 
 def ensure_stale_session_verifications_for_user(
@@ -1003,10 +1188,13 @@ def ensure_stale_session_verifications_for_user(
     providers: list[str] | tuple[str, ...] | None = None,
     now: datetime | None = None,
     freshness_seconds: int = CURRENT_SESSION_FRESHNESS_SECONDS,
+    trigger_source: str = "scheduled_recheck",
+    requested_by: str | None = None,
 ) -> dict[str, SessionVerification]:
     """Ensure verification jobs for all stale providers with an entry URL.
 
     Returns the active/created verification keyed by provider (empty when none).
+    Command/scheduled path only — never call from customer-facing GETs.
     """
     ensure_session_verification_tables(db)
     now = now or utc_now()
@@ -1032,6 +1220,8 @@ def ensure_stale_session_verifications_for_user(
             session_state=states.get(provider),
             now=now,
             freshness_seconds=freshness_seconds,
+            trigger_source=trigger_source,
+            requested_by=requested_by,
         )
         if created is not None:
             result[provider] = created
@@ -1246,9 +1436,12 @@ def session_verification_to_json(verification: SessionVerification | None) -> di
             "completed_at": None,
             "terminal_reason": None,
             "terminal_source": None,
+            "trigger_source": None,
+            "requested_by": None,
             "duration_ms": None,
             "verification_started_at": None,
             "verification_completed_at": None,
+            "effective_overdue": False,
         }
     duration = verification_duration_ms(
         requested_at=verification.requested_at,
@@ -1267,7 +1460,10 @@ def session_verification_to_json(verification: SessionVerification | None) -> di
         "completed_at": verification.completed_at,
         "terminal_reason": verification.terminal_reason,
         "terminal_source": verification.terminal_source,
+        "trigger_source": verification.trigger_source,
+        "requested_by": verification.requested_by,
         "duration_ms": duration,
         "verification_started_at": started_at,
         "verification_completed_at": verification.completed_at,
+        "effective_overdue": verification_is_effectively_overdue(verification),
     }

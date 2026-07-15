@@ -32,7 +32,7 @@ from mighty.capability_state import (
 )
 from mighty.customer_capability_presentation import (
     build_presented_capability_view,
-    load_stable_capability,
+    load_valid_stable_capability,
     resolve_account_identity,
 )
 from mighty.customer_account_access import (
@@ -297,6 +297,7 @@ def resolve_home_state(
     persist_db: object | None = None,
     persist_user_id: str | None = None,
     force_unknown: bool = False,
+    write_persist: bool = False,
 ) -> HomeStateResult:
     """Pick the dominant Home state and featured content.
 
@@ -305,6 +306,9 @@ def resolve_home_state(
 
     Customer-visible capability is gated: while verification is in flight the
     prior stable card is held (see customer_capability_presentation).
+
+    Customer-facing GETs must keep ``write_persist=False`` so presentation
+    rows are not written on read. Command paths may opt in.
     """
     actions = list(actions or [])
     access_views = _access_views_from_accounts(accounts)
@@ -378,7 +382,7 @@ def resolve_home_state(
         )
     previous = previous_stable_capability
     if previous is None and persist_db is not None and persist_user_id:
-        previous = load_stable_capability(
+        previous = load_valid_stable_capability(
             persist_db,
             persist_user_id,
             provider_key,
@@ -392,6 +396,7 @@ def resolve_home_state(
         persist_db=persist_db,
         persist_user_id=persist_user_id,
         account_identity=account_identity,
+        write_persist=write_persist,
         display_name=(
             truth_view.display_name if truth_view else (
                 truth_acct.display_name if truth_acct else TRUTH_PROVIDER_DISPLAY

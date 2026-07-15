@@ -6280,6 +6280,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-truth-timeline-section{margin-top:10px}
 .dash-truth-timeline-section .dash-truth-section-label{margin-bottom:6px}
 .dash-truth-cta{display:inline-block;margin-top:14px}
+.dash-truth-check-now{display:inline-flex;align-items:center;margin-top:14px;margin-right:10px;padding:9px 16px;border-radius:8px;border:0.5px solid #1c1917;background:#1c1917;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.dash-truth-check-now:disabled{opacity:0.55;cursor:default}
+.dash-truth-check-now:not(:disabled):hover{background:#292524}
 .dash-truth-tech{margin-top:18px;border-top:0.5px solid rgba(0,0,0,0.06);padding-top:12px}
 .dash-truth-tech summary{cursor:pointer;font-size:13px;font-weight:600;color:#57534e}
 .dash-truth-pipeline{margin-top:12px}
@@ -6473,8 +6476,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       {pending_count} awaiting decision
     </div>
     <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="{dash_global_last_updated_title}">{global_sync_label}</span>
-    <span id="worker-active-badge" style="display:none;font-size:11px;color:#059669;white-space:nowrap;padding:4px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0" title="{dash_role_extension_desc}">
-      Worker · {dash_activity_watching}
+    <span id="worker-active-badge" style="display:none;font-size:11px;color:#059669;white-space:nowrap;padding:4px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0" title="Extension heartbeat is healthy — does not imply a verification is active">
+      Worker: Watching
     </span>
     <!-- Alpha: manual sync removed — extension is the primary sync mechanism. Server retry is in Settings. -->
     <a id="ext-install-link" href="/extension-setup" target="_blank"
@@ -6854,14 +6857,77 @@ setInterval(updateSyncTimes, 30000);
 
 // ── Canonical account-status poll ───────────────────────────────────────────
 // Keeps card labels and sync header aligned with extension popup via /api/account-status.
-// Live Dashboard no longer renders [data-account-source] account cards; this poll
-// still updates the global header and remains safe if cards are reintroduced.
+// Read-only: polling never creates verification work.
+// Truth Dashboard reloads only when verification_id / lifecycle / snapshot_id change.
 // Login badges must use session_state / login_required — never legacy sync_status alone.
+var _truthRefreshIdentity = null;
+function _truthIdentityFromAccount(acct) {
+  if (!acct) return null;
+  var cap = acct.capability || {};
+  return {
+    verification_id: acct.access_cycle_id || cap.current_verification_id || cap.verification_id || null,
+    lifecycle: acct.verification_lifecycle || null,
+    snapshot_id: acct.snapshot_id || null,
+    is_checking: !!(cap.is_refreshing || acct.session_state === 'checking'
+      || acct.presentation_key === 'checking' || acct.status === 'checking'),
+    last_verified: (cap.last_verified || acct.last_confirmed_ready_at || null),
+  };
+}
+function _logDashboardRefreshReason(prev, next, reason) {
+  try {
+    console.info('dashboard_refresh_reason', {
+      previous_verification_id: prev && prev.verification_id,
+      new_verification_id: next && next.verification_id,
+      previous_lifecycle: prev && prev.lifecycle,
+      new_lifecycle: next && next.lifecycle,
+      previous_snapshot_id: prev && prev.snapshot_id,
+      new_snapshot_id: next && next.snapshot_id,
+      reason: reason,
+    });
+  } catch (e) {}
+}
+function _maybeReloadTruthDashboard(amexAcct) {
+  var next = _truthIdentityFromAccount(amexAcct);
+  if (!next) return;
+  if (_truthRefreshIdentity === null) {
+    _truthRefreshIdentity = next;
+    return;
+  }
+  var prev = _truthRefreshIdentity;
+  var reason = null;
+  if (prev.verification_id !== next.verification_id) reason = 'verification_id_changed';
+  else if (prev.lifecycle !== next.lifecycle) reason = 'verification_lifecycle_changed';
+  else if (prev.snapshot_id !== next.snapshot_id) reason = 'snapshot_id_changed';
+  if (!reason) {
+    // Update in-place Checking label / Last checked without full reload.
+    var btn = document.getElementById('amex-check-now-btn');
+    if (btn) {
+      btn.disabled = !!next.is_checking;
+      btn.textContent = next.is_checking ? 'Checking…' : 'Check now';
+    }
+    var headline = document.querySelector('.dash-truth-headline');
+    if (headline && next.is_checking) {
+      headline.textContent = 'Checking your login state…';
+    }
+    var lc = document.getElementById('dash-last-checked');
+    if (lc && next.last_verified && lc.dataset.lastChecked !== next.last_verified) {
+      lc.dataset.lastChecked = next.last_verified;
+    }
+    _truthRefreshIdentity = next;
+    return;
+  }
+  _logDashboardRefreshReason(prev, next, reason);
+  _truthRefreshIdentity = next;
+  reloadWithScroll();
+}
 function _pollAccountStatus() {
   fetch('/api/account-status').then(function(r){return r.json();}).then(function(d){
     if (!d.ok) return;
     var bySource = {};
     (d.accounts || []).forEach(function(a){ bySource[a.source] = a; });
+    if (bySource.amex) {
+      _maybeReloadTruthDashboard(bySource.amex);
+    }
     document.querySelectorAll('[data-account-source]').forEach(function(card) {
       var src = card.dataset.accountSource;
       var acct = bySource[src];
@@ -6891,7 +6957,7 @@ function _pollAccountStatus() {
       if (acct.login_required === true || acct.session_state === 'signed_out') {
         el.innerHTML = '<span style="font-size:11px;color:#dc2626;font-weight:700">' + acct.status_label + '</span>';
       } else if (acct.status === 'checking' || acct.session_state === 'checking') {
-        var checkMsg = acct.verification_message || acct.status_label || 'Checking...';
+        var checkMsg = acct.verification_message || acct.status_label || 'Checking your login state…';
         el.innerHTML = '<span style="font-size:11px;color:#6366f1;font-weight:600">' + checkMsg + '</span>';
       } else if (acct.status === 'updating') {
         el.innerHTML = '<span style="font-size:11px;color:#6366f1;font-weight:600">' + acct.status_label + '</span>';
@@ -6899,20 +6965,70 @@ function _pollAccountStatus() {
         el.innerHTML = '<span style="font-size:11px;color:' + (acct.status_color || '#6b7280') + ';font-weight:500">' + acct.status_label + '</span>';
       }
     });
-    if (d.summary && d.summary.is_syncing && d.summary.headline) {
-      var hdr = document.getElementById('global-sync-time');
-      if (hdr) { hdr.textContent = d.summary.headline; hdr.style.color = '#6366f1'; }
-    } else if (d.summary && !d.sync_running && d.summary.needs_login_count > 0) {
-      var hdr2 = document.getElementById('global-sync-time');
-      if (hdr2 && !window._syncPoll) {
-        hdr2.textContent = d.summary.headline;
-        hdr2.style.color = '#dc2626';
+    // Global header: only claim active work when a concrete operation exists.
+    var hdr = document.getElementById('global-sync-time');
+    if (hdr) {
+      var amex = bySource.amex;
+      var activeCheck = amex && (
+        amex.session_state === 'checking'
+        || amex.presentation_key === 'checking'
+        || (amex.capability && amex.capability.is_refreshing)
+      );
+      if (activeCheck) {
+        hdr.textContent = 'Checking your login state…';
+        hdr.style.color = '#6366f1';
+      } else if (d.sync_running && d.summary && d.summary.is_syncing && d.summary.headline) {
+        hdr.textContent = d.summary.headline;
+        hdr.style.color = '#6366f1';
+      } else if (d.summary && !d.sync_running && d.summary.needs_login_count > 0) {
+        if (!window._syncPoll) {
+          hdr.textContent = d.summary.headline;
+          hdr.style.color = '#dc2626';
+        }
       }
     }
   }).catch(function(){});
 }
 _pollAccountStatus();
 setInterval(_pollAccountStatus, 10000);
+
+function requestAmexCheckNow() {
+  var btn = document.getElementById('amex-check-now-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
+  fetch('/api/providers/amex/check', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': csrf,
+    },
+    body: '{}',
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (!d || !d.ok) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
+      return;
+    }
+    _truthRefreshIdentity = {
+      verification_id: d.verification_id,
+      lifecycle: d.lifecycle,
+      snapshot_id: (_truthRefreshIdentity && _truthRefreshIdentity.snapshot_id) || null,
+      is_checking: true,
+      last_verified: (_truthRefreshIdentity && _truthRefreshIdentity.last_verified) || null,
+    };
+    var headline = document.querySelector('.dash-truth-headline');
+    if (headline) headline.textContent = 'Checking your login state…';
+    _pollAccountStatus();
+  }).catch(function(){
+    if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
+  });
+}
+document.addEventListener('click', function(ev) {
+  var t = ev.target;
+  if (t && t.id === 'amex-check-now-btn') {
+    ev.preventDefault();
+    requestAmexCheckNow();
+  }
+});
 
 // ── Sync-state tracking via sessionStorage ─────────────────────────────────
 var _syncTs = parseInt(sessionStorage.getItem('mighty-sync-ts') || '0');
@@ -7264,22 +7380,11 @@ document.addEventListener('visibilitychange', function() {
 // Sync is driven by the background alarm (hourly) or explicit Sync button clicks.
 // No auto-sync on dashboard open — the dashboard displays whatever the DB has.
 
-// Reload Home when the extension finishes extraction (poll synced_at).
+// Truth Dashboard: do NOT reload on generic synced_at changes from /api/latest-sync.
+// Visible state changes are driven by /api/account-status identity diffs
+// (verification_id / lifecycle / snapshot_id) via _maybeReloadTruthDashboard.
 (function() {
-  var baseline = {latest_sync_baseline};
-  var pollForSync = {awaiting_sync_poll};
-  if (!pollForSync) return;
-  var syncWaitPoll = setInterval(function() {
-    if (window._syncPoll) return;
-    fetch('/api/latest-sync').then(function(r) { return r.json(); }).then(function(d) {
-      if (!d.latest) return;
-      if (d.latest !== baseline) {
-        clearInterval(syncWaitPoll);
-        reloadWithScroll();
-      }
-    }).catch(function() {});
-  }, 8000);
-  setTimeout(function() { clearInterval(syncWaitPoll); }, 600000);
+  // Intentionally no synced_at poller — avoids reload ambiguity on the Truth card.
 })();
 
 // Register SW for push delivery (notifications managed in /settings)
@@ -9927,6 +10032,7 @@ def dashboard():
             extraction_status=_truth_extraction_status,
             persist_db=get_db(),
             persist_user_id=session["user_id"],
+            write_persist=False,
             force_unknown=bool(
                 _is_dev_debug(user) and request.args.get("force_capability_unknown")
             ),
@@ -9939,11 +10045,18 @@ def dashboard():
             )
         except Exception:
             _extension_info = None
+        # Prefer selected verification completed_at for Last checked footer.
+        _truth_last_checked = _last_checked
+        if (
+            _home_result.capability is not None
+            and _home_result.capability.last_verified
+        ):
+            _truth_last_checked = _home_result.capability.last_verified
         return render_home_page(
             _home_result,
             first_name=_first_name,
             today_label=_today_label,
-            last_checked=_last_checked,
+            last_checked=_truth_last_checked,
             escape=he,
             extension_info=_extension_info,
         )
@@ -11385,7 +11498,10 @@ def decide(action_id):
 @app.route("/dashboard/has-pending")
 @require_login
 def has_pending():
-    expire_pending()
+    """Read-only pending-action probe for dashboard refresh.
+
+    Does not expire actions or create verification work.
+    """
     since = request.args.get("since")
     if since:
         try:
@@ -18468,7 +18584,11 @@ def api_sync_progress():
 @app.route("/api/account-status")
 @require_login_or_key
 def api_account_status():
-    """Canonical per-account update state for dashboard and extension."""
+    """Canonical per-account update state for dashboard and extension.
+
+    Read-only: does not enqueue verification, expire cycles, or persist
+    customer presentation. Committed state only.
+    """
     from mighty.account_status import (
         ERROR,
         NEEDS_LOGIN,
@@ -18479,18 +18599,9 @@ def api_account_status():
         load_all_account_statuses,
     )
     from mighty.session_access import CHECKING
-    from mighty.provider_access_manager import ensure_stale_provider_access_checks
 
     uid = get_current_user_id()
     db = get_db()
-    # Primary on-demand product trigger: dashboard poll + extension popup.
-    # Enqueues background session re-verification for stale evidence only.
-    # Does not write provider_session_state from this surface.
-    # Routes through Provider Access Manager (canonical access boundary).
-    try:
-        ensure_stale_provider_access_checks(db, uid)
-    except Exception:
-        pass
     user_row = db.execute(
         "SELECT sync_running, sync_started_at, sync_current_source FROM users WHERE id=?",
         (uid,),
@@ -18529,6 +18640,41 @@ def api_account_status():
             "waiting_for_extension": WAITING_FOR_EXTENSION,
             "error": ERROR,
         },
+    })
+
+
+@app.route("/api/providers/amex/check", methods=["POST"])
+@require_login
+def api_providers_amex_check():
+    """Explicit Check now — enqueue/reuse one Amex verification (command path).
+
+    Does not wait for completion or run extraction in this request.
+    """
+    check_csrf()
+    from mighty.provider_access_manager import request_provider_verification
+    from mighty.session_verification import session_verification_to_json
+
+    uid = session["user_id"]
+    db = get_db()
+    verification = request_provider_verification(
+        db,
+        uid,
+        "amex",
+        trigger_source="user_check_now",
+        requested_by=f"user:{uid}",
+        throttle_seconds=0,
+    )
+    if verification is None:
+        return jsonify({"ok": False, "error": "provider_unsupported"}), 400
+    payload = session_verification_to_json(verification)
+    return jsonify({
+        "ok": True,
+        "verification_id": payload["verification_id"],
+        "access_cycle_id": payload["verification_id"],
+        "lifecycle": payload["lifecycle"],
+        "trigger_source": payload.get("trigger_source") or "user_check_now",
+        "requested_by": payload.get("requested_by"),
+        "provider": "amex",
     })
 
 
@@ -19430,22 +19576,11 @@ def sync_account_cloud(source):
 @app.route("/sync/status")
 @require_login
 def sync_status():
+    """Read-only sync header state. Does not clear stuck flags or enqueue work."""
     uid = session["user_id"]
     db  = get_db()
     user_row = db.execute("SELECT sync_running, sync_started_at FROM users WHERE id=?", (uid,)).fetchone()
     running = bool(user_row and user_row["sync_running"])
-    # Safety: auto-clear if stuck > 20 minutes (handles crashed syncs)
-    if running and user_row and user_row["sync_started_at"]:
-        try:
-            age_mins = (datetime.now(timezone.utc) -
-                        datetime.fromisoformat(user_row["sync_started_at"].replace("Z", "+00:00"))
-                       ).total_seconds() / 60
-            if age_mins > 20:
-                db.execute("UPDATE users SET sync_running=0, sync_started_at=NULL WHERE id=?", (uid,))
-                db.commit()
-                running = False
-        except Exception:
-            pass
     last_ts = None
     row = db.execute("SELECT MAX(synced_at) AS ts FROM account_data WHERE user_id=?", (uid,)).fetchone()
     if row and row["ts"]:
@@ -22544,12 +22679,11 @@ def api_extension_provider_access_probe_manual():
 
 @app.route("/api/extension/session-verification/pending")
 def api_extension_session_verification_pending():
-    """Return the next background session verification for the extension.
+    """Return the next already-queued session verification for the extension.
 
-    Also ensures stale providers are enqueued so verification is driven by
-    extension lifecycle (startup / keepalive poll), not admin page views.
+    Read-only: does not enqueue, expire, or reconcile verification rows.
+    Background scheduling uses POST /api/extension/session-verification/ensure-due.
     """
-    from mighty.provider_access_manager import ensure_stale_provider_access_checks
     from mighty.session_verification import (
         get_pending_session_verification,
         session_verification_to_json,
@@ -22559,10 +22693,48 @@ def api_extension_session_verification_pending():
     if not user:
         return jsonify({"error": "invalid api key"}), 401
     db = get_db()
-    # Schedule through Provider Access Manager, then claim the next pending job.
-    ensure_stale_provider_access_checks(db, user["id"])
-    pending = get_pending_session_verification(db, user["id"], ensure_stale=False)
+    pending = get_pending_session_verification(
+        db, user["id"], ensure_stale=False, mutate=False,
+    )
     return jsonify(session_verification_to_json(pending))
+
+
+@app.route("/api/extension/session-verification/ensure-due", methods=["POST"])
+def api_extension_session_verification_ensure_due():
+    """Extension-owned scheduled command: enqueue due stale verifications.
+
+    trigger_source defaults to scheduled_recheck. Optional body.trigger_source
+    may be extension_startup on worker boot.
+    """
+    from mighty.provider_access_manager import ensure_stale_provider_access_checks
+    from mighty.session_verification import (
+        VERIFICATION_TRIGGER_SOURCES,
+        session_verification_to_json,
+    )
+
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+    body = body or {}
+    trigger = str(body.get("trigger_source") or "scheduled_recheck").strip().lower()
+    if trigger not in VERIFICATION_TRIGGER_SOURCES:
+        return jsonify({"error": "invalid trigger_source"}), 400
+    if trigger in {"user_check_now", "admin_debug"}:
+        return jsonify({"error": "trigger_source not allowed for ensure-due"}), 400
+    created = ensure_stale_provider_access_checks(
+        get_db(),
+        user["id"],
+        trigger_source=trigger,
+        requested_by=f"extension:{user['id']}",
+    )
+    return jsonify({
+        "ok": True,
+        "trigger_source": trigger,
+        "created": {
+            provider: session_verification_to_json(ver)
+            for provider, ver in created.items()
+        },
+    })
 
 
 @app.route("/api/extension/session-verification/reset-on-reload", methods=["POST"])
