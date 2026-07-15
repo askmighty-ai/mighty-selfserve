@@ -21,6 +21,10 @@ from mighty.account_readiness import (
     UNVERIFIED as READINESS_UNVERIFIED,
     AccountReadiness,
 )
+from mighty.authentication_state import (
+    AuthenticationState,
+    authentication_from_product_session,
+)
 from mighty.provider_account import EXTRACTION_FAILED, EXTRACTION_PENDING
 from mighty.session_verification import ACTIVE_VERIFICATION_LIFECYCLES
 from mighty import user_copy
@@ -88,6 +92,7 @@ class CustomerAccountAccessView:
     cached_snapshot_at: str | None = None
     background_verification: bool = False
     canonical_status: str | None = None
+    authentication_state: str = AuthenticationState.LOGIN_UNKNOWN.value
 
     def to_dict(self) -> dict[str, Any]:
         from mighty.capability_state import build_capability_view
@@ -96,6 +101,7 @@ class CustomerAccountAccessView:
         return {
             "provider": self.provider,
             "display_name": self.display_name,
+            "authentication_state": self.authentication_state,
             "capability_state": capability.state.value,
             "readiness": self.readiness,
             "session_state": self.session_state,
@@ -124,6 +130,7 @@ class CustomerAccountAccessView:
     def debug_rows(self) -> list[tuple[str, str]]:
         """Admin/alpha-only Why? rows — no secrets or raw payloads."""
         return [
+            ("authentication_state", self.authentication_state or "—"),
             ("readiness", self.readiness or "—"),
             ("session_state", self.session_state or "—"),
             ("verification_lifecycle", self.active_verification_lifecycle or "—"),
@@ -153,8 +160,12 @@ def resolve_live_access(
     *,
     readiness: str | None,
     session_state: str | None,
+    authentication_state: str | None = None,
 ) -> str:
-    """Live access label from readiness first, then session_state."""
+    """Live access label from readiness first, then authentication / session.
+
+    LOGIN_UNKNOWN never paints as Signed out.
+    """
     if readiness == READINESS_SIGNED_OUT:
         return LIVE_SIGNED_OUT
     if readiness == READINESS_READY:
@@ -162,6 +173,15 @@ def resolve_live_access(
         return LIVE_CONNECTED
     if readiness == READINESS_CHECKING:
         return LIVE_CHECKING
+    auth = authentication_state
+    if auth == AuthenticationState.SIGNED_OUT.value:
+        return LIVE_SIGNED_OUT
+    if auth == AuthenticationState.SIGNED_IN.value:
+        return LIVE_CONNECTED
+    if auth == AuthenticationState.LOGIN_UNKNOWN.value:
+        if session_state == "checking":
+            return LIVE_CHECKING
+        return LIVE_UNKNOWN
     if session_state == "signed_out":
         return LIVE_SIGNED_OUT
     if session_state == "checking":
@@ -296,9 +316,16 @@ def build_customer_account_access_view(
 ) -> CustomerAccountAccessView:
     """Build the shared customer view from readiness + discovery (presentation only)."""
     session_state = readiness.session_state
+    auth = authentication_from_product_session(session_state)
+    # Prefer readiness definitive signed_out / ready over product transport alone.
+    if readiness.state == READINESS_SIGNED_OUT:
+        auth = AuthenticationState.SIGNED_OUT
+    elif readiness.state == READINESS_READY or session_state == "connected":
+        auth = AuthenticationState.SIGNED_IN
     live_access = resolve_live_access(
         readiness=readiness.state,
         session_state=session_state,
+        authentication_state=auth.value,
     )
     private_state = resolve_private_data_state(
         readiness=readiness,
@@ -359,6 +386,7 @@ def build_customer_account_access_view(
         cached_snapshot_at=cached_snapshot_at or readiness.extraction_at,
         background_verification=readiness.background_verification,
         canonical_status=canonical_status or readiness.canonical_status,
+        authentication_state=auth.value,
     )
 
 

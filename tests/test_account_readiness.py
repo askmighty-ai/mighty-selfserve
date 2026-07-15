@@ -350,7 +350,8 @@ def test_stale_session_is_unverified_not_checking():
 def test_verification_error_is_unverified_not_sign_in_required():
     """Network/verification failure must not ask the user to sign in."""
     product = resolve_product_account_state(_session("delta", "error"))
-    assert product.session_state == "signed_out"  # product maps error → signed_out
+    assert product.session_state == "unknown"  # error → unknown / LOGIN_UNKNOWN
+    assert product.authentication_state.value == "login_unknown"
     readiness = resolve_account_readiness(
         provider="delta",
         product=product,

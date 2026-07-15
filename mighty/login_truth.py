@@ -212,7 +212,7 @@ ACCESS_STATE_SORT_ORDER: dict[AccessState, int] = {
 
 # Session next-action policy lives in mighty.session_access.PRODUCT_NEXT_ACTION.
 # Admin Current Access resolves through to_product_session_state so there is one
-# canonical mapping (error → signed_out, unknown → none / unable to verify).
+# canonical mapping (error → unknown / LOGIN_UNKNOWN, signed_out → Needs login).
 
 
 def next_action_for_current_access(

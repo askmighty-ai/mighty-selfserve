@@ -626,6 +626,11 @@ def complete_provider_access_check(
         result = dict(result)
         result["verification_decision"] = decision.final_decision
         result["verification_decision_reason"] = decision.decision_reason
+        from mighty.authentication_state import authentication_from_verification_decision
+
+        result["authentication_state"] = authentication_from_verification_decision(
+            decision.final_decision
+        ).value
         # Do not let record_probe_run re-derive via the legacy probe mapper —
         # that path can treat login chrome as signed_out and override this decision.
         run_id = record_probe_run(
