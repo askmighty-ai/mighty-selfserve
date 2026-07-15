@@ -12077,18 +12077,16 @@ def health():
     except Exception as e:
         user_count = None
         db_ok = False
-    import subprocess, os
-    try:
-        git_sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
-                                          cwd=os.path.dirname(__file__) or ".",
-                                          stderr=subprocess.DEVNULL).decode().strip()
-    except Exception:
-        git_sha = "unknown"
+    from mighty.verification_timeline_diagnostics import deployment_sha
+
+    # Env metadata only — do not call git inside the container.
+    sha = deployment_sha()
     return jsonify({
-        "ok":         True,
-        "db_ok":      db_ok,
-        "user_count": user_count,
-        "git_sha":    git_sha,
+        "ok":             True,
+        "db_ok":          db_ok,
+        "user_count":     user_count,
+        "deployment_sha": sha,
+        "git_sha":        sha,  # alias for older consumers
     })
 
 
@@ -22009,6 +22007,38 @@ def admin_replay_discovery_page():
 @require_admin
 def api_admin_replay_discovery(source):
     return jsonify(_admin_replay_discovery(session["user_id"], source))
+
+
+@app.route("/api/admin/debug/amex-verification-timeline")
+@require_admin
+def api_admin_amex_verification_timeline():
+    """Temporary admin-only sanitized Amex verification timeline dump.
+
+    Disabled unless MIGHTY_AMEX_TIMELINE_DEBUG=1. Not linked from customer or
+    admin navigation. Returns metadata only — no credentials, cookies, tokens,
+    balances, account numbers, or extracted values.
+    """
+    from mighty.verification_timeline_diagnostics import (
+        build_amex_verification_timeline_report,
+        timeline_debug_enabled,
+    )
+
+    if not timeline_debug_enabled():
+        return jsonify({"ok": False, "error": "debug_endpoint_disabled"}), 404
+
+    uid = session["user_id"]
+    requested = (request.args.get("user_id") or "").strip()
+    if requested and requested != uid:
+        # Explicit admin override: inspect another user_id only when requested.
+        # Still admin-gated + flag-gated; never resolves by email.
+        uid = requested
+
+    report = build_amex_verification_timeline_report(
+        get_db(),
+        uid,
+        provider="amex",
+    )
+    return jsonify(report)
 
 
 @app.route("/admin/pipeline-runs")
