@@ -1,24 +1,23 @@
 """
 mighty.customer_capability_presentation
 ───────────────────────────────────────
-Presentation-layer gate for the Truth Dashboard.
+Customer presentation state machine for the Truth Dashboard.
 
 Capability resolution (resolve_capability_state / build_capability_view) still
-computes live pipeline truth. This module decides *how* that truth is phrased
-for the customer:
+computes live pipeline truth. This module maps that truth into exactly one
+customer-visible mode:
 
-  • presentation_phase ``determining`` while the newest relevant verification
-    is active — never present-tense CapabilityState conclusions.
-  • A prior completed result may appear only as explicitly historical copy
-    (“Last confirmed…”, “Previous check was inconclusive”).
-  • presentation_phase ``terminal`` atomically replaces determining when the
-    current cycle completes. CapabilityState remains the terminal answer.
+  • never_checked / checking — active verification; never present-tense
+    CapabilityState conclusions. Prior results appear only under
+    Truth Timeline → Previous completed check.
+  • signed_out / connected / logged_in_no_account_data / extraction_failed /
+    check_inconclusive — terminal answers for the selected verification.
+  • stale_* — definitive terminals outside the freshness window; primary
+    headline is the historical claim (no duplicate Last confirmed block).
 
-Freshness rule: a prior result may be stated as *current* only when no newer
-verification is active and the result is still inside
-CUSTOMER_TRUTH_FRESHNESS_SECONDS. Once a new verification begins, the prior
-result becomes “last confirmed” and the primary status becomes determining.
-Stale-while-revalidate must not convert historical truth into present tense.
+Illegal: Checking plus “Last confirmed: …” on the primary card stack.
+Illegal: flashing Signed out / Connected while a verification is still active.
+Illegal: mixing verification IDs or clocks across Current vs Previous timeline.
 
 Persistence is monotonic: an older verification/access cycle must never
 overwrite a newer published presentation. Ordering uses canonical completion
@@ -55,18 +54,20 @@ from mighty.session_verification import (
 # Customer-truth freshness window — aligns with ready-result grace.
 CUSTOMER_TRUTH_FRESHNESS_SECONDS = READY_RESULT_GRACE_SECONDS
 
-DETERMINING_HEADLINE = "Determining your login state…"
-DETERMINING_HEADLINE_CURRENT = "Determining your current login state…"
+DETERMINING_HEADLINE = "Checking your login state…"
+DETERMINING_HEADLINE_CURRENT = "Checking your login state…"
 DETERMINING_BODY = (
     "Mighty is checking whether your American Express session is signed in."
 )
-REFRESHING_STATUS_HEADLINE = "Refreshing current status…"
+REFRESHING_STATUS_HEADLINE = "Checking your login state…"
 STALE_RECONFIRM_EXPLANATION = (
     "Mighty has not reconfirmed this result within the current freshness window."
 )
 EMPTY_CORRELATED_TIMELINE_MESSAGE = (
     "No correlated timeline events were recorded for this check."
 )
+PREVIOUS_CHECK_SECTION_LABEL = "Previous completed check"
+CURRENT_CHECK_SECTION_LABEL = "Current check"
 
 # Backward-compatible aliases (tests / callers from PR #102).
 REFRESH_LABEL = DETERMINING_HEADLINE_CURRENT
@@ -76,6 +77,70 @@ FIRST_EVER_CHECKING_EVIDENCE = DETERMINING_BODY
 
 _LIVE_CHECKING = "Checking"
 _EMPTY_TIMELINE_EVENT_ID = "tl-empty-correlated"
+
+
+# ── Customer presentation modes (product state machine) ───────────────────────
+
+
+@dataclass(frozen=True)
+class CustomerPresentationMode:
+    """One row in the customer presentation truth table."""
+
+    mode: str
+    is_checking: bool
+    is_stale: bool
+    shows_previous_in_timeline: bool
+    shows_previous_on_card: bool
+
+
+def resolve_customer_presentation_mode(
+    *,
+    refreshing: bool,
+    capability_state: CapabilityState | None,
+    has_previous: bool,
+    is_stale: bool,
+    ever_checked: bool,
+) -> CustomerPresentationMode:
+    """Map lifecycle+capability into exactly one customer presentation mode."""
+    if refreshing:
+        return CustomerPresentationMode(
+            mode="checking" if ever_checked or has_previous else "never_checked",
+            is_checking=True,
+            is_stale=False,
+            shows_previous_in_timeline=has_previous,
+            shows_previous_on_card=False,
+        )
+    state = capability_state or CapabilityState.LOGIN_UNKNOWN
+    if state == CapabilityState.LOGIN_UNKNOWN:
+        return CustomerPresentationMode(
+            mode="check_inconclusive",
+            is_checking=False,
+            is_stale=False,
+            shows_previous_in_timeline=False,
+            shows_previous_on_card=False,
+        )
+    mode_by_state = {
+        CapabilityState.SIGNED_OUT: "signed_out",
+        CapabilityState.EXTRACTION_SUCCESS: "connected",
+        CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA: "logged_in_no_account_data",
+        CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED: "extraction_failed",
+    }
+    base = mode_by_state.get(state, "check_inconclusive")
+    if is_stale and base != "check_inconclusive":
+        return CustomerPresentationMode(
+            mode=f"stale_{base}",
+            is_checking=False,
+            is_stale=True,
+            shows_previous_in_timeline=False,
+            shows_previous_on_card=False,
+        )
+    return CustomerPresentationMode(
+        mode=base,
+        is_checking=False,
+        is_stale=False,
+        shows_previous_in_timeline=False,
+        shows_previous_on_card=False,
+    )
 
 
 # ── Ordering metadata ────────────────────────────────────────────────────────
@@ -793,8 +858,21 @@ def _check_started_at(access_view: Any | None, live: CapabilityView) -> str | No
     return live.current_check_started_at
 
 
+def _historical_outcome_label(state: CapabilityState) -> str:
+    """Short previous-check outcome for timeline (never “Last confirmed:”)."""
+    if state == CapabilityState.SIGNED_OUT:
+        return "Signed out"
+    if state == CapabilityState.EXTRACTION_SUCCESS:
+        return "Connected — account data extracted"
+    if state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA:
+        return "Logged in — no account data"
+    if state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED:
+        return "Logged in — extraction failed"
+    return "Check inconclusive"
+
+
 def _historical_copy(state: CapabilityState) -> tuple[str, str]:
-    """Return (historical_summary, timestamp_label_verb)."""
+    """Return (historical_summary, timestamp_label_verb) for stale terminal cards."""
     if state == CapabilityState.SIGNED_OUT:
         return "Last confirmed: Signed out", "Confirmed"
     if state == CapabilityState.EXTRACTION_SUCCESS:
@@ -818,11 +896,8 @@ def _historical_copy(state: CapabilityState) -> tuple[str, str]:
 
 
 def _determining_headline(previous: CapabilityView | None) -> str:
-    if previous is None:
-        return DETERMINING_HEADLINE
-    if previous.state == CapabilityState.EXTRACTION_SUCCESS:
-        return REFRESHING_STATUS_HEADLINE
-    return DETERMINING_HEADLINE_CURRENT
+    del previous  # One Checking mode — prior results live in the timeline only.
+    return DETERMINING_HEADLINE
 
 
 def _events_from_truth_timeline(
@@ -857,7 +932,7 @@ def _current_check_timeline(
     started_at: str | None,
 ) -> PresentationTimelineSection:
     return PresentationTimelineSection(
-        label="Current check",
+        label=CURRENT_CHECK_SECTION_LABEL,
         events=(
             PresentationTimelineEvent(
                 description="Verification started",
@@ -865,7 +940,7 @@ def _current_check_timeline(
                 outcome="UNKNOWN",
             ),
             PresentationTimelineEvent(
-                description="Determining login state",
+                description="Checking login state",
                 timestamp=started_at,
                 outcome="UNKNOWN",
             ),
@@ -876,11 +951,28 @@ def _current_check_timeline(
 def _previous_check_timeline(
     previous: CapabilityView,
 ) -> PresentationTimelineSection | None:
-    events = _events_from_truth_timeline(previous)
-    if not events:
-        return None
+    """Previous terminal verification only — never mixed into Current check."""
+    outcome = _historical_outcome_label(previous.state)
+    summary = PresentationTimelineEvent(
+        description=outcome,
+        timestamp=previous.last_verified,
+        outcome=(
+            "PASS"
+            if previous.state
+            in (
+                CapabilityState.SIGNED_OUT,
+                CapabilityState.EXTRACTION_SUCCESS,
+            )
+            else "UNKNOWN"
+        ),
+    )
+    detail_events = _events_from_truth_timeline(previous)
+    # Prefer the explicit outcome row; keep correlated detail events after it.
+    events = (summary,) + tuple(
+        e for e in detail_events if e.description != outcome
+    )
     return PresentationTimelineSection(
-        label="Previous completed check",
+        label=PREVIOUS_CHECK_SECTION_LABEL,
         events=events,
     )
 
@@ -940,8 +1032,12 @@ def persistable_terminal_capability(
 
 
 def _stale_historical_presentation(view: CapabilityView) -> CapabilityView:
-    """Completed but stale — historical wording only, never present-tense current truth."""
-    summary, verb = _historical_copy(view.state)
+    """Completed but stale — historical wording only, never present-tense current truth.
+
+    Primary headline carries the historical claim. Do not also populate
+    ``historical_summary`` (that would duplicate “Last confirmed” on the card).
+    """
+    summary, _verb = _historical_copy(view.state)
     # Last confirmed signed-out may still offer sign-in; other stale states must not
     # imply a fresh current conclusion via CTA or extracted "current" fields.
     keep_signed_out_cta = (
@@ -971,8 +1067,9 @@ def _stale_historical_presentation(view: CapabilityView) -> CapabilityView:
         primary_headline=summary,
         primary_explanation=STALE_RECONFIRM_EXPLANATION,
         timestamp_label="Last confirmed" if view.last_verified else None,
-        historical_summary=summary,
-        historical_timestamp_label=verb,
+        # Primary already is the historical claim — no second card block.
+        historical_summary=None,
+        historical_timestamp_label=None,
         timeline_sections=(),
     )
 
@@ -983,7 +1080,11 @@ def _determining_view(
     previous: CapabilityView | None,
     access_view: Any | None,
 ) -> CapabilityView:
-    """Primary status is determining; prior result is historical only."""
+    """Primary status is Checking; prior result lives only in the timeline.
+
+    Illegal: primary stack showing Checking plus “Last confirmed: Signed out”.
+    Illegal: capability_state retained as a prior terminal conclusion mid-check.
+    """
     headline = _determining_headline(previous)
     started_at = _check_started_at(access_view, live)
     verification_id = _verification_id_from(live, access_view)
@@ -994,20 +1095,13 @@ def _determining_view(
             sections.append(prev_section)
     sections.append(_current_check_timeline(started_at=started_at))
 
-    historical_summary = None
-    historical_timestamp_label = None
-    previous_state = None
-    previous_confirmed_at = None
-    retained_state = CapabilityState.LOGIN_UNKNOWN
-    if previous is not None:
-        historical_summary, historical_timestamp_label = _historical_copy(previous.state)
-        previous_state = previous.state.value
-        previous_confirmed_at = previous.last_verified
-        retained_state = previous.state
+    previous_state = previous.state.value if previous is not None else None
+    previous_confirmed_at = previous.last_verified if previous is not None else None
 
     return replace(
         live,
-        state=retained_state,
+        # Neutral while Checking — never flash prior signed_out/connected as current.
+        state=CapabilityState.LOGIN_UNKNOWN,
         headline=headline,
         explanations=(DETERMINING_BODY,),
         evidence=(EvidenceItem(DETERMINING_BODY, None),),
@@ -1016,7 +1110,8 @@ def _determining_view(
         action_label=None,
         action_url=None,
         extracted_fields=(),
-        last_verified=previous_confirmed_at if previous is not None else started_at,
+        # Current-check clock only; prior completion stays on previous_confirmed_at.
+        last_verified=started_at,
         is_refreshing=True,
         refresh_label=headline,
         presentation_phase="determining",
@@ -1026,15 +1121,14 @@ def _determining_view(
         terminal_capability_state=None,
         previous_capability_state=previous_state,
         previous_confirmed_at=previous_confirmed_at,
-        status_is_historical=previous is not None,
+        # Previous is timeline-only — not a card-level historical block.
+        status_is_historical=False,
         primary_headline=headline,
         primary_explanation=DETERMINING_BODY,
         timestamp_label="Checking started" if started_at else None,
-        historical_summary=historical_summary,
-        historical_timestamp_label=historical_timestamp_label,
+        historical_summary=None,
+        historical_timestamp_label=None,
         timeline_sections=tuple(sections),
-        # Current-check timeline only on the live truth object — never a terminal
-        # capability event while determining.
         truth_validation=_determining_truth_validation(live, started_at=started_at),
     )
 
@@ -1078,7 +1172,7 @@ def _determining_truth_validation(
             id="current-determining-login",
             timestamp=started_at,
             category=EvidenceCategory.VERIFICATION,
-            description="Determining login state",
+            description="Checking login state",
             outcome=EvidenceOutcome.UNKNOWN,
             confidence_contribution=0,
             metadata=corr,
@@ -1091,8 +1185,12 @@ def _determining_truth_validation(
         ids["access_cycle_id"] = cycle
     return replace(
         truth,
-        timeline=events,
         capability_state="determining",
+        explanation=DETERMINING_BODY,
+        evidence=events,
+        timeline=events,
+        confidence="Low",
+        confidence_score=0,
         developer_ids=ids,
     )
 

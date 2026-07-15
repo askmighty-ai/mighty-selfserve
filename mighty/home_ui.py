@@ -77,6 +77,9 @@ def _render_extracted(
 ) -> str:
     if capability.presentation_phase == "determining":
         return ""
+    # Stale / historical cards must not imply current extracted values.
+    if capability.status_is_historical:
+        return ""
     if capability.state != CapabilityState.EXTRACTION_SUCCESS:
         return ""
     if not capability.extracted_fields:

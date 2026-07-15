@@ -43,6 +43,7 @@ from mighty.customer_capability_presentation import (
     load_stable_capability,
     load_stable_order_meta,
     present_customer_capability,
+    resolve_customer_presentation_mode,
     resolve_order_meta_for_view,
     save_stable_capability,
 )
@@ -213,16 +214,24 @@ def _assert_determining(presented, *, previous_state: CapabilityState | None = N
     assert presented.current_verification_active is True
     assert presented.terminal_capability_state is None
     assert presented.is_refreshing is True
+    assert presented.state == CapabilityState.LOGIN_UNKNOWN
+    assert presented.status_is_historical is False
+    assert presented.historical_summary is None
     assert "cannot determine" not in (presented.primary_headline or "").lower()
     assert "you are signed out" not in (presented.primary_headline or "").lower()
     assert "you are logged in" not in (presented.primary_headline or "").lower()
+    assert "last confirmed" not in (presented.primary_headline or "").lower()
+    assert "checking your login state" in (presented.primary_headline or "").lower()
     if previous_state is not None:
         assert presented.previous_capability_state == previous_state.value
-        assert presented.status_is_historical is True
-        assert presented.historical_summary
+        assert any(
+            s.label == "Previous completed check" for s in presented.timeline_sections
+        )
     else:
         assert presented.previous_capability_state is None
-        assert presented.status_is_historical is False
+        assert not any(
+            s.label == "Previous completed check" for s in presented.timeline_sections
+        )
 
 
 class TestCustomerTruthFreshness:
@@ -288,14 +297,15 @@ class TestCustomerTruthFreshness:
         assert presented.status_is_historical is True
         assert presented.current_verification_active is False
         assert "can see and extract your logged-in" not in presented.headline.lower()
-        assert "could access and extract" in presented.historical_summary.lower()
-        assert presented.primary_headline == presented.historical_summary
+        assert "could access and extract" in presented.primary_headline.lower()
+        assert presented.historical_summary is None  # primary carries the claim
         assert presented.primary_explanation == STALE_RECONFIRM_EXPLANATION
         assert presented.timestamp_label == "Last confirmed"
         assert not presented.extracted_fields
         rendered = render_capability_panel(presented, escape=_escape)
         assert "Mighty can see and extract your logged-in account data" not in rendered
         assert "Last confirmed" in rendered
+        assert "No field values in the latest snapshot" not in rendered
 
 
 class TestTemporallyAccuratePresentation:
@@ -321,8 +331,12 @@ class TestTemporallyAccuratePresentation:
         )
         _assert_determining(presented, previous_state=CapabilityState.SIGNED_OUT)
         assert presented.primary_headline == DETERMINING_HEADLINE_CURRENT
-        assert presented.historical_summary == "Last confirmed: Signed out"
+        assert presented.historical_summary is None
         assert "You are signed out" not in presented.headline
+        previous_section = next(
+            s for s in presented.timeline_sections if s.label == "Previous completed check"
+        )
+        assert previous_section.events[0].description == "Signed out"
 
     def test_prior_extraction_success_plus_active_verification(self):
         previous = _stable(READY)
@@ -336,8 +350,12 @@ class TestTemporallyAccuratePresentation:
             presented, previous_state=CapabilityState.EXTRACTION_SUCCESS,
         )
         assert presented.primary_headline == REFRESHING_STATUS_HEADLINE
-        assert "could access and extract" in presented.historical_summary.lower()
+        assert presented.historical_summary is None
         assert not presented.extracted_fields
+        previous_section = next(
+            s for s in presented.timeline_sections if s.label == "Previous completed check"
+        )
+        assert "Connected" in previous_section.events[0].description
 
     def test_prior_terminal_unknown_plus_active_verification(self):
         unknown = build_capability_view(
@@ -357,9 +375,13 @@ class TestTemporallyAccuratePresentation:
             access_view=live_view,
         )
         _assert_determining(presented, previous_state=CapabilityState.LOGIN_UNKNOWN)
-        assert presented.historical_summary == "Previous check was inconclusive"
+        assert presented.historical_summary is None
         assert "cannot determine" not in presented.headline.lower()
         assert "could not determine" not in presented.headline.lower()
+        previous_section = next(
+            s for s in presented.timeline_sections if s.label == "Previous completed check"
+        )
+        assert previous_section.events[0].description == "Check inconclusive"
 
     def test_active_to_signed_out_terminal(self):
         previous = _stable(SIGNED_OUT)
@@ -472,11 +494,13 @@ class TestTemporallyAccuratePresentation:
             access_view=_inflight_checking(),
         )
         rendered = render_capability_panel(presented, escape=_escape)
-        assert "Last confirmed: Signed out" in rendered
-        assert "Confirmed" in rendered
+        # Previous outcome lives in the timeline — not as primary “Last confirmed”.
+        assert "Previous completed check" in rendered
+        assert "Signed out" in rendered
         assert 'datetime="2026-07-13T04:48:00Z"' in rendered
-        assert "Last verified:" not in rendered
+        assert "Last confirmed: Signed out" not in rendered
         assert "You are signed out" not in rendered
+        assert DETERMINING_HEADLINE in rendered
 
     def test_current_terminal_uses_current_completion_time(self):
         previous = replace(
@@ -522,7 +546,6 @@ class TestTemporallyAccuratePresentation:
     def test_timelines_not_mixed_during_determining(self):
         previous = _stable(READY)
         assert previous.truth_validation is not None
-        prev_descs = {e.description for e in previous.truth_validation.timeline}
         mid_view = _inflight_checking()
         held = present_customer_capability(
             build_capability_view(mid_view, extracted_items=AMEX_FIELDS),
@@ -535,18 +558,20 @@ class TestTemporallyAccuratePresentation:
         current = next(s for s in held.timeline_sections if s.label == "Current check")
         assert [e.description for e in current.events] == [
             "Verification started",
-            "Determining login state",
+            "Checking login state",
         ]
         # Current-check truth timeline must not carry prior terminal capability event.
         assert held.truth_validation is not None
         current_descs = {e.description for e in held.truth_validation.timeline}
-        assert "Determining login state" in current_descs
+        assert "Checking login state" in current_descs
         assert not any(d.startswith("Capability ·") for d in current_descs)
-        # Previous section preserves prior cycle events separately.
+        # Previous section leads with prior outcome and stays separate.
         previous_section = next(
             s for s in held.timeline_sections if s.label == "Previous completed check"
         )
-        assert {e.description for e in previous_section.events} == prev_descs
+        assert previous_section.events[0].description == (
+            "Connected — account data extracted"
+        )
 
         done_view = _view(SIGNED_OUT, verification_lifecycle="completed")
         final = present_customer_capability(
@@ -594,9 +619,12 @@ class TestTemporallyAccuratePresentation:
         )
         rendered = render_capability_panel(held, escape=_escape)
         assert 'data-presentation-phase="determining"' in rendered
-        assert 'data-status-historical="1"' in rendered
-        assert DETERMINING_HEADLINE_CURRENT in rendered
-        assert "Last confirmed: Signed out" in rendered
+        assert 'data-capability="login_unknown"' in rendered
+        assert 'data-status-historical="1"' not in rendered
+        assert DETERMINING_HEADLINE in rendered
+        assert "Previous completed check" in rendered
+        assert "Signed out" in rendered
+        assert "Last confirmed: Signed out" not in rendered
         assert "cannot determine" not in rendered.lower()
         assert "You are signed out" not in rendered
 
@@ -737,11 +765,15 @@ class TestTemporallyAccuratePresentation:
         )
         assert determining.presentation_phase == "determining"
         assert determining.primary_headline == DETERMINING_HEADLINE_CURRENT
-        assert determining.historical_summary == "Previous check was inconclusive"
+        assert determining.historical_summary is None
+        assert determining.previous_capability_state == (
+            CapabilityState.LOGIN_UNKNOWN.value
+        )
         assert "cannot determine" not in determining.headline.lower()
         rendered_b = render_capability_panel(determining, escape=_escape)
-        assert "Determining your current login state" in rendered_b
-        assert "Previous check was inconclusive" in rendered_b
+        assert "Checking your login state" in rendered_b
+        assert "Previous completed check" in rendered_b
+        assert "Check inconclusive" in rendered_b
         assert "Mighty cannot determine" not in rendered_b
 
         # C. Current cycle terminals signed_out.
@@ -770,8 +802,13 @@ class TestTemporallyAccuratePresentation:
             access_view=recheck,
         )
         assert determining2.presentation_phase == "determining"
-        assert determining2.historical_summary == "Last confirmed: Signed out"
+        assert determining2.historical_summary is None
+        assert determining2.previous_capability_state == CapabilityState.SIGNED_OUT.value
         assert "You are signed out" not in determining2.headline
+        rendered_d = render_capability_panel(determining2, escape=_escape)
+        assert "Previous completed check" in rendered_d
+        assert "Signed out" in rendered_d
+        assert "Last confirmed: Signed out" not in rendered_d
 
         # E. Current cycle terminals authenticated/no-data.
         clock_e = datetime(2026, 7, 14, 15, 13, tzinfo=timezone.utc)
@@ -805,6 +842,128 @@ class TestTemporallyAccuratePresentation:
             if step.status_is_historical and step.historical_summary:
                 assert payload["historical_summary"] == step.historical_summary
                 assert step.historical_summary in html_panel
+
+
+class TestCustomerPresentationStateMachine:
+    """Product state machine: one presentation per lifecycle+capability pair."""
+
+    def test_truth_table_active_lifecycle_always_checking(self):
+        for lifecycle in ("requested", "running", "session_verified", "extracting"):
+            mode = resolve_customer_presentation_mode(
+                refreshing=True,
+                capability_state=CapabilityState.SIGNED_OUT,
+                has_previous=True,
+                is_stale=False,
+                ever_checked=True,
+            )
+            assert mode.mode == "checking"
+            assert mode.is_checking is True
+            assert mode.shows_previous_on_card is False
+            assert mode.shows_previous_in_timeline is True
+            live = present_customer_capability(
+                build_capability_view(
+                    _view(SIGNED_OUT, verification_lifecycle=lifecycle),
+                ),
+                previous_stable=_stable(SIGNED_OUT),
+                access_view=_view(SIGNED_OUT, verification_lifecycle=lifecycle),
+                verification_lifecycle=lifecycle,
+            )
+            assert live.presentation_phase == "determining"
+            assert live.state == CapabilityState.LOGIN_UNKNOWN
+            assert live.historical_summary is None
+            assert "signed out" not in (live.primary_headline or "").lower()
+
+    def test_illegal_flash_signed_out_during_active_check_blocked(self):
+        """Checking must not briefly present Signed Out as current truth."""
+        live_view = _inflight_checking()
+        # Live capability may already look signed-out from stale readiness.
+        live = build_capability_view(
+            _view(SIGNED_OUT, verification_lifecycle="running"),
+        )
+        presented = present_customer_capability(
+            live,
+            previous_stable=_stable(READY),
+            access_view=live_view,
+        )
+        assert presented.presentation_phase == "determining"
+        assert presented.state != CapabilityState.SIGNED_OUT
+        assert "You are signed out" not in (presented.primary_headline or "")
+        rendered = render_capability_panel(presented, escape=_escape)
+        assert "You are signed out" not in rendered
+        assert "Last confirmed: Signed out" not in rendered
+
+    def test_checking_with_prior_keeps_previous_only_in_timeline(self):
+        presented = present_customer_capability(
+            build_capability_view(_inflight_checking()),
+            previous_stable=_stable(SIGNED_OUT),
+            access_view=_inflight_checking(),
+        )
+        assert presented.historical_summary is None
+        assert presented.status_is_historical is False
+        labels = [s.label for s in presented.timeline_sections]
+        assert labels == ["Previous completed check", "Current check"]
+        previous = next(s for s in presented.timeline_sections if s.label == "Previous completed check")
+        assert previous.events[0].description == "Signed out"
+
+    def test_terminal_modes_are_unique(self):
+        cases = [
+            (SIGNED_OUT, "signed_out", CapabilityState.SIGNED_OUT),
+            (READY, "connected", CapabilityState.EXTRACTION_SUCCESS),
+            ("logged_in_no_data", "logged_in_no_account_data", CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA),
+        ]
+        for fixture, mode_name, state in cases:
+            if fixture == READY:
+                view = _view(READY, verification_lifecycle="completed")
+                live = build_capability_view(view, extracted_items=AMEX_FIELDS)
+            elif fixture == "logged_in_no_data":
+                live = _stable("logged_in_no_data")
+                view = _view(
+                    UNVERIFIED,
+                    session_state="connected",
+                    verification_lifecycle="completed",
+                )
+            else:
+                view = _view(SIGNED_OUT, verification_lifecycle="completed")
+                live = build_capability_view(view)
+            mode = resolve_customer_presentation_mode(
+                refreshing=False,
+                capability_state=state,
+                has_previous=False,
+                is_stale=False,
+                ever_checked=True,
+            )
+            assert mode.mode == mode_name
+            presented = present_customer_capability(
+                live, previous_stable=None, access_view=view,
+                now=datetime(2026, 7, 14, 16, 0, tzinfo=timezone.utc),
+            )
+            assert presented.presentation_phase == "terminal"
+            assert presented.state == state
+            assert presented.status_is_historical is False
+
+    def test_stale_connected_does_not_show_empty_extracted(self):
+        now = datetime(2026, 7, 14, 16, 0, tzinfo=timezone.utc)
+        access = _view(
+            READY,
+            verification_lifecycle="completed",
+            last_confirmed_ready_at=(
+                now - timedelta(seconds=CUSTOMER_TRUTH_FRESHNESS_SECONDS + 5)
+            ).isoformat(),
+        )
+        presented = present_customer_capability(
+            build_capability_view(access, extracted_items=AMEX_FIELDS),
+            previous_stable=None,
+            access_view=access,
+            now=now,
+        )
+        assert presented.status_is_historical is True
+        assert presented.state == CapabilityState.EXTRACTION_SUCCESS
+        assert not presented.extracted_fields
+        rendered = render_capability_panel(presented, escape=_escape)
+        assert "No field values in the latest snapshot" not in rendered
+        assert rendered.count("Last confirmed") == 1
+
+
 
 
 class TestSelectedVerificationTimestampWiring:
@@ -1519,7 +1678,7 @@ class TestTruthTimelineSelectedVerificationCorrelation:
             (e.timestamp == self.STALE_1129) for e in previous.events if e.timestamp
         )
         assert all(
-            e.description in ("Verification started", "Determining login state")
+            e.description in ("Verification started", "Checking login state")
             for e in current.events
         )
         assert held.truth_validation is not None
@@ -1850,7 +2009,11 @@ class TestInvalidationAndDebug:
         assert held.presentation_phase == "determining"
         assert held.previous_capability_state == CapabilityState.EXTRACTION_SUCCESS.value
         assert held.is_refreshing is True
-        assert held.status_is_historical is True
+        assert held.status_is_historical is False
+        assert held.historical_summary is None
+        assert any(
+            s.label == "Previous completed check" for s in held.timeline_sections
+        )
 
     def test_account_identity_change_invalidates(self):
         db = _memory_db()
