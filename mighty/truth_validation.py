@@ -382,10 +382,27 @@ def confidence_from_evidence(
     return ConfidenceLevel.MEDIUM, max(min(score, 70), 50)
 
 
+def _correlation_metadata(
+    *,
+    verification_id: str | None,
+    access_cycle_id: str | None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Developer-safe event IDs tying timeline rows to one verification cycle."""
+    meta: dict[str, Any] = dict(extra or {})
+    if verification_id:
+        meta["verification_id"] = verification_id
+    if access_cycle_id:
+        meta["access_cycle_id"] = access_cycle_id
+    return _safe_metadata(meta)
+
+
 def _evidence_from_capability(
     capability: CapabilityView,
     *,
     base_ts: str | None,
+    verification_id: str | None = None,
+    access_cycle_id: str | None = None,
 ) -> list[TruthEvidence]:
     items: list[TruthEvidence] = []
     for i, ev in enumerate(capability.evidence):
@@ -403,7 +420,11 @@ def _evidence_from_capability(
                 description=ev.text,
                 outcome=outcome,
                 confidence_contribution=_contribution_for(outcome, category),
-                metadata=_safe_metadata({"source": "capability_evidence"}),
+                metadata=_correlation_metadata(
+                    verification_id=verification_id,
+                    access_cycle_id=access_cycle_id,
+                    extra={"source": "capability_evidence"},
+                ),
             )
         )
     return items
@@ -414,6 +435,8 @@ def _ensure_state_evidence(
     evidence: list[TruthEvidence],
     *,
     base_ts: str | None,
+    verification_id: str | None = None,
+    access_cycle_id: str | None = None,
 ) -> list[TruthEvidence]:
     """Guarantee regression-critical evidence shapes per CapabilityState."""
     descs = {e.description.lower() for e in evidence}
@@ -437,7 +460,11 @@ def _ensure_state_evidence(
                 description=description,
                 outcome=outcome,
                 confidence_contribution=contribution,
-                metadata=_safe_metadata(meta or {"source": "truth_validation"}),
+                metadata=_correlation_metadata(
+                    verification_id=verification_id,
+                    access_cycle_id=access_cycle_id,
+                    extra=meta or {"source": "truth_validation"},
+                ),
             )
         )
         descs.add(description.lower())
@@ -691,12 +718,23 @@ def _expand_pipeline(
     return ordered
 
 
+def sort_timeline_events(
+    events: Sequence[TruthEvidence],
+) -> tuple[TruthEvidence, ...]:
+    """Sort by occurred_at; equal timestamps keep stable original order."""
+    indexed = list(enumerate(events))
+    indexed.sort(key=lambda pair: (pair[1].timestamp or "", pair[0]))
+    return tuple(event for _, event in indexed)
+
+
 def _timeline_events(
     state: CapabilityState,
     evidence: Sequence[TruthEvidence],
     *,
     base_ts: str | None,
     display_name: str,
+    verification_id: str | None = None,
+    access_cycle_id: str | None = None,
 ) -> tuple[TruthEvidence, ...]:
     """Chronological Truth Timeline (synthetic offsets when only one clock)."""
     # Prefer existing evidence ordered as built; prepend navigation open if useful.
@@ -719,7 +757,11 @@ def _timeline_events(
                     else EvidenceOutcome.UNKNOWN
                 ),
                 confidence_contribution=5 if state != CapabilityState.LOGIN_UNKNOWN else -2,
-                metadata=_safe_metadata({"source": "timeline"}),
+                metadata=_correlation_metadata(
+                    verification_id=verification_id,
+                    access_cycle_id=access_cycle_id,
+                    extra={"source": "timeline"},
+                ),
             )
         )
     # Deduplicate by description; keep chronological order of evidence list.
@@ -744,10 +786,14 @@ def _timeline_events(
                 else EvidenceOutcome.UNKNOWN
             ),
             confidence_contribution=0,
-            metadata=_safe_metadata({"capability_state": state.value}),
+            metadata=_correlation_metadata(
+                verification_id=verification_id,
+                access_cycle_id=access_cycle_id,
+                extra={"capability_state": state.value, "source": "timeline"},
+            ),
         )
     )
-    return tuple(events)
+    return sort_timeline_events(events)
 
 
 def _developer_ids(
@@ -788,9 +834,29 @@ def build_truth_validation(
     state = capability.state
     base_ts = capability.last_verified
     generated = generated_at or _now_iso()
+    ids = _developer_ids(
+        access_view,
+        verification_id=verification_id,
+        snapshot_id=snapshot_id,
+        correlation_id=correlation_id,
+        access_cycle_id=access_cycle_id,
+    )
+    vid = ids.get("verification_id")
+    cycle = ids.get("access_cycle_id")
 
-    evidence = _evidence_from_capability(capability, base_ts=base_ts)
-    evidence = _ensure_state_evidence(state, evidence, base_ts=base_ts)
+    evidence = _evidence_from_capability(
+        capability,
+        base_ts=base_ts,
+        verification_id=vid,
+        access_cycle_id=cycle,
+    )
+    evidence = _ensure_state_evidence(
+        state,
+        evidence,
+        base_ts=base_ts,
+        verification_id=vid,
+        access_cycle_id=cycle,
+    )
 
     # Chronological: keep construction order (already stage-aligned).
     evidence_tuple = tuple(evidence)
@@ -823,6 +889,8 @@ def build_truth_validation(
         evidence_tuple,
         base_ts=base_ts,
         display_name=capability.display_name,
+        verification_id=vid,
+        access_cycle_id=cycle,
     )
 
     return TruthValidation(
@@ -835,13 +903,7 @@ def build_truth_validation(
         pipeline=pipeline,
         timeline=timeline,
         transition=transition,
-        developer_ids=_developer_ids(
-            access_view,
-            verification_id=verification_id,
-            snapshot_id=snapshot_id,
-            correlation_id=correlation_id,
-            access_cycle_id=access_cycle_id,
-        ),
+        developer_ids=ids,
     )
 
 

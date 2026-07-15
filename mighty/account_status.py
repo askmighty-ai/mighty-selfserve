@@ -200,12 +200,19 @@ class AccountStatus:
             payload["snapshot_schema_version"] = self.snapshot_schema_version
         if self.capability is not None:
             cap = self.capability.to_dict()
+            from mighty.customer_capability_presentation import (
+                build_timeline_correlation_record,
+            )
+            cap["timeline_correlation"] = build_timeline_correlation_record(
+                self.capability,
+            )
             payload["capability"] = cap
             payload["capability_state"] = cap["capability_state"]
             if cap.get("truth_validation") is not None:
                 payload["truth_validation"] = cap["truth_validation"]
             elif self.capability.truth_validation is not None:
                 payload["truth_validation"] = self.capability.truth_validation.to_dict()
+            payload["timeline_correlation"] = cap["timeline_correlation"]
         elif self.customer_access is not None:
             payload["capability_state"] = self.customer_access.to_dict().get(
                 "capability_state",

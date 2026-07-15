@@ -257,8 +257,19 @@ def _render_truth_timeline(
     if capability.timeline_sections:
         return _render_timeline_sections(capability.timeline_sections, escape)
     truth = capability.truth_validation
-    if truth is None or not truth.timeline:
+    if truth is None:
         return ""
+    if not truth.timeline:
+        return (
+            f'<details class="dash-truth-timeline">'
+            f"<summary>Truth Timeline</summary>"
+            f'<div class="dash-truth-timeline-body">'
+            f'<p class="dash-truth-timeline-empty">'
+            f"No correlated timeline events were recorded for this check."
+            f"</p>"
+            f"</div>"
+            f"</details>"
+        )
     rows = "".join(_timeline_row(e, escape) for e in truth.timeline)
     return (
         f'<details class="dash-truth-timeline">'

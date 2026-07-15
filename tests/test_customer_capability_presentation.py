@@ -23,15 +23,20 @@ from mighty.customer_capability_presentation import (
     DETERMINING_BODY,
     DETERMINING_HEADLINE,
     DETERMINING_HEADLINE_CURRENT,
+    EMPTY_CORRELATED_TIMELINE_MESSAGE,
     FIRST_EVER_CHECKING_HEADLINE,
     REFRESHING_STATUS_HEADLINE,
     STALE_RECONFIRM_EXPLANATION,
     PresentationOrderMeta,
     apply_selected_verification_timestamp,
     build_presented_capability_view,
+    build_timeline_correlation_record,
     clear_stable_capability,
+    correlate_presentation_timeline,
     customer_visible_same,
     ensure_customer_capability_presentation_tables,
+    event_matches_presentation,
+    filter_correlated_timeline_events,
     fingerprint_account_identity,
     is_newer_presentation,
     is_result_within_customer_truth_freshness,
@@ -1064,7 +1069,8 @@ class TestSelectedVerificationTimestampWiring:
         assert meta.verification_completed_at is None
         wired = apply_selected_verification_timestamp(live, meta)
         assert wired.last_verified == before
-        assert wired is live
+        # Active checks may still receive correlation tagging; clock stays put.
+        assert wired.last_verified == live.last_verified
 
     def test_legacy_without_verification_completion_keeps_readiness_timestamp(self):
         """No verification identity/completed_at → degrade to readiness timestamp."""
@@ -1079,6 +1085,15 @@ class TestSelectedVerificationTimestampWiring:
             last_verified=self.STALE_1129,
             current_verification_id=None,
         )
+        # Clear truth IDs so legacy path has no selected verification identity.
+        if live.truth_validation is not None:
+            live = replace(
+                live,
+                truth_validation=replace(
+                    live.truth_validation,
+                    developer_ids={},
+                ),
+            )
         meta = PresentationOrderMeta(
             verification_id=None,
             access_cycle_id=None,
@@ -1089,7 +1104,6 @@ class TestSelectedVerificationTimestampWiring:
         )
         wired = apply_selected_verification_timestamp(live, meta)
         assert wired.last_verified == self.STALE_1129
-        assert wired is live
 
     def test_apply_selected_verification_timestamp_helper(self):
         view = replace(
@@ -1132,6 +1146,461 @@ class TestSelectedVerificationTimestampWiring:
         assert apply_selected_verification_timestamp(live, meta).last_verified == (
             self.SELECTED_311
         )
+
+
+class TestTruthTimelineSelectedVerificationCorrelation:
+    """Headline and current Truth Timeline must share one verification.
+
+    Production defect: Latest check completed 9:13 PM while Truth Timeline
+    still showed 11:29 AM events from an older verification.
+    """
+
+    STALE_1129 = "2026-07-14T18:29:00Z"  # 11:29 AM PT
+    SELECTED_913 = "2026-07-15T04:13:00Z"  # 9:13 PM PT Jul 14
+
+    def _seed_verification(self, db, *, vid: str, completed_at: str) -> None:
+        ensure_session_verification_tables(db)
+        db.execute(
+            """
+            INSERT INTO provider_session_verification (
+                verification_id, user_id, provider, lifecycle,
+                requested_at, started_at, completed_at,
+                terminal_reason, terminal_source
+            ) VALUES (?, ?, 'amex', 'completed', ?, ?, ?, 'signed_out', 'test')
+            """,
+            (vid, "u1", completed_at, completed_at, completed_at),
+        )
+        db.commit()
+
+    def _assert_timeline_matches_selected(self, presented, *, vid: str, completed_at: str):
+        assert presented.last_verified == completed_at
+        assert presented.current_verification_id == vid
+        assert presented.truth_validation is not None
+        ids = presented.truth_validation.developer_ids
+        assert ids.get("verification_id") == vid
+        assert ids.get("access_cycle_id") == vid or ids.get("access_cycle_id")
+        for event in presented.truth_validation.timeline:
+            assert event.metadata.get("verification_id") == vid
+            if event.timestamp and event.id != "tl-empty-correlated":
+                assert event.timestamp == completed_at
+                assert event.timestamp != self.STALE_1129 or completed_at == self.STALE_1129
+        corr = build_timeline_correlation_record(presented)
+        assert corr["presentation_verification_id"] == vid
+        assert corr["mismatched_event_count"] == 0
+        assert set(corr["current_timeline_verification_ids"]) <= {vid}
+
+    def test_production_1129_timeline_replaced_by_913_signed_out(self):
+        db = _memory_db()
+        self._seed_verification(db, vid="ver-a-1129", completed_at=self.STALE_1129)
+        self._seed_verification(db, vid="ver-b-913", completed_at=self.SELECTED_913)
+
+        access_a = _view(
+            SIGNED_OUT,
+            verification_lifecycle="completed",
+            verification_id="ver-a-1129",
+            last_confirmed_ready_at="2026-07-14T18:29:00+00:00",
+        )
+        prior = build_capability_view(access_a, verification_id="ver-a-1129")
+        prior = apply_selected_verification_timestamp(
+            prior,
+            resolve_order_meta_for_view(prior, db=db, user_id="u1", access_view=access_a),
+        )
+        assert prior.last_verified == self.STALE_1129
+        save_stable_capability(
+            db,
+            "u1",
+            prior,
+            order_meta=_meta(
+                verification_id="ver-a-1129",
+                completed_at=self.STALE_1129,
+                terminal_reason="signed_out",
+            ),
+        )
+
+        access_b = _view(
+            SIGNED_OUT,
+            verification_lifecycle="completed",
+            verification_id="ver-b-913",
+            last_confirmed_ready_at="2026-07-14T18:29:00+00:00",
+        )
+        presented = build_presented_capability_view(
+            access_b,
+            persist_db=db,
+            persist_user_id="u1",
+            verification_id="ver-b-913",
+        )
+        self._assert_timeline_matches_selected(
+            presented, vid="ver-b-913", completed_at=self.SELECTED_913,
+        )
+        rendered = render_capability_panel(presented, escape=_escape)
+        assert self.STALE_1129 not in rendered
+        for event in presented.truth_validation.timeline:
+            assert event.timestamp != self.STALE_1129
+
+        loaded = load_stable_capability(db, "u1", "amex")
+        assert loaded is not None
+        self._assert_timeline_matches_selected(
+            loaded, vid="ver-b-913", completed_at=self.SELECTED_913,
+        )
+
+    def test_production_defect_also_swaps_for_logged_in_no_data(self):
+        db = _memory_db()
+        self._seed_verification(db, vid="ver-a-1129", completed_at=self.STALE_1129)
+        ensure_session_verification_tables(db)
+        db.execute(
+            """
+            INSERT INTO provider_session_verification (
+                verification_id, user_id, provider, lifecycle,
+                requested_at, started_at, completed_at,
+                terminal_reason, terminal_source
+            ) VALUES (?, ?, 'amex', 'completed', ?, ?, ?, 'authenticated', 'test')
+            """,
+            ("ver-b-913", "u1", self.SELECTED_913, self.SELECTED_913, self.SELECTED_913),
+        )
+        db.commit()
+
+        prior = replace(
+            _stable("logged_in_no_data", verification_id="ver-a-1129"),
+            last_verified=self.STALE_1129,
+        )
+        save_stable_capability(
+            db,
+            "u1",
+            prior,
+            order_meta=_meta(
+                verification_id="ver-a-1129",
+                completed_at=self.STALE_1129,
+                terminal_reason="authenticated",
+            ),
+        )
+        access_b = _view(
+            UNVERIFIED,
+            session_state="connected",
+            verification_lifecycle="completed",
+            verification_id="ver-b-913",
+            last_confirmed_ready_at="2026-07-14T18:29:00+00:00",
+        )
+        presented = build_presented_capability_view(
+            access_b,
+            persist_db=db,
+            persist_user_id="u1",
+            verification_id="ver-b-913",
+            extracted_items=[],
+            extraction_status=EXTRACTION_COMPLETE,
+        )
+        assert presented.state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
+        self._assert_timeline_matches_selected(
+            presented, vid="ver-b-913", completed_at=self.SELECTED_913,
+        )
+
+    def test_dashboard_and_api_timelines_identical(self):
+        from mighty.account_status import _apply_stable_customer_capability
+
+        db = _memory_db()
+        self._seed_verification(db, vid="ver-b-913", completed_at=self.SELECTED_913)
+        access = _view(
+            SIGNED_OUT,
+            verification_lifecycle="completed",
+            verification_id="ver-b-913",
+            last_confirmed_ready_at="2026-07-14T18:29:00+00:00",
+        )
+        dash = build_presented_capability_view(
+            access,
+            persist_db=db,
+            persist_user_id="u1",
+            verification_id="ver-b-913",
+        )
+        clear_stable_capability(db, "u1", "amex")
+        api_live = build_capability_view(access, verification_id="ver-b-913")
+        accounts = [
+            AccountStatus(
+                source="amex",
+                display_name="American Express",
+                status="needs_login",
+                presentation_key="needs_sign_in",
+                presentation_label="Sign in required",
+                last_successful_sync_at=None,
+                current_attempt_at=None,
+                last_error=None,
+                user_action_label=None,
+                user_action_url=None,
+                customer_access=access,
+                capability=api_live,
+                verification_lifecycle="completed",
+                background_verification=False,
+            )
+        ]
+        _apply_stable_customer_capability(accounts, db=db, user_id="u1")
+        api = accounts[0].capability
+        assert api is not None
+        assert dash.last_verified == api.last_verified == self.SELECTED_913
+        assert dash.current_verification_id == api.current_verification_id
+        assert [
+            (e.id, e.timestamp, e.metadata.get("verification_id"))
+            for e in dash.truth_validation.timeline
+        ] == [
+            (e.id, e.timestamp, e.metadata.get("verification_id"))
+            for e in api.truth_validation.timeline
+        ]
+
+    def test_mismatched_and_legacy_events_omitted(self):
+        from mighty.truth_validation import (
+            EvidenceCategory,
+            EvidenceOutcome,
+            TruthEvidence,
+        )
+
+        live = build_capability_view(
+            _view(
+                SIGNED_OUT,
+                verification_lifecycle="completed",
+                verification_id="ver-b-913",
+                last_confirmed_ready_at="2026-07-15T04:13:00+00:00",
+            ),
+            verification_id="ver-b-913",
+        )
+        assert live.truth_validation is not None
+        stale = TruthEvidence(
+            id="stale-a",
+            timestamp=self.STALE_1129,
+            category=EvidenceCategory.SESSION,
+            description="Stale A event",
+            outcome=EvidenceOutcome.PASS,
+            confidence_contribution=0,
+            metadata={"verification_id": "ver-a-1129", "access_cycle_id": "ver-a-1129"},
+        )
+        legacy = TruthEvidence(
+            id="legacy-no-id",
+            timestamp=self.STALE_1129,
+            category=EvidenceCategory.SESSION,
+            description="Legacy uncorrelated",
+            outcome=EvidenceOutcome.PASS,
+            confidence_contribution=0,
+            metadata={},
+        )
+        polluted = replace(
+            live,
+            truth_validation=replace(
+                live.truth_validation,
+                timeline=live.truth_validation.timeline + (stale, legacy),
+            ),
+        )
+        cleaned = correlate_presentation_timeline(
+            polluted,
+            verification_id="ver-b-913",
+            access_cycle_id="ver-b-913",
+        )
+        ids = {e.id for e in cleaned.truth_validation.timeline}
+        assert "stale-a" not in ids
+        assert "legacy-no-id" not in ids
+
+    def test_no_fallback_to_provider_history_uses_empty_state(self):
+        from mighty.truth_validation import EvidenceCategory, EvidenceOutcome, TruthEvidence
+
+        live = build_capability_view(
+            _view(
+                SIGNED_OUT,
+                verification_lifecycle="completed",
+                verification_id="ver-b-913",
+            ),
+            verification_id="ver-b-913",
+        )
+        only_foreign = (
+            TruthEvidence(
+                id="foreign",
+                timestamp=self.STALE_1129,
+                category=EvidenceCategory.SESSION,
+                description="Other verification",
+                outcome=EvidenceOutcome.PASS,
+                confidence_contribution=0,
+                metadata={"verification_id": "ver-other", "access_cycle_id": "ver-other"},
+            ),
+        )
+        polluted = replace(
+            live,
+            last_verified=self.SELECTED_913,
+            truth_validation=replace(
+                live.truth_validation,
+                timeline=only_foreign,
+                developer_ids={
+                    "verification_id": "ver-b-913",
+                    "access_cycle_id": "ver-b-913",
+                },
+            ),
+        )
+        cleaned = correlate_presentation_timeline(
+            polluted,
+            verification_id="ver-b-913",
+            access_cycle_id="ver-b-913",
+        )
+        assert len(cleaned.truth_validation.timeline) == 1
+        assert cleaned.truth_validation.timeline[0].description == (
+            EMPTY_CORRELATED_TIMELINE_MESSAGE
+        )
+
+    def test_events_sorted_by_occurred_at_stable_for_ties(self):
+        from mighty.truth_validation import (
+            EvidenceCategory,
+            EvidenceOutcome,
+            TruthEvidence,
+            sort_timeline_events,
+        )
+
+        events = (
+            TruthEvidence(
+                id="b",
+                timestamp="2026-07-15T04:13:00Z",
+                category=EvidenceCategory.SESSION,
+                description="Second",
+                outcome=EvidenceOutcome.PASS,
+                confidence_contribution=0,
+                metadata={"verification_id": "ver-b-913"},
+            ),
+            TruthEvidence(
+                id="a",
+                timestamp="2026-07-15T04:12:00Z",
+                category=EvidenceCategory.NAVIGATION,
+                description="First",
+                outcome=EvidenceOutcome.PASS,
+                confidence_contribution=0,
+                metadata={"verification_id": "ver-b-913"},
+            ),
+            TruthEvidence(
+                id="c",
+                timestamp="2026-07-15T04:13:00Z",
+                category=EvidenceCategory.VERIFICATION,
+                description="Third",
+                outcome=EvidenceOutcome.PASS,
+                confidence_contribution=0,
+                metadata={"verification_id": "ver-b-913"},
+            ),
+        )
+        sorted_events = sort_timeline_events(events)
+        assert [e.id for e in sorted_events] == ["a", "b", "c"]
+        matched, omitted = filter_correlated_timeline_events(
+            events,
+            verification_id="ver-b-913",
+            access_cycle_id="ver-b-913",
+        )
+        assert omitted == 0
+        assert [e.id for e in matched] == ["a", "b", "c"]
+
+    def test_determining_sections_keep_active_and_previous_separate(self):
+        prior = apply_selected_verification_timestamp(
+            build_capability_view(
+                _view(
+                    SIGNED_OUT,
+                    verification_lifecycle="completed",
+                    verification_id="ver-prior",
+                    last_confirmed_ready_at="2026-07-14T18:29:00+00:00",
+                ),
+                verification_id="ver-prior",
+            ),
+            _meta(
+                verification_id="ver-prior",
+                completed_at=self.STALE_1129,
+                terminal_reason="signed_out",
+            ),
+        )
+        active = _inflight_checking(verification_id="ver-active")
+        held = present_customer_capability(
+            build_capability_view(active, verification_id="ver-active"),
+            previous_stable=prior,
+            access_view=active,
+        )
+        assert held.presentation_phase == "determining"
+        labels = [s.label for s in held.timeline_sections]
+        assert labels == ["Previous completed check", "Current check"]
+        previous = next(
+            s for s in held.timeline_sections if s.label == "Previous completed check"
+        )
+        current = next(s for s in held.timeline_sections if s.label == "Current check")
+        assert all(
+            (e.timestamp == self.STALE_1129) for e in previous.events if e.timestamp
+        )
+        assert all(
+            e.description in ("Verification started", "Determining login state")
+            for e in current.events
+        )
+        assert held.truth_validation is not None
+        assert not any(
+            d.startswith("Capability ·")
+            for d in (e.description for e in held.truth_validation.timeline)
+        )
+
+    def test_terminal_presentation_has_no_mixed_sections(self):
+        db = _memory_db()
+        self._seed_verification(db, vid="ver-b-913", completed_at=self.SELECTED_913)
+        presented = build_presented_capability_view(
+            _view(
+                SIGNED_OUT,
+                verification_lifecycle="completed",
+                verification_id="ver-b-913",
+                last_confirmed_ready_at="2026-07-14T18:29:00+00:00",
+            ),
+            persist_db=db,
+            persist_user_id="u1",
+            verification_id="ver-b-913",
+        )
+        assert presented.timeline_sections == ()
+        self._assert_timeline_matches_selected(
+            presented, vid="ver-b-913", completed_at=self.SELECTED_913,
+        )
+
+    def test_legacy_uncorrelated_timeline_cannot_attach_to_newer_card(self):
+        from mighty.truth_validation import EvidenceCategory, EvidenceOutcome, TruthEvidence
+
+        db = _memory_db()
+        self._seed_verification(db, vid="ver-b-913", completed_at=self.SELECTED_913)
+        live = build_capability_view(
+            _view(
+                SIGNED_OUT,
+                verification_lifecycle="completed",
+                verification_id="ver-b-913",
+                last_confirmed_ready_at="2026-07-15T04:13:00+00:00",
+            ),
+            verification_id="ver-b-913",
+        )
+        legacy_timeline = (
+            TruthEvidence(
+                id="legacy",
+                timestamp=self.STALE_1129,
+                category=EvidenceCategory.SESSION,
+                description="Legacy 11:29 event",
+                outcome=EvidenceOutcome.PASS,
+                confidence_contribution=0,
+                metadata={},
+            ),
+        )
+        polluted = replace(
+            live,
+            last_verified=self.SELECTED_913,
+            truth_validation=replace(
+                live.truth_validation,
+                timeline=legacy_timeline,
+                developer_ids={
+                    "verification_id": "ver-b-913",
+                    "access_cycle_id": "ver-b-913",
+                },
+            ),
+        )
+        save_stable_capability(
+            db,
+            "u1",
+            polluted,
+            order_meta=_meta(
+                verification_id="ver-b-913",
+                completed_at=self.SELECTED_913,
+                terminal_reason="signed_out",
+            ),
+        )
+        loaded = load_stable_capability(db, "u1", "amex")
+        assert loaded is not None
+        assert loaded.last_verified == self.SELECTED_913
+        descs = [e.description for e in loaded.truth_validation.timeline]
+        assert "Legacy 11:29 event" not in descs
+        assert EMPTY_CORRELATED_TIMELINE_MESSAGE in descs
+
 
 
 class TestMonotonicPersistence:
