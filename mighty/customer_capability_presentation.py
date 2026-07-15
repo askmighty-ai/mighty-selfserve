@@ -275,6 +275,55 @@ def enrich_order_meta_from_db(
     )
 
 
+def apply_selected_verification_timestamp(
+    view: CapabilityView,
+    meta: PresentationOrderMeta,
+) -> CapabilityView:
+    """Bind ``last_verified`` to the selected verification's ``completed_at``.
+
+    ``CapabilityView.last_verified`` is otherwise created from
+    ``last_confirmed_ready_at`` (extraction / prior ready). That value can lag
+    the selected terminal verification's completion time. Customer UI labels
+    ("Last confirmed", "Latest check completed") bind to ``last_verified``, not
+    ``verification_completed_at``, so the two must stay aligned.
+    """
+    completed = meta.verification_completed_at
+    if not completed or view.last_verified == completed:
+        return view
+    return replace(view, last_verified=completed)
+
+
+def resolve_order_meta_for_view(
+    view: CapabilityView,
+    *,
+    db: Any,
+    user_id: str,
+    access_view: Any | None = None,
+    verification_lifecycle: str | None = None,
+    account_identity: str | None = None,
+    order_meta: PresentationOrderMeta | None = None,
+) -> PresentationOrderMeta:
+    """Build order meta and fill completion time from the verification row."""
+    meta = order_meta or order_meta_from_capability(
+        view,
+        access_view=access_view,
+        verification_lifecycle=verification_lifecycle,
+        account_identity=account_identity,
+    )
+    if account_identity and not meta.account_identity:
+        meta = PresentationOrderMeta(
+            verification_id=meta.verification_id,
+            access_cycle_id=meta.access_cycle_id,
+            verification_completed_at=meta.verification_completed_at,
+            lifecycle=meta.lifecycle,
+            terminal_reason=meta.terminal_reason,
+            account_identity=account_identity,
+        )
+    return enrich_order_meta_from_db(
+        db, user_id, meta, provider=view.provider,
+    )
+
+
 def fingerprint_account_identity(username_material: str | None) -> str | None:
     """Stable non-reversible identity fingerprint for a provider credential."""
     text = (username_material or "").strip()
@@ -727,6 +776,9 @@ def merge_unchanged_presentation(
     else:
         pipeline = previous.pipeline
 
+    # Prefer live (already wired to selected verification completed_at when
+    # available). Do not retain a stale previous.last_verified merely because
+    # live.last_verified was still last_confirmed_ready_at.
     last_verified = live.last_verified or previous.last_verified
     return _as_stable(
         replace(
@@ -1286,24 +1338,32 @@ def build_presented_capability_view(
     live = build_capability_view(access_view, **build_kwargs)
 
     previous = previous_stable
-    if (
-        previous is None
-        and persist_db is not None
-        and persist_user_id
-        and not force_unknown
-    ):
-        provider = build_kwargs.get("provider") or (
-            getattr(access_view, "provider", None) if access_view else "amex"
-        )
-        identity = account_identity
+    provider = build_kwargs.get("provider") or (
+        getattr(access_view, "provider", None) if access_view else "amex"
+    )
+    identity = account_identity
+    meta: PresentationOrderMeta | None = order_meta
+    if persist_db is not None and persist_user_id and not force_unknown:
         if identity is None:
             identity = resolve_account_identity(persist_db, persist_user_id, provider)
-        previous = load_stable_capability(
-            persist_db,
-            persist_user_id,
-            provider,
+        if previous is None:
+            previous = load_stable_capability(
+                persist_db,
+                persist_user_id,
+                provider,
+                account_identity=identity,
+            )
+        # Wire last_verified from selected verification completed_at before
+        # freshness / merge so Dashboard timestamps match the selected cycle.
+        meta = resolve_order_meta_for_view(
+            live,
+            db=persist_db,
+            user_id=persist_user_id,
+            access_view=access_view,
             account_identity=identity,
+            order_meta=meta,
         )
+        live = apply_selected_verification_timestamp(live, meta)
 
     presented = present_customer_capability(
         live,
@@ -1315,26 +1375,16 @@ def build_presented_capability_view(
         live, presented,
     )
     if persist_db is not None and persist_user_id and persist_view is not None:
-        meta = order_meta or order_meta_from_capability(
-            persist_view,
-            access_view=access_view,
-            account_identity=account_identity,
-        )
-        if account_identity and not meta.account_identity:
-            meta = PresentationOrderMeta(
-                verification_id=meta.verification_id,
-                access_cycle_id=meta.access_cycle_id,
-                verification_completed_at=meta.verification_completed_at,
-                lifecycle=meta.lifecycle,
-                terminal_reason=meta.terminal_reason,
-                account_identity=account_identity,
+        if meta is None:
+            meta = resolve_order_meta_for_view(
+                persist_view,
+                db=persist_db,
+                user_id=persist_user_id,
+                access_view=access_view,
+                account_identity=identity,
+                order_meta=order_meta,
             )
-        meta = enrich_order_meta_from_db(
-            persist_db,
-            persist_user_id,
-            meta,
-            provider=persist_view.provider,
-        )
+        persist_view = apply_selected_verification_timestamp(persist_view, meta)
         save_stable_capability(
             persist_db,
             persist_user_id,

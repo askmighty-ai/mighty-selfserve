@@ -873,12 +873,12 @@ def _apply_stable_customer_capability(
     """Hold prior Truth card while verification is in flight (customer providers)."""
     from mighty.capability_state import is_customer_visible_provider
     from mighty.customer_capability_presentation import (
-        enrich_order_meta_from_db,
+        apply_selected_verification_timestamp,
         load_stable_capability,
-        order_meta_from_capability,
         persistable_terminal_capability,
         present_customer_capability,
         resolve_account_identity,
+        resolve_order_meta_for_view,
         save_stable_capability,
     )
 
@@ -890,6 +890,17 @@ def _apply_stable_customer_capability(
             db, user_id, acct.source, account_identity=identity,
         )
         live = acct.capability
+        # Bind last_verified to selected verification completed_at before
+        # presentation (API capability.last_verified → "Last confirmed" label).
+        meta = resolve_order_meta_for_view(
+            live,
+            db=db,
+            user_id=user_id,
+            access_view=acct.customer_access,
+            verification_lifecycle=acct.verification_lifecycle,
+            account_identity=identity,
+        )
+        live = apply_selected_verification_timestamp(live, meta)
         presented = present_customer_capability(
             live,
             previous_stable=previous,
@@ -900,15 +911,7 @@ def _apply_stable_customer_capability(
         acct.capability = presented
         persist_view = persistable_terminal_capability(live, presented)
         if persist_view is not None:
-            meta = order_meta_from_capability(
-                persist_view,
-                access_view=acct.customer_access,
-                verification_lifecycle=acct.verification_lifecycle,
-                account_identity=identity,
-            )
-            meta = enrich_order_meta_from_db(
-                db, user_id, meta, provider=acct.source,
-            )
+            persist_view = apply_selected_verification_timestamp(persist_view, meta)
             save_stable_capability(
                 db,
                 user_id,
