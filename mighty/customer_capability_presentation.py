@@ -1852,9 +1852,16 @@ def build_presented_capability_view(
     persist_user_id: str | None = None,
     account_identity: str | None = None,
     order_meta: PresentationOrderMeta | None = None,
+    write_persist: bool = True,
     **build_kwargs: Any,
 ) -> CapabilityView:
-    """Build live capability, apply presentation gate, optionally persist terminal."""
+    """Build live capability, apply presentation gate, optionally persist terminal.
+
+    ``persist_db`` is used for loading prior stable presentation and wiring
+    selected-verification timestamps. Writes only occur when
+    ``write_persist=True`` (command paths). Customer-facing GETs must pass
+    ``write_persist=False``.
+    """
     from mighty.capability_state import build_capability_view
 
     live = build_capability_view(access_view, **build_kwargs)
@@ -1896,7 +1903,12 @@ def build_presented_capability_view(
     persist_view = None if force_unknown else persistable_terminal_capability(
         live, presented,
     )
-    if persist_db is not None and persist_user_id and persist_view is not None:
+    if (
+        write_persist
+        and persist_db is not None
+        and persist_user_id
+        and persist_view is not None
+    ):
         if meta is None:
             meta = resolve_order_meta_for_view(
                 persist_view,

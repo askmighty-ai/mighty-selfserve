@@ -1116,7 +1116,7 @@ class TestSelectedVerificationTimestampWiring:
                 background_verification=False,
             )
         ]
-        _apply_stable_customer_capability(accounts, db=db, user_id="u1")
+        _apply_stable_customer_capability(accounts, db=db, user_id="u1", write_persist=True)
         api = accounts[0].capability
         assert api is not None
         assert api.last_verified == self.SELECTED_311
@@ -1489,7 +1489,7 @@ class TestTruthTimelineSelectedVerificationCorrelation:
                 background_verification=False,
             )
         ]
-        _apply_stable_customer_capability(accounts, db=db, user_id="u1")
+        _apply_stable_customer_capability(accounts, db=db, user_id="u1", write_persist=True)
         api = accounts[0].capability
         assert api is not None
         assert dash.last_verified == api.last_verified == self.SELECTED_913

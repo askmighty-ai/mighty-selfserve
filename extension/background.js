@@ -1093,9 +1093,43 @@ const MFA_SITES = new Set([
  * Only pings accounts the user has actually connected AND that are in ok status,
  * avoiding wasteful pings to 50+ sites the user hasn't connected or is logged out of.
  */
+async function requestDueSessionVerifications(triggerSource) {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+  try {
+    const resp = await fetch(
+      `${MIGHTY_URL}/api/extension/session-verification/ensure-due`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Mighty-Key': api_key,
+        },
+        body: JSON.stringify({
+          trigger_source: triggerSource || 'scheduled_recheck',
+        }),
+      },
+    );
+    if (!resp.ok) {
+      console.warn('[Mighty] ensure-due failed', resp.status);
+      return;
+    }
+    const data = await resp.json().catch(() => ({}));
+    const created = data?.created ? Object.keys(data.created) : [];
+    if (created.length) {
+      console.log('[Mighty] ensure-due created', triggerSource, created.join(','));
+    }
+  } catch (e) {
+    console.warn('[Mighty] ensure-due error:', e.message);
+  }
+}
+
 async function runSessionKeepalive() {
   const { api_key } = await chrome.storage.local.get('api_key');
   if (!api_key) return;
+
+  // Explicit scheduled command — never rely on GET /pending to create work.
+  await requestDueSessionVerifications('scheduled_recheck');
 
   // Sites where a headless fetch won't refresh sessions reliably
   const KEEPALIVE_SKIP = new Set(['xfinity', 'pa_utilities']);
@@ -2698,6 +2732,8 @@ async function _resetVerificationsAfterExtensionReload(reason) {
       data?.count ?? 0,
       'cancelled',
     );
+    // After a clean slate, explicitly request due rechecks (command path).
+    await requestDueSessionVerifications('extension_startup');
   } catch (e) {
     console.warn('[Mighty] verification reset-on-reload failed:', e.message);
   }
