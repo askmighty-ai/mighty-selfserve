@@ -64,6 +64,9 @@ REFRESHING_STATUS_HEADLINE = "Refreshing current status…"
 STALE_RECONFIRM_EXPLANATION = (
     "Mighty has not reconfirmed this result within the current freshness window."
 )
+EMPTY_CORRELATED_TIMELINE_MESSAGE = (
+    "No correlated timeline events were recorded for this check."
+)
 
 # Backward-compatible aliases (tests / callers from PR #102).
 REFRESH_LABEL = DETERMINING_HEADLINE_CURRENT
@@ -72,6 +75,7 @@ FIRST_EVER_CHECKING_HEADLINE = DETERMINING_HEADLINE
 FIRST_EVER_CHECKING_EVIDENCE = DETERMINING_BODY
 
 _LIVE_CHECKING = "Checking"
+_EMPTY_TIMELINE_EVENT_ID = "tl-empty-correlated"
 
 
 # ── Ordering metadata ────────────────────────────────────────────────────────
@@ -279,18 +283,324 @@ def apply_selected_verification_timestamp(
     view: CapabilityView,
     meta: PresentationOrderMeta,
 ) -> CapabilityView:
-    """Bind ``last_verified`` to the selected verification's ``completed_at``.
+    """Bind presentation clocks and Truth Timeline to the selected verification.
 
     ``CapabilityView.last_verified`` is otherwise created from
     ``last_confirmed_ready_at`` (extraction / prior ready). That value can lag
     the selected terminal verification's completion time. Customer UI labels
-    ("Last confirmed", "Latest check completed") bind to ``last_verified``, not
-    ``verification_completed_at``, so the two must stay aligned.
+    ("Last confirmed", "Latest check completed") bind to ``last_verified``, and
+    Truth Timeline events were historically stamped from the same readiness
+    clock — so both must be rebuilt from ``verification_completed_at``.
     """
     completed = meta.verification_completed_at
-    if not completed or view.last_verified == completed:
+    verification_id = _norm_id(meta.verification_id) or view.current_verification_id
+    access_cycle_id = _norm_id(meta.access_cycle_id) or verification_id
+
+    if completed and view.last_verified != completed:
+        view = replace(
+            view,
+            last_verified=completed,
+            current_verification_id=verification_id or view.current_verification_id,
+            pipeline=_restamp_pipeline(view.pipeline, completed),
+        )
+        view = _rebuild_truth_for_selected_verification(
+            view,
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+        )
+    elif verification_id or access_cycle_id:
+        # Completion clock already matches; still align IDs / correlation tags.
+        view = replace(
+            view,
+            current_verification_id=verification_id or view.current_verification_id,
+        )
+        view = _ensure_truth_ids(
+            view,
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+        )
+
+    return correlate_presentation_timeline(
+        view,
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id,
+        empty_if_none=bool(verification_id or completed),
+    )
+
+
+def _restamp_pipeline(
+    pipeline: tuple[PipelineStage, ...],
+    completed_at: str,
+) -> tuple[PipelineStage, ...]:
+    """Align pipeline stage clocks with the selected verification completion."""
+    return tuple(
+        replace(stage, timestamp=completed_at if stage.timestamp is not None else None)
+        for stage in pipeline
+    )
+
+
+def _rebuild_truth_for_selected_verification(
+    view: CapabilityView,
+    *,
+    verification_id: str | None,
+    access_cycle_id: str | None,
+) -> CapabilityView:
+    from mighty.truth_validation import attach_truth_validation
+
+    previous_state = None
+    if view.truth_validation is not None and view.truth_validation.transition:
+        previous_state = view.truth_validation.transition.previous_state
+    return attach_truth_validation(
+        view,
+        previous_state=previous_state,
+        session_confidence=view.confidence,
+        verification_id=verification_id,
+        access_cycle_id=access_cycle_id,
+    )
+
+
+def _ensure_truth_ids(
+    view: CapabilityView,
+    *,
+    verification_id: str | None,
+    access_cycle_id: str | None,
+) -> CapabilityView:
+    truth = view.truth_validation
+    if truth is None:
+        return _rebuild_truth_for_selected_verification(
+            view,
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+        )
+    ids = dict(truth.developer_ids or {})
+    if verification_id:
+        ids["verification_id"] = verification_id
+    if access_cycle_id:
+        ids["access_cycle_id"] = access_cycle_id
+    if ids == dict(truth.developer_ids or {}):
         return view
-    return replace(view, last_verified=completed)
+    # IDs changed without a clock rewrite — rebuild so event metadata matches.
+    return _rebuild_truth_for_selected_verification(
+        view,
+        verification_id=verification_id or ids.get("verification_id"),
+        access_cycle_id=access_cycle_id or ids.get("access_cycle_id"),
+    )
+
+
+def _event_verification_id(event: Any) -> str | None:
+    meta = getattr(event, "metadata", None) or {}
+    if isinstance(meta, dict):
+        return _norm_id(meta.get("verification_id"))
+    return None
+
+
+def _event_access_cycle_id(event: Any) -> str | None:
+    meta = getattr(event, "metadata", None) or {}
+    if isinstance(meta, dict):
+        return _norm_id(meta.get("access_cycle_id"))
+    return None
+
+
+def event_matches_presentation(
+    event: Any,
+    *,
+    verification_id: str | None,
+    access_cycle_id: str | None,
+) -> bool:
+    """True when an event is correlated to the presented verification cycle.
+
+    Legacy events with no correlation IDs are not treated as belonging to a
+    newer verification that does have an identity.
+    """
+    event_vid = _event_verification_id(event)
+    event_cycle = _event_access_cycle_id(event)
+    if verification_id:
+        if not event_vid:
+            return False
+        if event_vid != verification_id:
+            return False
+    if access_cycle_id:
+        if event_cycle and event_cycle != access_cycle_id:
+            return False
+        # When the presentation has a cycle id but the event only carries
+        # verification_id, allow match if verification_id already matched.
+        if not event_cycle and not verification_id:
+            return False
+    return True
+
+
+def filter_correlated_timeline_events(
+    events: tuple[Any, ...] | list[Any],
+    *,
+    verification_id: str | None,
+    access_cycle_id: str | None,
+) -> tuple[tuple[Any, ...], int]:
+    """Return (matching events sorted, omitted_count)."""
+    from mighty.truth_validation import sort_timeline_events
+
+    matched = [
+        event
+        for event in events
+        if event_matches_presentation(
+            event,
+            verification_id=verification_id,
+            access_cycle_id=access_cycle_id,
+        )
+    ]
+    omitted = len(list(events)) - len(matched)
+    if matched and hasattr(matched[0], "category"):
+        return sort_timeline_events(matched), omitted
+    # PresentationTimelineEvent has no category — sort by timestamp/description.
+    matched_sorted = tuple(
+        sorted(
+            matched,
+            key=lambda e: (
+                getattr(e, "timestamp", None) or "",
+                getattr(e, "description", None) or "",
+            ),
+        )
+    )
+    return matched_sorted, omitted
+
+
+def _empty_correlated_timeline_event(
+    *,
+    verification_id: str | None,
+    access_cycle_id: str | None,
+    timestamp: str | None,
+) -> Any:
+    from mighty.truth_validation import (
+        EvidenceCategory,
+        EvidenceOutcome,
+        TruthEvidence,
+    )
+
+    return TruthEvidence(
+        id=_EMPTY_TIMELINE_EVENT_ID,
+        timestamp=timestamp,
+        category=EvidenceCategory.VERIFICATION,
+        description=EMPTY_CORRELATED_TIMELINE_MESSAGE,
+        outcome=EvidenceOutcome.UNKNOWN,
+        confidence_contribution=0,
+        metadata={
+            k: v
+            for k, v in {
+                "verification_id": verification_id,
+                "access_cycle_id": access_cycle_id,
+                "source": "empty_correlated_timeline",
+            }.items()
+            if v
+        },
+    )
+
+
+def correlate_presentation_timeline(
+    view: CapabilityView,
+    *,
+    verification_id: str | None = None,
+    access_cycle_id: str | None = None,
+    empty_if_none: bool = True,
+) -> CapabilityView:
+    """Keep only timeline/evidence rows for the presented verification cycle."""
+    truth = view.truth_validation
+    if truth is None:
+        return view
+
+    vid = _norm_id(verification_id) or _norm_id(
+        (truth.developer_ids or {}).get("verification_id")
+    ) or _norm_id(view.current_verification_id)
+    cycle = _norm_id(access_cycle_id) or _norm_id(
+        (truth.developer_ids or {}).get("access_cycle_id")
+    ) or vid
+
+    timeline, _omitted_tl = filter_correlated_timeline_events(
+        truth.timeline,
+        verification_id=vid,
+        access_cycle_id=cycle,
+    )
+    evidence, _omitted_ev = filter_correlated_timeline_events(
+        truth.evidence,
+        verification_id=vid,
+        access_cycle_id=cycle,
+    )
+    if empty_if_none and vid and not timeline:
+        timeline = (
+            _empty_correlated_timeline_event(
+                verification_id=vid,
+                access_cycle_id=cycle,
+                timestamp=view.last_verified,
+            ),
+        )
+
+    ids = dict(truth.developer_ids or {})
+    if vid:
+        ids["verification_id"] = vid
+    if cycle:
+        ids["access_cycle_id"] = cycle
+
+    new_truth = replace(
+        truth,
+        timeline=timeline,
+        evidence=evidence,
+        developer_ids=ids,
+    )
+    return replace(
+        view,
+        truth_validation=new_truth,
+        current_verification_id=vid or view.current_verification_id,
+    )
+
+
+def build_timeline_correlation_record(view: CapabilityView) -> dict[str, Any]:
+    """Sanitized correlation diagnostic for Dashboard/API parity asserts."""
+    truth = view.truth_validation
+    ids = dict(truth.developer_ids or {}) if truth else {}
+    presentation_vid = _norm_id(
+        ids.get("verification_id") or view.current_verification_id
+    )
+    presentation_cycle = _norm_id(ids.get("access_cycle_id")) or presentation_vid
+
+    current_vids: list[str] = []
+    current_cycles: list[str] = []
+    previous_vids: list[str] = []
+    mismatched = 0
+    omitted = 0
+
+    if truth is not None:
+        for event in truth.timeline:
+            event_vid = _event_verification_id(event)
+            event_cycle = _event_access_cycle_id(event)
+            if event_vid:
+                current_vids.append(event_vid)
+            if event_cycle:
+                current_cycles.append(event_cycle)
+            if not event_matches_presentation(
+                event,
+                verification_id=presentation_vid,
+                access_cycle_id=presentation_cycle,
+            ):
+                mismatched += 1
+                if event_vid and event_vid != presentation_vid:
+                    previous_vids.append(event_vid)
+
+    for section in view.timeline_sections:
+        is_previous = "previous" in (section.label or "").lower()
+        for event in section.events:
+            # Presentation events may lack metadata; section label is authoritative.
+            if is_previous:
+                continue
+            # Current-check synthetic rows should not carry prior terminal ids.
+            pass
+
+    return {
+        "presentation_verification_id": presentation_vid,
+        "presentation_access_cycle_id": presentation_cycle,
+        "current_timeline_verification_ids": sorted(set(current_vids)),
+        "current_timeline_access_cycle_ids": sorted(set(current_cycles)),
+        "previous_timeline_verification_ids": sorted(set(previous_vids)),
+        "mismatched_event_count": mismatched,
+        "omitted_event_count": omitted,
+    }
 
 
 def resolve_order_meta_for_view(
@@ -521,13 +831,24 @@ def _events_from_truth_timeline(
     truth = view.truth_validation
     if truth is None or not truth.timeline:
         return ()
+    vid = _norm_id(
+        (truth.developer_ids or {}).get("verification_id")
+        or view.current_verification_id
+    )
+    cycle = _norm_id((truth.developer_ids or {}).get("access_cycle_id")) or vid
+    events, _ = filter_correlated_timeline_events(
+        truth.timeline,
+        verification_id=vid,
+        access_cycle_id=cycle,
+    )
     return tuple(
         PresentationTimelineEvent(
             description=item.description,
             timestamp=item.timestamp,
             outcome=item.outcome.value,
         )
-        for item in truth.timeline
+        for item in events
+        if item.id != _EMPTY_TIMELINE_EVENT_ID
     )
 
 
@@ -729,6 +1050,20 @@ def _determining_truth_validation(
         return None
     from mighty.truth_validation import EvidenceCategory, EvidenceOutcome, TruthEvidence
 
+    vid = _norm_id(
+        (truth.developer_ids or {}).get("verification_id")
+        or live.current_verification_id
+    )
+    cycle = _norm_id((truth.developer_ids or {}).get("access_cycle_id")) or vid
+    corr = {
+        k: v
+        for k, v in {
+            "verification_id": vid,
+            "access_cycle_id": cycle,
+            "source": "current_check",
+        }.items()
+        if v
+    }
     events = (
         TruthEvidence(
             id="current-verification-started",
@@ -737,6 +1072,7 @@ def _determining_truth_validation(
             description="Verification started",
             outcome=EvidenceOutcome.UNKNOWN,
             confidence_contribution=0,
+            metadata=corr,
         ),
         TruthEvidence(
             id="current-determining-login",
@@ -745,18 +1081,75 @@ def _determining_truth_validation(
             description="Determining login state",
             outcome=EvidenceOutcome.UNKNOWN,
             confidence_contribution=0,
+            metadata=corr,
         ),
     )
-    return replace(truth, timeline=events, capability_state="determining")
+    ids = dict(truth.developer_ids or {})
+    if vid:
+        ids["verification_id"] = vid
+    if cycle:
+        ids["access_cycle_id"] = cycle
+    return replace(
+        truth,
+        timeline=events,
+        capability_state="determining",
+        developer_ids=ids,
+    )
 
 
 def merge_unchanged_presentation(
     previous: CapabilityView,
     live: CapabilityView,
 ) -> CapabilityView:
-    """Keep prior visual card; refresh only last-verified / ID-bearing meta."""
+    """Keep prior visual card only when the same verification is still current.
+
+    When the selected verification identity or completion clock changes, the
+    Truth Timeline / evidence / pipeline must swap atomically with the headline
+    timestamp — never retain a previous verification's timeline under a newer
+    ``last_verified``.
+    """
     prev_tv = previous.truth_validation
     live_tv = live.truth_validation
+    prev_vid = _norm_id(
+        (
+            (prev_tv.developer_ids or {}).get("verification_id")
+            if prev_tv is not None
+            else None
+        )
+        or previous.current_verification_id
+    )
+    live_vid = _norm_id(
+        (
+            (live_tv.developer_ids or {}).get("verification_id")
+            if live_tv is not None
+            else None
+        )
+        or live.current_verification_id
+    )
+    verification_changed = bool(
+        (live_vid and live_vid != prev_vid)
+        or (
+            live.last_verified
+            and previous.last_verified
+            and live.last_verified != previous.last_verified
+        )
+    )
+
+    if verification_changed:
+        # Atomically publish the live verification's presentation unit.
+        last_verified = live.last_verified or previous.last_verified
+        return _as_stable(
+            replace(
+                live,
+                last_verified=last_verified,
+                pipeline=live.pipeline,
+                truth_validation=live_tv,
+                current_verification_id=(
+                    live.current_verification_id or previous.current_verification_id
+                ),
+            )
+        )
+
     truth = prev_tv
     if prev_tv is not None and live_tv is not None:
         truth = replace(
@@ -764,6 +1157,10 @@ def merge_unchanged_presentation(
             generated_at=live_tv.generated_at,
             developer_ids=dict(live_tv.developer_ids),
             transition=live_tv.transition,
+            # Same verification — live timeline clocks already match.
+            timeline=live_tv.timeline or prev_tv.timeline,
+            evidence=live_tv.evidence or prev_tv.evidence,
+            pipeline=live_tv.pipeline or prev_tv.pipeline,
         )
     elif live_tv is not None:
         truth = live_tv
@@ -812,7 +1209,7 @@ def present_customer_capability(
     inside CUSTOMER_TRUTH_FRESHNESS_SECONDS and no newer verification is active.
     """
     if force_unknown:
-        return _as_stable(live)
+        return _finalize_terminal_presentation(_as_stable(live))
 
     refreshing = is_customer_refresh_in_flight(
         access_view,
@@ -833,13 +1230,26 @@ def present_customer_capability(
     ):
         merged = merge_unchanged_presentation(previous_stable, live)
         if _needs_freshness_demotion(merged, now=now):
-            return _stale_historical_presentation(merged)
-        return merged
+            return _finalize_terminal_presentation(
+                _stale_historical_presentation(merged)
+            )
+        return _finalize_terminal_presentation(merged)
 
     stable = _as_stable(live)
     if _needs_freshness_demotion(stable, now=now):
-        return _stale_historical_presentation(stable)
-    return stable
+        return _finalize_terminal_presentation(
+            _stale_historical_presentation(stable)
+        )
+    return _finalize_terminal_presentation(stable)
+
+
+def _finalize_terminal_presentation(view: CapabilityView) -> CapabilityView:
+    """Ensure terminal cards expose only the selected verification's timeline."""
+    return correlate_presentation_timeline(
+        view,
+        verification_id=view.current_verification_id,
+        empty_if_none=bool(view.current_verification_id),
+    )
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -1176,9 +1586,23 @@ def load_stable_capability(
     if not isinstance(payload, dict):
         return None
     try:
-        return capability_view_from_payload(payload)
+        view = capability_view_from_payload(payload)
     except Exception:  # noqa: BLE001 — corrupt row must not break dashboard
         return None
+    # Stored column IDs are authoritative for correlation. Discard timeline
+    # events that belong to another verification (or lack IDs on a newer card).
+    order = _row_order_meta(row)
+    vid = _norm_id(order.verification_id) or _norm_id(view.current_verification_id)
+    cycle = _norm_id(order.access_cycle_id) or vid
+    if order.verification_completed_at and view.last_verified != order.verification_completed_at:
+        # Prefer the persisted ordering clock when payload last_verified drifted.
+        view = replace(view, last_verified=order.verification_completed_at)
+    return correlate_presentation_timeline(
+        view,
+        verification_id=vid,
+        access_cycle_id=cycle,
+        empty_if_none=bool(vid),
+    )
 
 
 def load_stable_order_meta(
