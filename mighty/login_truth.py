@@ -20,18 +20,15 @@ from mighty.provider_access_probe import (
     AUTH_SESSION_EXPIRED,
     PROBE_PROVIDERS,
     PROVIDER_PROBE_CONFIG,
-    ensure_probe_tables,
 )
 from mighty.provider_session_state import (
     ProviderSessionState,
     derive_session_evidence_from_probe,
-    ensure_provider_session_state_tables,
     get_provider_session_states,
 )
 from mighty.session_verification import (
     CURRENT_SESSION_FRESHNESS_SECONDS,
     SessionVerification,
-    ensure_session_verification_tables,
     get_session_verifications,
     is_session_evidence_fresh,
     is_verification_active,
@@ -740,9 +737,8 @@ def _load_provider_observation_context(
 
     Read-only: never projects probes or legacy sync_status into provider_session_state.
     Current access comes only from the stored provider_session_state row.
+    Does not ensure/migrate schema — owned by init_db / command paths.
     """
-    ensure_probe_tables(db)
-    ensure_provider_session_state_tables(db)
     provider_list = list(providers or sorted(PROBE_PROVIDERS))
 
     account_rows = {
@@ -917,9 +913,10 @@ def compute_current_account_access_rows(
             providers=providers,
         )
     )
-    ensure_session_verification_tables(db)
+    # Pure read — never ensure schema, expire, or reconcile on Current Access /
+    # customer GET paths. Schema is owned by init_db / command maintenance.
     verifications = get_session_verifications(
-        db, user_id, providers=provider_list, now=now
+        db, user_id, providers=provider_list, now=now, apply_maintenance=False,
     )
 
     return [
@@ -1214,10 +1211,8 @@ def gather_session_evidence_timeline(
     Default view shows canonical session evidence only. Cached private data and
     legacy compatibility signals (connection_status / sync_status) are optional
     and never determine Current Access.
+    Does not ensure/migrate schema — owned by init_db / command paths.
     """
-    ensure_probe_tables(db)
-    ensure_provider_session_state_tables(db)
-
     if provider:
         if provider not in PROBE_PROVIDERS:
             return []

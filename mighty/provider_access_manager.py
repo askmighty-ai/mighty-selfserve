@@ -51,6 +51,7 @@ from mighty.session_verification import (
     ensure_provider_session_verification_if_stale,
     ensure_session_verification_tables,
     ensure_stale_session_verifications_for_user,
+    expire_timed_out_verifications,
     log_access_cycle_event,
     mark_session_verification_running,
     normalize_trigger_source,
@@ -184,6 +185,22 @@ def ensure_provider_access_check_if_stale(
     )
 
 
+def run_verification_maintenance(
+    db: Any,
+    user_id: str,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Canonical command-side verification maintenance.
+
+    Expires overdue queue / running / extraction-phase rows. Idempotent.
+    Call from ensure-due, keepalive/startup, or dedicated schedulers — never
+    from customer-facing GET handlers.
+    """
+    ensure_session_verification_tables(db)
+    return expire_timed_out_verifications(db, user_id, now=now)
+
+
 def ensure_stale_provider_access_checks(
     db: Any,
     user_id: str,
@@ -197,7 +214,9 @@ def ensure_stale_provider_access_checks(
     """Scheduled/command trigger: enqueue access checks for stale probe providers.
 
     Must not be called from customer-facing GET endpoints.
+    Runs verification maintenance (expire overdue actives) before enqueue.
     """
+    run_verification_maintenance(db, user_id, now=now)
     return ensure_stale_session_verifications_for_user(
         db,
         user_id,

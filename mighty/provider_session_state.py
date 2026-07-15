@@ -206,7 +206,15 @@ def should_replace_session_evidence(
     return incoming_pri > existing_pri
 
 
-def ensure_provider_session_state_tables(db: Any) -> None:
+def ensure_provider_session_state_tables(db: Any, *, commit: bool = True) -> bool:
+    """Create PSS schema. Commits only when the table was newly created."""
+    existing_tables = {
+        row[0]
+        for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    mutated = "provider_session_state" not in existing_tables
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS provider_session_state (
@@ -227,7 +235,9 @@ def ensure_provider_session_state_tables(db: Any) -> None:
         "CREATE INDEX IF NOT EXISTS idx_pss_user "
         "ON provider_session_state(user_id)"
     )
-    db.commit()
+    if commit and mutated:
+        db.commit()
+    return mutated
 
 
 def _status_code(entry: dict[str, Any]) -> int | None:
@@ -880,7 +890,7 @@ def get_provider_session_state(
     user_id: str,
     provider: str,
 ) -> ProviderSessionState | None:
-    ensure_provider_session_state_tables(db)
+    """Pure read — does not ensure/migrate schema (owned by init_db / writers)."""
     row = db.execute(
         """
         SELECT provider, state, evidence_type, evidence_summary,
@@ -909,7 +919,7 @@ def get_provider_session_states(
     *,
     providers: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, ProviderSessionState]:
-    ensure_provider_session_state_tables(db)
+    """Pure read — does not ensure/migrate schema (owned by init_db / writers)."""
     provider_list = list(providers or sorted(PROBE_PROVIDERS))
     rows = db.execute(
         """

@@ -2058,9 +2058,14 @@ class TestInvalidationAndDebug:
             db, "u1", "amex",
             account_identity=fingerprint_account_identity("alice"),
         ) is None
-
-
-class TestApiDashboardParity:
+        # Legacy row must remain in storage (cleanup is command-side only).
+        row = db.execute(
+            "SELECT account_identity FROM customer_capability_presentation "
+            "WHERE user_id=? AND provider=?",
+            ("u1", "amex"),
+        ).fetchone()
+        assert row is not None
+        assert row["account_identity"] is None
     def _status(self, capability, *, view=None, lifecycle=None, bg=False):
         return AccountStatus(
             source="amex",

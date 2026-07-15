@@ -32,7 +32,7 @@ from mighty.capability_state import (
 )
 from mighty.customer_capability_presentation import (
     build_presented_capability_view,
-    load_stable_capability,
+    load_valid_stable_capability,
     resolve_account_identity,
 )
 from mighty.customer_account_access import (
@@ -382,7 +382,7 @@ def resolve_home_state(
         )
     previous = previous_stable_capability
     if previous is None and persist_db is not None and persist_user_id:
-        previous = load_stable_capability(
+        previous = load_valid_stable_capability(
             persist_db,
             persist_user_id,
             provider_key,

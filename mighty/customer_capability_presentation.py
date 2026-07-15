@@ -1367,7 +1367,23 @@ _SCHEMA_COLUMNS = (
 )
 
 
-def ensure_customer_capability_presentation_tables(db: Any) -> None:
+def ensure_customer_capability_presentation_tables(
+    db: Any, *, commit: bool = True,
+) -> bool:
+    """Create/migrate presentation schema. Commits only when DDL was applied.
+
+    After init_db / startup, subsequent calls are no-ops and do not commit when
+    nothing changed (or when ``commit=False``).
+    """
+    mutated = False
+    existing_tables = {
+        row[0]
+        for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "customer_capability_presentation" not in existing_tables:
+        mutated = True
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS customer_capability_presentation (
@@ -1395,6 +1411,7 @@ def ensure_customer_capability_presentation_tables(db: Any) -> None:
     }
     for name, col_type in _SCHEMA_COLUMNS:
         if name not in existing:
+            mutated = True
             try:
                 db.execute(
                     f"ALTER TABLE customer_capability_presentation "
@@ -1408,7 +1425,9 @@ def ensure_customer_capability_presentation_tables(db: Any) -> None:
         "CREATE INDEX IF NOT EXISTS idx_ccp_user "
         "ON customer_capability_presentation(user_id, updated_at DESC)"
     )
-    db.commit()
+    if commit and mutated:
+        db.commit()
+    return mutated
 
 
 def capability_view_to_payload(view: CapabilityView) -> dict[str, Any]:
@@ -1642,36 +1661,44 @@ def _row_order_meta(row: Any) -> PresentationOrderMeta:
     return PresentationOrderMeta()
 
 
-def load_stable_capability(
+def load_valid_stable_capability(
     db: Any,
     user_id: str,
     provider: str,
     *,
     account_identity: str | None = None,
 ) -> CapabilityView | None:
-    ensure_customer_capability_presentation_tables(db)
-    row = db.execute(
-        """
-        SELECT payload_json, verification_id, access_cycle_id,
-               verification_completed_at, lifecycle, terminal_reason,
-               account_identity
-        FROM customer_capability_presentation
-        WHERE user_id = ? AND provider = ?
-        """,
-        (user_id, provider),
-    ).fetchone()
+    """Pure read of persisted presentation. Never deletes or ensures schema.
+
+    Mismatched or legacy-null identity rows are ignored for the response
+    (treated as missing) but left in storage. Cleanup is command-side only
+    (credentials changed / reconnect / disconnect / migration).
+    """
+    try:
+        row = db.execute(
+            """
+            SELECT payload_json, verification_id, access_cycle_id,
+                   verification_completed_at, lifecycle, terminal_reason,
+                   account_identity
+            FROM customer_capability_presentation
+            WHERE user_id = ? AND provider = ?
+            """,
+            (user_id, provider),
+        ).fetchone()
+    except Exception as exc:  # noqa: BLE001 — table may be absent in unit fixtures
+        if "customer_capability_presentation" not in str(exc):
+            raise
+        return None
     if row is None:
         return None
 
     stored_identity = None
     if hasattr(row, "keys") and "account_identity" in row.keys():
         stored_identity = row["account_identity"]
-    # Identity mismatch → treat as no prior stable card (do not leak across accounts).
+    # Identity mismatch / legacy null → ignore for response; do not DELETE.
     if account_identity is not None and stored_identity and stored_identity != account_identity:
         return None
     if account_identity is not None and stored_identity is None and account_identity:
-        # Legacy row without identity: invalidate rather than risk cross-account reuse.
-        clear_stable_capability(db, user_id, provider)
         return None
 
     raw = row["payload_json"] if hasattr(row, "keys") else row[0]
@@ -1700,6 +1727,19 @@ def load_stable_capability(
         verification_id=vid,
         access_cycle_id=cycle,
         empty_if_none=bool(vid),
+    )
+
+
+def load_stable_capability(
+    db: Any,
+    user_id: str,
+    provider: str,
+    *,
+    account_identity: str | None = None,
+) -> CapabilityView | None:
+    """Alias for :func:`load_valid_stable_capability` (read-only)."""
+    return load_valid_stable_capability(
+        db, user_id, provider, account_identity=account_identity,
     )
 
 
@@ -1876,7 +1916,7 @@ def build_presented_capability_view(
         if identity is None:
             identity = resolve_account_identity(persist_db, persist_user_id, provider)
         if previous is None:
-            previous = load_stable_capability(
+            previous = load_valid_stable_capability(
                 persist_db,
                 persist_user_id,
                 provider,

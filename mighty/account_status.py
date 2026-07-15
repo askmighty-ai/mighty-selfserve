@@ -887,7 +887,7 @@ def _apply_stable_customer_capability(
     from mighty.capability_state import is_customer_visible_provider
     from mighty.customer_capability_presentation import (
         apply_selected_verification_timestamp,
-        load_stable_capability,
+        load_valid_stable_capability,
         persistable_terminal_capability,
         present_customer_capability,
         resolve_account_identity,
@@ -899,7 +899,7 @@ def _apply_stable_customer_capability(
         if not is_customer_visible_provider(acct.source) or acct.capability is None:
             continue
         identity = resolve_account_identity(db, user_id, acct.source)
-        previous = load_stable_capability(
+        previous = load_valid_stable_capability(
             db, user_id, acct.source, account_identity=identity,
         )
         live = acct.capability
