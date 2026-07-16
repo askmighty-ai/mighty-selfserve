@@ -113,6 +113,14 @@
     if (decision === 'signed_out') return 'SIGNED_OUT';
     if (decision === 'inconclusive' || decision === 'login_unknown') return 'LOGIN_UNKNOWN';
 
+    // Provider Access Manager also returns the canonical public enum. Consume it
+    // before legacy auth_state so a definitive backend result does not
+    // unnecessarily fall back to opening a provider tab.
+    const authenticationState = String(data.authentication_state || '').toUpperCase();
+    if (authenticationState === 'SIGNED_IN') return 'SIGNED_IN';
+    if (authenticationState === 'SIGNED_OUT') return 'SIGNED_OUT';
+    if (authenticationState === 'LOGIN_UNKNOWN') return 'LOGIN_UNKNOWN';
+
     // Compatibility only: consume backend auth_state when older deployments do
     // not yet return verification_decision. These are backend results, not local
     // extension classifications.
