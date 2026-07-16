@@ -1,9 +1,9 @@
 // Silent American Express session verification strategy.
 //
-// This layer deliberately does not replace the existing provider-tab verifier.
-// It first attempts a credentialed request from the extension service worker and
-// falls back to the existing runSessionVerification implementation whenever the
-// response is not conclusive.
+// The extension collects browser observations only. It never decides SIGNED_IN,
+// SIGNED_OUT, or LOGIN_UNKNOWN. The existing backend provider-access decision path
+// receives the evidence and returns the canonical verification decision. A
+// provider tab is opened only when that backend decision is inconclusive.
 (() => {
   const originalRunSessionVerification = runSessionVerification;
   const AMEX_SILENT_ENTRY = 'https://global.americanexpress.com/overview';
@@ -14,20 +14,18 @@
     return markers.reduce((count, marker) => count + (text.includes(marker) ? 1 : 0), 0);
   }
 
-  function classifyAmexSilentResponse(response, bodyText) {
-    const finalUrl = String(response?.url || AMEX_SILENT_ENTRY);
-    const lowerUrl = finalUrl.toLowerCase();
+  function collectAmexSilentEvidence(response, bodyText, requestedUrl) {
+    const finalUrl = String(response?.url || requestedUrl || AMEX_SILENT_ENTRY);
     const sample = String(bodyText || '').toLowerCase().slice(0, 250000);
-
-    const loginUrl = /\/(login|log-?in|signin|sign-?in)(?:[/?#]|$)/i.test(lowerUrl);
-    const loginHits = countHits(sample, [
+    const finalUrlIsLogin = /\/(login|log-?in|signin|sign-?in)(?:[/?#]|$)/i.test(finalUrl);
+    const loginMarkerCount = countHits(sample, [
       'sign in to your account',
       'log in to your account',
       'user id',
       'show password',
       'forgot password',
     ]);
-    const authenticatedHits = countHits(sample, [
+    const authenticatedMarkerCount = countHits(sample, [
       'membership rewards',
       'account home',
       'recent activity',
@@ -38,59 +36,27 @@
       'payment due',
     ]);
 
-    // Signed out requires affirmative provider-specific evidence. A generic 401,
-    // 403, fetch failure, or unexpected page is never enough by itself.
-    if (loginUrl || (loginHits >= 2 && authenticatedHits === 0)) {
-      return {
-        conclusive: true,
-        authenticationState: 'SIGNED_OUT',
-        finalUrl,
-        evidence: {
-          strategy: 'background_fetch',
-          response_status: response?.status || 0,
-          final_url_is_login: loginUrl,
-          login_marker_count: loginHits,
-          authenticated_marker_count: authenticatedHits,
-        },
-      };
-    }
-
-    // Require multiple authenticated markers. The overview URL alone is not proof:
-    // Amex may return an app shell, marketing content, or an access-block page.
-    if (response?.ok && authenticatedHits >= 2 && !loginUrl) {
-      return {
-        conclusive: true,
-        authenticationState: 'SIGNED_IN',
-        finalUrl,
-        evidence: {
-          strategy: 'background_fetch',
-          response_status: response.status,
-          final_url_is_login: false,
-          login_marker_count: loginHits,
-          authenticated_marker_count: authenticatedHits,
-        },
-      };
-    }
-
     return {
-      conclusive: false,
-      authenticationState: 'LOGIN_UNKNOWN',
       finalUrl,
-      evidence: {
+      observations: {
         strategy: 'background_fetch',
         response_status: response?.status || 0,
-        final_url_is_login: loginUrl,
-        login_marker_count: loginHits,
-        authenticated_marker_count: authenticatedHits,
+        response_ok: !!response?.ok,
+        redirected: !!response?.redirected,
+        final_url_is_login: finalUrlIsLogin,
+        login_marker_count: loginMarkerCount,
+        authenticated_marker_count: authenticatedMarkerCount,
+        network_error: false,
       },
     };
   }
 
-  async function runAmexSilentProbe(apiKey, verificationId, entryUrl) {
+  async function runAmexSilentProbe(entryUrl) {
+    const requestedUrl = entryUrl || AMEX_SILENT_ENTRY;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), AMEX_SILENT_TIMEOUT_MS);
     try {
-      const response = await fetch(entryUrl || AMEX_SILENT_ENTRY, {
+      const response = await fetch(requestedUrl, {
         method: 'GET',
         credentials: 'include',
         redirect: 'follow',
@@ -101,15 +67,22 @@
         },
       });
       const bodyText = await response.text();
-      return classifyAmexSilentResponse(response, bodyText);
+      return collectAmexSilentEvidence(response, bodyText, requestedUrl);
     } catch (error) {
       return {
-        conclusive: false,
-        authenticationState: 'LOGIN_UNKNOWN',
-        finalUrl: entryUrl || AMEX_SILENT_ENTRY,
-        evidence: {
+        finalUrl: requestedUrl,
+        observations: {
           strategy: 'background_fetch',
-          failure_reason: error?.name === 'AbortError' ? 'background_fetch_timeout' : 'background_fetch_failed',
+          response_status: 0,
+          response_ok: false,
+          redirected: false,
+          final_url_is_login: false,
+          login_marker_count: 0,
+          authenticated_marker_count: 0,
+          network_error: true,
+          failure_reason: error?.name === 'AbortError'
+            ? 'background_fetch_timeout'
+            : 'background_fetch_failed',
           error_name: error?.name || 'Error',
         },
       };
@@ -133,33 +106,66 @@
     }
   }
 
-  async function submitConclusiveSilentResult(apiKey, verificationId, result) {
-    const signedIn = result.authenticationState === 'SIGNED_IN';
+  function canonicalDecision(posted) {
+    const data = posted?.data || {};
+    const decision = String(data.verification_decision || '').toLowerCase();
+    if (decision === 'connected' || decision === 'signed_in') return 'SIGNED_IN';
+    if (decision === 'signed_out') return 'SIGNED_OUT';
+    if (decision === 'inconclusive' || decision === 'login_unknown') return 'LOGIN_UNKNOWN';
+
+    // Compatibility only: consume backend auth_state when older deployments do
+    // not yet return verification_decision. These are backend results, not local
+    // extension classifications.
+    const authState = String(data.auth_state || '').toLowerCase();
+    if (authState === 'authenticated_no_private_data' || authState === 'private_data_visible') {
+      return 'SIGNED_IN';
+    }
+    if (authState === 'login_page' || authState === 'session_expired') return 'SIGNED_OUT';
+    return 'LOGIN_UNKNOWN';
+  }
+
+  async function submitSilentEvidence(apiKey, verificationId, result) {
+    const observations = result.observations || {};
     const payload = {
       provider: 'amex',
       url_visited: result.finalUrl || AMEX_SILENT_ENTRY,
-      signed_in_detected: signedIn,
+      // These are raw observed booleans used by the existing backend evidence
+      // classifier. They are not canonical authentication decisions.
+      signed_in_detected: observations.authenticated_marker_count >= 2,
       private_data_detected: false,
-      failure_reason: signedIn ? null : 'login_required',
       verification_id: verificationId,
       access_cycle_id: verificationId,
       verification_strategy: 'background_fetch',
       evidence_source: 'extension_service_worker',
-      background_fetch_evidence: result.evidence,
+      background_fetch_evidence: observations,
+      page_diagnostics: {
+        final_url: result.finalUrl || AMEX_SILENT_ENTRY,
+        body_exists: true,
+        body_text_length: null,
+      },
     };
+    return _postProviderAccessProbe(apiKey, payload, { skipDedup: true });
+  }
 
-    await _postProviderAccessProbe(apiKey, payload, { skipDedup: true });
+  async function finishBackendDecision(apiKey, verificationId, decision) {
+    if (decision !== 'SIGNED_IN') {
+      // The provider-access endpoint owns signed-out terminalization. Avoid a
+      // competing extension-side terminal conclusion.
+      return;
+    }
+    // A silent fetch has no page from which to extract. The backend has already
+    // made the canonical SIGNED_IN decision; finish this access-only cycle rather
+    // than leaving it in session_verified/extracting.
     await _completeSessionVerification(
       apiKey,
       verificationId,
       'completed',
       null,
       {
-        terminalReason: signedIn ? 'authenticated' : 'signed_out',
-        terminalSource: 'extension_background_fetch',
+        terminalReason: 'authenticated',
+        terminalSource: 'backend_decision_background_fetch',
       },
     );
-    _lastProcessedSessionVerificationId = verificationId;
   }
 
   runSessionVerification = async function runSessionVerificationWithSilentAmex(
@@ -176,21 +182,20 @@
     try {
       console.log('[Mighty] Amex verification strategy=background_fetch');
       await markVerificationRunning(apiKey, verificationId);
-      const result = await runAmexSilentProbe(apiKey, verificationId, entryUrl || AMEX_SILENT_ENTRY);
-      console.log(
-        '[Mighty] Amex background fetch result=',
-        result.authenticationState,
-        'conclusive=',
-        result.conclusive,
-        result.evidence,
-      );
+      const result = await runAmexSilentProbe(entryUrl || AMEX_SILENT_ENTRY);
+      console.log('[Mighty] Amex background fetch observations=', result.observations);
 
-      if (result.conclusive) {
-        await submitConclusiveSilentResult(apiKey, verificationId, result);
+      const posted = await submitSilentEvidence(apiKey, verificationId, result);
+      const decision = canonicalDecision(posted);
+      console.log('[Mighty] Amex backend verification decision=', decision, posted?.data || {});
+
+      if (decision === 'SIGNED_IN' || decision === 'SIGNED_OUT') {
+        await finishBackendDecision(apiKey, verificationId, decision);
+        _lastProcessedSessionVerificationId = verificationId;
         return;
       }
 
-      console.log('[Mighty] Amex background fetch inconclusive — falling back to provider tab');
+      console.log('[Mighty] Amex backend decision inconclusive — falling back to provider tab');
       return originalRunSessionVerification(apiKey, provider, verificationId, entryUrl);
     } finally {
       silentProbeInProgress = false;
