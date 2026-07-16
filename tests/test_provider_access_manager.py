@@ -439,7 +439,9 @@ def test_login_page_passive_evidence_signed_out():
 def test_legacy_access_paths_marked_not_removed():
     bg = (REPO_ROOT / "extension" / "background.js").read_text()
     assert "LEGACY ACCESS PATH — DO NOT EXTEND" in bg
+    assert "DISABLED ON PRODUCT PATH" in bg
     assert "async function probeAmexConnectionState" in bg
+    assert "canonical auth path only" in bg
     assert "async function runProviderAccessProbes" in bg
 
     conn = (REPO_ROOT / "mighty" / "connection_state.py").read_text()

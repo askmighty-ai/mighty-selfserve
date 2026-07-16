@@ -77,8 +77,8 @@ This module is the **only** production entry point for an active session/access 
 
 | Path | Notes |
 |------|-------|
-| Access Manager evidence helpers | Active verification + explicit extension evidence |
-| Passive definitive evidence via Access Manager | Authenticated session, login page, session API 200 / 401 / 403 |
+| Access Manager evidence helpers | Active verification via ``decide_amex_verification_session`` only for Amex |
+| Passive Amex ``/amex/needs-login`` / ``/amex/connected`` | **Phase 1 Fix 3:** do **not** write PSS — enqueue verification instead |
 
 ### B. Compatibility wrappers
 
@@ -91,6 +91,10 @@ These still exist for older imports but **must** call the Access Manager
 - `mighty.provider_session_state.record_extension_session_connected`
 - `mighty.provider_session_state.record_session_evidence_from_probe`
 
+Amex product-path auth truth is **only** ``decide_amex_verification_session``
+on an active verification cycle. Extension local classifiers
+(``probeAmexConnectionState``, ``_probeAmexLoggedIn``, local extraction auth
+fallback) are disabled / gated and must not write AuthenticationState.
 ### C. Debug-only
 
 | Path | Notes |

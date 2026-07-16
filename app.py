@@ -18877,21 +18877,21 @@ def api_sync_login_cleared():
     db.commit()
     # Only write connected session state when the request carries explicit
     # authenticated/session_verified evidence — not merely because login_required cleared.
+    # Phase 1 Fix 3: Amex must not invent SIGNED_IN here — enqueue verification.
     if (body or {}).get("session_verified"):
         try:
             from mighty.provider_access_manager import (
-                record_amex_extension_connected,
                 record_extension_session_connected,
+                request_provider_verification,
             )
 
             if source == "amex":
-                record_amex_extension_connected(
+                request_provider_verification(
                     db,
                     uid,
-                    observed_at=now,
-                    evidence_type="session_verified",
-                    evidence_summary="Amex extension reported verified authenticated session",
-                    source="extension_amex_login_cleared",
+                    "amex",
+                    trigger_source="provider_page_observed",
+                    requested_by="extension:login_cleared",
                 )
             else:
                 record_extension_session_connected(
@@ -21369,11 +21369,12 @@ def api_connect_amex_status():
 
 @app.route("/api/extension/amex/needs-login", methods=["POST"])
 def api_extension_amex_needs_login():
-    """Extension adapter: Amex session not verified.
+    """Extension adapter: Amex session not verified (observation only).
 
-    Passive observation only. While an active Amex access-cycle verification is
-    running, defer — the verifier owns connected/signed_out for that cycle.
-    A 409 connection-FSM rejection must not write provider_session_state.
+    Phase 1 Fix 3: does **not** write provider_session_state / AuthenticationState.
+    Auth truth is owned solely by decide_amex_verification_session on an active
+    verification cycle. Passive observation may update the legacy connection FSM
+    and enqueue a verification; it must not invent SIGNED_OUT.
     """
     user, body = api_user()
     if not user:
@@ -21402,6 +21403,7 @@ def api_extension_amex_needs_login():
                 "verification_id": active_vid,
                 "source": AMEX_SOURCE,
                 "adapter": extension_adapter.ADAPTER_ID,
+                "pss_written": False,
             })
 
     try:
@@ -21416,11 +21418,20 @@ def api_extension_amex_needs_login():
             "connection_status": e.current,
             "deferred": True,
             "reason": "connection_transition_rejected",
+            "pss_written": False,
         }), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    from mighty.provider_access_manager import record_amex_extension_needs_login
-    record_amex_extension_needs_login(db, uid, observed_at=iso())
+
+    # Enqueue canonical verification instead of writing PSS signed_out.
+    from mighty.provider_access_manager import request_provider_verification
+    verification = request_provider_verification(
+        db,
+        uid,
+        "amex",
+        trigger_source="provider_page_observed",
+        requested_by="extension:amex_needs_login",
+    )
     from mighty.account_state import safe_recompute_account_state
     safe_recompute_account_state(db, uid, AMEX_SOURCE)
     return jsonify({
@@ -21429,12 +21440,21 @@ def api_extension_amex_needs_login():
         "adapter": extension_adapter.ADAPTER_ID,
         "connection_status": status,
         "label": amex_state_label(status),
+        "pss_written": False,
+        "verification_enqueued": verification is not None,
+        "verification_id": (
+            verification.verification_id if verification is not None else None
+        ),
     })
 
 
 @app.route("/api/extension/amex/connected", methods=["POST"])
 def api_extension_amex_connected():
-    """Extension adapter: verified provider session (connection layer only)."""
+    """Extension adapter: verified provider session (connection layer only).
+
+    Phase 1 Fix 3: does **not** write provider_session_state / AuthenticationState.
+    Auth truth requires decide_amex_verification_session on a verification cycle.
+    """
     user, _ = api_user()
     if not user:
         return jsonify({"error": "unauthorized"}), 401
@@ -21452,11 +21472,19 @@ def api_extension_amex_connected():
             "ok": False,
             "error": str(e),
             "connection_status": e.current,
+            "pss_written": False,
         }), 409
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    from mighty.provider_access_manager import record_amex_extension_connected
-    record_amex_extension_connected(db, uid, observed_at=iso())
+
+    from mighty.provider_access_manager import request_provider_verification
+    verification = request_provider_verification(
+        db,
+        uid,
+        "amex",
+        trigger_source="provider_page_observed",
+        requested_by="extension:amex_connected",
+    )
     from mighty.account_state import safe_recompute_account_state
     safe_recompute_account_state(db, uid, AMEX_SOURCE)
     info = get_amex_connection_status(db, uid, decrypt_fn=decrypt_account_data)
@@ -21469,6 +21497,11 @@ def api_extension_amex_connected():
         "extraction_status": extraction_status,
         "refresh_queued": extraction_status == "pending",
         "label": amex_state_label(status),
+        "pss_written": False,
+        "verification_enqueued": verification is not None,
+        "verification_id": (
+            verification.verification_id if verification is not None else None
+        ),
     })
 
 
@@ -22574,6 +22607,57 @@ def admin_session_evidence_page():
         include_cached_data=include_cached_data,
         include_legacy=include_legacy,
     )
+
+
+@app.route("/admin/amex-login-state")
+@require_admin
+def admin_amex_login_state_page():
+    """Phase 1 auth-only diagnostic: latest Amex AuthenticationState + Run check."""
+    from mighty.amex_login_state_console import resolve_amex_login_state_diagnostic
+
+    uid = session["user_id"]
+    diagnostic = resolve_amex_login_state_diagnostic(get_db(), uid)
+    return _admin_debug.render_amex_login_state_page(diagnostic)
+
+
+@app.route("/api/admin/amex-login-state/run", methods=["POST"])
+@require_admin
+def api_admin_amex_login_state_run():
+    """Enqueue one Amex login-state verification (admin_debug trigger)."""
+    from mighty.provider_access_manager import request_provider_verification
+    from mighty.session_verification import session_verification_to_json
+
+    uid = session["user_id"]
+    db = get_db()
+    verification = request_provider_verification(
+        db,
+        uid,
+        "amex",
+        trigger_source="admin_debug",
+        requested_by=f"admin:{uid}",
+        throttle_seconds=0,
+    )
+    if verification is None:
+        return jsonify({"ok": False, "error": "provider_unsupported"}), 400
+    payload = session_verification_to_json(verification)
+    return jsonify({
+        "ok": True,
+        "verification_id": payload["verification_id"],
+        "access_cycle_id": payload["verification_id"],
+        "lifecycle": payload["lifecycle"],
+        "trigger_source": payload.get("trigger_source") or "admin_debug",
+    })
+
+
+@app.route("/api/admin/amex-login-state/status")
+@require_admin
+def api_admin_amex_login_state_status():
+    """Latest Amex auth diagnostic JSON (no secrets / account data)."""
+    from mighty.amex_login_state_console import resolve_amex_login_state_diagnostic
+
+    uid = session["user_id"]
+    diagnostic = resolve_amex_login_state_diagnostic(get_db(), uid)
+    return jsonify(diagnostic.to_dict())
 
 
 @app.route("/admin/provider-access-probe")

@@ -448,9 +448,11 @@ def test_derive_session_evidence_from_session_api_401():
     assert evidence.evidence_summary == "ReadUserSession.v1 returned 401"
 
 
-def test_extension_amex_connected_writes_provider_session_state(client):
+def test_extension_amex_connected_enqueues_verification_without_pss(client):
+    """Phase 1 Fix 3: passive connected must not write AuthenticationState/PSS."""
     import app as mighty
     from mighty.provider_session_state import get_provider_session_state
+    from mighty.session_verification import get_latest_session_verification
 
     api_key = _prepare_amex_waiting(client, mighty)
     r = client.post(
@@ -459,23 +461,23 @@ def test_extension_amex_connected_writes_provider_session_state(client):
         json={"session_verified": True},
     )
     assert r.status_code == 200
+    body = r.get_json()
+    assert body.get("pss_written") is False
+    assert body.get("verification_enqueued") is True
 
     uid = _uid(client)
     with mighty.app.app_context():
-        session = get_provider_session_state(mighty.get_db(), uid, "amex")
-        assert session is not None
-        assert session.state == "connected"
-        assert session.evidence_type == "session_verified"
-        assert session.source == "extension_amex_connected"
-        assert session.evidence_summary == (
-            "Amex extension reported verified authenticated session"
-        )
-        assert session.confidence == "high"
+        assert get_provider_session_state(mighty.get_db(), uid, "amex") is None
+        latest = get_latest_session_verification(mighty.get_db(), uid, "amex")
+        assert latest is not None
+        assert latest.trigger_source == "provider_page_observed"
 
 
-def test_extension_amex_needs_login_writes_provider_session_state(client):
+def test_extension_amex_needs_login_enqueues_verification_without_pss(client):
+    """Phase 1 Fix 3: passive needs-login must not invent SIGNED_OUT in PSS."""
     import app as mighty
     from mighty.provider_session_state import get_provider_session_state
+    from mighty.session_verification import get_latest_session_verification
 
     api_key = _prepare_amex_waiting(client, mighty)
     r = client.post(
@@ -483,18 +485,20 @@ def test_extension_amex_needs_login_writes_provider_session_state(client):
         headers={"X-Mighty-Key": api_key},
     )
     assert r.status_code == 200
+    body = r.get_json()
+    assert body.get("pss_written") is False
+    assert body.get("verification_enqueued") is True
 
     uid = _uid(client)
     with mighty.app.app_context():
-        session = get_provider_session_state(mighty.get_db(), uid, "amex")
-        assert session is not None
-        assert session.state == "signed_out"
-        assert session.evidence_type == "login_required"
-        assert session.source == "extension_amex_needs_login"
-        assert session.evidence_summary == "Amex extension reported login required"
+        assert get_provider_session_state(mighty.get_db(), uid, "amex") is None
+        latest = get_latest_session_verification(mighty.get_db(), uid, "amex")
+        assert latest is not None
+        assert latest.trigger_source == "provider_page_observed"
 
 
 def test_newer_needs_login_overrides_prior_connected(client):
+    """Passive endpoints no longer race PSS; both enqueue verifications only."""
     import app as mighty
     from mighty.provider_session_state import get_provider_session_state
 
@@ -511,13 +515,12 @@ def test_newer_needs_login_overrides_prior_connected(client):
 
     uid = _uid(client)
     with mighty.app.app_context():
-        session = get_provider_session_state(mighty.get_db(), uid, "amex")
-        assert session is not None
-        assert session.state == "signed_out"
-        assert session.source == "extension_amex_needs_login"
+        # Neither passive call may invent AuthenticationState via PSS.
+        assert get_provider_session_state(mighty.get_db(), uid, "amex") is None
 
 
 def test_newer_connected_overrides_prior_needs_login(client):
+    """Passive endpoints no longer race PSS; both enqueue verifications only."""
     import app as mighty
     from mighty.provider_session_state import get_provider_session_state
 
@@ -534,10 +537,7 @@ def test_newer_connected_overrides_prior_needs_login(client):
 
     uid = _uid(client)
     with mighty.app.app_context():
-        session = get_provider_session_state(mighty.get_db(), uid, "amex")
-        assert session is not None
-        assert session.state == "connected"
-        assert session.source == "extension_amex_connected"
+        assert get_provider_session_state(mighty.get_db(), uid, "amex") is None
 
 
 def test_mr_extraction_without_session_endpoint_does_not_write_connected(client):
@@ -570,7 +570,8 @@ def test_mr_extraction_without_session_endpoint_does_not_write_connected(client)
         assert amex.cached_data_state == "fresh"
 
 
-def test_admin_login_truth_reflects_extension_session_state_immediately(admin_client):
+def test_admin_login_truth_does_not_treat_passive_as_auth_truth(admin_client):
+    """Phase 1 Fix 3: passive needs-login must not paint Signed out without decide_amex."""
     import app as mighty
 
     api_key = _prepare_amex_waiting(admin_client, mighty)
@@ -586,18 +587,16 @@ def test_admin_login_truth_reflects_extension_session_state_immediately(admin_cl
 
     r = admin_client.get("/admin/login-truth")
     assert r.status_code == 200
-    assert b"Signed out" in r.data
-    assert b"Amex extension reported login required" in r.data or b"Signed out" in r.data
-
+    # Without a completed decide_amex cycle, Current Access must not claim Signed out
+    # from the passive endpoint alone.
     uid = _uid(admin_client)
     with mighty.app.app_context():
         rows = compute_current_account_access_rows(
             mighty.get_db(), uid, decrypt_account_fn=mighty.decrypt_account_data
         )
         amex = next(row for row in rows if row.provider == "amex")
-        assert amex.current_access == "signed_out"
-        assert amex.source == "extension_amex_needs_login"
-        assert amex.evidence == "Amex extension reported login required"
+        assert amex.current_access != "signed_out"
+        assert amex.source != "extension_amex_needs_login"
 
 
 def test_extension_amex_extract_with_session_verified_writes_connected(client):

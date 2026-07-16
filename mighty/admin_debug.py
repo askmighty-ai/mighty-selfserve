@@ -71,6 +71,11 @@ ADMIN_TOOLS: list[tuple[str, str, str]] = [
         "Session Evidence Timeline",
         "Why Mighty believes each provider is connected, signed out, or unknown",
     ),
+    (
+        "amex-login-state",
+        "Amex Login State",
+        "Latest Amex authentication verification — Phase 1 reliability console",
+    ),
 ]
 
 
@@ -2477,3 +2482,151 @@ def render_session_evidence_timeline_page(
         )
 
     return _admin_shell("session-evidence", "Session Evidence Timeline", body)
+
+
+def render_amex_login_state_page(diagnostic: Any, *, run_message: str | None = None) -> str:
+    """Auth-only Amex login-state reliability console (no balances/tokens/DOM)."""
+    d = diagnostic
+    auth = getattr(d, "authentication_state", None) or "login_unknown"
+    auth_colors = {
+        "signed_in": ("#065f46", "#d1fae5"),
+        "signed_out": ("#991b1b", "#fee2e2"),
+        "login_unknown": ("#374151", "#f3f4f6"),
+    }
+    fg, bg = auth_colors.get(auth, auth_colors["login_unknown"])
+    auth_badge = (
+        f'<span style="display:inline-block;padding:6px 12px;border-radius:6px;'
+        f'font-size:14px;font-weight:700;color:{fg};background:{bg};'
+        f'text-transform:uppercase;letter-spacing:.04em">{_he(auth)}</span>'
+    )
+    flags = getattr(d, "evidence_flags", ()) or ()
+    flags_html = (
+        "".join(
+            f'<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;'
+            f'border-radius:4px;background:#e5e7eb;font-size:11px">{_he(f)}</span>'
+            for f in flags
+        )
+        or '<span class="muted">None recorded</span>'
+    )
+    msg = ""
+    if run_message:
+        msg = (
+            f'<p style="margin:0 0 12px;padding:8px 12px;background:#eff6ff;'
+            f'border-radius:6px;font-size:13px">{_he(run_message)}</p>'
+        )
+
+    rows = [
+        ("Authentication state", auth_badge),
+        ("Confidence", _he(getattr(d, "confidence", None) or "—")),
+        ("Terminal reason", _he(getattr(d, "terminal_reason", None) or "—")),
+        ("Terminal source", _he(getattr(d, "terminal_source", None) or "—")),
+        ("Verification ID", f'<code>{_he(getattr(d, "verification_id", None) or "—")}</code>'),
+        ("Access-cycle ID", f'<code>{_he(getattr(d, "access_cycle_id", None) or "—")}</code>'),
+        ("Lifecycle", _he(getattr(d, "lifecycle", None) or "—")),
+        (
+            "Duration (ms)",
+            _he(
+                getattr(d, "duration_ms", None)
+                if getattr(d, "duration_ms", None) is not None
+                else "—"
+            ),
+        ),
+        ("Requested at", _fmt_iso(getattr(d, "requested_at", None))),
+        ("Started at", _fmt_iso(getattr(d, "started_at", None))),
+        ("Completed at", _fmt_iso(getattr(d, "completed_at", None))),
+        ("Trigger source", _he(getattr(d, "trigger_source", None) or "—")),
+        ("Evidence type", _he(getattr(d, "evidence_type", None) or "—")),
+        ("Evidence summary", _he(getattr(d, "evidence_summary", None) or "—")),
+        ("Evidence flags", flags_html),
+        ("PSS state (transport)", _he(getattr(d, "pss_state", None) or "—")),
+        ("PSS source", _he(getattr(d, "pss_source", None) or "—")),
+        ("Extension version", _he(getattr(d, "extension_version", None) or "—")),
+        (
+            "Deployment SHA",
+            f'<code>{_he(getattr(d, "deployment_sha", None) or "—")}</code>',
+        ),
+    ]
+    table_rows = "".join(
+        f'<tr><th style="width:220px;text-align:left">{label}</th>'
+        f"<td>{value}</td></tr>"
+        for label, value in rows
+    )
+
+    body = (
+        f"{msg}"
+        '<div class="card" style="margin-bottom:16px">'
+        "<h3>Run login-state check</h3>"
+        '<p class="muted" style="font-size:12px;margin:0 0 12px">'
+        "Enqueues one Amex session verification (trigger_source=admin_debug). "
+        "The extension claims the job, collects evidence, and the server resolves "
+        "<code>decide_amex_verification_session</code> → AuthenticationState. "
+        "No balances, cookies, tokens, or DOM are shown here.</p>"
+        '<button class="btn" id="run-amex-login-state">Run login-state check</button>'
+        ' <span id="run-amex-login-status" class="muted" '
+        'style="font-size:12px;margin-left:8px"></span>'
+        "</div>"
+        '<div class="card">'
+        "<h3>Latest Amex authentication verification</h3>"
+        f"<table><tbody>{table_rows}</tbody></table>"
+        "</div>"
+        """
+<script>
+(function () {
+  const btn = document.getElementById('run-amex-login-state');
+  const status = document.getElementById('run-amex-login-status');
+  if (!btn) return;
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    status.textContent = 'Enqueueing…';
+    try {
+      const resp = await fetch('/api/admin/amex-login-state/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        status.textContent = data.error || ('HTTP ' + resp.status);
+        btn.disabled = false;
+        return;
+      }
+      status.textContent = 'Queued ' + (data.verification_id || '') +
+        ' — waiting for extension…';
+      try {
+        window.postMessage({
+          type: '__mighty_dashboard__',
+          action: 'ensure_session_verification',
+          trigger_source: 'admin_debug',
+        }, '*');
+      } catch (e) {}
+      let polls = 0;
+      const timer = setInterval(async function () {
+        polls += 1;
+        try {
+          const s = await fetch('/api/admin/amex-login-state/status');
+          const body = await s.json();
+          const lc = (body.lifecycle || '');
+          status.textContent = 'Lifecycle: ' + lc +
+            (body.authentication_state ? (' · ' + body.authentication_state) : '');
+          if (['completed', 'failed', 'timed_out'].includes(lc) || polls > 45) {
+            clearInterval(timer);
+            window.location.reload();
+          }
+        } catch (e) {
+          if (polls > 45) {
+            clearInterval(timer);
+            btn.disabled = false;
+            status.textContent = 'Poll failed — reload manually';
+          }
+        }
+      }, 2000);
+    } catch (e) {
+      status.textContent = String(e);
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+"""
+    )
+    return _admin_shell("amex-login-state", "Amex Login State", body)
