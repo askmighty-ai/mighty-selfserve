@@ -136,6 +136,7 @@ class AccountStatus:
     snapshot_verified_at: str | None = None
     snapshot_schema_version: int | None = None
     capability: CapabilityView | None = None
+    authentication_state: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -152,6 +153,8 @@ class AccountStatus:
             "user_action_label": self.user_action_label,
             "user_action_url": self.user_action_url,
         }
+        if self.authentication_state is not None:
+            payload["authentication_state"] = self.authentication_state
         if self.session_state is not None:
             payload["session_state"] = self.session_state
         if self.current_access is not None:
@@ -643,6 +646,11 @@ def build_account_status(
         snapshot_verified_at=snapshot_verified_at,
         snapshot_schema_version=snapshot_schema_version,
         capability=capability,
+        authentication_state=(
+            product.authentication_state.value
+            if product is not None
+            else customer_access.authentication_state
+        ),
     )
 
 

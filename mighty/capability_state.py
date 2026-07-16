@@ -134,6 +134,7 @@ class CapabilityView:
     historical_summary: str | None = None
     historical_timestamp_label: str | None = None
     timeline_sections: tuple[PresentationTimelineSection, ...] = ()
+    authentication_state: str = "login_unknown"
 
     def to_dict(self) -> dict[str, Any]:
         primary_headline = self.primary_headline if self.primary_headline is not None else self.headline
@@ -145,6 +146,7 @@ class CapabilityView:
         payload: dict[str, Any] = {
             "provider": self.provider,
             "display_name": self.display_name,
+            "authentication_state": self.authentication_state,
             "capability_state": self.state.value,
             "state": self.state.value,
             "title": primary_headline,
@@ -261,7 +263,19 @@ def _is_authenticated(
     readiness: str | None,
     live_access: str | None,
     session_state: str | None,
+    authentication_state: str | None = None,
 ) -> bool:
+    from mighty.authentication_state import AuthenticationState, normalize_authentication_state
+
+    auth = normalize_authentication_state(authentication_state)
+    if auth == AuthenticationState.SIGNED_OUT:
+        return False
+    if auth == AuthenticationState.SIGNED_IN:
+        return True
+    if auth == AuthenticationState.LOGIN_UNKNOWN:
+        # Do not invent authentication from readiness/session transport.
+        # readiness==ready still implies a prior confirmed signed-in cycle.
+        return readiness == "ready"
     if readiness == "signed_out" or live_access == _LIVE_SIGNED_OUT or session_state == "signed_out":
         return False
     if readiness == "ready":
@@ -308,28 +322,45 @@ def resolve_capability_state(
     signed_out_evidence: bool = False,
     verification_lifecycle: str | None = None,
     background_verification: bool = False,
+    authentication_state: str | None = None,
 ) -> CapabilityState:
     """Translate access signals into exactly one CapabilityState.
 
     Does not mutate readiness or lifecycle. Does not read legacy sync_status
     or connection_status — callers must not pass those as inputs.
+
+    ``authentication_state`` is consumed as-is (SIGNED_IN / SIGNED_OUT /
+    LOGIN_UNKNOWN). Capability may fork SIGNED_IN into extraction outcomes but
+    must never reinterpret LOGIN_UNKNOWN as SIGNED_OUT, or revise auth from
+    extraction results.
     """
+    from mighty.authentication_state import AuthenticationState, normalize_authentication_state
+
     del has_snapshot  # Snapshot informs pipeline/evidence, not the state fork.
     del user_action_required  # Never decide SIGNED_OUT from CTA flags alone.
 
-    # A. SIGNED_OUT — definitive signed-out evidence only.
-    if (
+    auth = normalize_authentication_state(authentication_state)
+
+    # A. SIGNED_OUT — canonical authentication only (or legacy definitive signals
+    # when authentication_state is absent). Never invent from extraction.
+    if auth == AuthenticationState.SIGNED_OUT:
+        return CapabilityState.SIGNED_OUT
+    if auth is None and (
         signed_out_evidence
         or readiness == "signed_out"
         or live_access == _LIVE_SIGNED_OUT
         or session_state == "signed_out"
     ):
         return CapabilityState.SIGNED_OUT
+    # When auth is LOGIN_UNKNOWN, do not fall through to transport signed_out.
+    if auth == AuthenticationState.LOGIN_UNKNOWN:
+        signed_out_evidence = False
 
     authenticated = _is_authenticated(
         readiness=readiness,
         live_access=live_access,
         session_state=session_state,
+        authentication_state=authentication_state,
     )
     in_flight = _extraction_in_flight(
         readiness=readiness,
@@ -361,7 +392,7 @@ def resolve_capability_state(
         # Inconclusive / checking / unknown — never invent signed_out.
         return CapabilityState.LOGIN_UNKNOWN
 
-    # Authenticated from here.
+    # Authenticated from here (SIGNED_IN). Extraction forks never revise auth.
 
     # C. LOGIN_VISIBLE_EXTRACTION_FAILED
     if extraction_failed:
@@ -398,6 +429,8 @@ def resolve_capability_state_from_view(
     if view is None:
         # No account row / credentials-only / discovery-only → unknown, not signed out.
         return CapabilityState.LOGIN_UNKNOWN
+    auth = getattr(view, "authentication_state", None)
+    auth_value = auth.value if hasattr(auth, "value") else auth
     return resolve_capability_state(
         readiness=view.readiness,
         live_access=view.live_access,
@@ -410,6 +443,7 @@ def resolve_capability_state_from_view(
         signed_out_evidence=view.readiness == "signed_out",
         verification_lifecycle=view.active_verification_lifecycle,
         background_verification=bool(view.background_verification),
+        authentication_state=auth_value,
     )
 
 
@@ -765,6 +799,7 @@ def build_capability_view(
                 readiness=view.readiness,
                 live_access=view.live_access,
                 session_state=view.session_state,
+                authentication_state=getattr(view, "authentication_state", None),
             )
             else CapabilityState.LOGIN_UNKNOWN
         )
@@ -805,6 +840,11 @@ def build_capability_view(
     headline = _HEADLINES[state]
     explanations = _EXPLANATIONS[state]
     last_verified = _fmt_ts(view.last_confirmed_at if view else None)
+    from mighty.authentication_state import AuthenticationState, normalize_authentication_state
+
+    auth = normalize_authentication_state(
+        getattr(view, "authentication_state", None)
+    ) or AuthenticationState.LOGIN_UNKNOWN
     capability = CapabilityView(
         provider=provider,
         display_name=display_name,
@@ -834,6 +874,7 @@ def build_capability_view(
         historical_summary=None,
         historical_timestamp_label=None,
         timeline_sections=(),
+        authentication_state=auth.value,
     )
     # Observability only — lazy import avoids circular dependency at module load.
     from mighty.truth_validation import attach_truth_validation

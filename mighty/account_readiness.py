@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from mighty.authentication_state import AuthenticationState
 from mighty.provider_account import (
     EXTRACTION_COMPLETE,
     EXTRACTION_FAILED,
@@ -342,9 +343,15 @@ def resolve_account_readiness(
         current_access == "error"
         or verification_lifecycle in {"failed", "timed_out"}
     )
-    definitive_signed_out = (
-        session_state == "signed_out" and current_access != "error"
-    )
+    # SIGNED_OUT only from canonical authentication — never from error/inconclusive.
+    if product is not None:
+        definitive_signed_out = (
+            product.authentication_state == AuthenticationState.SIGNED_OUT
+        )
+    else:
+        definitive_signed_out = (
+            session_state == "signed_out" and current_access != "error"
+        )
 
     # Stale-while-revalidate: retain last confirmed ready while a later routine
     # cycle runs, through inconclusive rechecks inside grace, or between cycles

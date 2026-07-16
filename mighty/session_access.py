@@ -4,14 +4,17 @@ Architecture:
   provider_session_state
     → login_truth.compute_current_account_access_rows
     → session_access.resolve_product_account_state
+         (emits AuthenticationState + product session transport)
     → Dashboard / Accounts / Account Center / Popup / /api/account-status / Admin
 
-All customer-facing login decisions must go through this bridge. Legacy
-sync_status / connection_status must not decide banners, counts, badges, or
-/api/account-status login messaging.
+Canonical authentication truth is AuthenticationState
+(SIGNED_IN | SIGNED_OUT | LOGIN_UNKNOWN). Product session_state is transport
+only (connected / checking / signed_out / unknown) and must never invent
+SIGNED_OUT from verification failure.
 
 Surfaces may choose wording and detail level, but must never reinterpret
-session_state, login_required, user_attention_required, or next_action.
+authentication_state. Legacy sync_status / connection_status must not decide
+banners, counts, badges, or /api/account-status login messaging.
 """
 
 from __future__ import annotations
@@ -19,6 +22,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
+from mighty.authentication_state import (
+    AuthenticationState,
+    authentication_from_current_access,
+)
 from mighty.login_truth import (
     CurrentAccess,
     CurrentAccountAccess,
@@ -37,6 +44,7 @@ from mighty.user_copy import (
 )
 
 # Product-facing session vocabulary (shared across admin + customer surfaces).
+# Transport only — not authentication truth. See AuthenticationState.
 ProductSessionState = Literal["connected", "checking", "signed_out", "unknown"]
 
 CHECKING = "checking"
@@ -50,7 +58,9 @@ PRODUCT_SESSION_FROM_CURRENT_ACCESS: dict[CurrentAccess, ProductSessionState] = 
     "connected_now": "connected",
     "checking": "checking",
     "signed_out": "signed_out",
-    "error": "signed_out",  # verification failure → Needs login
+    # Verification failure / inconclusive / probe error → unable to verify.
+    # Never invent SIGNED_OUT without definitive signed-out evidence.
+    "error": "unknown",
     "unknown": "unknown",
 }
 
@@ -89,9 +99,10 @@ PRODUCT_NEXT_ACTION: dict[ProductSessionState, tuple[NextActionType, str]] = {
 class ProductAccountState:
     """Canonical product projection of Current Access.
 
-    Every status consumer should derive session/login/next-action from this
-    object (or an equivalent resolve_product_account_state call) rather than
-    re-mapping Current Access locally.
+    ``authentication_state`` is the immutable auth truth. ``session_state`` is
+    transport for existing surfaces. Every status consumer should derive
+    login_required from authentication_state (SIGNED_OUT only), not from
+    collapsed error/inconclusive labels.
     """
 
     provider: str
@@ -102,12 +113,14 @@ class ProductAccountState:
     next_action_type: NextActionType
     next_action_text: str
     status_label: str
+    authentication_state: AuthenticationState = AuthenticationState.LOGIN_UNKNOWN
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "provider": self.provider,
             "session_state": self.session_state,
             "current_access": self.current_access,
+            "authentication_state": self.authentication_state.value,
             "login_required": self.login_required,
             "user_attention_required": self.user_attention_required,
             "next_action_type": self.next_action_type,
@@ -133,16 +146,23 @@ class SessionAccessPresentation:
     user_attention_required: bool = False
     next_action_type: NextActionType | None = None
     next_action_text: str | None = None
+    authentication_state: AuthenticationState = AuthenticationState.LOGIN_UNKNOWN
 
 
 def to_product_session_state(current_access: CurrentAccess) -> ProductSessionState:
     return PRODUCT_SESSION_FROM_CURRENT_ACCESS[current_access]
 
 
+def to_authentication_state(current_access: CurrentAccess) -> AuthenticationState:
+    """Canonical authentication from Current Access (error → LOGIN_UNKNOWN)."""
+    return authentication_from_current_access(current_access)
+
+
 def resolve_product_account_state(access: CurrentAccountAccess) -> ProductAccountState:
     """Project Current Access into the shared product account state contract."""
     session_state = to_product_session_state(access.current_access)
-    login_required = session_state == "signed_out"
+    authentication_state = to_authentication_state(access.current_access)
+    login_required = authentication_state == AuthenticationState.SIGNED_OUT
     next_action_type, next_action_text = PRODUCT_NEXT_ACTION[session_state]
     return ProductAccountState(
         provider=access.provider,
@@ -153,6 +173,7 @@ def resolve_product_account_state(access: CurrentAccountAccess) -> ProductAccoun
         next_action_type=next_action_type,
         next_action_text=next_action_text,
         status_label=SESSION_STATUS_LABELS[session_state],
+        authentication_state=authentication_state,
     )
 
 
@@ -161,12 +182,12 @@ def product_state_for_session(
     *,
     provider: str = "",
     current_access: CurrentAccess | None = None,
+    authentication_state: AuthenticationState | None = None,
 ) -> ProductAccountState:
     """Build ProductAccountState from an already-resolved product session_state."""
-    login_required = session_state == "signed_out"
-    next_action_type, next_action_text = PRODUCT_NEXT_ACTION[session_state]
     if current_access is None:
         # Inverse of PRODUCT_SESSION_FROM_CURRENT_ACCESS for the common cases.
+        # error no longer maps to signed_out, so unknown stays unknown.
         inverse: dict[ProductSessionState, CurrentAccess] = {
             "connected": "connected_now",
             "checking": "checking",
@@ -174,6 +195,9 @@ def product_state_for_session(
             "unknown": "unknown",
         }
         current_access = inverse[session_state]
+    auth = authentication_state or to_authentication_state(current_access)
+    login_required = auth == AuthenticationState.SIGNED_OUT
+    next_action_type, next_action_text = PRODUCT_NEXT_ACTION[session_state]
     return ProductAccountState(
         provider=provider,
         session_state=session_state,
@@ -183,6 +207,7 @@ def product_state_for_session(
         next_action_type=next_action_type,
         next_action_text=next_action_text,
         status_label=SESSION_STATUS_LABELS[session_state],
+        authentication_state=auth,
     )
 
 
@@ -200,9 +225,10 @@ def resolve_session_access_presentation(
     """Map canonical Current Access to product status + Access Loop presentation."""
     product = resolve_product_account_state(access)
     session_state = product.session_state
+    auth = product.authentication_state
     verify_msg = verification_message_for(display_name, session_state)
 
-    if session_state == "signed_out":
+    if auth == AuthenticationState.SIGNED_OUT or session_state == "signed_out":
         return SessionAccessPresentation(
             session_state=session_state,
             current_access=access.current_access,
@@ -217,6 +243,7 @@ def resolve_session_access_presentation(
             user_attention_required=product.user_attention_required,
             next_action_type=product.next_action_type,
             next_action_text=product.next_action_text,
+            authentication_state=auth,
         )
     if session_state == "checking":
         return SessionAccessPresentation(
@@ -233,6 +260,7 @@ def resolve_session_access_presentation(
             user_attention_required=product.user_attention_required,
             next_action_type=product.next_action_type,
             next_action_text=product.next_action_text,
+            authentication_state=auth,
         )
     if session_state == "connected":
         return SessionAccessPresentation(
@@ -249,6 +277,7 @@ def resolve_session_access_presentation(
             user_attention_required=product.user_attention_required,
             next_action_type=product.next_action_type,
             next_action_text=product.next_action_text,
+            authentication_state=auth,
         )
     # unknown — never "needs login"; no fresh signed-out evidence; no login CTA
     return SessionAccessPresentation(
@@ -265,6 +294,7 @@ def resolve_session_access_presentation(
         user_attention_required=product.user_attention_required,
         next_action_type=product.next_action_type,
         next_action_text=product.next_action_text,
+        authentication_state=auth,
     )
 
 
@@ -294,17 +324,29 @@ def client_login_badge_kind(
     session_state: str | None = None,
     login_required: bool = False,
     sync_status: str | None = None,
+    authentication_state: str | None = None,
 ) -> Literal["needs_login", "checking"] | None:
     """Dashboard client login-badge decision mirrored from updateSyncTimes.
 
     Legacy sync_status=login_required must never invent Needs login when a
     canonical session_state is present (connected / unknown / checking).
+    Needs login only for definitive SIGNED_OUT (never for LOGIN_UNKNOWN).
     """
-    if login_required or session_state == "signed_out":
+    from mighty.authentication_state import AuthenticationState, normalize_authentication_state
+
+    auth = normalize_authentication_state(authentication_state)
+    if (
+        auth == AuthenticationState.SIGNED_OUT
+        or login_required
+        or session_state == "signed_out"
+    ):
         return "needs_login"
     if session_state == "checking":
         return "checking"
-    if session_state in ("connected", "unknown"):
+    if session_state in ("connected", "unknown") or auth in (
+        AuthenticationState.SIGNED_IN,
+        AuthenticationState.LOGIN_UNKNOWN,
+    ):
         return None
     # No session_state: checking sync_status is a non-login setup signal only.
     if not session_state and sync_status == "checking":

@@ -1636,6 +1636,9 @@ def capability_view_from_payload(payload: dict[str, Any]) -> CapabilityView:
         historical_summary=None,
         historical_timestamp_label=None,
         timeline_sections=tuple(timeline_sections),
+        authentication_state=str(
+            payload.get("authentication_state") or "login_unknown"
+        ),
     )
 
 
