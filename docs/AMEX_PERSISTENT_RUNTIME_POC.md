@@ -27,19 +27,10 @@ The install command is useful when the channel is unavailable.
 python scripts/amex_persistent_runtime.py login
 ```
 
-The login run continuously writes sanitized diagnostics to:
-
-```text
-~/.mighty/provider_runtime/amex_login_diagnostics.json
-```
-
-The diagnostics include navigation, relevant response status codes, failed
-requests, browser console errors, page errors, and visible error text. They do
-not include credentials, cookies, request bodies, authorization headers, or
-query strings.
-
-A dedicated Chrome window opens. Sign in normally and complete any MFA. The
-window closes once the runtime sees authenticated evidence.
+An ordinary installed Google Chrome window opens with a dedicated Mighty Amex
+profile. Playwright is not attached during login. Sign in normally, complete any
+MFA, confirm that the Amex account is authenticated, and close the entire
+dedicated Chrome window. Then return to the terminal and press Enter.
 
 Profile data is stored at:
 
@@ -50,6 +41,9 @@ Profile data is stored at:
 Do not point this spike at your everyday Chrome profile. Chromium does not allow
 multiple processes to use the same user-data directory, and Mighty needs its own
 isolated provider profile.
+
+The earlier Playwright-controlled login diagnostics remain in the repository
+for historical analysis, but native login mode does not create or update them.
 
 ## Step 2: verify without a visible window
 

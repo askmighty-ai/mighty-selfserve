@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import signal
 import sys
 import time
@@ -235,96 +236,75 @@ def run_login(
     channel: str,
     timeout_seconds: int,
 ) -> int:
-    started_at = iso_now()
-    with sync_playwright() as playwright:
-        try:
-            context = playwright.chromium.launch_persistent_context(
-                str(profile_dir),
-                channel=channel,
-                headless=False,
-                no_viewport=True,
-            )
-        except PlaywrightError as exc:
-            print(profile_lock_hint(profile_dir), file=sys.stderr)
-            print(str(exc), file=sys.stderr)
-            return 2
+    """Establish the Amex session in ordinary installed Chrome.
 
-        install_signal_shutdown(context)
-        page = context.pages[0] if context.pages else context.new_page()
-        diagnostics = AmexLoginDiagnostics(diagnostics_path)
-        diagnostics.attach(page)
-        session_api_statuses: list[int] = []
-
-        def on_response(response: Any) -> None:
-            if any(marker in response.url for marker in SESSION_API_MARKERS):
-                session_api_statuses.append(response.status)
-
-        page.on("response", on_response)
+    Playwright is deliberately not attached during login. Amex's login flow
+    failed under Playwright control because its cross-origin submit path was
+    blocked. The user performs the normal login ceremony in native Chrome; the
+    dedicated profile is then reused by verify mode.
+    """
+    del result_path, diagnostics_path, channel, timeout_seconds
+    if sys.platform != "darwin":
         print(
-            "\nA dedicated Mighty browser window is opening for American Express.\n"
-            "Sign in normally, including any MFA Amex requests.\n"
-            "Mighty does not read or store your password.\n"
-            "The window will close automatically after authenticated evidence is observed.\n"
+            "Native login bootstrap is currently implemented for macOS only.",
+            file=sys.stderr,
         )
+        return 2
 
-        page.goto(AMEX_LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
-        diagnostics.record_login_controls()
-        diagnostics.record_snapshot("login_page_loaded")
-        deadline = time.monotonic() + timeout_seconds
-        page_loaded = True
-        outcome = "INCONCLUSIVE"
-        next_snapshot_at = time.monotonic() + 5
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "open",
+        "-na",
+        "Google Chrome",
+        "--args",
+        f"--user-data-dir={profile_dir}",
+        "--new-window",
+        AMEX_LOGIN_URL,
+    ]
+    print(
+        "\nOpening ordinary Google Chrome with Mighty's dedicated Amex profile.\n"
+        "1. Sign in normally and complete any MFA requested by American Express.\n"
+        "2. Confirm that you can see your authenticated Amex account.\n"
+        "3. Close the entire dedicated Chrome window.\n"
+        "4. Return here and press Enter.\n\n"
+        "Mighty does not read or store your password.\n"
+    )
+    try:
+        subprocess.run(command, check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Could not launch native Chrome: {exc}", file=sys.stderr)
+        return 2
 
-        while time.monotonic() < deadline:
-            try:
-                page.wait_for_timeout(1_000)
-                result = collect_result(
-                    page=page,
-                    mode="login",
-                    started_at=started_at,
-                    profile_dir=profile_dir,
-                    channel=channel,
-                    headless=False,
-                    session_api_statuses=session_api_statuses,
-                    page_loaded=page_loaded,
-                )
-                outcome = result.outcome
-                if time.monotonic() >= next_snapshot_at:
-                    diagnostics.record_snapshot("waiting_for_authentication")
-                    next_snapshot_at = time.monotonic() + 5
-                print(
-                    f"\rWaiting for authenticated Amex session… "
-                    f"url={result.final_url} outcome={outcome}   ",
-                    end="",
-                    flush=True,
-                )
-                if outcome == "AUTHENTICATED":
-                    print()
-                    write_result(result, result_path)
-                    diagnostics.record_snapshot("authenticated")
-                    print_result(result)
-                    context.close()
-                    return 0
-            except PlaywrightError:
-                break
+    try:
+        input("Press Enter only after the dedicated Chrome window is fully closed: ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nLogin bootstrap cancelled.", file=sys.stderr)
+        return 130
 
-        result = collect_result(
-            page=page,
-            mode="login",
-            started_at=started_at,
-            profile_dir=profile_dir,
-            channel=channel,
-            headless=False,
-            session_api_statuses=session_api_statuses,
-            page_loaded=page_loaded,
-            runtime_error=None if outcome != "RUNTIME_ERROR" else "login_runtime_error",
+    # Chrome may take a moment to release its profile lock after the window closes.
+    time.sleep(2)
+    lock_candidates = (
+        profile_dir / "SingletonLock",
+        profile_dir / "SingletonCookie",
+        profile_dir / "SingletonSocket",
+    )
+    existing_locks = [str(path) for path in lock_candidates if path.exists()]
+    if existing_locks:
+        print(
+            "\nThe dedicated profile still appears to be in use.\n"
+            "Close all Chrome windows using the Mighty Amex profile, wait a few "
+            "seconds, and then run the verify command.\n"
+            f"Observed lock files: {existing_locks}",
+            file=sys.stderr,
         )
-        print()
-        diagnostics.record_snapshot("login_timeout_or_stall")
-        write_result(result, result_path)
-        print_result(result)
-        context.close()
-        return 0 if result.outcome == "AUTHENTICATED" else 1
+        return 1
+
+    print(
+        "\nNative Amex login bootstrap complete.\n"
+        "Now test invisible session reuse with:\n\n"
+        "  python scripts/amex_persistent_runtime.py verify\n"
+    )
+    return 0
 
 
 def run_verify(
