@@ -42,6 +42,7 @@ from mighty.session_verification import (
     CURRENT_SESSION_FRESHNESS_SECONDS,
     READY_REVALIDATION_INTERVAL_SECONDS,
     READY_RESULT_GRACE_SECONDS,
+    VERIFICATION_MAINTENANCE_INTERVAL_SECONDS,
     SessionVerification,
     TERMINAL_VERIFICATION_LIFECYCLES,
     VerificationLifecycle,
@@ -51,6 +52,7 @@ from mighty.session_verification import (
     ensure_provider_session_verification_if_stale,
     ensure_session_verification_tables,
     ensure_stale_session_verifications_for_user,
+    expire_all_timed_out_verifications,
     expire_timed_out_verifications,
     log_access_cycle_event,
     mark_session_verification_running,
@@ -194,11 +196,36 @@ def run_verification_maintenance(
     """Canonical command-side verification maintenance.
 
     Expires overdue queue / running / extraction-phase rows. Idempotent.
-    Call from ensure-due, keepalive/startup, or dedicated schedulers — never
-    from customer-facing GET handlers.
+    Call from ensure-due, keepalive/startup, dedicated maintain, or the
+    independent server heartbeat — never from customer-facing GET handlers.
     """
     ensure_session_verification_tables(db)
     return expire_timed_out_verifications(db, user_id, now=now)
+
+
+def run_all_verification_maintenance(
+    db: Any,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Global command-side maintenance across all users. Idempotent.
+
+    Owned by the independent server heartbeat (and startup sweep). Does not
+    enqueue new work — only terminalizes overdue active rows.
+    """
+    ensure_session_verification_tables(db)
+    updated = expire_all_timed_out_verifications(db, now=now)
+    if updated:
+        log_access_cycle_event(
+            "verification_maintenance",
+            provider="*",
+            verification_id=None,
+            access_cycle_id=None,
+            verification_state="timed_out",
+            expired_count=updated,
+            interval_seconds=VERIFICATION_MAINTENANCE_INTERVAL_SECONDS,
+        )
+    return updated
 
 
 def ensure_stale_provider_access_checks(

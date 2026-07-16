@@ -1053,10 +1053,16 @@ def test_no_get_call_graph_contains_mutating_maintenance():
     pam = (ROOT / "mighty" / "provider_access_manager.py").read_text()
     assert "def run_verification_maintenance" in pam
     assert "run_verification_maintenance(db, user_id" in pam
+    assert "def run_all_verification_maintenance" in pam
     ensure_due = app_src.split(
         "def api_extension_session_verification_ensure_due", 1
     )[1].split("\n@app.route", 1)[0]
     assert "ensure_stale_provider_access_checks" in ensure_due
+    maintain = app_src.split(
+        "def api_extension_session_verification_maintain", 1
+    )[1].split("\n@app.route", 1)[0]
+    assert "run_verification_maintenance" in maintain
+    assert "def _start_verification_maintenance_scheduler" in app_src
 
 
 def test_pure_read_api_defaults_and_aliases():

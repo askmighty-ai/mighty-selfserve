@@ -86,25 +86,30 @@ chrome.tabs.onRemoved.addListener((id, info) => {
   _amexMrTabEvidenceByTabId.delete(id);
   // Active probe-phase verification tab closed → terminal cancelled.
   // Once past probe (authenticated mid-cycle), do not cancel — extraction /
-  // no-qualifying / server mid-cycle timeout own terminalization.
+  // no-qualifying / independent maintenance timeout own terminalization.
   if (
     _sessionVerificationInProgress
     && _activeSessionVerificationId
     && _activeSessionVerificationTabId === id
-    && !_activeSessionVerificationPastProbe
   ) {
     const verificationId = _activeSessionVerificationId;
+    const pastProbe = _activeSessionVerificationPastProbe;
     // Clear active pointer immediately — never leave a stale verification id.
     _clearActiveSessionVerification('tab_closed');
     chrome.storage.local.get('api_key').then(({ api_key }) => {
       if (!api_key) return;
-      _completeSessionVerification(
-        api_key,
-        verificationId,
-        'failed',
-        'verification cancelled — tab closed',
-        { terminalReason: 'cancelled', terminalSource: 'extension_tab_closed' },
-      ).catch(() => {});
+      if (!pastProbe) {
+        _completeSessionVerification(
+          api_key,
+          verificationId,
+          'failed',
+          'verification cancelled — tab closed',
+          { terminalReason: 'cancelled', terminalSource: 'extension_tab_closed' },
+        ).catch(() => {});
+      } else {
+        // Mid-cycle tab loss — nudge command-side expire without mutating via GET.
+        runVerificationMaintenanceHeartbeat().catch(() => {});
+      }
     }).catch(() => {});
   }
 });
@@ -1041,6 +1046,17 @@ async function handleInterceptedApi(url, data, { graphql = false } = {}) {
 
 const KEEPALIVE_ALARM    = 'mighty-keepalive';
 const KEEPALIVE_INTERVAL = 20; // minutes — short enough to beat most session timeouts
+// Independent of ensure-due / keepalive — expires overdue verifications every minute.
+const VERIFICATION_MAINT_ALARM = 'mighty-verification-maintain';
+const VERIFICATION_MAINT_INTERVAL_MINUTES = 1;
+
+function _ensureVerificationMaintenanceAlarm() {
+  chrome.alarms.clear(VERIFICATION_MAINT_ALARM, () => {
+    chrome.alarms.create(VERIFICATION_MAINT_ALARM, {
+      periodInMinutes: VERIFICATION_MAINT_INTERVAL_MINUTES,
+    });
+  });
+}
 
 chrome.runtime.onInstalled.addListener((details) => {
   // Always recreate alarms on install/reload to fix any stale periods from old versions.
@@ -1051,7 +1067,16 @@ chrome.runtime.onInstalled.addListener((details) => {
   chrome.alarms.clear(KEEPALIVE_ALARM, () => {
     chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
   });
-  console.log('[Mighty] Extension installed/reloaded, sync every', SYNC_INTERVAL, 'min, keepalive every', KEEPALIVE_INTERVAL, 'min');
+  _ensureVerificationMaintenanceAlarm();
+  console.log(
+    '[Mighty] Extension installed/reloaded, sync every',
+    SYNC_INTERVAL,
+    'min, keepalive every',
+    KEEPALIVE_INTERVAL,
+    'min, verification maintain every',
+    VERIFICATION_MAINT_INTERVAL_MINUTES,
+    'min',
+  );
   // Do not resurrect stale access cycles after reload — force a clean verification.
   _resetVerificationsAfterExtensionReload(`install:${details?.reason || 'unknown'}`);
   // In manual-probe/dev mode, defer automatic sync so reload does not open provider tabs.
@@ -1066,6 +1091,13 @@ chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.get(KEEPALIVE_ALARM, (a) => {
     if (!a) chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL });
   });
+  chrome.alarms.get(VERIFICATION_MAINT_ALARM, (a) => {
+    if (!a) {
+      chrome.alarms.create(VERIFICATION_MAINT_ALARM, {
+        periodInMinutes: VERIFICATION_MAINT_INTERVAL_MINUTES,
+      });
+    }
+  });
   // Browser restart drops verification tabs — cancel orphaned active cycles.
   _resetVerificationsAfterExtensionReload('browser_startup');
   setTimeout(() => runSyncIfAllowed('browser-startup'), 3000);
@@ -1074,6 +1106,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === SYNC_ALARM)     runSyncIfAllowed('sync-alarm');
   if (alarm.name === KEEPALIVE_ALARM) runSessionKeepalive();
+  if (alarm.name === VERIFICATION_MAINT_ALARM) runVerificationMaintenanceHeartbeat();
 });
 
 // Sites that require MFA — auto-login fills username/password but the user must
@@ -1121,6 +1154,39 @@ async function requestDueSessionVerifications(triggerSource) {
     }
   } catch (e) {
     console.warn('[Mighty] ensure-due error:', e.message);
+  }
+}
+
+/**
+ * Independent command-side maintenance heartbeat.
+ * Expires overdue requested/running/session_verified/extracting rows.
+ * Must not depend on ensure-due, pending claim, or a live job loop.
+ */
+async function runVerificationMaintenanceHeartbeat() {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key) return;
+  try {
+    const resp = await fetch(
+      `${MIGHTY_URL}/api/extension/session-verification/maintain`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Mighty-Key': api_key,
+        },
+        body: '{}',
+      },
+    );
+    if (!resp.ok) {
+      console.warn('[Mighty] verification maintain failed', resp.status);
+      return;
+    }
+    const data = await resp.json().catch(() => ({}));
+    if (data?.expired) {
+      console.log('[Mighty] verification maintain expired', data.expired);
+    }
+  } catch (e) {
+    console.warn('[Mighty] verification maintain error:', e.message);
   }
 }
 
@@ -2326,9 +2392,10 @@ async function _applyAmexExtractionResult(apiKey, verificationId, result) {
       publishableFields: result.publishable_fields,
     });
     if (!ok) {
+      // Extraction POST rejected / network failed — always terminalize.
       await _completeSessionVerification(
-        apiKey, verificationId, 'failed', 'extraction_failed',
-        { terminalReason: 'unknown', terminalSource: 'extension_extraction_failed' },
+        apiKey, verificationId, 'failed', 'extraction_post_rejected',
+        { terminalReason: 'unknown', terminalSource: 'extension_extraction_post_rejected' },
       );
     }
     return ok;
@@ -2362,9 +2429,12 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
   if (!apiKey || !verificationId) return false;
   if (_amexExtractionCyclesStarted.has(verificationId)) {
     console.log('[Mighty Amex] duplicate extraction prevented for cycle', verificationId);
+    // Do not leave the cycle stranded — independent maintenance owns timeout
+    // if the in-flight attempt never terminalizes.
     return false;
   }
   _amexExtractionCyclesStarted.add(verificationId);
+  let terminalized = false;
 
   try {
     await fetch(`${MIGHTY_URL}/api/extension/session-verification/advance`, {
@@ -2390,7 +2460,10 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
   try {
     if (existingTabId) {
       const result = await tryTab(existingTabId);
-      if (result) return _applyAmexExtractionResult(apiKey, verificationId, result);
+      if (result) {
+        terminalized = true;
+        return _applyAmexExtractionResult(apiKey, verificationId, result);
+      }
     }
 
     const openTabs = await chrome.tabs.query({ url: '*://*.americanexpress.com/*' });
@@ -2399,6 +2472,7 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
       if (existingTabId && tab.id === existingTabId) continue;
       const result = await tryTab(tab.id);
       if (result && result.status === AMEX_EXTRACTION_STATUS.EXTRACTION_SUCCESS) {
+        terminalized = true;
         return _applyAmexExtractionResult(apiKey, verificationId, result);
       }
       if (result && (
@@ -2420,6 +2494,7 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
         SESSION_VERIFICATION_TAB_REASON,
       );
       if (!tab?.id) {
+        terminalized = true;
         await _completeSessionVerification(
           apiKey, verificationId, 'failed', 'extraction_tab_blocked',
           { terminalReason: 'navigation_failed', terminalSource: 'extension_extraction_tab_blocked' },
@@ -2428,17 +2503,28 @@ async function runAmexExtractionForAccessCycle(apiKey, verificationId, existingT
       }
       await waitForTabLoad(tab.id, 25_000);
       const result = await attemptAmexExtractionWithHydrationRetry(tab.id);
+      terminalized = true;
       return _applyAmexExtractionResult(apiKey, verificationId, result);
     } finally {
       if (tab?.id) chrome.tabs.remove(tab.id).catch(() => {});
     }
   } catch (e) {
     console.warn('[Mighty Amex] access-cycle extraction failed:', e.message);
+    terminalized = true;
     await _completeSessionVerification(
       apiKey, verificationId, 'failed', e.message || 'extraction_failed',
       { terminalReason: 'unknown', terminalSource: 'extension_extraction_exception' },
     );
     return false;
+  } finally {
+    // Content-script / probe gaps that return without a result must not
+    // silently abandon an active mid-cycle row.
+    if (!terminalized) {
+      await _completeSessionVerification(
+        apiKey, verificationId, 'failed', 'extraction_no_result',
+        { terminalReason: 'unknown', terminalSource: 'extension_extraction_no_result' },
+      );
+    }
   }
 }
 
@@ -2717,6 +2803,7 @@ function _clearActiveSessionVerification(reason) {
 async function _resetVerificationsAfterExtensionReload(reason) {
   _clearActiveSessionVerification(reason || 'extension_reload');
   _lastProcessedSessionVerificationId = null;
+  _amexExtractionCyclesStarted.clear();
   try {
     const { api_key } = await chrome.storage.local.get('api_key');
     if (!api_key) return;
@@ -2732,7 +2819,8 @@ async function _resetVerificationsAfterExtensionReload(reason) {
       data?.count ?? 0,
       'cancelled',
     );
-    // After a clean slate, explicitly request due rechecks (command path).
+    // Sweep any overdue actives the cancel path left, then request due rechecks.
+    await runVerificationMaintenanceHeartbeat();
     await requestDueSessionVerifications('extension_startup');
   } catch (e) {
     console.warn('[Mighty] verification reset-on-reload failed:', e.message);
@@ -4302,16 +4390,32 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
       }
     }
   } catch (e) {
-    await _postProviderAccessProbe(apiKey, {
-      provider,
-      url_visited: entry,
-      signed_in_detected: false,
-      private_data_detected: false,
-      error: e.message,
-      failure_reason: 'probe_navigation_error',
-      verification_id: verificationId,
-      access_cycle_id: verificationId,
-    }, { skipDedup: true });
+    let probePosted = false;
+    try {
+      const posted = await _postProviderAccessProbe(apiKey, {
+        provider,
+        url_visited: entry,
+        signed_in_detected: false,
+        private_data_detected: false,
+        error: e.message,
+        failure_reason: 'probe_navigation_error',
+        verification_id: verificationId,
+        access_cycle_id: verificationId,
+      }, { skipDedup: true });
+      probePosted = !!posted;
+    } catch (postErr) {
+      console.warn('[Mighty] probe post after navigation error failed:', postErr?.message);
+    }
+    // Never leave a claimed row active after a navigation exception.
+    if (!probePosted && verificationId) {
+      await _completeSessionVerification(
+        apiKey,
+        verificationId,
+        'failed',
+        e.message || 'probe_navigation_error',
+        { terminalReason: 'navigation_failed', terminalSource: 'extension_navigation_exception' },
+      );
+    }
     _lastProcessedSessionVerificationId = verificationId;
     _activeSessionVerificationPastProbe = true;
   } finally {

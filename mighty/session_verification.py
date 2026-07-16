@@ -82,6 +82,10 @@ VERIFICATION_TIMEOUT_SECONDS = VERIFICATION_MAX_DURATION_SECONDS
 # Allow session_verified → extracting → complete enough time for private-data pull.
 # Still finite: expire_timed_out_verifications always terminals overdue mid-cycles.
 VERIFICATION_EXTRACTION_TIMEOUT_SECONDS = 90
+# Independent command-side maintenance cadence. Must be short relative to the
+# 20s probe / 90s extraction contracts so a stuck Check now cannot linger.
+# Worst-case persisted timeout ≈ phase_deadline + this interval.
+VERIFICATION_MAINTENANCE_INTERVAL_SECONDS = 60
 # After a confirmed ready extraction, wait this long before requesting another
 # routine revalidation cycle (prevents ~120s session-freshness churn).
 READY_REVALIDATION_INTERVAL_SECONDS = 15 * 60
@@ -402,6 +406,56 @@ def ensure_session_verification_tables(db: Any, *, commit: bool = True) -> bool:
     return mutated
 
 
+def verification_timeout_deadline_at(
+    verification: SessionVerification | None,
+    *,
+    timeout_seconds: int = VERIFICATION_MAX_DURATION_SECONDS,
+    extraction_timeout_seconds: int = VERIFICATION_EXTRACTION_TIMEOUT_SECONDS,
+) -> str | None:
+    """ISO deadline when this active row becomes overdue for command-side expire.
+
+    Derived only — never persisted. Terminal rows return None.
+    """
+    if verification is None:
+        return None
+    if verification.lifecycle not in ACTIVE_VERIFICATION_LIFECYCLES:
+        return None
+    if verification.lifecycle == "requested":
+        started = _parse_iso(verification.requested_at)
+        if started is None:
+            return None
+        return (started + timedelta(seconds=timeout_seconds)).isoformat()
+    if verification.lifecycle == "running":
+        started = _parse_iso(verification.started_at) or _parse_iso(
+            verification.requested_at
+        )
+        if started is None:
+            return None
+        return (started + timedelta(seconds=timeout_seconds)).isoformat()
+    # session_verified / extracting
+    started = _parse_iso(verification.requested_at)
+    if started is None:
+        return None
+    return (started + timedelta(seconds=extraction_timeout_seconds)).isoformat()
+
+
+def verification_last_transition_at(
+    verification: SessionVerification | None,
+) -> str | None:
+    """Best-effort last lifecycle transition timestamp (sanitized, derived)."""
+    if verification is None:
+        return None
+    if verification.lifecycle in TERMINAL_VERIFICATION_LIFECYCLES:
+        return verification.completed_at or verification.started_at or verification.requested_at
+    if verification.lifecycle in MID_CYCLE_VERIFICATION_LIFECYCLES:
+        # Mid-cycle advance does not stamp a dedicated column; started_at is the
+        # last durable transition after claim, else requested_at.
+        return verification.started_at or verification.requested_at
+    if verification.lifecycle == "running":
+        return verification.started_at or verification.requested_at
+    return verification.requested_at
+
+
 def verification_is_effectively_overdue(
     verification: SessionVerification | None,
     *,
@@ -415,21 +469,15 @@ def verification_is_effectively_overdue(
     if verification.lifecycle not in ACTIVE_VERIFICATION_LIFECYCLES:
         return False
     now = now or utc_now()
-    if verification.lifecycle in {"requested"}:
-        started = _parse_iso(verification.requested_at)
-        if started is None:
-            return False
-        return (now - started).total_seconds() > timeout_seconds
-    if verification.lifecycle == "running":
-        started = _parse_iso(verification.started_at) or _parse_iso(verification.requested_at)
-        if started is None:
-            return False
-        return (now - started).total_seconds() > timeout_seconds
-    # session_verified / extracting
-    started = _parse_iso(verification.requested_at)
-    if started is None:
+    deadline = verification_timeout_deadline_at(
+        verification,
+        timeout_seconds=timeout_seconds,
+        extraction_timeout_seconds=extraction_timeout_seconds,
+    )
+    deadline_dt = _parse_iso(deadline)
+    if deadline_dt is None:
         return False
-    return (now - started).total_seconds() > extraction_timeout_seconds
+    return now > deadline_dt
 
 
 def _row_to_verification(row: dict[str, Any] | None) -> SessionVerification | None:
@@ -687,6 +735,39 @@ def expire_timed_out_verifications(
             prior_lifecycle=prior,
         )
     return updated
+
+
+def expire_all_timed_out_verifications(
+    db: Any,
+    *,
+    now: datetime | None = None,
+    timeout_seconds: int = VERIFICATION_MAX_DURATION_SECONDS,
+    extraction_timeout_seconds: int = VERIFICATION_EXTRACTION_TIMEOUT_SECONDS,
+) -> int:
+    """Expire overdue active verifications for every user. Idempotent.
+
+    Used by the independent server maintenance heartbeat so timeouts do not
+    depend on Dashboard GETs, ensure-due keepalive, or a live extension job.
+    """
+    ensure_session_verification_tables(db)
+    user_rows = db.execute(
+        """
+        SELECT DISTINCT user_id
+        FROM provider_session_verification
+        WHERE lifecycle IN ('requested', 'running', 'session_verified', 'extracting')
+        """
+    ).fetchall()
+    total = 0
+    for row in user_rows or []:
+        uid = str(row["user_id"] if hasattr(row, "keys") else row[0])
+        total += expire_timed_out_verifications(
+            db,
+            uid,
+            now=now,
+            timeout_seconds=timeout_seconds,
+            extraction_timeout_seconds=extraction_timeout_seconds,
+        )
+    return total
 
 
 def get_latest_session_verification(
@@ -1427,6 +1508,7 @@ def session_verification_to_json(verification: SessionVerification | None) -> di
     if verification is None:
         return {
             "verification_id": None,
+            "access_cycle_id": None,
             "provider": None,
             "lifecycle": "idle",
             "entry_url": None,
@@ -1441,6 +1523,8 @@ def session_verification_to_json(verification: SessionVerification | None) -> di
             "duration_ms": None,
             "verification_started_at": None,
             "verification_completed_at": None,
+            "timeout_deadline_at": None,
+            "last_transition_at": None,
             "effective_overdue": False,
         }
     duration = verification_duration_ms(
@@ -1451,6 +1535,7 @@ def session_verification_to_json(verification: SessionVerification | None) -> di
     started_at = verification.started_at or verification.requested_at
     return {
         "verification_id": verification.verification_id,
+        "access_cycle_id": verification.verification_id,
         "provider": verification.provider,
         "lifecycle": verification.lifecycle,
         "entry_url": verification.entry_url,
@@ -1465,5 +1550,7 @@ def session_verification_to_json(verification: SessionVerification | None) -> di
         "duration_ms": duration,
         "verification_started_at": started_at,
         "verification_completed_at": verification.completed_at,
+        "timeout_deadline_at": verification_timeout_deadline_at(verification),
+        "last_transition_at": verification_last_transition_at(verification),
         "effective_overdue": verification_is_effectively_overdue(verification),
     }

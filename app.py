@@ -1670,6 +1670,51 @@ def _start_alert_scheduler():
     print("[Mighty] Expiry alert scheduler started (daily at 08:00 UTC)", flush=True)
 
 
+def _run_verification_maintenance_once(*, label: str = "scheduled") -> int:
+    """Command-side expire of overdue active verifications (all users)."""
+    from mighty.provider_access_manager import run_all_verification_maintenance
+
+    try:
+        with app.app_context():
+            n = run_all_verification_maintenance(get_db())
+            if n:
+                print(
+                    f"[VerificationMaintenance] {label}: expired {n} overdue row(s)",
+                    flush=True,
+                )
+            return n
+    except Exception as e:
+        print(f"[VerificationMaintenance] {label} error: {e}", flush=True)
+        return 0
+
+
+def _start_verification_maintenance_scheduler():
+    """Independent command-side heartbeat — expire overdue verifications every minute.
+
+    Does not depend on Dashboard GETs, account-status polls, ensure-due keepalive,
+    or a successful extension job loop. Runs once at startup to recover stuck rows.
+    """
+    import time as _time_vm
+    from mighty.session_verification import VERIFICATION_MAINTENANCE_INTERVAL_SECONDS
+
+    interval = max(15, int(VERIFICATION_MAINTENANCE_INTERVAL_SECONDS))
+
+    def _loop():
+        # Startup recovery: terminalize pre-existing overdue actives immediately.
+        _run_verification_maintenance_once(label="startup")
+        while True:
+            _time_vm.sleep(interval)
+            _run_verification_maintenance_once(label="heartbeat")
+
+    t = threading.Thread(target=_loop, daemon=True, name="verification-maintenance")
+    t.start()
+    print(
+        f"[Mighty] Verification maintenance scheduler started "
+        f"(every {interval}s; startup sweep enabled)",
+        flush=True,
+    )
+
+
 # ── Site URL health check ──────────────────────────────────────────────────────
 # Proactively detects dead domains and domain migrations before users notice.
 # Checks all known account entry URLs weekly; stores results in site_url_health.
@@ -6992,6 +7037,28 @@ function _pollAccountStatus() {
 _pollAccountStatus();
 setInterval(_pollAccountStatus, 10000);
 
+function _formatCheckStartedLocal(iso) {
+  if (!iso) return '';
+  try {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  } catch (e) { return ''; }
+}
+function _renderCheckingCopy(startedAtIso) {
+  var headline = document.querySelector('.dash-truth-headline');
+  if (headline) headline.textContent = 'Checking your login state…';
+  var explain = document.querySelector('.dash-truth-explain');
+  var startedLocal = _formatCheckStartedLocal(startedAtIso);
+  var lines = [];
+  if (startedLocal) lines.push('Started at ' + startedLocal);
+  lines.push('This check will stop automatically if it cannot finish.');
+  if (explain) {
+    explain.innerHTML = lines.map(function(t) {
+      return '<li class="dash-truth-explain-item">' + t + '</li>';
+    }).join('');
+  }
+}
 function requestAmexCheckNow() {
   var btn = document.getElementById('amex-check-now-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
@@ -7015,8 +7082,7 @@ function requestAmexCheckNow() {
       is_checking: true,
       last_verified: (_truthRefreshIdentity && _truthRefreshIdentity.last_verified) || null,
     };
-    var headline = document.querySelector('.dash-truth-headline');
-    if (headline) headline.textContent = 'Checking your login state…';
+    _renderCheckingCopy(d.requested_at || d.last_transition_at);
     _pollAccountStatus();
   }).catch(function(){
     if (btn) { btn.disabled = false; btn.textContent = 'Check now'; }
@@ -18670,10 +18736,13 @@ def api_providers_amex_check():
     return jsonify({
         "ok": True,
         "verification_id": payload["verification_id"],
-        "access_cycle_id": payload["verification_id"],
+        "access_cycle_id": payload.get("access_cycle_id") or payload["verification_id"],
         "lifecycle": payload["lifecycle"],
         "trigger_source": payload.get("trigger_source") or "user_check_now",
         "requested_by": payload.get("requested_by"),
+        "requested_at": payload.get("requested_at"),
+        "timeout_deadline_at": payload.get("timeout_deadline_at"),
+        "last_transition_at": payload.get("last_transition_at"),
         "provider": "amex",
     })
 
@@ -22737,6 +22806,25 @@ def api_extension_session_verification_ensure_due():
     })
 
 
+@app.route("/api/extension/session-verification/maintain", methods=["POST"])
+def api_extension_session_verification_maintain():
+    """Independent command-side maintenance — expire overdue actives only.
+
+    Does not enqueue new work. Safe to call every minute from the extension
+    alarm even while a Check now job is active. Idempotent.
+    """
+    from mighty.provider_access_manager import run_verification_maintenance
+
+    user = api_user()[0]
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+    expired = run_verification_maintenance(get_db(), user["id"])
+    return jsonify({
+        "ok": True,
+        "expired": int(expired),
+    })
+
+
 @app.route("/api/extension/session-verification/reset-on-reload", methods=["POST"])
 def api_extension_session_verification_reset_on_reload():
     """Cancel all active verifications after extension reload / browser restart.
@@ -23162,4 +23250,7 @@ if __name__ == "__main__":
         _start_alert_scheduler()
     # Start site URL health scheduler (weekly; first check after 5 min)
     _start_url_health_scheduler()
+    # Independent verification timeout ownership (opt-out via env).
+    if os.environ.get("ENABLE_VERIFICATION_MAINTENANCE", "true").lower() == "true":
+        _start_verification_maintenance_scheduler()
     app.run(host="0.0.0.0", port=PORT, debug=False)
