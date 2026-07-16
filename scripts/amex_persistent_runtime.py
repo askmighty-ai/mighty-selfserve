@@ -251,13 +251,37 @@ def run_login(
         )
         return 2
 
+    chrome_binary = Path(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    )
+    if not chrome_binary.exists():
+        print(
+            f"Google Chrome executable not found at {chrome_binary}",
+            file=sys.stderr,
+        )
+        return 2
+
+    def stop_mighty_chrome(process: subprocess.Popen[Any]) -> None:
+        """Stop only the dedicated Mighty Chrome process group."""
+        if process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=10)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=5)
+
     profile_dir.mkdir(parents=True, exist_ok=True)
     command = [
-        "open",
-        "-na",
-        "Google Chrome",
-        "--args",
+        str(chrome_binary),
         f"--user-data-dir={profile_dir}",
+        "--remote-debugging-port=0",
+        "--no-first-run",
+        "--no-default-browser-check",
         "--new-window",
         AMEX_LOGIN_URL,
     ]
@@ -265,35 +289,50 @@ def run_login(
         "\nOpening ordinary Google Chrome with Mighty's dedicated Amex profile.\n"
         "1. Sign in normally and complete any MFA requested by American Express.\n"
         "2. Confirm that you can see your authenticated Amex account.\n"
-        "3. Close the entire dedicated Chrome window.\n"
-        "4. Return here and press Enter.\n\n"
+        "3. Return here and press Enter.\n"
+        "4. Mighty will close only its dedicated Chrome process.\n\n"
         "Mighty does not read or store your password.\n"
     )
     try:
-        subprocess.run(command, check=True)
-    except (OSError, subprocess.CalledProcessError) as exc:
+        process = subprocess.Popen(
+            command,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
         print(f"Could not launch native Chrome: {exc}", file=sys.stderr)
         return 2
 
     try:
-        input("Press Enter only after the dedicated Chrome window is fully closed: ")
+        input(
+            "Press Enter after the dedicated Mighty Chrome window shows your "
+            "authenticated Amex account: "
+        )
     except (EOFError, KeyboardInterrupt):
+        stop_mighty_chrome(process)
         print("\nLogin bootstrap cancelled.", file=sys.stderr)
         return 130
 
-    # Chrome may take a moment to release its profile lock after the window closes.
-    time.sleep(2)
+    stop_mighty_chrome(process)
+
+    # Chrome may take a moment to release its profile lock after shutdown.
+    deadline = time.monotonic() + 15
     lock_candidates = (
         profile_dir / "SingletonLock",
         profile_dir / "SingletonCookie",
         profile_dir / "SingletonSocket",
     )
     existing_locks = [str(path) for path in lock_candidates if path.exists()]
+    while existing_locks and time.monotonic() < deadline:
+        time.sleep(0.5)
+        existing_locks = [str(path) for path in lock_candidates if path.exists()]
+
     if existing_locks:
         print(
             "\nThe dedicated profile still appears to be in use.\n"
-            "Close all Chrome windows using the Mighty Amex profile, wait a few "
-            "seconds, and then run the verify command.\n"
+            "Only the dedicated Mighty Chrome process was stopped; your normal "
+            "Chrome windows were not touched. Wait a few seconds and retry verify.\n"
             f"Observed lock files: {existing_locks}",
             file=sys.stderr,
         )

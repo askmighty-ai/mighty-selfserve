@@ -27,10 +27,12 @@ The install command is useful when the channel is unavailable.
 python scripts/amex_persistent_runtime.py login
 ```
 
-An ordinary installed Google Chrome window opens with a dedicated Mighty Amex
+An ordinary installed Google Chrome process opens with a dedicated Mighty Amex
 profile. Playwright is not attached during login. Sign in normally, complete any
-MFA, confirm that the Amex account is authenticated, and close the entire
-dedicated Chrome window. Then return to the terminal and press Enter.
+MFA, and confirm that the Amex account is authenticated. Then return to the
+terminal and press Enter. The script closes only the dedicated Mighty Chrome
+process group; it does not close or modify the user's regular Chrome windows or
+profiles.
 
 Profile data is stored at:
 
