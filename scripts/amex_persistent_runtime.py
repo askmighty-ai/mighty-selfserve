@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from amex_login_diagnostics import AmexLoginDiagnostics
+
 from playwright.sync_api import (
     BrowserContext,
     Error as PlaywrightError,
@@ -33,6 +35,9 @@ AMEX_OVERVIEW_URL = "https://global.americanexpress.com/overview"
 AMEX_LOGIN_URL = "https://www.americanexpress.com/en-us/account/login"
 DEFAULT_PROFILE_DIR = Path.home() / ".mighty" / "provider_runtime" / "amex"
 DEFAULT_RESULT_PATH = Path.home() / ".mighty" / "provider_runtime" / "amex_last_result.json"
+DEFAULT_DIAGNOSTICS_PATH = (
+    Path.home() / ".mighty" / "provider_runtime" / "amex_login_diagnostics.json"
+)
 
 LOGIN_URL_TOKENS = ("/login", "/log-in", "/signin", "/sign-in", "/logon")
 AUTHENTICATED_MARKERS = (
@@ -226,6 +231,7 @@ def run_login(
     *,
     profile_dir: Path,
     result_path: Path,
+    diagnostics_path: Path,
     channel: str,
     timeout_seconds: int,
 ) -> int:
@@ -245,6 +251,8 @@ def run_login(
 
         install_signal_shutdown(context)
         page = context.pages[0] if context.pages else context.new_page()
+        diagnostics = AmexLoginDiagnostics(diagnostics_path)
+        diagnostics.attach(page)
         session_api_statuses: list[int] = []
 
         def on_response(response: Any) -> None:
@@ -260,9 +268,12 @@ def run_login(
         )
 
         page.goto(AMEX_LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
+        diagnostics.record_login_controls()
+        diagnostics.record_snapshot("login_page_loaded")
         deadline = time.monotonic() + timeout_seconds
         page_loaded = True
         outcome = "INCONCLUSIVE"
+        next_snapshot_at = time.monotonic() + 5
 
         while time.monotonic() < deadline:
             try:
@@ -278,6 +289,9 @@ def run_login(
                     page_loaded=page_loaded,
                 )
                 outcome = result.outcome
+                if time.monotonic() >= next_snapshot_at:
+                    diagnostics.record_snapshot("waiting_for_authentication")
+                    next_snapshot_at = time.monotonic() + 5
                 print(
                     f"\rWaiting for authenticated Amex session… "
                     f"url={result.final_url} outcome={outcome}   ",
@@ -287,6 +301,7 @@ def run_login(
                 if outcome == "AUTHENTICATED":
                     print()
                     write_result(result, result_path)
+                    diagnostics.record_snapshot("authenticated")
                     print_result(result)
                     context.close()
                     return 0
@@ -305,6 +320,7 @@ def run_login(
             runtime_error=None if outcome != "RUNTIME_ERROR" else "login_runtime_error",
         )
         print()
+        diagnostics.record_snapshot("login_timeout_or_stall")
         write_result(result, result_path)
         print_result(result)
         context.close()
@@ -397,6 +413,12 @@ def parse_args() -> argparse.Namespace:
         help=f"Sanitized result JSON (default: {DEFAULT_RESULT_PATH})",
     )
     parser.add_argument(
+        "--diagnostics-path",
+        type=Path,
+        default=DEFAULT_DIAGNOSTICS_PATH,
+        help=f"Sanitized login diagnostics JSON (default: {DEFAULT_DIAGNOSTICS_PATH})",
+    )
+    parser.add_argument(
         "--channel",
         default=os.environ.get("MIGHTY_BROWSER_CHANNEL", "chrome"),
         help="Playwright browser channel (default: chrome).",
@@ -425,11 +447,13 @@ def main() -> int:
     args = parse_args()
     args.profile_dir = args.profile_dir.expanduser().resolve()
     args.result_path = args.result_path.expanduser().resolve()
+    args.diagnostics_path = args.diagnostics_path.expanduser().resolve()
 
     if args.mode == "login":
         return run_login(
             profile_dir=args.profile_dir,
             result_path=args.result_path,
+            diagnostics_path=args.diagnostics_path,
             channel=args.channel,
             timeout_seconds=args.login_timeout_seconds,
         )

@@ -27,6 +27,17 @@ The install command is useful when the channel is unavailable.
 python scripts/amex_persistent_runtime.py login
 ```
 
+The login run continuously writes sanitized diagnostics to:
+
+```text
+~/.mighty/provider_runtime/amex_login_diagnostics.json
+```
+
+The diagnostics include navigation, relevant response status codes, failed
+requests, browser console errors, page errors, and visible error text. They do
+not include credentials, cookies, request bodies, authorization headers, or
+query strings.
+
 A dedicated Chrome window opens. Sign in normally and complete any MFA. The
 window closes once the runtime sees authenticated evidence.
 
