@@ -57,7 +57,11 @@ CUSTOMER_TRUTH_FRESHNESS_SECONDS = READY_RESULT_GRACE_SECONDS
 DETERMINING_HEADLINE = "Checking your login state…"
 DETERMINING_HEADLINE_CURRENT = "Checking your login state…"
 DETERMINING_BODY = (
-    "Mighty is checking whether your American Express session is signed in."
+    "Mighty is checking whether your American Express session is signed in. "
+    "This check will stop automatically if it cannot finish."
+)
+DETERMINING_FINITE_NOTE = (
+    "This check will stop automatically if it cannot finish."
 )
 REFRESHING_STATUS_HEADLINE = "Checking your login state…"
 STALE_RECONFIRM_EXPLANATION = (
