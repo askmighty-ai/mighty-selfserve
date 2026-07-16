@@ -10,7 +10,8 @@
     "alarms",
     "scripting",
     "activeTab",
-    "cookies"
+    "cookies",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"
