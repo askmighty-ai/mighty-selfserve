@@ -11,10 +11,11 @@ Commands:
     python scripts/provider_runtime.py status
     python scripts/provider_runtime.py stop
 
-The bootstrap command opens a visible native Chrome window only for login. After
-the user confirms authentication, the runtime verifies through CDP, shuts down
-only Chrome processes using the dedicated profile, relaunches that profile
-headlessly, and starts the local runtime service.
+Lifecycle:
+    bootstrap opens a visible native Chrome window for login, verifies over CDP,
+    then leaves that authenticated Chrome process running. serve attaches to the
+    same CDP endpoint (or launches headless Chrome only when none is live).
+    Repeated verify calls reuse the authenticated session without relaunching.
 """
 
 from __future__ import annotations
@@ -185,6 +186,14 @@ def wait_for_cdp(port: int, timeout: float = 20.0) -> str:
     raise RuntimeError(f"Chrome CDP endpoint did not become ready: {last_error}")
 
 
+def cdp_endpoint_available(port: int, timeout: float = 1.0) -> str | None:
+    """Return the CDP base URL if an endpoint is already listening, else None."""
+    try:
+        return wait_for_cdp(port, timeout=timeout)
+    except RuntimeError:
+        return None
+
+
 def launch_native_chrome(
     *,
     profile_dir: Path,
@@ -264,42 +273,41 @@ def verify_amex_over_cdp(cdp_url: str, result_path: Path) -> VerificationResult:
     body_text = ""
 
     with sync_playwright() as playwright:
+        # Attach only. Do not call browser.close() — that can terminate the
+        # native Chrome process. Leaving the Playwright context disconnects
+        # the client while Chrome stays alive.
         browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+        if browser.contexts:
+            context: BrowserContext = browser.contexts[0]
+        else:
+            raise RuntimeError("Chrome exposed no persistent browser context")
+
+        page: Page = context.pages[0] if context.pages else context.new_page()
+
+        def on_response(response: Any) -> None:
+            if any(marker in response.url for marker in SESSION_API_MARKERS):
+                session_api_statuses.append(response.status)
+
+        page.on("response", on_response)
         try:
-            context: BrowserContext
-            if browser.contexts:
-                context = browser.contexts[0]
-            else:
-                raise RuntimeError("Chrome exposed no persistent browser context")
+            page.goto(
+                AMEX_OVERVIEW_URL,
+                wait_until="domcontentloaded",
+                timeout=30_000,
+            )
+            page.wait_for_timeout(5_000)
+        except Exception as exc:
+            runtime_error = f"navigation_error: {type(exc).__name__}: {exc}"
 
-            page: Page = context.pages[0] if context.pages else context.new_page()
-
-            def on_response(response: Any) -> None:
-                if any(marker in response.url for marker in SESSION_API_MARKERS):
-                    session_api_statuses.append(response.status)
-
-            page.on("response", on_response)
-            try:
-                page.goto(
-                    AMEX_OVERVIEW_URL,
-                    wait_until="domcontentloaded",
-                    timeout=30_000,
-                )
-                page.wait_for_timeout(5_000)
-            except Exception as exc:
-                runtime_error = f"navigation_error: {type(exc).__name__}: {exc}"
-
-            final_url = sanitize_url(page.url)
-            try:
-                title = page.title()
-            except Exception:
-                pass
-            try:
-                body_text = page.locator("body").inner_text(timeout=3_000)
-            except Exception:
-                pass
-        finally:
-            browser.close()
+        final_url = sanitize_url(page.url)
+        try:
+            title = page.title()
+        except Exception:
+            pass
+        try:
+            body_text = page.locator("body").inner_text(timeout=3_000)
+        except Exception:
+            pass
 
     state, reason = classify_amex(
         final_url=final_url,
@@ -348,6 +356,18 @@ class ProviderRuntime:
         self.started_at = iso_now()
         self.last_result: VerificationResult | None = None
 
+    def matching_chrome_pids(self) -> list[int]:
+        """PIDs whose command line uses the exact dedicated Amex profile."""
+        return profile_processes(self.profile_dir)
+
+    def primary_chrome_pid(self) -> int | None:
+        pids = self.matching_chrome_pids()
+        if not pids:
+            return None
+        if self.chrome_process is not None and self.chrome_process.pid in pids:
+            return self.chrome_process.pid
+        return min(pids)
+
     def write_state(self) -> None:
         payload = {
             "pid": os.getpid(),
@@ -355,7 +375,8 @@ class ProviderRuntime:
             "updated_at": iso_now(),
             "cdp_port": self.cdp_port,
             "cdp_url": self.cdp_url,
-            "chrome_pid": self.chrome_process.pid if self.chrome_process else None,
+            "chrome_pid": self.primary_chrome_pid(),
+            "chrome_running": bool(self.matching_chrome_pids()),
             "profile_dir": str(self.profile_dir),
             "last_result": asdict(self.last_result) if self.last_result else None,
         }
@@ -364,6 +385,14 @@ class ProviderRuntime:
 
     def start(self) -> None:
         with self.lock:
+            existing = cdp_endpoint_available(self.cdp_port)
+            if existing is not None:
+                # Attach to the authenticated Chrome left running by bootstrap.
+                self.chrome_process = None
+                self.cdp_url = existing
+                self.write_state()
+                return
+
             terminate_profile_processes(self.profile_dir)
             if not wait_for_profile_release(self.profile_dir):
                 raise RuntimeError("Dedicated Amex profile lock was not released")
@@ -388,14 +417,13 @@ class ProviderRuntime:
 
     def status(self) -> dict[str, Any]:
         with self.lock:
+            pids = self.matching_chrome_pids()
             return {
                 "ok": True,
                 "runtime_pid": os.getpid(),
                 "started_at": self.started_at,
-                "chrome_pid": self.chrome_process.pid if self.chrome_process else None,
-                "chrome_running": bool(
-                    self.chrome_process and self.chrome_process.poll() is None
-                ),
+                "chrome_pid": self.primary_chrome_pid(),
+                "chrome_running": bool(pids),
                 "cdp_url": self.cdp_url,
                 "profile_dir": str(self.profile_dir),
                 "last_result": asdict(self.last_result) if self.last_result else None,
@@ -403,6 +431,7 @@ class ProviderRuntime:
 
     def stop(self) -> None:
         with self.lock:
+            # Only terminate Chrome using the exact dedicated Mighty Amex profile.
             terminate_profile_processes(self.profile_dir)
             self.chrome_process = None
             self.cdp_url = None
@@ -456,33 +485,42 @@ def bootstrap_amex(root: Path, cdp_port: int, result_path: Path) -> int:
     terminate_profile_processes(profile_dir)
     wait_for_profile_release(profile_dir)
 
-    process = launch_native_chrome(
+    launch_native_chrome(
         profile_dir=profile_dir,
         cdp_port=cdp_port,
         headless=False,
         initial_url=AMEX_LOGIN_URL,
     )
-    try:
-        cdp_url = wait_for_cdp(cdp_port)
+    cdp_url = wait_for_cdp(cdp_port)
+    print(
+        "\nMighty opened an isolated Chrome window for American Express.\n"
+        "Sign in normally and complete any MFA. Your other Chrome windows and\n"
+        "profiles are not affected. When you can see your Amex account, return\n"
+        "here and press Enter.\n"
+    )
+    input("Press Enter after Amex is authenticated: ")
+    result = verify_amex_over_cdp(cdp_url, result_path)
+    print(json.dumps(asdict(result), indent=2))
+
+    if result.authentication_state != "SIGNED_IN":
         print(
-            "\nMighty opened an isolated Chrome window for American Express.\n"
-            "Sign in normally and complete any MFA. Your other Chrome windows and\n"
-            "profiles are not affected. When you can see your Amex account, return\n"
-            "here and press Enter.\n"
+            "\nThe dedicated browser did not produce definitive signed-in evidence.\n"
+            "The authenticated Amex Chrome process has been left running for diagnosis.\n"
+            "Close that window manually when finished, or run stop after serve attaches.",
+            file=sys.stderr,
         )
-        input("Press Enter after Amex is authenticated: ")
-        result = verify_amex_over_cdp(cdp_url, result_path)
-        print(json.dumps(asdict(result), indent=2))
-        if result.authentication_state != "SIGNED_IN":
-            print(
-                "\nThe dedicated browser did not produce definitive signed-in evidence.",
-                file=sys.stderr,
-            )
-            return 1
-        return 0
-    finally:
-        terminate_profile_processes(profile_dir)
-        wait_for_profile_release(profile_dir)
+        return 1
+
+    print(
+        "\nAmex authentication succeeded.\n"
+        "The authenticated Amex Chrome process will remain running with CDP enabled.\n"
+        "Do not close that browser window.\n"
+        "\n"
+        "In a second terminal, start the runtime so it can attach to this process:\n"
+        "\n"
+        "  .venv/bin/python scripts/provider_runtime.py serve\n"
+    )
+    return 0
 
 
 def request_json(method: str, url: str) -> dict[str, Any]:
@@ -511,6 +549,10 @@ def run_server(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, shutdown)
     print(f"Mighty Provider Runtime listening at http://{args.host}:{args.port}")
     print(f"Amex CDP: {runtime.cdp_url}")
+    if runtime.chrome_process is None:
+        print("Attached to existing authenticated Amex Chrome over CDP.")
+    else:
+        print("Launched headless Amex Chrome (no live CDP endpoint was found).")
     try:
         server.serve_forever()
     finally:
