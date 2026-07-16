@@ -132,7 +132,59 @@ SIGNED_OUT
 LOGIN_UNKNOWN
 ```
 
-## 4. Inspect runtime status
+### Verification versus maintenance
+
+| Concern | Owner |
+| --- | --- |
+| Classify whether Amex is `SIGNED_IN` / `SIGNED_OUT` / `LOGIN_UNKNOWN` | Verification (`POST /providers/amex/verify`) |
+| Detect the Amex inactivity-expiration dialog and click **Continue** | Maintenance watcher |
+| Confirm the session is still valid after Continue | Maintenance calls the same canonical verify path |
+| Open, close, or restart Chrome | Neither path — Chrome stays attached over CDP |
+
+Verification answers “is this session authenticated right now?” Maintenance keeps a
+live authenticated Chrome session from being dropped by Amex’s inactivity dialog.
+
+## 4. Automatic Amex session extension
+
+When `serve` attaches to the live Amex Chrome process, it starts one daemon
+maintenance watcher thread. That watcher:
+
+- polls about every 3 seconds over the existing CDP endpoint;
+- prefers an existing page whose hostname ends with `americanexpress.com`;
+- never creates a page merely to watch, and never calls `browser.close()`;
+- detects the genuine expiration dialog only when all of these are visible in
+  the same dialog/modal:
+  - text like “Your session is about to expire”;
+  - language referring to session expiration or inactivity;
+  - a **Continue** button inside that dialog;
+- records `maintenance_started`, clicks Continue, waits up to 10 seconds for the
+  dialog to disappear, then runs canonical verification;
+- records success only when verification returns `SIGNED_IN`.
+
+Maintenance outcomes:
+
+```text
+SESSION_EXTENDED
+EXTENSION_CLICK_FAILED
+DIALOG_DID_NOT_CLOSE
+SESSION_NOT_CONFIRMED
+WATCHER_ERROR
+```
+
+Watcher exceptions are recorded as `WATCHER_ERROR` and are never classified as
+`SIGNED_OUT`. Concurrent verify and maintenance calls share a runtime lock so
+they cannot drive the same page at once. Duplicate maintenance attempts are
+locked out and debounced for at least 30 seconds.
+
+### Developer maintenance check
+
+Run one immediate inspection without starting a second watcher:
+
+```bash
+curl -X POST http://127.0.0.1:8765/providers/amex/maintenance/check
+```
+
+## 5. Inspect runtime status
 
 ```bash
 .venv/bin/python scripts/provider_runtime.py status
@@ -142,15 +194,29 @@ LOGIN_UNKNOWN
 the exact dedicated `--user-data-dir` path, even when `ProviderRuntime` did not
 launch that Chrome process itself (for example after bootstrap attach).
 
-## 5. Stop the runtime
+Sanitized maintenance fields in status/state:
+
+```text
+maintenance_running
+last_maintenance_attempt_at
+last_maintenance_result
+last_session_extended_at
+maintenance_attempt_count
+maintenance_success_count
+```
+
+These fields never store page HTML, account values, cookies, credentials,
+request bodies, or query strings.
+
+## 6. Stop the runtime
 
 ```bash
 .venv/bin/python scripts/provider_runtime.py stop
 ```
 
-Stopping terminates only Chrome processes whose command line contains the exact
-dedicated Mighty Amex profile path. Normal Chrome windows and profiles are
-never affected.
+Stopping ends the maintenance watcher, then terminates only Chrome processes
+whose command line contains the exact dedicated Mighty Amex profile path.
+Normal Chrome windows and profiles are never affected.
 
 ## Current scope
 
@@ -163,9 +229,10 @@ It currently provides:
 - CDP attach from `serve` to the authenticated process;
 - headless launch fallback when no CDP endpoint is live;
 - CDP-based verification that disconnects without killing Chrome;
-- localhost status, verification, and shutdown commands;
+- automatic Amex inactivity-dialog session extension;
+- localhost status, verification, maintenance-check, and shutdown commands;
 - canonical authentication results;
-- sanitized persisted runtime state.
+- sanitized persisted runtime state (including maintenance counters).
 
 It does not yet:
 

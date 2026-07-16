@@ -16,6 +16,8 @@ Lifecycle:
     then leaves that authenticated Chrome process running. serve attaches to the
     same CDP endpoint (or launches headless Chrome only when none is live).
     Repeated verify calls reuse the authenticated session without relaunching.
+    While serve is running, a maintenance watcher extends Amex sessions when the
+    genuine inactivity-expiration dialog appears.
 """
 
 from __future__ import annotations
@@ -71,6 +73,98 @@ LOGIN_MARKERS = (
     "forgot password",
 )
 SESSION_API_MARKERS = ("ReadUserSession.v1", "UpdateUserSession.v1")
+
+MAINTENANCE_POLL_SECONDS = 3.0
+MAINTENANCE_DEBOUNCE_SECONDS = 30.0
+MAINTENANCE_DIALOG_CLOSE_TIMEOUT_SECONDS = 10.0
+
+MAINTENANCE_RESULT_SESSION_EXTENDED = "SESSION_EXTENDED"
+MAINTENANCE_RESULT_EXTENSION_CLICK_FAILED = "EXTENSION_CLICK_FAILED"
+MAINTENANCE_RESULT_DIALOG_DID_NOT_CLOSE = "DIALOG_DID_NOT_CLOSE"
+MAINTENANCE_RESULT_SESSION_NOT_CONFIRMED = "SESSION_NOT_CONFIRMED"
+MAINTENANCE_RESULT_WATCHER_ERROR = "WATCHER_ERROR"
+MAINTENANCE_RESULT_NO_DIALOG = "NO_DIALOG"
+MAINTENANCE_RESULT_IN_PROGRESS = "IN_PROGRESS"
+MAINTENANCE_RESULT_DEBOUNCED = "DEBOUNCED"
+
+EXPIRATION_HEADLINE_PHRASES = (
+    "your session is about to expire",
+    "session is about to expire",
+    "your session will expire",
+    "session will expire soon",
+)
+
+# Visible dialog inspection runs in the page; keep criteria conservative.
+FIND_AMEX_EXPIRATION_DIALOG_JS = """
+() => {
+  const isVisible = (el) => {
+    if (!el || !(el instanceof Element)) return false;
+    const style = window.getComputedStyle(el);
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.opacity === "0"
+    ) {
+      return false;
+    }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+
+  const normalize = (text) => (text || "").replace(/\\s+/g, " ").trim().toLowerCase();
+  const headlines = [
+    "your session is about to expire",
+    "session is about to expire",
+    "your session will expire",
+    "session will expire soon",
+  ];
+  const hasHeadline = (text) => headlines.some((phrase) => text.includes(phrase));
+  const hasExpirationLanguage = (text) => {
+    const mentionsSession = text.includes("session");
+    const mentionsExpire = text.includes("expir");
+    const mentionsInactive =
+      text.includes("inactiv") || text.includes("inactive") || text.includes("inactivity");
+    return mentionsSession && (mentionsExpire || mentionsInactive);
+  };
+
+  const dialogSelector =
+    '[role="dialog"], [aria-modal="true"], dialog, .modal, [class*="modal"], [class*="Modal"]';
+  const dialogs = Array.from(document.querySelectorAll(dialogSelector)).filter(isVisible);
+
+  const markContinue = (dialog, button) => {
+    const token = "mighty-amex-continue-" + Date.now().toString(36);
+    button.setAttribute("data-mighty-amex-continue", token);
+    return {
+      detected: true,
+      continue_token: token,
+      dialog_text: normalize(dialog.innerText || "").slice(0, 240),
+    };
+  };
+
+  for (const dialog of dialogs) {
+    const text = normalize(dialog.innerText || dialog.textContent || "");
+    if (!hasHeadline(text) || !hasExpirationLanguage(text)) {
+      continue;
+    }
+    const buttons = Array.from(
+      dialog.querySelectorAll('button, [role="button"], input[type="button"], a')
+    ).filter(isVisible);
+    for (const button of buttons) {
+      const label = normalize(
+        button.innerText ||
+          button.textContent ||
+          button.getAttribute("value") ||
+          button.getAttribute("aria-label") ||
+          ""
+      );
+      if (label === "continue" || label.startsWith("continue ")) {
+        return markContinue(dialog, button);
+      }
+    }
+  }
+  return { detected: false, continue_token: null, dialog_text: null };
+}
+"""
 
 
 def iso_now() -> str:
@@ -265,6 +359,172 @@ def classify_amex(
     return "LOGIN_UNKNOWN", "Verification completed without definitive evidence"
 
 
+def expiration_dialog_criteria_met(dialog_text: str, *, has_continue_button: bool) -> bool:
+    """Return True only when conservative Amex expiration-dialog criteria match."""
+    if not has_continue_button:
+        return False
+    lowered = " ".join((dialog_text or "").lower().split())
+    has_headline = any(phrase in lowered for phrase in EXPIRATION_HEADLINE_PHRASES)
+    mentions_session = "session" in lowered
+    mentions_expire = "expir" in lowered
+    mentions_inactive = "inactiv" in lowered
+    has_expiration_language = mentions_session and (mentions_expire or mentions_inactive)
+    return has_headline and has_expiration_language
+
+
+def select_amex_page(
+    context: BrowserContext,
+    *,
+    create_if_missing: bool = False,
+) -> Page | None:
+    """Prefer an existing americanexpress.com page; optionally create for verify."""
+    for page in context.pages:
+        try:
+            host = (urlsplit(page.url).hostname or "").lower()
+        except Exception:
+            continue
+        if host == "americanexpress.com" or host.endswith(".americanexpress.com"):
+            return page
+    if not create_if_missing:
+        return None
+    if context.pages:
+        return context.pages[0]
+    return context.new_page()
+
+
+def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
+    """Inspect the page for a genuine Amex inactivity-expiration dialog."""
+    try:
+        payload = page.evaluate(FIND_AMEX_EXPIRATION_DIALOG_JS)
+    except Exception:
+        return {"detected": False, "continue_token": None, "dialog_text": None}
+    if not isinstance(payload, dict):
+        return {"detected": False, "continue_token": None, "dialog_text": None}
+    detected = bool(payload.get("detected"))
+    dialog_text = payload.get("dialog_text") or ""
+    continue_token = payload.get("continue_token")
+    if detected and not expiration_dialog_criteria_met(
+        str(dialog_text),
+        has_continue_button=bool(continue_token),
+    ):
+        return {"detected": False, "continue_token": None, "dialog_text": None}
+    return {
+        "detected": detected,
+        "continue_token": continue_token,
+        "dialog_text": dialog_text if detected else None,
+    }
+
+
+def click_expiration_continue(page: Page, continue_token: str) -> bool:
+    """Click the Continue button marked inside the validated expiration dialog."""
+    locator = page.locator(f'[data-mighty-amex-continue="{continue_token}"]')
+    try:
+        if locator.count() < 1 or not locator.first.is_visible():
+            return False
+        locator.first.click(timeout=5_000)
+        return True
+    except Exception:
+        return False
+
+
+def wait_for_expiration_dialog_close(page: Page, timeout_seconds: float) -> bool:
+    """Wait until the validated expiration dialog is no longer detected."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        info = inspect_amex_expiration_dialog(page)
+        if not info.get("detected"):
+            return True
+        page.wait_for_timeout(250)
+    return False
+
+
+@dataclass(frozen=True)
+class MaintenanceOutcome:
+    result: str
+    observed_at: str
+    dialog_detected: bool
+    verification_state: str | None = None
+    reason: str | None = None
+    runtime_error: str | None = None
+
+
+def dismiss_amex_expiration_dialog(page: Page) -> MaintenanceOutcome | None:
+    """Detect and dismiss the expiration dialog.
+
+    Returns None when Continue was clicked and the dialog closed, so the caller
+    should run canonical verification. Otherwise returns a terminal outcome.
+    """
+    observed_at = iso_now()
+    info = inspect_amex_expiration_dialog(page)
+    if not info.get("detected") or not info.get("continue_token"):
+        return MaintenanceOutcome(
+            result=MAINTENANCE_RESULT_NO_DIALOG,
+            observed_at=observed_at,
+            dialog_detected=False,
+            reason="No Amex expiration dialog detected",
+        )
+
+    print("[Mighty Maintenance] Amex expiration dialog detected")
+    print("[Mighty Maintenance] maintenance_started")
+    if not click_expiration_continue(page, str(info["continue_token"])):
+        print(f"[Mighty Maintenance] {MAINTENANCE_RESULT_EXTENSION_CLICK_FAILED}")
+        return MaintenanceOutcome(
+            result=MAINTENANCE_RESULT_EXTENSION_CLICK_FAILED,
+            observed_at=observed_at,
+            dialog_detected=True,
+            reason="Continue click failed inside expiration dialog",
+        )
+    print("[Mighty Maintenance] Continue clicked")
+
+    if not wait_for_expiration_dialog_close(
+        page,
+        MAINTENANCE_DIALOG_CLOSE_TIMEOUT_SECONDS,
+    ):
+        print(f"[Mighty Maintenance] {MAINTENANCE_RESULT_DIALOG_DID_NOT_CLOSE}")
+        return MaintenanceOutcome(
+            result=MAINTENANCE_RESULT_DIALOG_DID_NOT_CLOSE,
+            observed_at=observed_at,
+            dialog_detected=True,
+            reason="Expiration dialog remained visible after Continue",
+        )
+    return None
+
+
+def confirm_session_extended(verification: VerificationResult) -> MaintenanceOutcome:
+    """Map canonical verification onto a maintenance outcome."""
+    auth_state = verification.authentication_state
+    if auth_state == "SIGNED_IN":
+        print(f"[Mighty Maintenance] {MAINTENANCE_RESULT_SESSION_EXTENDED}")
+        return MaintenanceOutcome(
+            result=MAINTENANCE_RESULT_SESSION_EXTENDED,
+            observed_at=iso_now(),
+            dialog_detected=True,
+            verification_state=auth_state,
+            reason="Continue clicked and verification returned SIGNED_IN",
+        )
+
+    print(f"[Mighty Maintenance] {MAINTENANCE_RESULT_SESSION_NOT_CONFIRMED}")
+    return MaintenanceOutcome(
+        result=MAINTENANCE_RESULT_SESSION_NOT_CONFIRMED,
+        observed_at=iso_now(),
+        dialog_detected=True,
+        verification_state=auth_state,
+        reason="Continue clicked but verification did not return SIGNED_IN",
+    )
+
+
+def extend_amex_session_on_page(
+    page: Page,
+    *,
+    verify_fn: Any,
+) -> MaintenanceOutcome:
+    """Click Continue on a validated dialog and confirm SIGNED_IN via verify_fn."""
+    early = dismiss_amex_expiration_dialog(page)
+    if early is not None:
+        return early
+    return confirm_session_extended(verify_fn())
+
+
 def verify_amex_over_cdp(cdp_url: str, result_path: Path) -> VerificationResult:
     runtime_error: str | None = None
     session_api_statuses: list[int] = []
@@ -282,7 +542,9 @@ def verify_amex_over_cdp(cdp_url: str, result_path: Path) -> VerificationResult:
         else:
             raise RuntimeError("Chrome exposed no persistent browser context")
 
-        page: Page = context.pages[0] if context.pages else context.new_page()
+        page = select_amex_page(context, create_if_missing=True)
+        if page is None:
+            raise RuntimeError("Chrome exposed no page for Amex verification")
 
         def on_response(response: Any) -> None:
             if any(marker in response.url for marker in SESSION_API_MARKERS):
@@ -356,6 +618,19 @@ class ProviderRuntime:
         self.started_at = iso_now()
         self.last_result: VerificationResult | None = None
 
+        self.maintenance_running = False
+        self.last_maintenance_attempt_at: str | None = None
+        self.last_maintenance_result: str | None = None
+        self.last_session_extended_at: str | None = None
+        self.maintenance_attempt_count = 0
+        self.maintenance_success_count = 0
+
+        self._maintenance_stop = threading.Event()
+        self._maintenance_thread: threading.Thread | None = None
+        self._maintenance_attempt_lock = threading.Lock()
+        self._last_maintenance_attempt_mono = 0.0
+        self._last_dialog_fingerprint: str | None = None
+
     def matching_chrome_pids(self) -> list[int]:
         """PIDs whose command line uses the exact dedicated Amex profile."""
         return profile_processes(self.profile_dir)
@@ -368,6 +643,16 @@ class ProviderRuntime:
             return self.chrome_process.pid
         return min(pids)
 
+    def _maintenance_fields(self) -> dict[str, Any]:
+        return {
+            "maintenance_running": self.maintenance_running,
+            "last_maintenance_attempt_at": self.last_maintenance_attempt_at,
+            "last_maintenance_result": self.last_maintenance_result,
+            "last_session_extended_at": self.last_session_extended_at,
+            "maintenance_attempt_count": self.maintenance_attempt_count,
+            "maintenance_success_count": self.maintenance_success_count,
+        }
+
     def write_state(self) -> None:
         payload = {
             "pid": os.getpid(),
@@ -379,6 +664,7 @@ class ProviderRuntime:
             "chrome_running": bool(self.matching_chrome_pids()),
             "profile_dir": str(self.profile_dir),
             "last_result": asdict(self.last_result) if self.last_result else None,
+            **self._maintenance_fields(),
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -405,6 +691,185 @@ class ProviderRuntime:
             self.cdp_url = wait_for_cdp(self.cdp_port)
             self.write_state()
 
+    def start_maintenance_watcher(self) -> None:
+        """Start the Amex session-maintenance daemon once for this runtime."""
+        with self.lock:
+            if self._maintenance_thread is not None and self._maintenance_thread.is_alive():
+                return
+            self._maintenance_stop.clear()
+            self.maintenance_running = True
+            self._maintenance_thread = threading.Thread(
+                target=self._maintenance_watcher_loop,
+                name="amex-maintenance-watcher",
+                daemon=True,
+            )
+            self._maintenance_thread.start()
+            self.write_state()
+
+    def stop_maintenance_watcher(self) -> None:
+        self._maintenance_stop.set()
+        thread = self._maintenance_thread
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=5.0)
+        with self.lock:
+            self.maintenance_running = False
+            self._maintenance_thread = None
+            self.write_state()
+
+    def _maintenance_watcher_loop(self) -> None:
+        while not self._maintenance_stop.is_set():
+            try:
+                self.run_maintenance_once(force=False)
+            except Exception as exc:
+                self._record_maintenance_outcome(
+                    MaintenanceOutcome(
+                        result=MAINTENANCE_RESULT_WATCHER_ERROR,
+                        observed_at=iso_now(),
+                        dialog_detected=False,
+                        runtime_error=f"{type(exc).__name__}: {exc}",
+                        reason="Watcher loop error",
+                    )
+                )
+                print(f"[Mighty Maintenance] {MAINTENANCE_RESULT_WATCHER_ERROR}")
+            self._maintenance_stop.wait(MAINTENANCE_POLL_SECONDS)
+
+    def _record_maintenance_outcome(self, outcome: MaintenanceOutcome) -> None:
+        with self.lock:
+            if outcome.result in {
+                MAINTENANCE_RESULT_NO_DIALOG,
+                MAINTENANCE_RESULT_IN_PROGRESS,
+                MAINTENANCE_RESULT_DEBOUNCED,
+            }:
+                return
+            self.last_maintenance_attempt_at = outcome.observed_at
+            self.last_maintenance_result = outcome.result
+            self.maintenance_attempt_count += 1
+            if outcome.result == MAINTENANCE_RESULT_SESSION_EXTENDED:
+                self.maintenance_success_count += 1
+                self.last_session_extended_at = outcome.observed_at
+            self.write_state()
+
+    def run_maintenance_once(self, *, force: bool = False) -> dict[str, Any]:
+        """Run one maintenance inspection. Does not start a second watcher."""
+        if not self._maintenance_attempt_lock.acquire(blocking=False):
+            return {
+                "ok": True,
+                "result": MAINTENANCE_RESULT_IN_PROGRESS,
+                "dialog_detected": False,
+                "reason": "A maintenance attempt is already in progress",
+                **self._maintenance_fields(),
+            }
+
+        try:
+            if not force:
+                elapsed = time.monotonic() - self._last_maintenance_attempt_mono
+                if (
+                    self._last_maintenance_attempt_mono > 0
+                    and elapsed < MAINTENANCE_DEBOUNCE_SECONDS
+                    and self._last_dialog_fingerprint is not None
+                ):
+                    return {
+                        "ok": True,
+                        "result": MAINTENANCE_RESULT_DEBOUNCED,
+                        "dialog_detected": False,
+                        "reason": "Debounced recent maintenance attempt",
+                        **self._maintenance_fields(),
+                    }
+
+            # Hold the runtime lock for all CDP/page work so verify cannot race.
+            with self.lock:
+                if not self.cdp_url:
+                    raise RuntimeError("Provider runtime is not started")
+                outcome = self._inspect_and_extend_session(self.cdp_url)
+
+            if outcome.result == MAINTENANCE_RESULT_NO_DIALOG:
+                return {
+                    "ok": True,
+                    "result": outcome.result,
+                    "dialog_detected": False,
+                    "reason": outcome.reason,
+                    **self._maintenance_fields(),
+                }
+
+            self._last_maintenance_attempt_mono = time.monotonic()
+            if outcome.dialog_detected:
+                self._last_dialog_fingerprint = outcome.result
+            self._record_maintenance_outcome(outcome)
+            return {
+                "ok": True,
+                "result": outcome.result,
+                "dialog_detected": outcome.dialog_detected,
+                "verification_state": outcome.verification_state,
+                "reason": outcome.reason,
+                "runtime_error": outcome.runtime_error,
+                **self._maintenance_fields(),
+            }
+        except Exception as exc:
+            outcome = MaintenanceOutcome(
+                result=MAINTENANCE_RESULT_WATCHER_ERROR,
+                observed_at=iso_now(),
+                dialog_detected=False,
+                runtime_error=f"{type(exc).__name__}: {exc}",
+                reason="Maintenance inspection failed",
+            )
+            print(f"[Mighty Maintenance] {MAINTENANCE_RESULT_WATCHER_ERROR}")
+            self._record_maintenance_outcome(outcome)
+            return {
+                "ok": False,
+                "result": outcome.result,
+                "dialog_detected": False,
+                "authentication_state": None,
+                "reason": outcome.reason,
+                "runtime_error": outcome.runtime_error,
+                **self._maintenance_fields(),
+            }
+        finally:
+            self._maintenance_attempt_lock.release()
+
+    def _inspect_and_extend_session(self, cdp_url: str) -> MaintenanceOutcome:
+        """Inspect/dismiss dialog, then verify on a fresh CDP attach (no nesting)."""
+        try:
+            with sync_playwright() as playwright:
+                browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+                if not browser.contexts:
+                    raise RuntimeError("Chrome exposed no persistent browser context")
+                context = browser.contexts[0]
+                page = select_amex_page(context, create_if_missing=False)
+                if page is None:
+                    return MaintenanceOutcome(
+                        result=MAINTENANCE_RESULT_NO_DIALOG,
+                        observed_at=iso_now(),
+                        dialog_detected=False,
+                        reason="No existing americanexpress.com page to inspect",
+                    )
+                early = dismiss_amex_expiration_dialog(page)
+                if early is not None:
+                    return early
+        except Exception as exc:
+            print(f"[Mighty Maintenance] {MAINTENANCE_RESULT_WATCHER_ERROR}")
+            return MaintenanceOutcome(
+                result=MAINTENANCE_RESULT_WATCHER_ERROR,
+                observed_at=iso_now(),
+                dialog_detected=False,
+                runtime_error=f"{type(exc).__name__}: {exc}",
+                reason="Maintenance page operations failed",
+            )
+
+        try:
+            verification = verify_amex_over_cdp(cdp_url, self.result_path)
+            self.last_result = verification
+            self.write_state()
+            return confirm_session_extended(verification)
+        except Exception as exc:
+            print(f"[Mighty Maintenance] {MAINTENANCE_RESULT_WATCHER_ERROR}")
+            return MaintenanceOutcome(
+                result=MAINTENANCE_RESULT_WATCHER_ERROR,
+                observed_at=iso_now(),
+                dialog_detected=True,
+                runtime_error=f"{type(exc).__name__}: {exc}",
+                reason="Post-extension verification failed",
+            )
+
     def verify(self, provider: str) -> VerificationResult:
         if provider != "amex":
             raise ValueError(f"Unsupported provider: {provider}")
@@ -427,9 +892,11 @@ class ProviderRuntime:
                 "cdp_url": self.cdp_url,
                 "profile_dir": str(self.profile_dir),
                 "last_result": asdict(self.last_result) if self.last_result else None,
+                **self._maintenance_fields(),
             }
 
     def stop(self) -> None:
+        self.stop_maintenance_watcher()
         with self.lock:
             # Only terminate Chrome using the exact dedicated Mighty Amex profile.
             terminate_profile_processes(self.profile_dir)
@@ -471,6 +938,21 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                 self._send_json(
                     HTTPStatus.INTERNAL_SERVER_ERROR,
                     {"ok": False, "error": str(exc)},
+                )
+            return
+        if self.path == "/providers/amex/maintenance/check":
+            try:
+                payload = self.server.runtime.run_maintenance_once(force=True)
+                status = HTTPStatus.OK if payload.get("ok", True) else HTTPStatus.INTERNAL_SERVER_ERROR
+                self._send_json(status, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "result": MAINTENANCE_RESULT_WATCHER_ERROR,
+                        "error": str(exc),
+                    },
                 )
             return
         if self.path == "/shutdown":
@@ -539,6 +1021,7 @@ def run_server(args: argparse.Namespace) -> int:
         result_path=args.result_path,
     )
     runtime.start()
+    runtime.start_maintenance_watcher()
     server = RuntimeHTTPServer((args.host, args.port), RuntimeHandler)
     server.runtime = runtime
 
@@ -553,6 +1036,7 @@ def run_server(args: argparse.Namespace) -> int:
         print("Attached to existing authenticated Amex Chrome over CDP.")
     else:
         print("Launched headless Amex Chrome (no live CDP endpoint was found).")
+    print("Amex session maintenance watcher started.")
     try:
         server.serve_forever()
     finally:
