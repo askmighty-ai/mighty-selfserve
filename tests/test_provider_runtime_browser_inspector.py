@@ -16,7 +16,9 @@ from mighty.provider_runtime import (
     ProviderRuntime,
     classify_amex_expiration_candidate,
     classify_amex_expiration_from_inspection,
+    debug_inspect_browser_context,
     dismiss_amex_expiration_dialog,
+    format_browser_inspect_debug_report,
     inspect_amex_page_signals,
     inspect_browser_context,
     inspect_page_browser,
@@ -96,7 +98,7 @@ def test_modal_without_role_dialog_is_detected():
     page.url = "https://global.americanexpress.com/overview"
     page.evaluate.return_value = _modern_payload(source_type="DOM")
 
-    info_candidates, _, _ = inspect_page_browser(page, mark_continue=True)
+    info_candidates, _, _, _ = inspect_page_browser(page, mark_continue=True)
     inspection = BrowserInspection(
         inspected_at="t",
         selected_page_url=page.url,
@@ -142,9 +144,12 @@ def test_modal_in_iframe_and_nested_iframe():
     page.main_frame = main
     page.frames = [main, outer, nested]
 
-    candidates, frame_count, errors = inspect_page_browser(page, mark_continue=True)
+    candidates, frame_count, errors, frame_diagnostics = inspect_page_browser(
+        page, mark_continue=True
+    )
     assert frame_count == 3
     assert not any("inaccessible" in err for err in errors)
+    assert frame_diagnostics == []
     assert any(item.source_type == "IFRAME" for item in candidates)
     classified = classify_amex_expiration_from_inspection(
         BrowserInspection(
@@ -169,7 +174,7 @@ def test_modal_in_open_shadow_root():
         "session-timeout-host class=timeout"
     )
 
-    candidates, _, _ = inspect_page_browser(page)
+    candidates, _, _, _ = inspect_page_browser(page)
     assert candidates[0].source_type == "SHADOW_DOM"
     assert candidates[0].host_tag_class_summary is not None
 
@@ -178,19 +183,50 @@ def test_inaccessible_cross_origin_frame_is_sanitized():
     main = MagicMock(name="main")
     main.url = "https://global.americanexpress.com/overview"
     main.evaluate.return_value = {"candidates": [], "errors": []}
+    main.is_detached.return_value = False
+    main.parent_frame = None
 
     blocked = MagicMock(name="blocked")
     blocked.url = "https://other-bank.example/challenge"
     blocked.evaluate.side_effect = Exception("Forbidden")
+    blocked.is_detached.return_value = False
+    blocked.parent_frame = main
 
     page = MagicMock()
     page.url = main.url
     page.main_frame = main
     page.frames = [main, blocked]
 
-    candidates, _, errors = inspect_page_browser(page)
+    candidates, _, errors, frame_diagnostics = inspect_page_browser(page)
     assert any("inaccessible_frame" in err for err in errors)
     assert any("frame_inaccessible" in (item.errors or []) for item in candidates)
+    assert any("inaccessible_frame" in (item.detector_tags or []) for item in candidates)
+    assert len(frame_diagnostics) == 1
+    diag = frame_diagnostics[0]
+    assert diag["frame_url"] == "https://other-bank.example/challenge"
+    assert diag["is_main_frame"] is False
+    assert diag["parent_frame_url"] == "https://global.americanexpress.com/overview"
+    assert diag["exception_class"] == "Exception"
+    assert "Forbidden" in (diag["exception_message"] or "")
+    assert diag["traceback"]
+    assert diag["failure_phase"] == "during_evaluate"
+    assert diag["appears_cross_origin"] is True
+    assert diag["evaluate_document_title"]["ok"] is False
+    assert diag["playwright_operation"].startswith("frame.evaluate(BROWSER_INSPECTOR_JS")
+
+    inspection = inspect_browser_context(
+        MagicMock(pages=[page]),
+        provider="amex",
+        select_page_fn=lambda context, create_if_missing=False: page,
+    )
+    sanitized = inspection.to_sanitized_dict()
+    assert sanitized["candidates"][0]["errors"] == ["frame_inaccessible"]
+    assert "developer_diagnostics" in sanitized
+    assert sanitized["developer_diagnostics"]["inaccessible_frame_count"] == 1
+    assert (
+        sanitized["developer_diagnostics"]["inaccessible_frames"][0]["exception_class"]
+        == "Exception"
+    )
 
 
 def test_exact_and_equivalent_live_amex_wording():
@@ -430,7 +466,109 @@ def test_runtime_persists_latest_inspection_without_bytes(tmp_path: Path):
 
     assert payload["ok"] is True
     assert payload["screenshot_path"] is None
+    assert "developer_diagnostics" in payload
     latest = runtime.latest_browser_inspection("amex")
     assert latest["ok"] is True
     assert "candidates" in latest
     assert latest.get("screenshot_path") is None
+
+
+def test_browser_inspect_debug_stops_on_first_probe_failure():
+    main = MagicMock(name="main")
+    main.url = "https://global.americanexpress.com/overview"
+    main.is_detached.return_value = False
+    main.parent_frame = None
+
+    def main_evaluate(expression, *args):
+        text = str(expression)
+        if "readyState" in text:
+            return "complete"
+        if "title" in text:
+            return "Account Home"
+        if "location.href" in text:
+            return main.url
+        if "body != null" in text:
+            return True
+        if "innerText" in text:
+            raise RuntimeError("innerText blocked")
+        return None
+
+    main.evaluate.side_effect = main_evaluate
+
+    page = MagicMock()
+    page.url = main.url
+    page.is_closed.return_value = False
+    page.main_frame = main
+    page.frames = [main]
+    page.viewport_size = {"width": 1200, "height": 800}
+
+    context = MagicMock()
+    context.pages = [page]
+
+    payload = debug_inspect_browser_context(
+        context,
+        provider="amex",
+        select_page_fn=lambda ctx, create_if_missing=False: page,
+    )
+    assert payload["ok"] is False
+    assert payload["stopped_early"] is True
+    assert len(payload["pages"]) == 1
+    assert len(payload["frames"]) == 1
+    probes = payload["frames"][0]["probes"]
+    assert [item["probe"] for item in probes] == [
+        "document.readyState",
+        "document.title",
+        "location.href",
+        "document.body != null",
+        "document.body.innerText.slice(0,100)",
+    ]
+    assert probes[-1]["ok"] is False
+    assert probes[-1]["exception_class"] == "RuntimeError"
+    assert "innerText blocked" in (probes[-1]["exception_message"] or "")
+    assert probes[-1]["traceback"]
+    failure = payload["first_failure"]
+    assert failure["probe"] == "document.body.innerText.slice(0,100)"
+    assert failure["exception_class"] == "RuntimeError"
+
+    report = format_browser_inspect_debug_report(payload)
+    assert "=== Pages (1) ===" in report
+    assert "PROBE document.title: OK" in report
+    assert "PROBE document.body.innerText.slice(0,100): FAIL" in report
+    assert "FIRST FAILURE (stopped)" in report
+    assert "RuntimeError" in report
+
+
+def test_browser_inspect_debug_all_probes_succeed():
+    page = MagicMock()
+    page.url = "https://global.americanexpress.com/overview"
+    page.is_closed.return_value = False
+    page.main_frame = page
+    page.frames = [page]
+    page.is_detached.return_value = False
+    page.parent_frame = None
+
+    def evaluate(expression, *args):
+        text = str(expression)
+        if "readyState" in text:
+            return "complete"
+        if "title" in text:
+            return "Overview"
+        if "location.href" in text:
+            return page.url
+        if "body != null" in text:
+            return True
+        if "innerText" in text:
+            return "Account summary text"
+        return None
+
+    page.evaluate.side_effect = evaluate
+    context = MagicMock(pages=[page])
+    payload = debug_inspect_browser_context(
+        context,
+        provider="amex",
+        select_page_fn=lambda ctx, create_if_missing=False: page,
+    )
+    assert payload["ok"] is True
+    assert payload["first_failure"] is None
+    assert payload["stopped_early"] is False
+    assert all(probe["ok"] for probe in payload["frames"][0]["probes"])

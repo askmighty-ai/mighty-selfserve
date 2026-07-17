@@ -14,6 +14,7 @@ Commands:
     python scripts/provider_runtime.py keepalive-status amex
     python scripts/provider_runtime.py keepalive-stop amex
     python scripts/provider_runtime.py browser-inspect amex
+    python scripts/provider_runtime.py browser-inspect-debug amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
 
 Lifecycle:
@@ -40,6 +41,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -802,6 +804,7 @@ class BrowserInspection:
     errors: list[str] = field(default_factory=list)
     screenshot_path: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    developer_diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_sanitized_dict(self) -> dict[str, Any]:
         return {
@@ -814,6 +817,8 @@ class BrowserInspection:
             "errors": list(self.errors),
             "screenshot_path": self.screenshot_path,
             "diagnostics": dict(self.diagnostics),
+            # Full failure detail for developers only (includes tracebacks).
+            "developer_diagnostics": dict(self.developer_diagnostics),
         }
 
 
@@ -1140,39 +1145,287 @@ def _normalize_inspector_frame_payload(
     return {"candidates": [], "errors": list(payload.get("errors") or [])}
 
 
+FRAME_ACCESS_PROBE_EXPRESSIONS: tuple[tuple[str, str], ...] = (
+    ("document.readyState", "document.readyState"),
+    ("document.title", "document.title"),
+    ("location.href", "location.href"),
+    ("document.body != null", "document.body != null"),
+    (
+        "document.body.innerText.slice(0,100)",
+        "document.body ? document.body.innerText.slice(0, 100) : null",
+    ),
+)
+
+# Progressive statements used when title works but the inspector evaluate fails.
+INSPECTOR_FAILURE_LOCALIZATION_PROBES: tuple[tuple[str, str], ...] = (
+    ("document.documentElement != null", "document.documentElement != null"),
+    (
+        "document.querySelectorAll('*').length",
+        "document.querySelectorAll('*').length",
+    ),
+    (
+        "document.body.innerText.slice(0, 20)",
+        "document.body ? document.body.innerText.slice(0, 20) : null",
+    ),
+    (
+        "shadow_root_enumeration",
+        "(() => { let n = 0; for (const el of document.querySelectorAll('*')) {"
+        " if (el.shadowRoot) n += 1; } return n; })()",
+    ),
+)
+
+
+def _frame_parent_url(frame: Any) -> str | None:
+    try:
+        parent = getattr(frame, "parent_frame", None)
+        if parent is None:
+            return None
+        return sanitize_url(getattr(parent, "url", None))
+    except Exception:
+        return None
+
+
+def _frame_appears_cross_origin(
+    frame_url: str | None,
+    page_url: str | None,
+) -> bool | None:
+    frame_host = _hostname(frame_url)
+    page_host = _hostname(page_url)
+    if not frame_host or not page_host:
+        return None
+    return frame_host != page_host
+
+
+def _safe_frame_is_detached(frame: Any) -> bool | None:
+    try:
+        is_detached = getattr(frame, "is_detached", None)
+        if not callable(is_detached):
+            return None
+        value = is_detached()
+        # Only trust real booleans — mocks may return truthy non-bool sentinels.
+        if isinstance(value, bool):
+            return value
+    except Exception:
+        return None
+    return None
+
+
+def _probe_frame_evaluate(frame: Any, expression: str) -> dict[str, Any]:
+    """Run one evaluate probe; never raises."""
+    try:
+        value = frame.evaluate(expression)
+        return {
+            "ok": True,
+            "value": value,
+            "exception_class": None,
+            "exception_message": None,
+            "traceback": None,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "value": None,
+            "exception_class": type(exc).__name__,
+            "exception_message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+
+def _collect_frame_evaluate_probes(
+    frame: Any,
+    *,
+    stop_on_first_failure: bool = False,
+) -> list[dict[str, Any]]:
+    probes: list[dict[str, Any]] = []
+    for name, expression in FRAME_ACCESS_PROBE_EXPRESSIONS:
+        result = _probe_frame_evaluate(frame, expression)
+        probes.append({"probe": name, "expression": expression, **result})
+        if stop_on_first_failure and not result["ok"]:
+            break
+    return probes
+
+
+def _localize_inspector_failure_statement(frame: Any) -> dict[str, Any]:
+    """Identify the earliest evaluate statement that fails after title works."""
+    localization: list[dict[str, Any]] = []
+    for name, expression in INSPECTOR_FAILURE_LOCALIZATION_PROBES:
+        result = _probe_frame_evaluate(frame, expression)
+        localization.append({"probe": name, "expression": expression, **result})
+        if not result["ok"]:
+            return {
+                "failing_statement": expression,
+                "failing_probe": name,
+                "localization_probes": localization,
+            }
+    return {
+        "failing_statement": (
+            "frame.evaluate(BROWSER_INSPECTOR_JS, "
+            "{mark_continue, default_source_type})"
+        ),
+        "failing_probe": "BROWSER_INSPECTOR_JS",
+        "localization_probes": localization,
+    }
+
+
+def _build_frame_failure_diagnostics(
+    frame: Any,
+    *,
+    page_url: str | None,
+    frame_url: str | None,
+    is_main: bool,
+    parent_frame_url: str | None,
+    playwright_operation: str,
+    exception_class: str | None,
+    exception_message: str | None,
+    traceback_text: str | None,
+    failure_phase: str,
+    failing_statement: str | None = None,
+) -> dict[str, Any]:
+    """Developer-only detail for a frame that could not be inspected."""
+    title_probe = _probe_frame_evaluate(frame, "document.title")
+    ready_probe = _probe_frame_evaluate(frame, "document.readyState")
+    body_probe = _probe_frame_evaluate(frame, "document.body != null")
+    execution_context_exists = any(
+        probe["ok"] for probe in (title_probe, ready_probe, body_probe)
+    )
+    resolved_failing_statement = failing_statement
+    localization: dict[str, Any] | None = None
+    if (
+        title_probe["ok"]
+        and failure_phase == "during_evaluate"
+        and playwright_operation.startswith("frame.evaluate(BROWSER_INSPECTOR_JS")
+    ):
+        localization = _localize_inspector_failure_statement(frame)
+        resolved_failing_statement = localization.get("failing_statement")
+
+    return {
+        "frame_url": frame_url,
+        "is_main_frame": bool(is_main),
+        "parent_frame_url": parent_frame_url,
+        "playwright_operation": playwright_operation,
+        "exception_class": exception_class,
+        "exception_message": exception_message,
+        "traceback": traceback_text,
+        "is_detached": _safe_frame_is_detached(frame),
+        "execution_context_exists": execution_context_exists,
+        "failure_phase": failure_phase,
+        "appears_cross_origin": _frame_appears_cross_origin(frame_url, page_url),
+        "evaluate_document_title": title_probe,
+        "evaluate_document_readyState": ready_probe,
+        "evaluate_document_body_not_null": body_probe,
+        "failing_statement": resolved_failing_statement or playwright_operation,
+        "failure_localization": localization,
+    }
+
+
 def _evaluate_browser_inspector_in_frame(
     frame: Any,
     *,
     mark_continue: bool,
     default_source_type: str,
+    page_url: str | None = None,
+    frame_url: str | None = None,
+    is_main: bool = False,
+    parent_frame_url: str | None = None,
 ) -> dict[str, Any]:
-    try:
-        payload = frame.evaluate(
-            BROWSER_INSPECTOR_JS,
-            {
-                "mark_continue": mark_continue,
-                "default_source_type": default_source_type,
-            },
+    detached = _safe_frame_is_detached(frame)
+    if detached is True:
+        diag = _build_frame_failure_diagnostics(
+            frame,
+            page_url=page_url,
+            frame_url=frame_url,
+            is_main=is_main,
+            parent_frame_url=parent_frame_url,
+            playwright_operation="frame.is_detached",
+            exception_class=None,
+            exception_message="Frame is detached",
+            traceback_text=None,
+            failure_phase="before_evaluate",
+            failing_statement="frame.is_detached() == True",
         )
+        return {
+            "candidates": [],
+            "errors": ["frame_inaccessible:detached"],
+            "developer_diagnostics": diag,
+        }
+
+    inspector_options = {
+        "mark_continue": mark_continue,
+        "default_source_type": default_source_type,
+    }
+    try:
+        payload = frame.evaluate(BROWSER_INSPECTOR_JS, inspector_options)
     except TypeError:
         try:
             payload = frame.evaluate(BROWSER_INSPECTOR_JS)
         except Exception as exc:
+            tb = traceback.format_exc()
+            diag = _build_frame_failure_diagnostics(
+                frame,
+                page_url=page_url,
+                frame_url=frame_url,
+                is_main=is_main,
+                parent_frame_url=parent_frame_url,
+                playwright_operation="frame.evaluate(BROWSER_INSPECTOR_JS)",
+                exception_class=type(exc).__name__,
+                exception_message=str(exc),
+                traceback_text=tb,
+                failure_phase="during_evaluate",
+                failing_statement="frame.evaluate(BROWSER_INSPECTOR_JS)",
+            )
             return {
                 "candidates": [],
                 "errors": [f"frame_inaccessible:{type(exc).__name__}"],
+                "developer_diagnostics": diag,
             }
     except Exception as exc:
+        tb = traceback.format_exc()
+        diag = _build_frame_failure_diagnostics(
+            frame,
+            page_url=page_url,
+            frame_url=frame_url,
+            is_main=is_main,
+            parent_frame_url=parent_frame_url,
+            playwright_operation=(
+                "frame.evaluate(BROWSER_INSPECTOR_JS, "
+                "{mark_continue, default_source_type})"
+            ),
+            exception_class=type(exc).__name__,
+            exception_message=str(exc),
+            traceback_text=tb,
+            failure_phase="during_evaluate",
+            failing_statement=(
+                "frame.evaluate(BROWSER_INSPECTOR_JS, "
+                "{mark_continue, default_source_type})"
+            ),
+        )
         return {
             "candidates": [],
             "errors": [f"frame_inaccessible:{type(exc).__name__}"],
+            "developer_diagnostics": diag,
         }
     if not isinstance(payload, dict):
         return {"candidates": [], "errors": ["invalid_inspector_payload"]}
-    return _normalize_inspector_frame_payload(
+    normalized = _normalize_inspector_frame_payload(
         payload,
         default_source_type=default_source_type,
     )
+    js_errors = [str(err) for err in (normalized.get("errors") or []) if err]
+    if any("shadow_traversal" in err for err in js_errors):
+        normalized["developer_diagnostics"] = _build_frame_failure_diagnostics(
+            frame,
+            page_url=page_url,
+            frame_url=frame_url,
+            is_main=is_main,
+            parent_frame_url=parent_frame_url,
+            playwright_operation="BROWSER_INSPECTOR_JS shadow DOM traversal",
+            exception_class=None,
+            exception_message="; ".join(js_errors),
+            traceback_text=None,
+            failure_phase="shadow_dom_traversal",
+            failing_statement="collectFromRoot(... el.shadowRoot ...)",
+        )
+    return normalized
 
 
 def _candidate_from_raw(
@@ -1248,13 +1501,14 @@ def inspect_page_browser(
     page: Page,
     *,
     mark_continue: bool = False,
-) -> tuple[list[InspectionCandidate], int, list[str]]:
+) -> tuple[list[InspectionCandidate], int, list[str], list[dict[str, Any]]]:
     """Inspect one page across frames/shadow roots into generic candidates."""
     frames = _iter_page_frames(page)
     main_frame = getattr(page, "main_frame", None)
     page_url = sanitize_url(getattr(page, "url", None))
     candidates: list[InspectionCandidate] = []
     errors: list[str] = []
+    frame_diagnostics: list[dict[str, Any]] = []
     frame_count = 0
 
     for frame in frames:
@@ -1263,15 +1517,53 @@ def inspect_page_browser(
         if main_frame is None and frame is page:
             is_main = True
         default_source = SOURCE_TYPE_DOM if is_main else SOURCE_TYPE_IFRAME
+        parent_frame_url = _frame_parent_url(frame)
         try:
             frame_url = sanitize_url(getattr(frame, "url", None))
-        except Exception:
+        except Exception as exc:
             frame_url = None
+            diag = _build_frame_failure_diagnostics(
+                frame,
+                page_url=page_url,
+                frame_url=None,
+                is_main=is_main,
+                parent_frame_url=parent_frame_url,
+                playwright_operation="frame.url",
+                exception_class=type(exc).__name__,
+                exception_message=str(exc),
+                traceback_text=traceback.format_exc(),
+                failure_phase="before_evaluate",
+                failing_statement="getattr(frame, 'url')",
+            )
+            frame_diagnostics.append(diag)
+            errors.append(
+                f"inaccessible_frame:unknown:frame_inaccessible:{type(exc).__name__}"
+            )
+            candidates.append(
+                InspectionCandidate(
+                    source_type=default_source,
+                    page_url=page_url,
+                    frame_url=None,
+                    tag_name=None,
+                    role=None,
+                    class_summary=None,
+                    text_snippet=None,
+                    errors=["frame_inaccessible"],
+                    detector_tags=["inaccessible_frame"],
+                )
+            )
+            continue
         payload = _evaluate_browser_inspector_in_frame(
             frame,
             mark_continue=mark_continue,
             default_source_type=default_source,
+            page_url=page_url,
+            frame_url=frame_url,
+            is_main=is_main,
+            parent_frame_url=parent_frame_url,
         )
+        if isinstance(payload.get("developer_diagnostics"), dict):
+            frame_diagnostics.append(payload["developer_diagnostics"])
         frame_errors = [
             str(err)[:120] for err in (payload.get("errors") or []) if err
         ][:12]
@@ -1308,7 +1600,7 @@ def inspect_page_browser(
             )
             if candidate is not None:
                 candidates.append(candidate)
-    return candidates, frame_count, errors
+    return candidates, frame_count, errors, frame_diagnostics
 
 
 def capture_browser_inspection_screenshot(
@@ -1355,18 +1647,22 @@ def inspect_browser_context(
     candidates: list[InspectionCandidate] = []
     frame_count = 0
     screenshot_path: str | None = None
+    frame_diagnostics: list[dict[str, Any]] = []
     selected_url = sanitize_url(selected.url) if selected is not None else None
 
     if selected is None:
         errors.append("no_provider_page_selected")
     else:
-        page_candidates, page_frames, page_errors = inspect_page_browser(
-            selected,
-            mark_continue=mark_continue,
+        page_candidates, page_frames, page_errors, page_frame_diagnostics = (
+            inspect_page_browser(
+                selected,
+                mark_continue=mark_continue,
+            )
         )
         candidates.extend(page_candidates)
         frame_count += page_frames
         errors.extend(page_errors)
+        frame_diagnostics.extend(page_frame_diagnostics)
         if capture_screenshot:
             try:
                 screenshot_path = capture_browser_inspection_screenshot(
@@ -1390,12 +1686,215 @@ def inspect_browser_context(
             "provider": provider,
             "capture_screenshot": bool(capture_screenshot),
         },
+        developer_diagnostics={
+            "inaccessible_frames": frame_diagnostics,
+            "inaccessible_frame_count": len(frame_diagnostics),
+        },
     )
+
+
+def debug_inspect_browser_context(
+    context: BrowserContext,
+    *,
+    provider: str = "amex",
+    select_page_fn: Any = None,
+) -> dict[str, Any]:
+    """Temporary developer probe: pages/frames with per-evaluate success/failure.
+
+    Stops at the first failed evaluate probe and returns its exception/traceback.
+    Does not run classifier, keepalive, or maintenance logic.
+    """
+    pages_info: list[dict[str, Any]] = []
+    for index, page in enumerate(list(context.pages)):
+        entry: dict[str, Any] = {"index": index}
+        try:
+            entry["url"] = getattr(page, "url", None)
+        except Exception as exc:
+            entry["url"] = None
+            entry["url_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            entry["is_closed"] = bool(page.is_closed()) if hasattr(page, "is_closed") else None
+        except Exception as exc:
+            entry["is_closed"] = None
+            entry["is_closed_error"] = f"{type(exc).__name__}: {exc}"
+        pages_info.append(entry)
+
+    selector = select_page_fn or (
+        select_amex_page if provider == "amex" else select_provider_page
+    )
+    if select_page_fn is None and provider == "amex":
+        selected = select_amex_page(context, create_if_missing=False)
+    elif select_page_fn is None:
+        selected = None
+    else:
+        selected = selector(context, create_if_missing=False)
+
+    selected_url = sanitize_url(getattr(selected, "url", None)) if selected else None
+    frames_info: list[dict[str, Any]] = []
+    first_failure: dict[str, Any] | None = None
+
+    if selected is None:
+        return {
+            "ok": False,
+            "provider": provider,
+            "pages": pages_info,
+            "selected_page_url": None,
+            "frames": frames_info,
+            "first_failure": {
+                "playwright_operation": "select_provider_page",
+                "exception_class": "RuntimeError",
+                "exception_message": "No provider page selected",
+                "traceback": None,
+            },
+            "stopped_early": True,
+        }
+
+    main_frame = getattr(selected, "main_frame", None)
+    for index, frame in enumerate(_iter_page_frames(selected)):
+        is_main = main_frame is not None and frame is main_frame
+        if main_frame is None and frame is selected:
+            is_main = True
+        try:
+            frame_url = getattr(frame, "url", None)
+        except Exception as exc:
+            frame_url = None
+            first_failure = {
+                "frame_index": index,
+                "frame_url": None,
+                "is_main_frame": is_main,
+                "parent_frame_url": _frame_parent_url(frame),
+                "probe": "frame.url",
+                "expression": "getattr(frame, 'url')",
+                "playwright_operation": "frame.url",
+                "exception_class": type(exc).__name__,
+                "exception_message": str(exc),
+                "traceback": traceback.format_exc(),
+            }
+            frames_info.append(
+                {
+                    "index": index,
+                    "url": None,
+                    "is_main_frame": is_main,
+                    "parent_frame_url": _frame_parent_url(frame),
+                    "is_detached": _safe_frame_is_detached(frame),
+                    "probes": [],
+                    "failed": True,
+                }
+            )
+            break
+
+        frame_entry: dict[str, Any] = {
+            "index": index,
+            "url": frame_url,
+            "is_main_frame": is_main,
+            "parent_frame_url": _frame_parent_url(frame),
+            "is_detached": _safe_frame_is_detached(frame),
+            "appears_cross_origin": _frame_appears_cross_origin(
+                sanitize_url(frame_url),
+                selected_url,
+            ),
+            "probes": [],
+            "failed": False,
+        }
+        probes = _collect_frame_evaluate_probes(frame, stop_on_first_failure=True)
+        frame_entry["probes"] = probes
+        failed_probe = next((probe for probe in probes if not probe["ok"]), None)
+        if failed_probe is not None:
+            frame_entry["failed"] = True
+            first_failure = {
+                "frame_index": index,
+                "frame_url": sanitize_url(frame_url),
+                "is_main_frame": is_main,
+                "parent_frame_url": frame_entry["parent_frame_url"],
+                "probe": failed_probe.get("probe"),
+                "expression": failed_probe.get("expression"),
+                "playwright_operation": (
+                    f"frame.evaluate({failed_probe.get('expression')!r})"
+                ),
+                "exception_class": failed_probe.get("exception_class"),
+                "exception_message": failed_probe.get("exception_message"),
+                "traceback": failed_probe.get("traceback"),
+            }
+            frames_info.append(frame_entry)
+            break
+        frames_info.append(frame_entry)
+
+    return {
+        "ok": first_failure is None,
+        "provider": provider,
+        "pages": pages_info,
+        "selected_page_url": selected_url,
+        "frames": frames_info,
+        "first_failure": first_failure,
+        "stopped_early": first_failure is not None,
+    }
+
+
+def format_browser_inspect_debug_report(payload: dict[str, Any]) -> str:
+    """Render browser-inspect-debug payload as a human-readable report."""
+    lines: list[str] = []
+    pages = payload.get("pages") or []
+    lines.append(f"=== Pages ({len(pages)}) ===")
+    for page in pages:
+        lines.append(
+            f"[{page.get('index')}] url={page.get('url')!r} "
+            f"is_closed={page.get('is_closed')}"
+        )
+        if page.get("url_error"):
+            lines.append(f"  url_error={page['url_error']}")
+    lines.append("")
+    lines.append("=== Selected page ===")
+    lines.append(f"url={payload.get('selected_page_url')!r}")
+    lines.append("")
+    frames = payload.get("frames") or []
+    lines.append(f"=== Frames ({len(frames)}) ===")
+    for frame in frames:
+        role = "main" if frame.get("is_main_frame") else "child"
+        lines.append(f"--- Frame {frame.get('index')} ({role}) ---")
+        lines.append(f"url={frame.get('url')!r}")
+        lines.append(f"parent_frame_url={frame.get('parent_frame_url')!r}")
+        lines.append(f"is_detached={frame.get('is_detached')}")
+        lines.append(f"appears_cross_origin={frame.get('appears_cross_origin')}")
+        for probe in frame.get("probes") or []:
+            if probe.get("ok"):
+                lines.append(
+                    f"PROBE {probe.get('probe')}: OK -> {probe.get('value')!r}"
+                )
+            else:
+                lines.append(f"PROBE {probe.get('probe')}: FAIL")
+                lines.append(
+                    f"  exception={probe.get('exception_class')}: "
+                    f"{probe.get('exception_message')}"
+                )
+    lines.append("")
+    failure = payload.get("first_failure")
+    if failure:
+        lines.append("=== FIRST FAILURE (stopped) ===")
+        lines.append(f"frame_index={failure.get('frame_index')}")
+        lines.append(f"frame_url={failure.get('frame_url')!r}")
+        lines.append(f"probe={failure.get('probe')!r}")
+        lines.append(f"expression={failure.get('expression')!r}")
+        lines.append(f"playwright_operation={failure.get('playwright_operation')!r}")
+        lines.append(
+            f"exception={failure.get('exception_class')}: "
+            f"{failure.get('exception_message')}"
+        )
+        tb = failure.get("traceback")
+        if tb:
+            lines.append("traceback:")
+            lines.append(tb.rstrip())
+    else:
+        lines.append("=== FIRST FAILURE ===")
+        lines.append("None (all probes succeeded)")
+    return "\n".join(lines) + "\n"
 
 
 def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
     """Use Browser Inspector + Amex classifier to find the expiration dialog."""
-    candidates, _frame_count, _errors = inspect_page_browser(page, mark_continue=True)
+    candidates, _frame_count, _errors, _frame_diagnostics = inspect_page_browser(
+        page,
+        mark_continue=True,
+    )
     inspection = BrowserInspection(
         inspected_at=iso_now(),
         selected_page_url=sanitize_url(getattr(page, "url", None)),
@@ -1429,7 +1928,10 @@ def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
 
 def diagnose_amex_expiration_dialog_on_page(page: Page) -> dict[str, Any]:
     """Developer diagnostic wrapper over Browser Inspector + Amex classifier."""
-    candidates, frame_count, errors = inspect_page_browser(page, mark_continue=False)
+    candidates, frame_count, errors, _frame_diagnostics = inspect_page_browser(
+        page,
+        mark_continue=False,
+    )
     flat: list[dict[str, Any]] = []
     for candidate in candidates:
         conditions = classify_amex_expiration_candidate(candidate)
@@ -2101,7 +2603,7 @@ class ProviderRuntime:
                     )
                 if observation_only:
                     # Observation-only: Browser Inspector + classifier, never click.
-                    inspection_candidates, _, _ = inspect_page_browser(
+                    inspection_candidates, _, _, _ = inspect_page_browser(
                         page,
                         mark_continue=False,
                     )
@@ -2220,6 +2722,21 @@ class ProviderRuntime:
             payload = dict(self._latest_browser_inspection)
             payload["ok"] = True
             return payload
+
+    def inspect_browser_debug(self, provider: str = "amex") -> dict[str, Any]:
+        """Temporary developer probe over the live provider session frames."""
+        if provider != "amex":
+            raise ValueError(f"Unsupported provider: {provider}")
+        with self.lock:
+            if not self.cdp_url:
+                raise RuntimeError("Provider runtime is not started")
+            cdp_url = self.cdp_url
+            with sync_playwright() as playwright:
+                browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+                if not browser.contexts:
+                    raise RuntimeError("Chrome exposed no persistent browser context")
+                context = browser.contexts[0]
+                return debug_inspect_browser_context(context, provider=provider)
 
     def diagnose_expiration_dialog(self, provider: str = "amex") -> dict[str, Any]:
         """Backward-compatible diagnostic wrapper over Browser Inspector."""
@@ -2811,6 +3328,21 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                     {"ok": False, "error": str(exc)},
                 )
             return
+        if self.path == "/providers/amex/diagnostics/browser-inspection-debug":
+            try:
+                payload = self.server.runtime.inspect_browser_debug("amex")
+                self._send_json(HTTPStatus.OK, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "exception_class": type(exc).__name__,
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+            return
         if self.path == "/providers/amex/diagnostics/inspect-expiration-dialog":
             try:
                 payload = self.server.runtime.diagnose_expiration_dialog("amex")
@@ -2999,6 +3531,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    browser_inspect_debug = subparsers.add_parser(
+        "browser-inspect-debug",
+        help=(
+            "Temporary developer probe: print every page/frame evaluate result "
+            "and stop on the first failure with traceback"
+        ),
+    )
+    browser_inspect_debug.add_argument("provider", choices=("amex",))
+
     inspect_expiration = subparsers.add_parser(
         "inspect-expiration-dialog",
         help="Deprecated alias for browser-inspect + Amex expiration classification",
@@ -3069,6 +3610,33 @@ def main() -> int:
             {"capture_screenshot": bool(getattr(args, "capture_screenshot", False))},
         )
         print(json.dumps(payload, indent=2))
+        return 0 if payload.get("ok") else 1
+    if args.command == "browser-inspect-debug":
+        payload = request_json(
+            "POST",
+            (
+                f"http://{args.host}:{args.port}/providers/"
+                f"{args.provider}/diagnostics/browser-inspection-debug"
+            ),
+            {},
+        )
+        # Prefer human-readable probe report; fall back to raw JSON on transport errors.
+        if "pages" in payload and "frames" in payload:
+            print(format_browser_inspect_debug_report(payload))
+            if payload.get("first_failure") and payload["first_failure"].get("traceback"):
+                # Traceback already included in the report; keep JSON available via stderr.
+                print(
+                    json.dumps(
+                        {
+                            "ok": payload.get("ok"),
+                            "first_failure": payload.get("first_failure"),
+                        },
+                        indent=2,
+                    ),
+                    file=sys.stderr,
+                )
+        else:
+            print(json.dumps(payload, indent=2))
         return 0 if payload.get("ok") else 1
     if args.command == "inspect-expiration-dialog":
         payload = request_json(
