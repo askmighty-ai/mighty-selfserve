@@ -184,6 +184,32 @@ Run one immediate inspection without starting a second watcher:
 curl -X POST http://127.0.0.1:8765/providers/amex/maintenance/check
 ```
 
+### Developer expiration-dialog inspection
+
+When a keepalive trial fails to see a visible Amex expiration modal, run the
+sanitized CDP diagnostic. It enumerates pages, frames, open shadow roots, and
+generic modal candidates (not only `role="dialog"`), without saving full HTML or
+account data.
+
+```bash
+.venv/bin/python scripts/provider_runtime.py inspect-expiration-dialog amex
+```
+
+Or:
+
+```bash
+curl -X POST http://127.0.0.1:8765/providers/amex/diagnostics/inspect-expiration-dialog
+```
+
+The response includes the selected Amex page URL, frame/candidate counts, and
+per-candidate frame URL, source type (`DOM` / `IFRAME` / `SHADOW_DOM`), role/tag/class
+summary, sanitized text snippet (≤300 chars, keyword-gated), visible button
+labels, whether the detector matched, and which conditions passed or failed.
+
+Detection itself inspects the main frame, child frames, accessible open shadow
+roots, and generic visible modal containers. Keepalive trials remain
+observation-only and still do not click Continue.
+
 ## 5. Inspect runtime status
 
 ```bash

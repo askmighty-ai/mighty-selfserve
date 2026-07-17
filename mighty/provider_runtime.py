@@ -13,6 +13,7 @@ Commands:
     python scripts/provider_runtime.py keepalive-start amex --strategy SESSION_API
     python scripts/provider_runtime.py keepalive-status amex
     python scripts/provider_runtime.py keepalive-stop amex
+    python scripts/provider_runtime.py inspect-expiration-dialog amex
 
 Lifecycle:
     bootstrap opens a visible native Chrome window for login, verifies over CDP,
@@ -120,10 +121,76 @@ EXPIRATION_HEADLINE_PHRASES = (
     "your session will expire",
     "session will expire soon",
 )
+EXPIRATION_SNIPPET_KEYWORDS = (
+    "session",
+    "expire",
+    "inactivity",
+    "continue",
+    "log out",
+)
+EXPIRATION_SNIPPET_MAX_CHARS = 300
+EXPIRATION_DIALOG_CONTAINER_SELECTORS = (
+    '[role="dialog"]',
+    '[aria-modal="true"]',
+    "dialog",
+    ".modal",
+    '[class*="modal"]',
+    '[class*="Modal"]',
+    '[class*="overlay"]',
+    '[class*="Overlay"]',
+    '[class*="popup"]',
+    '[class*="Popup"]',
+    '[class*="timeout"]',
+    '[class*="Timeout"]',
+    '[class*="session"]',
+    '[class*="Session"]',
+    '[class*="expire"]',
+    '[class*="Expire"]',
+    '[data-testid*="session"]',
+    '[data-testid*="timeout"]',
+    '[id*="session"]',
+    '[id*="timeout"]',
+)
 
-# Visible dialog inspection runs in the page; keep criteria conservative.
-FIND_AMEX_EXPIRATION_DIALOG_JS = """
-() => {
+# Visible dialog inspection runs in each frame document; keep criteria conservative.
+# Supports main DOM, open shadow roots, and generic modal containers (not only role=dialog).
+INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS = """
+(options) => {
+  const opts = options || {};
+  const diagnose = !!opts.diagnose;
+  const markContinue = !!opts.mark_continue;
+  const defaultSourceType = opts.default_source_type || "DOM";
+  const maxSnippet = 300;
+  const keywords = ["session", "expire", "inactivity", "continue", "log out"];
+  const headlines = [
+    "your session is about to expire",
+    "session is about to expire",
+    "your session will expire",
+    "session will expire soon",
+  ];
+  const containerSelector = [
+    '[role="dialog"]',
+    '[aria-modal="true"]',
+    "dialog",
+    ".modal",
+    '[class*="modal"]',
+    '[class*="Modal"]',
+    '[class*="overlay"]',
+    '[class*="Overlay"]',
+    '[class*="popup"]',
+    '[class*="Popup"]',
+    '[class*="timeout"]',
+    '[class*="Timeout"]',
+    '[class*="session"]',
+    '[class*="Session"]',
+    '[class*="expire"]',
+    '[class*="Expire"]',
+    '[data-testid*="session"]',
+    '[data-testid*="timeout"]',
+    '[id*="session"]',
+    '[id*="timeout"]',
+  ].join(", ");
+
   const isVisible = (el) => {
     if (!el || !(el instanceof Element)) return false;
     const style = window.getComputedStyle(el);
@@ -139,59 +206,191 @@ FIND_AMEX_EXPIRATION_DIALOG_JS = """
   };
 
   const normalize = (text) => (text || "").replace(/\\s+/g, " ").trim().toLowerCase();
-  const headlines = [
-    "your session is about to expire",
-    "session is about to expire",
-    "your session will expire",
-    "session will expire soon",
-  ];
-  const hasHeadline = (text) => headlines.some((phrase) => text.includes(phrase));
-  const hasExpirationLanguage = (text) => {
-    const mentionsSession = text.includes("session");
-    const mentionsExpire = text.includes("expir");
-    const mentionsInactive =
-      text.includes("inactiv") || text.includes("inactive") || text.includes("inactivity");
-    return mentionsSession && (mentionsExpire || mentionsInactive);
+
+  const interestingSnippet = (text) => keywords.some((keyword) => text.includes(keyword));
+
+  const buttonLabel = (button) =>
+    normalize(
+      button.innerText ||
+        button.textContent ||
+        button.getAttribute("value") ||
+        button.getAttribute("aria-label") ||
+        ""
+    );
+
+  const collectButtons = (container) => {
+    const nodes = Array.from(
+      container.querySelectorAll('button, [role="button"], input[type="button"], a')
+    ).filter(isVisible);
+    const labels = [];
+    const continueButtons = [];
+    for (const button of nodes) {
+      const label = buttonLabel(button);
+      if (!label) continue;
+      if (labels.length < 12) labels.push(label);
+      if (label === "continue" || label.startsWith("continue ")) {
+        continueButtons.push(button);
+      }
+    }
+    return { labels, continueButtons };
   };
 
-  const dialogSelector =
-    '[role="dialog"], [aria-modal="true"], dialog, .modal, [class*="modal"], [class*="Modal"]';
-  const dialogs = Array.from(document.querySelectorAll(dialogSelector)).filter(isVisible);
-
-  const markContinue = (dialog, button) => {
-    const token = "mighty-amex-continue-" + Date.now().toString(36);
-    button.setAttribute("data-mighty-amex-continue", token);
+  const evaluateConditions = (text, hasContinueButton) => {
+    const hasHeadline = headlines.some((phrase) => text.includes(phrase));
+    const mentionsSession = text.includes("session");
+    const mentionsExpire = text.includes("expir");
+    const mentionsInactive = text.includes("inactiv");
+    const hasExpirationLanguage =
+      mentionsSession && (mentionsExpire || mentionsInactive);
+    const matched = !!(hasHeadline && hasExpirationLanguage && hasContinueButton);
+    const passed = [];
+    const failed = [];
+    (hasHeadline ? passed : failed).push("has_headline");
+    (hasExpirationLanguage ? passed : failed).push("has_expiration_language");
+    (hasContinueButton ? passed : failed).push("has_continue_button");
     return {
-      detected: true,
-      continue_token: token,
-      dialog_text: normalize(dialog.innerText || "").slice(0, 240),
+      has_headline: hasHeadline,
+      has_expiration_language: hasExpirationLanguage,
+      has_continue_button: !!hasContinueButton,
+      mentions_session: mentionsSession,
+      mentions_expire: mentionsExpire,
+      mentions_inactive: mentionsInactive,
+      passed,
+      failed,
+      matched,
     };
   };
 
-  for (const dialog of dialogs) {
-    const text = normalize(dialog.innerText || dialog.textContent || "");
-    if (!hasHeadline(text) || !hasExpirationLanguage(text)) {
-      continue;
+  const summarizeElement = (el) => {
+    const tag = (el.tagName || "").toLowerCase();
+    const role = el.getAttribute("role") || "";
+    const className = (el.getAttribute("class") || "").replace(/\\s+/g, " ").trim().slice(0, 120);
+    const id = (el.getAttribute("id") || "").slice(0, 80);
+    const parts = [tag];
+    if (role) parts.push('role="' + role + '"');
+    if (id) parts.push("id=" + id);
+    if (className) parts.push("class=" + className);
+    return parts.join(" ");
+  };
+
+  const pushCandidate = (el, sourceType, out, seen) => {
+    if (!el || seen.has(el) || !isVisible(el)) return;
+    const text = normalize(el.innerText || el.textContent || "");
+    if (!text || !interestingSnippet(text)) return;
+    seen.add(el);
+    const buttons = collectButtons(el);
+    const hasContinue = buttons.continueButtons.length > 0;
+    const conditions = evaluateConditions(text, hasContinue);
+    out.push({
+      element: el,
+      continue_button: hasContinue ? buttons.continueButtons[0] : null,
+      source_type: sourceType,
+      role_tag_class_summary: summarizeElement(el),
+      text_snippet: text.slice(0, maxSnippet),
+      button_labels: buttons.labels,
+      conditions,
+      detector_matched: conditions.matched,
+    });
+  };
+
+  const collectFromRoot = (root, sourceType, out, seen) => {
+    if (!root) return;
+    let nodes = [];
+    try {
+      nodes = Array.from(root.querySelectorAll(containerSelector));
+    } catch (err) {
+      nodes = [];
     }
-    const buttons = Array.from(
-      dialog.querySelectorAll('button, [role="button"], input[type="button"], a')
-    ).filter(isVisible);
-    for (const button of buttons) {
-      const label = normalize(
-        button.innerText ||
-          button.textContent ||
-          button.getAttribute("value") ||
-          button.getAttribute("aria-label") ||
-          ""
-      );
-      if (label === "continue" || label.startsWith("continue ")) {
-        return markContinue(dialog, button);
+    for (const el of nodes) {
+      pushCandidate(el, sourceType, out, seen);
+    }
+
+    // Generic visible modal-like overlays (fixed/absolute) with keyword text.
+    let overlayNodes = [];
+    try {
+      overlayNodes = Array.from(root.querySelectorAll("div, section, aside, article"));
+    } catch (err) {
+      overlayNodes = [];
+    }
+    for (const el of overlayNodes) {
+      if (!isVisible(el)) continue;
+      let style;
+      try {
+        style = window.getComputedStyle(el);
+      } catch (err) {
+        continue;
+      }
+      const position = style.position;
+      if (position !== "fixed" && position !== "absolute") continue;
+      const z = parseInt(style.zIndex, 10);
+      if (!Number.isFinite(z) || z < 5) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 120 || rect.height < 60) continue;
+      pushCandidate(el, sourceType, out, seen);
+    }
+
+    let all = [];
+    try {
+      all = Array.from(root.querySelectorAll("*"));
+    } catch (err) {
+      all = [];
+    }
+    for (const el of all) {
+      if (el.shadowRoot) {
+        collectFromRoot(el.shadowRoot, "SHADOW_DOM", out, seen);
       }
     }
+  };
+
+  const candidates = [];
+  const seen = new Set();
+  collectFromRoot(document, defaultSourceType, candidates, seen);
+
+  if (diagnose) {
+    return {
+      detected: candidates.some((item) => item.detector_matched),
+      continue_token: null,
+      dialog_text: null,
+      candidates: candidates.slice(0, 40).map((item) => ({
+        source_type: item.source_type,
+        role_tag_class_summary: item.role_tag_class_summary,
+        text_snippet: item.text_snippet,
+        button_labels: item.button_labels,
+        detector_matched: item.detector_matched,
+        conditions: item.conditions,
+      })),
+    };
   }
-  return { detected: false, continue_token: null, dialog_text: null };
+
+  for (const item of candidates) {
+    if (!item.detector_matched || !item.continue_button) continue;
+    let token = null;
+    if (markContinue) {
+      token = "mighty-amex-continue-" + Date.now().toString(36);
+      item.continue_button.setAttribute("data-mighty-amex-continue", token);
+    }
+    return {
+      detected: true,
+      continue_token: token,
+      dialog_text: item.text_snippet.slice(0, 240),
+      source_type: item.source_type,
+      role_tag_class_summary: item.role_tag_class_summary,
+      candidates: [],
+    };
+  }
+  return {
+    detected: false,
+    continue_token: null,
+    dialog_text: null,
+    source_type: null,
+    role_tag_class_summary: null,
+    candidates: [],
+  };
 }
 """
+
+# Backward-compatible alias used by older call sites/tests.
+FIND_AMEX_EXPIRATION_DIALOG_JS = INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS
 
 PAGE_ACTIVITY_JS = """
 () => {
@@ -414,17 +613,59 @@ def classify_amex(
     return "LOGIN_UNKNOWN", "Verification completed without definitive evidence"
 
 
-def expiration_dialog_criteria_met(dialog_text: str, *, has_continue_button: bool) -> bool:
-    """Return True only when conservative Amex expiration-dialog criteria match."""
-    if not has_continue_button:
-        return False
+def evaluate_expiration_dialog_conditions(
+    dialog_text: str,
+    *,
+    has_continue_button: bool,
+) -> dict[str, Any]:
+    """Evaluate conservative Amex expiration-dialog conditions for diagnostics."""
     lowered = " ".join((dialog_text or "").lower().split())
     has_headline = any(phrase in lowered for phrase in EXPIRATION_HEADLINE_PHRASES)
     mentions_session = "session" in lowered
     mentions_expire = "expir" in lowered
     mentions_inactive = "inactiv" in lowered
     has_expiration_language = mentions_session and (mentions_expire or mentions_inactive)
-    return has_headline and has_expiration_language
+    matched = bool(has_headline and has_expiration_language and has_continue_button)
+    passed: list[str] = []
+    failed: list[str] = []
+    (passed if has_headline else failed).append("has_headline")
+    (passed if has_expiration_language else failed).append("has_expiration_language")
+    (passed if has_continue_button else failed).append("has_continue_button")
+    return {
+        "has_headline": has_headline,
+        "has_expiration_language": has_expiration_language,
+        "has_continue_button": bool(has_continue_button),
+        "mentions_session": mentions_session,
+        "mentions_expire": mentions_expire,
+        "mentions_inactive": mentions_inactive,
+        "passed": passed,
+        "failed": failed,
+        "matched": matched,
+    }
+
+
+def expiration_dialog_criteria_met(dialog_text: str, *, has_continue_button: bool) -> bool:
+    """Return True only when conservative Amex expiration-dialog criteria match."""
+    return bool(
+        evaluate_expiration_dialog_conditions(
+            dialog_text,
+            has_continue_button=has_continue_button,
+        )["matched"]
+    )
+
+
+def snippet_is_expiration_candidate(text: str) -> bool:
+    lowered = " ".join((text or "").lower().split())
+    return any(keyword in lowered for keyword in EXPIRATION_SNIPPET_KEYWORDS)
+
+
+def sanitize_expiration_snippet(text: str | None) -> str | None:
+    if not text:
+        return None
+    lowered = " ".join(str(text).lower().split())
+    if not snippet_is_expiration_candidate(lowered):
+        return None
+    return lowered[:EXPIRATION_SNIPPET_MAX_CHARS]
 
 
 def select_amex_page(
@@ -447,39 +688,203 @@ def select_amex_page(
     return context.new_page()
 
 
-def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
-    """Inspect the page for a genuine Amex inactivity-expiration dialog."""
+def _iter_page_frames(page: Page) -> list[Any]:
+    """Return page frames, falling back to the page itself for simple mocks."""
     try:
-        payload = page.evaluate(FIND_AMEX_EXPIRATION_DIALOG_JS)
+        frames = page.frames
     except Exception:
-        return {"detected": False, "continue_token": None, "dialog_text": None}
+        return [page]
+    if frames is None:
+        return [page]
+    try:
+        frame_list = list(frames)
+    except TypeError:
+        return [page]
+    return frame_list or [page]
+
+
+def _evaluate_expiration_in_frame(
+    frame: Any,
+    *,
+    diagnose: bool,
+    mark_continue: bool,
+    default_source_type: str,
+) -> dict[str, Any]:
+    try:
+        payload = frame.evaluate(
+            INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS,
+            {
+                "diagnose": diagnose,
+                "mark_continue": mark_continue,
+                "default_source_type": default_source_type,
+            },
+        )
+    except TypeError:
+        # Older mocks/callers may stub evaluate() without an argument payload.
+        try:
+            payload = frame.evaluate(INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS)
+        except Exception:
+            return {
+                "detected": False,
+                "continue_token": None,
+                "dialog_text": None,
+                "candidates": [],
+            }
+    except Exception:
+        return {
+            "detected": False,
+            "continue_token": None,
+            "dialog_text": None,
+            "candidates": [],
+        }
     if not isinstance(payload, dict):
-        return {"detected": False, "continue_token": None, "dialog_text": None}
-    detected = bool(payload.get("detected"))
-    dialog_text = payload.get("dialog_text") or ""
-    continue_token = payload.get("continue_token")
-    if detected and not expiration_dialog_criteria_met(
-        str(dialog_text),
-        has_continue_button=bool(continue_token),
-    ):
-        return {"detected": False, "continue_token": None, "dialog_text": None}
+        return {
+            "detected": False,
+            "continue_token": None,
+            "dialog_text": None,
+            "candidates": [],
+        }
+    return payload
+
+
+def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
+    """Inspect main frame, child frames, and open shadow roots for the dialog."""
+    frames = _iter_page_frames(page)
+    main_frame = getattr(page, "main_frame", None)
+    for frame in frames:
+        is_main = main_frame is not None and frame is main_frame
+        if main_frame is None and frame is page:
+            is_main = True
+        payload = _evaluate_expiration_in_frame(
+            frame,
+            diagnose=False,
+            mark_continue=True,
+            default_source_type="DOM" if is_main else "IFRAME",
+        )
+        detected = bool(payload.get("detected"))
+        dialog_text = payload.get("dialog_text") or ""
+        continue_token = payload.get("continue_token")
+        if detected and expiration_dialog_criteria_met(
+            str(dialog_text),
+            has_continue_button=bool(continue_token),
+        ):
+            return {
+                "detected": True,
+                "continue_token": continue_token,
+                "dialog_text": sanitize_expiration_snippet(str(dialog_text)),
+                "source_type": payload.get("source_type"),
+                "role_tag_class_summary": payload.get("role_tag_class_summary"),
+            }
     return {
-        "detected": detected,
-        "continue_token": continue_token,
-        "dialog_text": dialog_text if detected else None,
+        "detected": False,
+        "continue_token": None,
+        "dialog_text": None,
+        "source_type": None,
+        "role_tag_class_summary": None,
+    }
+
+
+def diagnose_amex_expiration_dialog_on_page(page: Page) -> dict[str, Any]:
+    """Developer diagnostic: enumerate sanitized modal candidates across frames."""
+    frames = _iter_page_frames(page)
+    main_frame = getattr(page, "main_frame", None)
+    frame_reports: list[dict[str, Any]] = []
+    flat_candidates: list[dict[str, Any]] = []
+
+    for frame in frames:
+        is_main = main_frame is not None and frame is main_frame
+        if main_frame is None and frame is page:
+            is_main = True
+        try:
+            frame_url = sanitize_url(getattr(frame, "url", None))
+        except Exception:
+            frame_url = None
+        payload = _evaluate_expiration_in_frame(
+            frame,
+            diagnose=True,
+            mark_continue=False,
+            default_source_type="DOM" if is_main else "IFRAME",
+        )
+        candidates_out: list[dict[str, Any]] = []
+        for raw in payload.get("candidates") or []:
+            if not isinstance(raw, dict):
+                continue
+            snippet = sanitize_expiration_snippet(raw.get("text_snippet"))
+            if not snippet:
+                continue
+            button_labels = [
+                " ".join(str(label).lower().split())[:80]
+                for label in (raw.get("button_labels") or [])
+                if label
+            ][:12]
+            conditions = raw.get("conditions")
+            if not isinstance(conditions, dict):
+                conditions = evaluate_expiration_dialog_conditions(
+                    snippet,
+                    has_continue_button=any(
+                        label == "continue" or label.startswith("continue ")
+                        for label in button_labels
+                    ),
+                )
+            candidate = {
+                "frame_url": frame_url,
+                "source_type": raw.get("source_type")
+                or ("DOM" if is_main else "IFRAME"),
+                "role_tag_class_summary": str(raw.get("role_tag_class_summary") or "")[:200],
+                "text_snippet": snippet,
+                "button_labels": button_labels,
+                "detector_matched": bool(
+                    raw.get("detector_matched")
+                    or conditions.get("matched")
+                ),
+                "conditions": {
+                    "has_headline": bool(conditions.get("has_headline")),
+                    "has_expiration_language": bool(
+                        conditions.get("has_expiration_language")
+                    ),
+                    "has_continue_button": bool(conditions.get("has_continue_button")),
+                    "passed": list(conditions.get("passed") or []),
+                    "failed": list(conditions.get("failed") or []),
+                },
+            }
+            candidates_out.append(candidate)
+            flat_candidates.append(candidate)
+        frame_reports.append(
+            {
+                "url": frame_url,
+                "is_main": bool(is_main),
+                "candidate_count": len(candidates_out),
+                "candidates": candidates_out,
+            }
+        )
+
+    return {
+        "page_url": sanitize_url(getattr(page, "url", None)),
+        "frame_count": len(frame_reports),
+        "candidate_count": len(flat_candidates),
+        "detector_matched": any(item.get("detector_matched") for item in flat_candidates),
+        "frames": frame_reports,
+        "candidates": flat_candidates,
     }
 
 
 def click_expiration_continue(page: Page, continue_token: str) -> bool:
     """Click the Continue button marked inside the validated expiration dialog."""
-    locator = page.locator(f'[data-mighty-amex-continue="{continue_token}"]')
-    try:
-        if locator.count() < 1 or not locator.first.is_visible():
-            return False
-        locator.first.click(timeout=5_000)
-        return True
-    except Exception:
-        return False
+    selector = f'[data-mighty-amex-continue="{continue_token}"]'
+    targets: list[Any] = [page]
+    for frame in _iter_page_frames(page):
+        if frame is not page:
+            targets.append(frame)
+    for target in targets:
+        try:
+            locator = target.locator(selector)
+            if locator.count() < 1 or not locator.first.is_visible():
+                continue
+            locator.first.click(timeout=5_000)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def wait_for_expiration_dialog_close(page: Page, timeout_seconds: float) -> bool:
@@ -1125,6 +1530,65 @@ class ProviderRuntime:
             self.write_state()
             return self.last_result
 
+    def diagnose_expiration_dialog(self, provider: str = "amex") -> dict[str, Any]:
+        """Developer-only CDP inspection of expiration-dialog candidates."""
+        if provider != "amex":
+            raise ValueError(f"Unsupported provider: {provider}")
+        with self.lock:
+            if not self.cdp_url:
+                raise RuntimeError("Provider runtime is not started")
+            cdp_url = self.cdp_url
+            with sync_playwright() as playwright:
+                browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+                if not browser.contexts:
+                    raise RuntimeError("Chrome exposed no persistent browser context")
+                context = browser.contexts[0]
+                pages = list(context.pages)
+                selected = select_amex_page(context, create_if_missing=False)
+                ordered_pages: list[Page] = []
+                if selected is not None:
+                    ordered_pages.append(selected)
+                for page in pages:
+                    if selected is None or page is not selected:
+                        ordered_pages.append(page)
+
+                page_reports: list[dict[str, Any]] = []
+                all_candidates: list[dict[str, Any]] = []
+                selected_url = sanitize_url(selected.url) if selected is not None else None
+                frame_count = 0
+
+                for page in ordered_pages:
+                    report = diagnose_amex_expiration_dialog_on_page(page)
+                    page_url = report.get("page_url")
+                    is_selected = selected is not None and page is selected
+                    if is_selected:
+                        selected_url = page_url or selected_url
+                    frame_count += int(report.get("frame_count") or 0)
+                    candidates = list(report.get("candidates") or [])
+                    all_candidates.extend(candidates)
+                    page_reports.append(
+                        {
+                            "url": page_url,
+                            "selected": is_selected,
+                            "frame_count": report.get("frame_count"),
+                            "candidate_count": report.get("candidate_count"),
+                            "frames": report.get("frames") or [],
+                        }
+                    )
+
+                return {
+                    "ok": True,
+                    "selected_page_url": selected_url,
+                    "page_count": len(pages),
+                    "frame_count": frame_count,
+                    "candidate_count": len(all_candidates),
+                    "detector_matched": any(
+                        item.get("detector_matched") for item in all_candidates
+                    ),
+                    "pages": page_reports,
+                    "candidates": all_candidates[:80],
+                }
+
     def _append_keepalive_event(self, event: dict[str, Any]) -> None:
         cleaned = sanitize_keepalive_event(event)
         self.keepalive_events.append(cleaned)
@@ -1611,6 +2075,16 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                     {"ok": False, "error": str(exc)},
                 )
             return
+        if self.path == "/providers/amex/diagnostics/inspect-expiration-dialog":
+            try:
+                payload = self.server.runtime.diagnose_expiration_dialog("amex")
+                self._send_json(HTTPStatus.OK, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"ok": False, "error": str(exc)},
+                )
+            return
         if self.path == "/shutdown":
             self._send_json(HTTPStatus.OK, {"ok": True})
             threading.Thread(target=self.server.shutdown, daemon=True).start()
@@ -1774,6 +2248,12 @@ def parse_args() -> argparse.Namespace:
 
     keepalive_stop = subparsers.add_parser("keepalive-stop")
     keepalive_stop.add_argument("provider", choices=("amex",))
+
+    inspect_expiration = subparsers.add_parser(
+        "inspect-expiration-dialog",
+        help="Developer-only CDP diagnostic for Amex expiration-dialog candidates",
+    )
+    inspect_expiration.add_argument("provider", choices=("amex",))
     return parser.parse_args()
 
 
@@ -1826,6 +2306,16 @@ def main() -> int:
         payload = request_json(
             "POST",
             f"http://{args.host}:{args.port}/providers/{args.provider}/keepalive/stop",
+        )
+        print(json.dumps(payload, indent=2))
+        return 0 if payload.get("ok") else 1
+    if args.command == "inspect-expiration-dialog":
+        payload = request_json(
+            "POST",
+            (
+                f"http://{args.host}:{args.port}/providers/"
+                f"{args.provider}/diagnostics/inspect-expiration-dialog"
+            ),
         )
         print(json.dumps(payload, indent=2))
         return 0 if payload.get("ok") else 1
