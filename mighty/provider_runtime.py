@@ -15,6 +15,7 @@ Commands:
     python scripts/provider_runtime.py keepalive-stop amex
     python scripts/provider_runtime.py browser-inspect amex
     python scripts/provider_runtime.py browser-inspect-debug amex
+    python scripts/provider_runtime.py browser-find-text amex "expire"
     python scripts/provider_runtime.py inspect-expiration-dialog amex
 
 Lifecycle:
@@ -2547,6 +2548,512 @@ def format_browser_inspect_debug_report(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+FIND_TEXT_SNIPPET_MAX_CHARS = 200
+FIND_TEXT_MAX_MATCHES = 40
+FIND_TEXT_PARENT_CHAIN_MAX = 5
+FIND_TEXT_ACTION_DESCENDANT_MAX = 12
+
+
+def _explorer_tag_label(node: dict[str, Any] | None) -> str:
+    if not node:
+        return "?"
+    name = str(node.get("nodeName") or "").lower()
+    if not name or name.startswith("#"):
+        return name or "?"
+    attrs = _attrs_list_to_dict(node.get("attributes"))
+    class_summary = _class_summary_from_attrs(attrs)
+    node_id_attr = attrs.get("id")
+    parts = [name]
+    if node_id_attr:
+        parts.append(f"#{node_id_attr}")
+    if class_summary:
+        first_class = class_summary.split()[0]
+        parts.append(f".{first_class}")
+    return "".join(parts) if len(parts) == 1 else f"{parts[0]}{''.join(parts[1:])}"
+
+
+def _build_explorer_index(
+    node: dict[str, Any],
+    index: dict[int, dict[str, Any]],
+    *,
+    parent_backend_id: int | None = None,
+    shadow_root_depth: int = 0,
+    iframe_depth: int = 0,
+    frame_url: str | None = None,
+    frame_id: str | None = None,
+    frame_url_by_id: dict[str, str | None] | None = None,
+) -> None:
+    """Index pierced DOM for developer text search (depths + frame URLs)."""
+    url_by_id = frame_url_by_id or {}
+    backend_id = node.get("backendNodeId")
+    node_id = node.get("nodeId")
+    current_frame_id = node.get("frameId") or frame_id
+    current_frame_url = frame_url
+    if current_frame_id and current_frame_id in url_by_id:
+        current_frame_url = url_by_id.get(current_frame_id) or current_frame_url
+
+    if backend_id is not None:
+        backend_int = int(backend_id)
+        attrs = _attrs_list_to_dict(node.get("attributes"))
+        index[backend_int] = {
+            "node": node,
+            "node_id": int(node_id) if node_id is not None else None,
+            "parent_backend_id": parent_backend_id,
+            "backend_node_id": backend_int,
+            "node_name": str(node.get("nodeName") or ""),
+            "node_type": node.get("nodeType"),
+            "attributes": attrs,
+            "frame_id": current_frame_id,
+            "frame_url": current_frame_url,
+            "shadow_root_depth": int(shadow_root_depth),
+            "iframe_depth": int(iframe_depth),
+            "node_value": node.get("nodeValue"),
+        }
+        current_parent = backend_int
+    else:
+        current_parent = parent_backend_id
+
+    for child in node.get("children") or []:
+        if isinstance(child, dict):
+            _build_explorer_index(
+                child,
+                index,
+                parent_backend_id=current_parent,
+                shadow_root_depth=shadow_root_depth,
+                iframe_depth=iframe_depth,
+                frame_url=current_frame_url,
+                frame_id=current_frame_id,
+                frame_url_by_id=url_by_id,
+            )
+    for shadow in node.get("shadowRoots") or []:
+        if isinstance(shadow, dict):
+            _build_explorer_index(
+                shadow,
+                index,
+                parent_backend_id=current_parent,
+                shadow_root_depth=shadow_root_depth + 1,
+                iframe_depth=iframe_depth,
+                frame_url=current_frame_url,
+                frame_id=current_frame_id,
+                frame_url_by_id=url_by_id,
+            )
+    content = node.get("contentDocument")
+    if isinstance(content, dict):
+        content_frame_id = content.get("frameId") or current_frame_id
+        content_frame_url = url_by_id.get(content_frame_id) if content_frame_id else None
+        _build_explorer_index(
+            content,
+            index,
+            parent_backend_id=current_parent,
+            shadow_root_depth=shadow_root_depth,
+            iframe_depth=iframe_depth + 1,
+            frame_url=content_frame_url or current_frame_url,
+            frame_id=content_frame_id,
+            frame_url_by_id=url_by_id,
+        )
+
+
+def _parent_chain_for_backend(
+    index: dict[int, dict[str, Any]],
+    backend_node_id: int,
+    *,
+    limit: int = FIND_TEXT_PARENT_CHAIN_MAX,
+) -> list[str]:
+    chain: list[str] = []
+    current: int | None = index.get(backend_node_id, {}).get("parent_backend_id")
+    seen: set[int] = set()
+    while current is not None and current not in seen and len(chain) < limit:
+        seen.add(current)
+        info = index.get(current) or {}
+        chain.append(_explorer_tag_label(info.get("node")))
+        current = info.get("parent_backend_id")
+    return chain
+
+
+def _ancestor_distance(
+    index: dict[int, dict[str, Any]],
+    backend_node_id: int,
+) -> int:
+    distance = 0
+    current: int | None = index.get(backend_node_id, {}).get("parent_backend_id")
+    seen: set[int] = set()
+    while current is not None and current not in seen:
+        seen.add(current)
+        distance += 1
+        current = (index.get(current) or {}).get("parent_backend_id")
+    return distance
+
+
+def _nearest_element_backend(
+    index: dict[int, dict[str, Any]],
+    backend_node_id: int,
+) -> int | None:
+    current: int | None = backend_node_id
+    seen: set[int] = set()
+    while current is not None and current not in seen:
+        seen.add(current)
+        info = index.get(current) or {}
+        node_type = info.get("node_type")
+        name = str(info.get("node_name") or "").upper()
+        if node_type == 1 or (name and not name.startswith("#")):
+            return current
+        current = info.get("parent_backend_id")
+    return None
+
+
+def _collect_action_descendants(
+    node: dict[str, Any],
+    *,
+    ax_name_by_backend: dict[int, str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    buttons: list[dict[str, Any]] = []
+    links: list[str] = []
+
+    def walk(current: dict[str, Any]) -> None:
+        if (
+            len(buttons) >= FIND_TEXT_ACTION_DESCENDANT_MAX
+            and len(links) >= FIND_TEXT_ACTION_DESCENDANT_MAX
+        ):
+            return
+        name = str(current.get("nodeName") or "").lower()
+        backend_id = current.get("backendNodeId")
+        if name in {"button", "a"} or (
+            name
+            and _attrs_list_to_dict(current.get("attributes")).get("role") == "button"
+        ):
+            info = {
+                "node": current,
+                "backend_node_id": int(backend_id) if backend_id is not None else None,
+                "attributes": _attrs_list_to_dict(current.get("attributes")),
+                "node_name": name,
+            }
+            label = _action_label_from_node(info, ax_name_by_backend=ax_name_by_backend)
+            if label:
+                if name == "a":
+                    if len(links) < FIND_TEXT_ACTION_DESCENDANT_MAX:
+                        links.append(label)
+                elif len(buttons) < FIND_TEXT_ACTION_DESCENDANT_MAX:
+                    buttons.append(
+                        {
+                            "label": label,
+                            "backend_node_id": info.get("backend_node_id"),
+                        }
+                    )
+        for child in current.get("children") or []:
+            if isinstance(child, dict):
+                walk(child)
+        for shadow in current.get("shadowRoots") or []:
+            if isinstance(shadow, dict):
+                walk(shadow)
+
+    walk(node)
+    return buttons, links
+
+
+def _match_sort_key(match: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        0 if match.get("exact_match") else 1,
+        0 if match.get("match_source") == "ax_name" else 1,
+        0 if match.get("match_source") == "dom_text" else 1,
+        int(match.get("ancestor_distance") or 0),
+        str(match.get("tag_name") or ""),
+        int(match.get("backend_node_id") or 0),
+    )
+
+
+def _build_text_match_record(
+    session: Any,
+    *,
+    index: dict[int, dict[str, Any]],
+    backend_node_id: int,
+    matched_text: str,
+    match_source: str,
+    query: str,
+    ax_name_by_backend: dict[int, str],
+    ax_role_by_backend: dict[int, str],
+) -> dict[str, Any] | None:
+    element_backend = _nearest_element_backend(index, backend_node_id)
+    if element_backend is None:
+        return None
+    info = index.get(element_backend) or {}
+    node = info.get("node") or {}
+    attrs = dict(info.get("attributes") or {})
+    role = (attrs.get("role") or "").strip() or None
+    if element_backend in ax_role_by_backend:
+        role = role or ax_role_by_backend[element_backend]
+    accessible_name = ax_name_by_backend.get(element_backend)
+    if not accessible_name:
+        accessible_name = _normalize_text(
+            attrs.get("aria-label") or attrs.get("title") or ""
+        ) or None
+    text_snippet = _collect_text_from_dom_node(node, limit=FIND_TEXT_SNIPPET_MAX_CHARS)
+    if not text_snippet and accessible_name:
+        text_snippet = accessible_name[:FIND_TEXT_SNIPPET_MAX_CHARS]
+    buttons, links = _collect_action_descendants(
+        node,
+        ax_name_by_backend=ax_name_by_backend,
+    )
+    geometry = None
+    try:
+        geometry = _box_from_model(get_node_box_model(session, element_backend))
+    except Exception:
+        geometry = None
+
+    query_norm = _normalize_text(query)
+    haystacks = [
+        _normalize_text(matched_text),
+        _normalize_text(accessible_name or ""),
+        _normalize_text(text_snippet or ""),
+    ]
+    exact_match = any(h == query_norm for h in haystacks if h)
+
+    return {
+        "frame_url": sanitize_url(info.get("frame_url")),
+        "backend_node_id": element_backend,
+        "node_id": info.get("node_id"),
+        "tag_name": str(info.get("node_name") or "").lower() or None,
+        "role": role,
+        "accessible_name": (accessible_name[:120] if accessible_name else None),
+        "class_summary": _class_summary_from_attrs(attrs),
+        "text_snippet": text_snippet or None,
+        "matched_text": _normalize_text(matched_text)[:FIND_TEXT_SNIPPET_MAX_CHARS],
+        "match_source": match_source,
+        "parent_chain": _parent_chain_for_backend(index, element_backend),
+        "shadow_root_depth": int(info.get("shadow_root_depth") or 0),
+        "iframe_depth": int(info.get("iframe_depth") or 0),
+        "attributes": {
+            "role": attrs.get("role"),
+            "aria-modal": attrs.get("aria-modal"),
+            "aria-label": attrs.get("aria-label"),
+            "id": attrs.get("id"),
+            "class": attrs.get("class"),
+        },
+        "button_descendants": buttons,
+        "link_descendants": links,
+        "geometry": geometry,
+        "exact_match": exact_match,
+        "ancestor_distance": _ancestor_distance(index, element_backend),
+    }
+
+
+def find_text_in_page_cdp(
+    page: Page,
+    query: str,
+) -> dict[str, Any]:
+    """Developer-only: locate substring matches via CDP DOM/AX (no evaluate)."""
+    needle = _normalize_text(query)
+    page_url = sanitize_url(getattr(page, "url", None))
+    if not needle:
+        return {
+            "ok": False,
+            "query": query,
+            "selected_page_url": page_url,
+            "match_count": 0,
+            "matches": [],
+            "error": "empty_query",
+        }
+
+    session = None
+    try:
+        session = open_page_cdp_session(page)
+        enable_inspection_domains(session)
+        try:
+            frame_tree = get_frame_tree(session)
+            frame_entries = _frame_entries_from_tree(frame_tree)
+        except Exception:
+            frame_entries = [{"frame_id": None, "frame_url": page_url}]
+        frame_url_by_id = {
+            str(entry["frame_id"]): entry.get("frame_url")
+            for entry in frame_entries
+            if entry.get("frame_id")
+        }
+        document_payload = get_pierced_document(session)
+        root = document_payload.get("root") or {}
+        index: dict[int, dict[str, Any]] = {}
+        if isinstance(root, dict):
+            _build_explorer_index(
+                root,
+                index,
+                frame_url=page_url,
+                frame_url_by_id=frame_url_by_id,
+            )
+
+        ax_name_by_backend: dict[int, str] = {}
+        ax_role_by_backend: dict[int, str] = {}
+        try:
+            ax_tree = get_accessibility_tree(session)
+            ax_name_by_backend, ax_role_by_backend, _dialog_backends = _build_ax_maps(
+                ax_tree
+            )
+        except Exception:
+            ax_tree = {"nodes": []}
+
+        raw_matches: list[dict[str, Any]] = []
+        seen_keys: set[tuple[Any, ...]] = set()
+
+        def add_match(
+            *,
+            backend_node_id: int | None,
+            matched_text: str,
+            match_source: str,
+        ) -> None:
+            if backend_node_id is None:
+                return
+            record = _build_text_match_record(
+                session,
+                index=index,
+                backend_node_id=int(backend_node_id),
+                matched_text=matched_text,
+                match_source=match_source,
+                query=query,
+                ax_name_by_backend=ax_name_by_backend,
+                ax_role_by_backend=ax_role_by_backend,
+            )
+            if record is None:
+                return
+            key = (
+                record.get("backend_node_id"),
+                record.get("match_source"),
+                record.get("matched_text"),
+            )
+            if key in seen_keys:
+                return
+            seen_keys.add(key)
+            raw_matches.append(record)
+
+        # DOM text nodes in pierced tree (main + shadow + accessible iframes).
+        for backend_id, info in list(index.items()):
+            if info.get("node_type") != 3:
+                continue
+            value = str(info.get("node_value") or "")
+            normalized = _normalize_text(value)
+            if needle not in normalized:
+                continue
+            add_match(
+                backend_node_id=backend_id,
+                matched_text=normalized,
+                match_source="dom_text",
+            )
+
+        # Accessibility names (may surface text not present as DOM text nodes).
+        for backend_id, name in ax_name_by_backend.items():
+            normalized = _normalize_text(name)
+            if needle not in normalized:
+                continue
+            add_match(
+                backend_node_id=backend_id,
+                matched_text=normalized,
+                match_source="ax_name",
+            )
+
+        ordered = sorted(raw_matches, key=_match_sort_key)
+        truncated = len(ordered) > FIND_TEXT_MAX_MATCHES
+        matches = ordered[:FIND_TEXT_MAX_MATCHES]
+        return {
+            "ok": True,
+            "query": query,
+            "selected_page_url": page_url,
+            "match_count": len(matches),
+            "matches": matches,
+            "truncated": truncated,
+            "collector": "cdp_dom_ax_text_search",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "query": query,
+            "selected_page_url": page_url,
+            "match_count": 0,
+            "matches": [],
+            "error": f"{type(exc).__name__}: {exc}",
+            "exception_class": type(exc).__name__,
+            "traceback": traceback.format_exc(),
+        }
+    finally:
+        _safe_detach_cdp_session(session)
+
+
+def find_text_in_browser_context(
+    context: BrowserContext,
+    query: str,
+    *,
+    provider: str = "amex",
+    select_page_fn: Any = None,
+) -> dict[str, Any]:
+    """Run developer text search against the selected provider page."""
+    selector = select_page_fn or (
+        select_amex_page if provider == "amex" else select_provider_page
+    )
+    if select_page_fn is None and provider == "amex":
+        selected = select_amex_page(context, create_if_missing=False)
+    elif select_page_fn is None:
+        selected = None
+    else:
+        selected = selector(context, create_if_missing=False)
+    if selected is None:
+        return {
+            "ok": False,
+            "query": query,
+            "selected_page_url": None,
+            "match_count": 0,
+            "matches": [],
+            "error": "no_provider_page_selected",
+        }
+    return find_text_in_page_cdp(selected, query)
+
+
+def format_browser_find_text_report(payload: dict[str, Any]) -> str:
+    """Render browser-find-text matches as a human-readable report."""
+    lines: list[str] = []
+    lines.append(f"query={payload.get('query')!r}")
+    lines.append(f"selected_page_url={payload.get('selected_page_url')!r}")
+    lines.append(f"match_count={payload.get('match_count', 0)}")
+    if payload.get("error"):
+        lines.append(f"error={payload.get('error')}")
+    lines.append("")
+    matches = payload.get("matches") or []
+    if not matches:
+        lines.append("NO MATCHES")
+        return "\n".join(lines) + "\n"
+    for index, match in enumerate(matches, start=1):
+        lines.append(f"MATCH {index}")
+        lines.append(f"frame:\n{match.get('frame_url')}")
+        lines.append(f"backend_node_id:\n{match.get('backend_node_id')}")
+        lines.append(f"node_id:\n{match.get('node_id')}")
+        lines.append(f"tag:\n{match.get('tag_name')}")
+        lines.append(f"role:\n{match.get('role')}")
+        lines.append(f"accessible_name:\n{match.get('accessible_name')}")
+        lines.append(f"class:\n{match.get('class_summary')}")
+        lines.append(f"match_source:\n{match.get('match_source')}")
+        lines.append(f"matched_text:\n{match.get('matched_text')}")
+        lines.append(f"text:\n{match.get('text_snippet')}")
+        lines.append("parent chain:")
+        for item in match.get("parent_chain") or []:
+            lines.append(f"  {item}")
+        lines.append(f"shadow_root_depth:\n{match.get('shadow_root_depth')}")
+        lines.append(f"iframe_depth:\n{match.get('iframe_depth')}")
+        attrs = match.get("attributes") or {}
+        lines.append("attributes:")
+        for key in ("role", "aria-modal", "aria-label", "id", "class"):
+            lines.append(f"  {key}: {attrs.get(key)}")
+        lines.append("buttons:")
+        buttons = match.get("button_descendants") or []
+        if not buttons:
+            lines.append("  (none)")
+        for button in buttons:
+            lines.append(
+                f"  {button.get('label')}  backend_node_id={button.get('backend_node_id')}"
+            )
+        lines.append("links:")
+        links = match.get("link_descendants") or []
+        if not links:
+            lines.append("  (none)")
+        for link in links:
+            lines.append(f"  {link}")
+        lines.append(f"geometry:\n{match.get('geometry')}")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
 
 def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
     """Use Browser Inspector + Amex classifier to find the expiration dialog."""
@@ -3429,6 +3936,25 @@ class ProviderRuntime:
                 context = browser.contexts[0]
                 return debug_inspect_browser_context(context, provider=provider)
 
+    def find_browser_text(self, provider: str, query: str) -> dict[str, Any]:
+        """Developer-only DOM text explorer over the live provider session."""
+        if provider != "amex":
+            raise ValueError(f"Unsupported provider: {provider}")
+        with self.lock:
+            if not self.cdp_url:
+                raise RuntimeError("Provider runtime is not started")
+            cdp_url = self.cdp_url
+            with sync_playwright() as playwright:
+                browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+                if not browser.contexts:
+                    raise RuntimeError("Chrome exposed no persistent browser context")
+                context = browser.contexts[0]
+                return find_text_in_browser_context(
+                    context,
+                    query,
+                    provider=provider,
+                )
+
     def diagnose_expiration_dialog(self, provider: str = "amex") -> dict[str, Any]:
         """Backward-compatible diagnostic wrapper over Browser Inspector."""
         payload = self.inspect_browser(provider, capture_screenshot=False)
@@ -4034,6 +4560,24 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                     },
                 )
             return
+        if self.path == "/providers/amex/diagnostics/browser-find-text":
+            try:
+                body = self._read_json_body()
+                query = str(body.get("query") or "")
+                payload = self.server.runtime.find_browser_text("amex", query)
+                status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.BAD_REQUEST
+                self._send_json(status, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "exception_class": type(exc).__name__,
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+            return
         if self.path == "/providers/amex/diagnostics/inspect-expiration-dialog":
             try:
                 payload = self.server.runtime.diagnose_expiration_dialog("amex")
@@ -4225,11 +4769,24 @@ def parse_args() -> argparse.Namespace:
     browser_inspect_debug = subparsers.add_parser(
         "browser-inspect-debug",
         help=(
-            "Temporary developer probe: print every page/frame evaluate result "
+            "Temporary developer probe: print CDP capability results "
             "and stop on the first failure with traceback"
         ),
     )
     browser_inspect_debug.add_argument("provider", choices=("amex",))
+
+    browser_find_text = subparsers.add_parser(
+        "browser-find-text",
+        help=(
+            "Developer-only DOM explorer: find where search text occurs via CDP "
+            "(no dialog classification)"
+        ),
+    )
+    browser_find_text.add_argument("provider", choices=("amex",))
+    browser_find_text.add_argument(
+        "query",
+        help='Case-insensitive substring to locate (e.g. "expire")',
+    )
 
     inspect_expiration = subparsers.add_parser(
         "inspect-expiration-dialog",
@@ -4328,6 +4885,17 @@ def main() -> int:
                 )
         else:
             print(json.dumps(payload, indent=2))
+        return 0 if payload.get("ok") else 1
+    if args.command == "browser-find-text":
+        payload = request_json(
+            "POST",
+            (
+                f"http://{args.host}:{args.port}/providers/"
+                f"{args.provider}/diagnostics/browser-find-text"
+            ),
+            {"query": str(args.query)},
+        )
+        print(format_browser_find_text_report(payload))
         return 0 if payload.get("ok") else 1
     if args.command == "inspect-expiration-dialog":
         payload = request_json(
