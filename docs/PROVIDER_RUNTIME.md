@@ -152,13 +152,10 @@ maintenance watcher thread. That watcher:
 - polls about every 3 seconds over the existing CDP endpoint;
 - prefers an existing page whose hostname ends with `americanexpress.com`;
 - never creates a page merely to watch, and never calls `browser.close()`;
-- detects the genuine expiration dialog only when all of these are visible in
-  the same dialog/modal:
-  - text like “Your session is about to expire”;
-  - language referring to session expiration or inactivity;
-  - a **Continue** button inside that dialog;
-- records `maintenance_started`, clicks Continue, waits up to 10 seconds for the
-  dialog to disappear, then runs canonical verification;
+- uses Browser Inspector candidates plus the Amex expiration classifier;
+- clicks **Continue** only inside the exact classified candidate;
+- records `maintenance_started`, waits up to 10 seconds for the dialog to
+  disappear, then runs canonical verification;
 - records success only when verification returns `SIGNED_IN`.
 
 Maintenance outcomes:
@@ -184,31 +181,93 @@ Run one immediate inspection without starting a second watcher:
 curl -X POST http://127.0.0.1:8765/providers/amex/maintenance/check
 ```
 
-### Developer expiration-dialog inspection
+### Browser Inspector
 
-When a keepalive trial fails to see a visible Amex expiration modal, run the
-sanitized CDP diagnostic. It enumerates pages, frames, open shadow roots, and
-generic modal candidates (not only `role="dialog"`), without saving full HTML or
-account data.
+The Browser Inspector is a reusable, provider-agnostic view of what the attached
+browser is visibly rendering. It does **not** own provider-specific meaning.
 
-```bash
-.venv/bin/python scripts/provider_runtime.py inspect-expiration-dialog amex
+```text
+Provider Runtime
+    ↓
+Browser Inspector
+    ├── pages
+    ├── frames
+    ├── visible modal candidates
+    ├── visible controls
+    ├── accessible open shadow roots
+    └── sanitized screenshots/diagnostics metadata
 ```
 
-Or:
+Responsibilities:
 
-```bash
-curl -X POST http://127.0.0.1:8765/providers/amex/diagnostics/inspect-expiration-dialog
+- select the best provider page with a generic hostname/preference helper;
+- inspect the selected page’s main frame, nested child frames, and open shadow
+  roots without failing the whole run when one context is inaccessible;
+- emit bounded `InspectionCandidate` records for visible modal-like containers
+  (not every page shell), including `role="dialog"`, `aria-modal`, substantial
+  fixed/absolute overlays, high z-index layers, actionable controls, and
+  modal-related text;
+- deduplicate nested candidates so the outer useful container wins;
+- keep text snippets ≤300 characters and mask runs of 6+ digits as
+  `[REDACTED_NUMBER]`;
+- never persist credentials, cookies, authorization headers, request/response
+  bodies, full HTML, balances, card numbers, transaction values, or full query
+  strings.
+
+Amex-specific expiration classification consumes inspector output in a separate
+classifier. A candidate is the Amex expiration dialog only when:
+
+- headline text is a close equivalent of “Your session is about to expire”;
+- text mentions inactivity or expiration;
+- visible actions include **Continue**;
+- text/actions also include Log Out or equivalent session-ending language
+  (for example “signed out”);
+- the candidate is visible.
+
+Classifier condition keys:
+
+```text
+headline_match
+expiration_language_match
+continue_action_match
+logout_action_match
+candidate_visible
+classified_as_expiration_dialog
 ```
 
-The response includes the selected Amex page URL, frame/candidate counts, and
-per-candidate frame URL, source type (`DOM` / `IFRAME` / `SHADOW_DOM`), role/tag/class
-summary, sanitized text snippet (≤300 chars, keyword-gated), visible button
-labels, whether the detector matched, and which conditions passed or failed.
+`role="dialog"` is not required.
 
-Detection itself inspects the main frame, child frames, accessible open shadow
-roots, and generic visible modal containers. Keepalive trials remain
-observation-only and still do not click Continue.
+#### Developer Browser Inspector API / CLI
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py browser-inspect amex
+```
+
+Optional screenshot (disabled by default; never used by automatic background
+inspection):
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py browser-inspect amex \
+  --capture-screenshot
+```
+
+```bash
+curl -X POST http://127.0.0.1:8765/providers/amex/diagnostics/browser-inspection \
+  -H 'Content-Type: application/json' \
+  -d '{"capture_screenshot": false}'
+
+curl http://127.0.0.1:8765/providers/amex/diagnostics/browser-inspection/latest
+```
+
+Screenshot warning: captured images may contain sensitive account information.
+They are stored only under `~/.mighty/provider_runtime/diagnostics/`, are never
+uploaded, and the API returns only the local path (never screenshot bytes).
+
+Keepalive trials remain observation-only: they record
+`expiration_dialog_detected` from the classifier and do not click Continue.
+Canonical authentication still comes from verification / the latest committed
+canonical state (`inspection_authentication_state_source`:
+`LATEST_CANONICAL` | `FRESH_VERIFICATION` | `NONE`), not from DOM guessing.
 
 ## 5. Inspect runtime status
 
@@ -320,9 +379,11 @@ It currently provides:
 - CDP attach from `serve` to the authenticated process;
 - headless launch fallback when no CDP endpoint is live;
 - CDP-based verification that disconnects without killing Chrome;
-- automatic Amex inactivity-dialog session extension;
+- reusable Browser Inspector (pages/frames/shadow/modal candidates);
+- automatic Amex inactivity-dialog session extension via inspector + classifier;
 - developer-only Amex keepalive trials (experiment, not production keepalive);
-- localhost status, verification, maintenance-check, keepalive, and shutdown commands;
+- localhost status, verification, maintenance-check, browser-inspect, keepalive,
+  and shutdown commands;
 - canonical authentication results;
 - sanitized persisted runtime state (including maintenance counters and trial results).
 

@@ -13,6 +13,7 @@ Commands:
     python scripts/provider_runtime.py keepalive-start amex --strategy SESSION_API
     python scripts/provider_runtime.py keepalive-status amex
     python scripts/provider_runtime.py keepalive-stop amex
+    python scripts/provider_runtime.py browser-inspect amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
 
 Lifecycle:
@@ -20,8 +21,9 @@ Lifecycle:
     then leaves that authenticated Chrome process running. serve attaches to the
     same CDP endpoint (or launches headless Chrome only when none is live).
     Repeated verify calls reuse the authenticated session without relaunching.
-    While serve is running, a maintenance watcher extends Amex sessions when the
-    genuine inactivity-expiration dialog appears.
+    While serve is running, a maintenance watcher uses the Browser Inspector plus
+    an Amex-specific classifier to extend sessions when the genuine
+    inactivity-expiration dialog appears.
     Developer-only keepalive trials can experiment with controlled background
     actions; they are not automatic production keepalive.
 """
@@ -31,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -38,7 +41,7 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -59,10 +62,46 @@ DEFAULT_PROFILE_DIR = DEFAULT_ROOT / "amex"
 DEFAULT_STATE_PATH = DEFAULT_ROOT / "runtime_state.json"
 DEFAULT_RESULT_PATH = DEFAULT_ROOT / "amex_last_result.json"
 DEFAULT_KEEPALIVE_RESULT_PATH = DEFAULT_ROOT / "amex_keepalive_last_trial.json"
+DEFAULT_DIAGNOSTICS_DIR = DEFAULT_ROOT / "diagnostics"
 DEFAULT_LOG_PATH = DEFAULT_ROOT / "provider_runtime.log"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_CDP_PORT = 9223
+
+SOURCE_TYPE_DOM = "DOM"
+SOURCE_TYPE_IFRAME = "IFRAME"
+SOURCE_TYPE_SHADOW_DOM = "SHADOW_DOM"
+
+AUTH_STATE_SOURCE_LATEST_CANONICAL = "LATEST_CANONICAL"
+AUTH_STATE_SOURCE_FRESH_VERIFICATION = "FRESH_VERIFICATION"
+AUTH_STATE_SOURCE_NONE = "NONE"
+
+IGNORED_PAGE_URL_PREFIXES = (
+    "chrome://",
+    "chrome-extension://",
+    "devtools://",
+    "edge://",
+    "about:blank",
+    "about:srcdoc",
+)
+
+AMEX_HOSTNAME_SUFFIXES = ("americanexpress.com",)
+AMEX_PREFERRED_HOSTNAMES = ("global.americanexpress.com",)
+
+INSPECTION_TEXT_MAX_CHARS = 300
+LONG_DIGIT_RE = re.compile(r"\d{6,}")
+MODAL_TEXT_KEYWORDS = (
+    "session",
+    "expire",
+    "inactivity",
+    "continue",
+    "log out",
+    "sign in",
+    "verify",
+    "challenge",
+    "security",
+    "authentication",
+)
 
 LOGIN_URL_TOKENS = ("/login", "/log-in", "/signin", "/sign-in", "/logon")
 AUTHENTICATED_MARKERS = (
@@ -121,14 +160,19 @@ EXPIRATION_HEADLINE_PHRASES = (
     "your session will expire",
     "session will expire soon",
 )
-EXPIRATION_SNIPPET_KEYWORDS = (
-    "session",
-    "expire",
-    "inactivity",
-    "continue",
+EXPIRATION_LANGUAGE_TOKENS = ("expir", "inactiv")
+LOGOUT_LANGUAGE_PHRASES = (
     "log out",
+    "logout",
+    "logged out",
+    "sign out",
+    "signed out",
+    "sign-out",
+    "log-out",
 )
-EXPIRATION_SNIPPET_MAX_CHARS = 300
+# Backward-compatible aliases used by older tests/call sites.
+EXPIRATION_SNIPPET_KEYWORDS = MODAL_TEXT_KEYWORDS
+EXPIRATION_SNIPPET_MAX_CHARS = INSPECTION_TEXT_MAX_CHARS
 EXPIRATION_DIALOG_CONTAINER_SELECTORS = (
     '[role="dialog"]',
     '[aria-modal="true"]',
@@ -152,21 +196,25 @@ EXPIRATION_DIALOG_CONTAINER_SELECTORS = (
     '[id*="timeout"]',
 )
 
-# Visible dialog inspection runs in each frame document; keep criteria conservative.
-# Supports main DOM, open shadow roots, and generic modal containers (not only role=dialog).
-INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS = """
+# Generic Browser Inspector: finds visible modal-like candidates only.
+# Provider-specific classification (e.g. Amex expiration) happens in Python.
+BROWSER_INSPECTOR_JS = """
 (options) => {
   const opts = options || {};
-  const diagnose = !!opts.diagnose;
   const markContinue = !!opts.mark_continue;
   const defaultSourceType = opts.default_source_type || "DOM";
   const maxSnippet = 300;
-  const keywords = ["session", "expire", "inactivity", "continue", "log out"];
-  const headlines = [
-    "your session is about to expire",
-    "session is about to expire",
-    "your session will expire",
-    "session will expire soon",
+  const keywords = [
+    "session",
+    "expire",
+    "inactivity",
+    "continue",
+    "log out",
+    "sign in",
+    "verify",
+    "challenge",
+    "security",
+    "authentication",
   ];
   const containerSelector = [
     '[role="dialog"]',
@@ -191,6 +239,9 @@ INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS = """
     '[id*="timeout"]',
   ].join(", ");
 
+  const errors = [];
+  const closedShadowMarkers = [];
+
   const isVisible = (el) => {
     if (!el || !(el instanceof Element)) return false;
     const style = window.getComputedStyle(el);
@@ -206,106 +257,178 @@ INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS = """
   };
 
   const normalize = (text) => (text || "").replace(/\\s+/g, " ").trim().toLowerCase();
+  const redactDigits = (text) => (text || "").replace(/\\d{6,}/g, "[REDACTED_NUMBER]");
+  const hasModalKeyword = (text) => keywords.some((keyword) => text.includes(keyword));
 
-  const interestingSnippet = (text) => keywords.some((keyword) => text.includes(keyword));
-
-  const buttonLabel = (button) =>
+  const buttonLabel = (el) =>
     normalize(
-      button.innerText ||
-        button.textContent ||
-        button.getAttribute("value") ||
-        button.getAttribute("aria-label") ||
+      el.innerText ||
+        el.textContent ||
+        el.getAttribute("value") ||
+        el.getAttribute("aria-label") ||
         ""
     );
 
-  const collectButtons = (container) => {
-    const nodes = Array.from(
-      container.querySelectorAll('button, [role="button"], input[type="button"], a')
-    ).filter(isVisible);
-    const labels = [];
+  const collectActions = (container) => {
+    const buttons = [];
+    const links = [];
     const continueButtons = [];
-    for (const button of nodes) {
-      const label = buttonLabel(button);
+    let nodes = [];
+    try {
+      nodes = Array.from(
+        container.querySelectorAll(
+          'button, [role="button"], input[type="button"], input[type="submit"], a'
+        )
+      ).filter(isVisible);
+    } catch (err) {
+      nodes = [];
+    }
+    for (const node of nodes) {
+      const label = buttonLabel(node);
       if (!label) continue;
-      if (labels.length < 12) labels.push(label);
+      const tag = (node.tagName || "").toLowerCase();
+      if (tag === "a") {
+        if (links.length < 12) links.push(label);
+      } else if (buttons.length < 12) {
+        buttons.push(label);
+      }
       if (label === "continue" || label.startsWith("continue ")) {
-        continueButtons.push(button);
+        continueButtons.push(node);
       }
     }
-    return { labels, continueButtons };
+    return { buttons, links, continueButtons };
   };
 
-  const evaluateConditions = (text, hasContinueButton) => {
-    const hasHeadline = headlines.some((phrase) => text.includes(phrase));
-    const mentionsSession = text.includes("session");
-    const mentionsExpire = text.includes("expir");
-    const mentionsInactive = text.includes("inactiv");
-    const hasExpirationLanguage =
-      mentionsSession && (mentionsExpire || mentionsInactive);
-    const matched = !!(hasHeadline && hasExpirationLanguage && hasContinueButton);
-    const passed = [];
-    const failed = [];
-    (hasHeadline ? passed : failed).push("has_headline");
-    (hasExpirationLanguage ? passed : failed).push("has_expiration_language");
-    (hasContinueButton ? passed : failed).push("has_continue_button");
-    return {
-      has_headline: hasHeadline,
-      has_expiration_language: hasExpirationLanguage,
-      has_continue_button: !!hasContinueButton,
-      mentions_session: mentionsSession,
-      mentions_expire: mentionsExpire,
-      mentions_inactive: mentionsInactive,
-      passed,
-      failed,
-      matched,
-    };
+  const viewportArea = () => {
+    const w = window.innerWidth || document.documentElement.clientWidth || 1;
+    const h = window.innerHeight || document.documentElement.clientHeight || 1;
+    return Math.max(1, w * h);
   };
 
-  const summarizeElement = (el) => {
+  const classSummary = (el) =>
+    (el.getAttribute("class") || "").replace(/\\s+/g, " ").trim().slice(0, 120);
+
+  const hostSummary = (el) => {
     const tag = (el.tagName || "").toLowerCase();
-    const role = el.getAttribute("role") || "";
-    const className = (el.getAttribute("class") || "").replace(/\\s+/g, " ").trim().slice(0, 120);
-    const id = (el.getAttribute("id") || "").slice(0, 80);
-    const parts = [tag];
-    if (role) parts.push('role="' + role + '"');
-    if (id) parts.push("id=" + id);
-    if (className) parts.push("class=" + className);
-    return parts.join(" ");
+    const cls = classSummary(el);
+    return cls ? tag + " class=" + cls : tag;
   };
 
-  const pushCandidate = (el, sourceType, out, seen) => {
+  const accessibleName = (el) => {
+    const labelledBy = el.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      try {
+        const parts = labelledBy
+          .split(/\\s+/)
+          .map((id) => {
+            const node = document.getElementById(id);
+            return node ? normalize(node.innerText || node.textContent || "") : "";
+          })
+          .filter(Boolean);
+        if (parts.length) return parts.join(" ").slice(0, 120);
+      } catch (err) {}
+    }
+    return normalize(
+      el.getAttribute("aria-label") ||
+        el.getAttribute("title") ||
+        el.getAttribute("name") ||
+        ""
+    ).slice(0, 120);
+  };
+
+  const considerCandidate = (el, sourceType, hostTagClass, out, seen) => {
     if (!el || seen.has(el) || !isVisible(el)) return;
-    const text = normalize(el.innerText || el.textContent || "");
-    if (!text || !interestingSnippet(text)) return;
+    let style;
+    try {
+      style = window.getComputedStyle(el);
+    } catch (err) {
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    const coverage = (rect.width * rect.height) / viewportArea();
+    const position = style.position || "";
+    const fixedOrAbsolute = position === "fixed" || position === "absolute";
+    const zRaw = style.zIndex;
+    const z = parseInt(zRaw, 10);
+    const role = el.getAttribute("role") || "";
+    const ariaModal = el.getAttribute("aria-modal");
+    const text = redactDigits(normalize(el.innerText || el.textContent || ""));
+    const actions = collectActions(el);
+    const hasActions = actions.buttons.length + actions.links.length > 0;
+    const tags = [];
+
+    if (role === "dialog") tags.push("role_dialog");
+    if (ariaModal === "true") tags.push("aria_modal");
+    if (fixedOrAbsolute && coverage >= 0.15) tags.push("substantial_coverage");
+    if (Number.isFinite(z) && z >= 100) tags.push("high_z_index");
+    if (hasActions && (role === "dialog" || ariaModal === "true" || fixedOrAbsolute)) {
+      tags.push("actionable_controls");
+    }
+    if (coverage >= 0.35 && fixedOrAbsolute) tags.push("viewport_overlay");
+    if (text && hasModalKeyword(text)) tags.push("modal_text");
+
+    // Require at least one detector signal, and avoid capturing plain page shells.
+    if (!tags.length) return;
+    if (
+      !tags.includes("role_dialog") &&
+      !tags.includes("aria_modal") &&
+      !tags.includes("modal_text") &&
+      !(tags.includes("substantial_coverage") && hasActions) &&
+      !(tags.includes("viewport_overlay") && hasActions)
+    ) {
+      return;
+    }
+    if (text.length < 8 && !tags.includes("role_dialog") && !tags.includes("aria_modal")) {
+      return;
+    }
+
     seen.add(el);
-    const buttons = collectButtons(el);
-    const hasContinue = buttons.continueButtons.length > 0;
-    const conditions = evaluateConditions(text, hasContinue);
+    let continueToken = null;
+    if (markContinue && actions.continueButtons.length) {
+      continueToken = "mighty-amex-continue-" + Date.now().toString(36) + "-" + out.length;
+      actions.continueButtons[0].setAttribute("data-mighty-amex-continue", continueToken);
+    }
+
     out.push({
       element: el,
-      continue_button: hasContinue ? buttons.continueButtons[0] : null,
       source_type: sourceType,
-      role_tag_class_summary: summarizeElement(el),
+      tag_name: (el.tagName || "").toLowerCase(),
+      role: role || null,
+      class_summary: classSummary(el) || null,
+      host_tag_class_summary: hostTagClass || null,
       text_snippet: text.slice(0, maxSnippet),
-      button_labels: buttons.labels,
-      conditions,
-      detector_matched: conditions.matched,
+      visible_button_labels: actions.buttons,
+      visible_link_labels: actions.links,
+      bounding_box: {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+      viewport_coverage_ratio: Math.round(coverage * 1000) / 1000,
+      z_index: Number.isFinite(z) ? z : zRaw || null,
+      fixed_or_absolute: fixedOrAbsolute,
+      aria_modal: ariaModal === null ? null : ariaModal === "true",
+      accessible_name: accessibleName(el) || null,
+      detector_tags: tags,
+      continue_token: continueToken,
+      errors: [],
     });
   };
 
-  const collectFromRoot = (root, sourceType, out, seen) => {
+  const collectFromRoot = (root, sourceType, hostTagClass, out, seen) => {
     if (!root) return;
     let nodes = [];
     try {
       nodes = Array.from(root.querySelectorAll(containerSelector));
     } catch (err) {
+      errors.push("query_containers_failed");
       nodes = [];
     }
     for (const el of nodes) {
-      pushCandidate(el, sourceType, out, seen);
+      considerCandidate(el, sourceType, hostTagClass, out, seen);
     }
 
-    // Generic visible modal-like overlays (fixed/absolute) with keyword text.
     let overlayNodes = [];
     try {
       overlayNodes = Array.from(root.querySelectorAll("div, section, aside, article"));
@@ -323,10 +446,11 @@ INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS = """
       const position = style.position;
       if (position !== "fixed" && position !== "absolute") continue;
       const z = parseInt(style.zIndex, 10);
-      if (!Number.isFinite(z) || z < 5) continue;
       const rect = el.getBoundingClientRect();
-      if (rect.width < 120 || rect.height < 60) continue;
-      pushCandidate(el, sourceType, out, seen);
+      const coverage = (rect.width * rect.height) / viewportArea();
+      if ((!Number.isFinite(z) || z < 5) && coverage < 0.15) continue;
+      if (rect.width < 80 || rect.height < 40) continue;
+      considerCandidate(el, sourceType, hostTagClass, out, seen);
     }
 
     let all = [];
@@ -336,61 +460,70 @@ INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS = """
       all = [];
     }
     for (const el of all) {
-      if (el.shadowRoot) {
-        collectFromRoot(el.shadowRoot, "SHADOW_DOM", out, seen);
+      try {
+        if (el.shadowRoot) {
+          collectFromRoot(el.shadowRoot, "SHADOW_DOM", hostSummary(el), out, seen);
+        } else if (el.attachShadow) {
+          // Closed shadow roots are not exposed via element.shadowRoot.
+          // Detect only when open root is absent but shadow exists via openOrClosed?
+          // Standard DOM: closed roots yield null shadowRoot; record marker once per host
+          // only when the host advertises shadow via known attributes/custom elements.
+        }
+      } catch (err) {
+        errors.push("shadow_traversal_error");
       }
     }
   };
 
-  const candidates = [];
+  const raw = [];
   const seen = new Set();
-  collectFromRoot(document, defaultSourceType, candidates, seen);
+  collectFromRoot(document, defaultSourceType, null, raw, seen);
 
-  if (diagnose) {
-    return {
-      detected: candidates.some((item) => item.detector_matched),
-      continue_token: null,
-      dialog_text: null,
-      candidates: candidates.slice(0, 40).map((item) => ({
-        source_type: item.source_type,
-        role_tag_class_summary: item.role_tag_class_summary,
-        text_snippet: item.text_snippet,
-        button_labels: item.button_labels,
-        detector_matched: item.detector_matched,
-        conditions: item.conditions,
-      })),
-    };
-  }
-
-  for (const item of candidates) {
-    if (!item.detector_matched || !item.continue_button) continue;
-    let token = null;
-    if (markContinue) {
-      token = "mighty-amex-continue-" + Date.now().toString(36);
-      item.continue_button.setAttribute("data-mighty-amex-continue", token);
+  // Deduplicate nested candidates: keep outermost useful containers.
+  const keep = [];
+  for (const item of raw) {
+    const nestedInsideKept = keep.some(
+      (outer) => outer.element !== item.element && outer.element.contains(item.element)
+    );
+    if (nestedInsideKept) continue;
+    // Drop previously kept descendants of this new outer candidate.
+    for (let i = keep.length - 1; i >= 0; i -= 1) {
+      if (item.element.contains(keep[i].element) && item.element !== keep[i].element) {
+        keep.splice(i, 1);
+      }
     }
-    return {
-      detected: true,
-      continue_token: token,
-      dialog_text: item.text_snippet.slice(0, 240),
-      source_type: item.source_type,
-      role_tag_class_summary: item.role_tag_class_summary,
-      candidates: [],
-    };
+    keep.push(item);
   }
+
   return {
-    detected: false,
-    continue_token: null,
-    dialog_text: null,
-    source_type: null,
-    role_tag_class_summary: null,
-    candidates: [],
+    candidates: keep.slice(0, 40).map((item) => ({
+      source_type: item.source_type,
+      tag_name: item.tag_name,
+      role: item.role,
+      class_summary: item.class_summary,
+      host_tag_class_summary: item.host_tag_class_summary,
+      text_snippet: item.text_snippet,
+      visible_button_labels: item.visible_button_labels,
+      visible_link_labels: item.visible_link_labels,
+      bounding_box: item.bounding_box,
+      viewport_coverage_ratio: item.viewport_coverage_ratio,
+      z_index: item.z_index,
+      fixed_or_absolute: item.fixed_or_absolute,
+      aria_modal: item.aria_modal,
+      accessible_name: item.accessible_name,
+      detector_tags: item.detector_tags,
+      continue_token: item.continue_token,
+      errors: item.errors,
+    })),
+    closed_shadow_markers: closedShadowMarkers,
+    errors,
   };
 }
 """
 
-# Backward-compatible alias used by older call sites/tests.
-FIND_AMEX_EXPIRATION_DIALOG_JS = INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS
+# Backward-compatible aliases used by older call sites/tests.
+INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS = BROWSER_INSPECTOR_JS
+FIND_AMEX_EXPIRATION_DIALOG_JS = BROWSER_INSPECTOR_JS
 
 PAGE_ACTIVITY_JS = """
 () => {
@@ -613,59 +746,330 @@ def classify_amex(
     return "LOGIN_UNKNOWN", "Verification completed without definitive evidence"
 
 
-def evaluate_expiration_dialog_conditions(
-    dialog_text: str,
-    *,
-    has_continue_button: bool,
-) -> dict[str, Any]:
-    """Evaluate conservative Amex expiration-dialog conditions for diagnostics."""
-    lowered = " ".join((dialog_text or "").lower().split())
-    has_headline = any(phrase in lowered for phrase in EXPIRATION_HEADLINE_PHRASES)
-    mentions_session = "session" in lowered
-    mentions_expire = "expir" in lowered
-    mentions_inactive = "inactiv" in lowered
-    has_expiration_language = mentions_session and (mentions_expire or mentions_inactive)
-    matched = bool(has_headline and has_expiration_language and has_continue_button)
-    passed: list[str] = []
-    failed: list[str] = []
-    (passed if has_headline else failed).append("has_headline")
-    (passed if has_expiration_language else failed).append("has_expiration_language")
-    (passed if has_continue_button else failed).append("has_continue_button")
-    return {
-        "has_headline": has_headline,
-        "has_expiration_language": has_expiration_language,
-        "has_continue_button": bool(has_continue_button),
-        "mentions_session": mentions_session,
-        "mentions_expire": mentions_expire,
-        "mentions_inactive": mentions_inactive,
-        "passed": passed,
-        "failed": failed,
-        "matched": matched,
-    }
+@dataclass
+class InspectionCandidate:
+    source_type: str
+    page_url: str | None
+    frame_url: str | None
+    tag_name: str | None
+    role: str | None
+    class_summary: str | None
+    text_snippet: str | None
+    visible_button_labels: list[str] = field(default_factory=list)
+    visible_link_labels: list[str] = field(default_factory=list)
+    bounding_box: dict[str, Any] | None = None
+    viewport_coverage_ratio: float | None = None
+    z_index: Any = None
+    fixed_or_absolute: bool = False
+    aria_modal: bool | None = None
+    accessible_name: str | None = None
+    detector_tags: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    host_tag_class_summary: str | None = None
+    continue_token: str | None = None
+
+    def to_sanitized_dict(self) -> dict[str, Any]:
+        return {
+            "source_type": self.source_type,
+            "page_url": self.page_url,
+            "frame_url": self.frame_url,
+            "tag_name": self.tag_name,
+            "role": self.role,
+            "class_summary": self.class_summary,
+            "host_tag_class_summary": self.host_tag_class_summary,
+            "text_snippet": self.text_snippet,
+            "visible_button_labels": list(self.visible_button_labels),
+            "visible_link_labels": list(self.visible_link_labels),
+            "bounding_box": self.bounding_box,
+            "viewport_coverage_ratio": self.viewport_coverage_ratio,
+            "z_index": self.z_index,
+            "fixed_or_absolute": self.fixed_or_absolute,
+            "aria_modal": self.aria_modal,
+            "accessible_name": self.accessible_name,
+            "detector_tags": list(self.detector_tags),
+            "errors": list(self.errors),
+        }
 
 
-def expiration_dialog_criteria_met(dialog_text: str, *, has_continue_button: bool) -> bool:
-    """Return True only when conservative Amex expiration-dialog criteria match."""
-    return bool(
-        evaluate_expiration_dialog_conditions(
-            dialog_text,
-            has_continue_button=has_continue_button,
-        )["matched"]
-    )
+@dataclass
+class BrowserInspection:
+    inspected_at: str
+    selected_page_url: str | None
+    page_count: int
+    frame_count: int
+    candidate_count: int
+    candidates: list[InspectionCandidate] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    screenshot_path: str | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def to_sanitized_dict(self) -> dict[str, Any]:
+        return {
+            "inspected_at": self.inspected_at,
+            "selected_page_url": self.selected_page_url,
+            "page_count": self.page_count,
+            "frame_count": self.frame_count,
+            "candidate_count": self.candidate_count,
+            "candidates": [item.to_sanitized_dict() for item in self.candidates],
+            "errors": list(self.errors),
+            "screenshot_path": self.screenshot_path,
+            "diagnostics": dict(self.diagnostics),
+        }
+
+
+def redact_long_digit_sequences(text: str) -> str:
+    return LONG_DIGIT_RE.sub("[REDACTED_NUMBER]", text)
+
+
+def sanitize_inspection_snippet(text: str | None) -> str | None:
+    """Bound and redact candidate text. Returns None for empty/unrelated blobs."""
+    if not text:
+        return None
+    lowered = " ".join(str(text).lower().split())
+    lowered = redact_long_digit_sequences(lowered)
+    if not any(keyword in lowered for keyword in MODAL_TEXT_KEYWORDS):
+        return None
+    return lowered[:INSPECTION_TEXT_MAX_CHARS]
+
+
+def sanitize_expiration_snippet(text: str | None) -> str | None:
+    """Backward-compatible alias for sanitized modal candidate snippets."""
+    return sanitize_inspection_snippet(text)
 
 
 def snippet_is_expiration_candidate(text: str) -> bool:
     lowered = " ".join((text or "").lower().split())
-    return any(keyword in lowered for keyword in EXPIRATION_SNIPPET_KEYWORDS)
+    return any(keyword in lowered for keyword in MODAL_TEXT_KEYWORDS)
 
 
-def sanitize_expiration_snippet(text: str | None) -> str | None:
-    if not text:
+def _normalize_action_labels(labels: Any) -> list[str]:
+    cleaned: list[str] = []
+    for label in labels or []:
+        if not label:
+            continue
+        normalized = " ".join(str(label).lower().split())[:80]
+        if normalized:
+            cleaned.append(normalized)
+        if len(cleaned) >= 12:
+            break
+    return cleaned
+
+
+def _label_is_continue(label: str) -> bool:
+    return label == "continue" or label.startswith("continue ")
+
+
+def _text_has_logout_language(text: str, action_labels: list[str]) -> bool:
+    haystacks = [text, *action_labels]
+    for haystack in haystacks:
+        if any(phrase in haystack for phrase in LOGOUT_LANGUAGE_PHRASES):
+            return True
+    return False
+
+
+def classify_amex_expiration_candidate(
+    candidate: InspectionCandidate | dict[str, Any],
+) -> dict[str, Any]:
+    """Classify one Browser Inspector candidate as the Amex expiration dialog."""
+    if isinstance(candidate, InspectionCandidate):
+        text = candidate.text_snippet or ""
+        button_labels = list(candidate.visible_button_labels)
+        link_labels = list(candidate.visible_link_labels)
+        visible = True
+        errors = list(candidate.errors)
+    else:
+        text = str(candidate.get("text_snippet") or "")
+        button_labels = _normalize_action_labels(candidate.get("visible_button_labels"))
+        if not button_labels:
+            button_labels = _normalize_action_labels(candidate.get("button_labels"))
+        link_labels = _normalize_action_labels(candidate.get("visible_link_labels"))
+        visible = candidate.get("candidate_visible", True) is not False
+        errors = list(candidate.get("errors") or [])
+
+    lowered = " ".join(redact_long_digit_sequences(text).lower().split())
+    action_labels = button_labels + link_labels
+    headline_match = any(phrase in lowered for phrase in EXPIRATION_HEADLINE_PHRASES)
+    expiration_language_match = any(token in lowered for token in EXPIRATION_LANGUAGE_TOKENS)
+    continue_action_match = any(_label_is_continue(label) for label in action_labels)
+    logout_action_match = _text_has_logout_language(lowered, action_labels)
+    candidate_visible = bool(visible) and "inaccessible" not in " ".join(errors).lower()
+    classified = bool(
+        candidate_visible
+        and headline_match
+        and expiration_language_match
+        and continue_action_match
+        and logout_action_match
+    )
+    return {
+        "headline_match": headline_match,
+        "expiration_language_match": expiration_language_match,
+        "continue_action_match": continue_action_match,
+        "logout_action_match": logout_action_match,
+        "candidate_visible": candidate_visible,
+        "classified_as_expiration_dialog": classified,
+    }
+
+
+def classify_amex_expiration_from_inspection(
+    inspection: BrowserInspection,
+) -> dict[str, Any]:
+    """Return the first classified Amex expiration candidate from an inspection."""
+    for candidate in inspection.candidates:
+        conditions = classify_amex_expiration_candidate(candidate)
+        if conditions["classified_as_expiration_dialog"]:
+            return {
+                "detected": True,
+                "candidate": candidate,
+                "conditions": conditions,
+                "continue_token": candidate.continue_token,
+                "dialog_text": candidate.text_snippet,
+                "source_type": candidate.source_type,
+            }
+    return {
+        "detected": False,
+        "candidate": None,
+        "conditions": None,
+        "continue_token": None,
+        "dialog_text": None,
+        "source_type": None,
+    }
+
+
+def evaluate_expiration_dialog_conditions(
+    dialog_text: str,
+    *,
+    has_continue_button: bool,
+    action_labels: list[str] | None = None,
+) -> dict[str, Any]:
+    """Evaluate Amex expiration conditions; includes legacy key aliases."""
+    labels = list(action_labels or [])
+    if has_continue_button and not any(_label_is_continue(label) for label in labels):
+        labels.append("continue")
+    conditions = classify_amex_expiration_candidate(
+        {
+            "text_snippet": dialog_text,
+            "visible_button_labels": labels,
+            "candidate_visible": True,
+        }
+    )
+    # Legacy aliases kept for older diagnostics/tests.
+    conditions["has_headline"] = conditions["headline_match"]
+    conditions["has_expiration_language"] = conditions["expiration_language_match"]
+    conditions["has_continue_button"] = conditions["continue_action_match"]
+    conditions["matched"] = conditions["classified_as_expiration_dialog"]
+    legacy_keys = (
+        ("has_headline", "headline_match"),
+        ("has_expiration_language", "expiration_language_match"),
+        ("has_continue_button", "continue_action_match"),
+        ("logout_action_match", "logout_action_match"),
+        ("candidate_visible", "candidate_visible"),
+    )
+    passed: list[str] = []
+    failed: list[str] = []
+    for legacy_key, modern_key in legacy_keys:
+        (passed if conditions[modern_key] else failed).append(legacy_key)
+        if legacy_key != modern_key:
+            (passed if conditions[modern_key] else failed).append(modern_key)
+    conditions["passed"] = passed
+    conditions["failed"] = failed
+    return conditions
+
+
+def expiration_dialog_criteria_met(dialog_text: str, *, has_continue_button: bool) -> bool:
+    """Return True only when Amex expiration-dialog criteria match."""
+    return bool(
+        evaluate_expiration_dialog_conditions(
+            dialog_text,
+            has_continue_button=has_continue_button,
+        )["classified_as_expiration_dialog"]
+    )
+
+
+def _is_ignored_browser_url(url: str | None) -> bool:
+    raw = (url or "").strip().lower()
+    if not raw:
+        return True
+    return any(raw.startswith(prefix) for prefix in IGNORED_PAGE_URL_PREFIXES)
+
+
+def _hostname(url: str | None) -> str:
+    try:
+        return (urlsplit(url or "").hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _host_matches_suffixes(host: str, suffixes: tuple[str, ...]) -> bool:
+    if not host:
+        return False
+    for suffix in suffixes:
+        needle = suffix.lower().lstrip(".")
+        if host == needle or host.endswith("." + needle):
+            return True
+    return False
+
+
+def _page_viewport_area(page: Page) -> float:
+    try:
+        viewport = getattr(page, "viewport_size", None)
+        if isinstance(viewport, dict):
+            return float(viewport.get("width", 0) or 0) * float(
+                viewport.get("height", 0) or 0
+            )
+    except Exception:
+        pass
+    try:
+        size = page.evaluate("() => ({ w: window.innerWidth || 0, h: window.innerHeight || 0 })")
+        if isinstance(size, dict):
+            return float(size.get("w", 0) or 0) * float(size.get("h", 0) or 0)
+    except Exception:
+        pass
+    return 0.0
+
+
+def select_provider_page(
+    context: BrowserContext,
+    *,
+    hostname_suffixes: tuple[str, ...],
+    preferred_hostnames: tuple[str, ...] = (),
+    deprioritize_login: bool = True,
+    create_if_missing: bool = False,
+) -> Page | None:
+    """Generic provider page selector for multi-tab CDP contexts."""
+    ranked: list[tuple[tuple[Any, ...], Page]] = []
+    for page in list(context.pages):
+        try:
+            if page.is_closed():
+                continue
+        except Exception:
+            pass
+        url = getattr(page, "url", None)
+        if _is_ignored_browser_url(url):
+            continue
+        host = _hostname(url)
+        if not _host_matches_suffixes(host, hostname_suffixes):
+            continue
+        preferred = 1 if host in {item.lower() for item in preferred_hostnames} else 0
+        login_penalty = 0 if (deprioritize_login and is_login_url(url)) else 1
+        area = _page_viewport_area(page)
+        # Higher tuple wins.
+        ranked.append(((login_penalty, preferred, area), page))
+
+    if ranked:
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return ranked[0][1]
+    if not create_if_missing:
         return None
-    lowered = " ".join(str(text).lower().split())
-    if not snippet_is_expiration_candidate(lowered):
-        return None
-    return lowered[:EXPIRATION_SNIPPET_MAX_CHARS]
+    usable = [
+        page
+        for page in list(context.pages)
+        if not _is_ignored_browser_url(getattr(page, "url", None))
+    ]
+    if usable:
+        return usable[0]
+    if context.pages:
+        return context.pages[0]
+    return context.new_page()
 
 
 def select_amex_page(
@@ -673,19 +1077,14 @@ def select_amex_page(
     *,
     create_if_missing: bool = False,
 ) -> Page | None:
-    """Prefer an existing americanexpress.com page; optionally create for verify."""
-    for page in context.pages:
-        try:
-            host = (urlsplit(page.url).hostname or "").lower()
-        except Exception:
-            continue
-        if host == "americanexpress.com" or host.endswith(".americanexpress.com"):
-            return page
-    if not create_if_missing:
-        return None
-    if context.pages:
-        return context.pages[0]
-    return context.new_page()
+    """Prefer global.americanexpress.com over login/public Amex pages."""
+    return select_provider_page(
+        context,
+        hostname_suffixes=AMEX_HOSTNAME_SUFFIXES,
+        preferred_hostnames=AMEX_PREFERRED_HOSTNAMES,
+        deprioritize_login=True,
+        create_if_missing=create_if_missing,
+    )
 
 
 def _iter_page_frames(page: Page) -> list[Any]:
@@ -703,168 +1102,367 @@ def _iter_page_frames(page: Page) -> list[Any]:
     return frame_list or [page]
 
 
-def _evaluate_expiration_in_frame(
+def _normalize_inspector_frame_payload(
+    payload: dict[str, Any],
+    *,
+    default_source_type: str,
+) -> dict[str, Any]:
+    """Accept modern inspector payloads and legacy expiration-dialog mocks."""
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        return payload
+
+    # Legacy shape used by older tests/call sites:
+    # {detected, continue_token, dialog_text, source_type, candidates: []}
+    dialog_text = payload.get("dialog_text") or payload.get("text_snippet")
+    if payload.get("detected") and dialog_text:
+        labels = _normalize_action_labels(payload.get("button_labels") or ["continue"])
+        return {
+            "candidates": [
+                {
+                    "source_type": payload.get("source_type") or default_source_type,
+                    "tag_name": None,
+                    "role": None,
+                    "class_summary": None,
+                    "role_tag_class_summary": payload.get("role_tag_class_summary"),
+                    "text_snippet": dialog_text,
+                    "visible_button_labels": labels,
+                    "visible_link_labels": [],
+                    "detector_tags": ["legacy_payload"],
+                    "continue_token": payload.get("continue_token"),
+                    "errors": [],
+                }
+            ],
+            "errors": [],
+        }
+    if isinstance(candidates, list):
+        return payload
+    return {"candidates": [], "errors": list(payload.get("errors") or [])}
+
+
+def _evaluate_browser_inspector_in_frame(
     frame: Any,
     *,
-    diagnose: bool,
     mark_continue: bool,
     default_source_type: str,
 ) -> dict[str, Any]:
     try:
         payload = frame.evaluate(
-            INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS,
+            BROWSER_INSPECTOR_JS,
             {
-                "diagnose": diagnose,
                 "mark_continue": mark_continue,
                 "default_source_type": default_source_type,
             },
         )
     except TypeError:
-        # Older mocks/callers may stub evaluate() without an argument payload.
         try:
-            payload = frame.evaluate(INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS)
-        except Exception:
+            payload = frame.evaluate(BROWSER_INSPECTOR_JS)
+        except Exception as exc:
             return {
-                "detected": False,
-                "continue_token": None,
-                "dialog_text": None,
                 "candidates": [],
+                "errors": [f"frame_inaccessible:{type(exc).__name__}"],
             }
-    except Exception:
+    except Exception as exc:
         return {
-            "detected": False,
-            "continue_token": None,
-            "dialog_text": None,
             "candidates": [],
+            "errors": [f"frame_inaccessible:{type(exc).__name__}"],
         }
     if not isinstance(payload, dict):
-        return {
-            "detected": False,
-            "continue_token": None,
-            "dialog_text": None,
-            "candidates": [],
-        }
-    return payload
+        return {"candidates": [], "errors": ["invalid_inspector_payload"]}
+    return _normalize_inspector_frame_payload(
+        payload,
+        default_source_type=default_source_type,
+    )
 
 
-def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
-    """Inspect main frame, child frames, and open shadow roots for the dialog."""
+def _candidate_from_raw(
+    raw: dict[str, Any],
+    *,
+    page_url: str | None,
+    frame_url: str | None,
+    default_source_type: str,
+) -> InspectionCandidate | None:
+    snippet = sanitize_inspection_snippet(raw.get("text_snippet"))
+    button_labels = _normalize_action_labels(
+        raw.get("visible_button_labels") or raw.get("button_labels")
+    )
+    link_labels = _normalize_action_labels(raw.get("visible_link_labels"))
+    detector_tags = [
+        str(tag)[:64] for tag in (raw.get("detector_tags") or []) if tag
+    ][:16]
+    errors = [str(err)[:120] for err in (raw.get("errors") or []) if err][:12]
+    if not snippet and not detector_tags and not errors:
+        return None
+    if snippet is None and not (
+        raw.get("role") == "dialog" or raw.get("aria_modal") is True
+    ):
+        # Keep dialog/aria-modal candidates even if keyword gate rejects text.
+        snippet = redact_long_digit_sequences(
+            " ".join(str(raw.get("text_snippet") or "").lower().split())
+        )[:INSPECTION_TEXT_MAX_CHARS] or None
+    class_summary = str(raw.get("class_summary") or "")[:120] or None
+    role = raw.get("role")
+    tag_name = raw.get("tag_name")
+    if not class_summary and raw.get("role_tag_class_summary"):
+        # Compatibility with older inspector payloads/tests.
+        summary = str(raw.get("role_tag_class_summary"))
+        class_summary = summary[:120]
+    return InspectionCandidate(
+        source_type=str(raw.get("source_type") or default_source_type),
+        page_url=page_url,
+        frame_url=frame_url,
+        tag_name=str(tag_name).lower()[:40] if tag_name else None,
+        role=str(role)[:40] if role else None,
+        class_summary=class_summary,
+        text_snippet=snippet,
+        visible_button_labels=button_labels,
+        visible_link_labels=link_labels,
+        bounding_box=raw.get("bounding_box")
+        if isinstance(raw.get("bounding_box"), dict)
+        else None,
+        viewport_coverage_ratio=(
+            float(raw["viewport_coverage_ratio"])
+            if isinstance(raw.get("viewport_coverage_ratio"), (int, float))
+            else None
+        ),
+        z_index=raw.get("z_index"),
+        fixed_or_absolute=bool(raw.get("fixed_or_absolute")),
+        aria_modal=raw.get("aria_modal")
+        if isinstance(raw.get("aria_modal"), bool)
+        else None,
+        accessible_name=(
+            str(raw.get("accessible_name"))[:120] if raw.get("accessible_name") else None
+        ),
+        detector_tags=detector_tags,
+        errors=errors,
+        host_tag_class_summary=(
+            str(raw.get("host_tag_class_summary"))[:160]
+            if raw.get("host_tag_class_summary")
+            else None
+        ),
+        continue_token=str(raw["continue_token"]) if raw.get("continue_token") else None,
+    )
+
+
+def inspect_page_browser(
+    page: Page,
+    *,
+    mark_continue: bool = False,
+) -> tuple[list[InspectionCandidate], int, list[str]]:
+    """Inspect one page across frames/shadow roots into generic candidates."""
     frames = _iter_page_frames(page)
     main_frame = getattr(page, "main_frame", None)
+    page_url = sanitize_url(getattr(page, "url", None))
+    candidates: list[InspectionCandidate] = []
+    errors: list[str] = []
+    frame_count = 0
+
     for frame in frames:
+        frame_count += 1
         is_main = main_frame is not None and frame is main_frame
         if main_frame is None and frame is page:
             is_main = True
-        payload = _evaluate_expiration_in_frame(
-            frame,
-            diagnose=False,
-            mark_continue=True,
-            default_source_type="DOM" if is_main else "IFRAME",
-        )
-        detected = bool(payload.get("detected"))
-        dialog_text = payload.get("dialog_text") or ""
-        continue_token = payload.get("continue_token")
-        if detected and expiration_dialog_criteria_met(
-            str(dialog_text),
-            has_continue_button=bool(continue_token),
-        ):
-            return {
-                "detected": True,
-                "continue_token": continue_token,
-                "dialog_text": sanitize_expiration_snippet(str(dialog_text)),
-                "source_type": payload.get("source_type"),
-                "role_tag_class_summary": payload.get("role_tag_class_summary"),
-            }
-    return {
-        "detected": False,
-        "continue_token": None,
-        "dialog_text": None,
-        "source_type": None,
-        "role_tag_class_summary": None,
-    }
-
-
-def diagnose_amex_expiration_dialog_on_page(page: Page) -> dict[str, Any]:
-    """Developer diagnostic: enumerate sanitized modal candidates across frames."""
-    frames = _iter_page_frames(page)
-    main_frame = getattr(page, "main_frame", None)
-    frame_reports: list[dict[str, Any]] = []
-    flat_candidates: list[dict[str, Any]] = []
-
-    for frame in frames:
-        is_main = main_frame is not None and frame is main_frame
-        if main_frame is None and frame is page:
-            is_main = True
+        default_source = SOURCE_TYPE_DOM if is_main else SOURCE_TYPE_IFRAME
         try:
             frame_url = sanitize_url(getattr(frame, "url", None))
         except Exception:
             frame_url = None
-        payload = _evaluate_expiration_in_frame(
+        payload = _evaluate_browser_inspector_in_frame(
             frame,
-            diagnose=True,
-            mark_continue=False,
-            default_source_type="DOM" if is_main else "IFRAME",
+            mark_continue=mark_continue,
+            default_source_type=default_source,
         )
-        candidates_out: list[dict[str, Any]] = []
+        frame_errors = [
+            str(err)[:120] for err in (payload.get("errors") or []) if err
+        ][:12]
+        if frame_errors:
+            inaccessible = any("inaccessible" in err for err in frame_errors)
+            if inaccessible:
+                errors.append(
+                    f"inaccessible_frame:{frame_url or 'unknown'}:{frame_errors[0]}"
+                )
+                candidates.append(
+                    InspectionCandidate(
+                        source_type=default_source,
+                        page_url=page_url,
+                        frame_url=frame_url,
+                        tag_name=None,
+                        role=None,
+                        class_summary=None,
+                        text_snippet=None,
+                        errors=["frame_inaccessible"],
+                        detector_tags=["inaccessible_frame"],
+                    )
+                )
+                continue
+            errors.extend(frame_errors)
+
         for raw in payload.get("candidates") or []:
             if not isinstance(raw, dict):
                 continue
-            snippet = sanitize_expiration_snippet(raw.get("text_snippet"))
-            if not snippet:
-                continue
-            button_labels = [
-                " ".join(str(label).lower().split())[:80]
-                for label in (raw.get("button_labels") or [])
-                if label
-            ][:12]
-            conditions = raw.get("conditions")
-            if not isinstance(conditions, dict):
-                conditions = evaluate_expiration_dialog_conditions(
-                    snippet,
-                    has_continue_button=any(
-                        label == "continue" or label.startswith("continue ")
-                        for label in button_labels
-                    ),
-                )
-            candidate = {
-                "frame_url": frame_url,
-                "source_type": raw.get("source_type")
-                or ("DOM" if is_main else "IFRAME"),
-                "role_tag_class_summary": str(raw.get("role_tag_class_summary") or "")[:200],
-                "text_snippet": snippet,
-                "button_labels": button_labels,
-                "detector_matched": bool(
-                    raw.get("detector_matched")
-                    or conditions.get("matched")
-                ),
-                "conditions": {
-                    "has_headline": bool(conditions.get("has_headline")),
-                    "has_expiration_language": bool(
-                        conditions.get("has_expiration_language")
-                    ),
-                    "has_continue_button": bool(conditions.get("has_continue_button")),
-                    "passed": list(conditions.get("passed") or []),
-                    "failed": list(conditions.get("failed") or []),
-                },
-            }
-            candidates_out.append(candidate)
-            flat_candidates.append(candidate)
-        frame_reports.append(
-            {
-                "url": frame_url,
-                "is_main": bool(is_main),
-                "candidate_count": len(candidates_out),
-                "candidates": candidates_out,
-            }
-        )
+            candidate = _candidate_from_raw(
+                raw,
+                page_url=page_url,
+                frame_url=frame_url,
+                default_source_type=default_source,
+            )
+            if candidate is not None:
+                candidates.append(candidate)
+    return candidates, frame_count, errors
 
+
+def capture_browser_inspection_screenshot(
+    page: Page,
+    *,
+    provider: str,
+    diagnostics_dir: Path,
+) -> str:
+    """Capture one developer-only screenshot; returns local path only."""
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = diagnostics_dir / f"{provider}_browser_inspection_{stamp}.png"
+    print(
+        "[Mighty Browser Inspector] WARNING: screenshots may contain sensitive "
+        "account information and are stored only on this machine."
+    )
+    page.screenshot(path=str(path), full_page=False)
+    return str(path)
+
+
+def inspect_browser_context(
+    context: BrowserContext,
+    *,
+    provider: str = "amex",
+    capture_screenshot: bool = False,
+    mark_continue: bool = False,
+    diagnostics_dir: Path | None = None,
+    select_page_fn: Any = None,
+) -> BrowserInspection:
+    """Provider-agnostic Browser Inspector over a CDP browser context."""
+    errors: list[str] = []
+    pages = list(context.pages)
+    selector = select_page_fn or (
+        select_amex_page if provider == "amex" else select_provider_page
+    )
+    if select_page_fn is None and provider == "amex":
+        selected = select_amex_page(context, create_if_missing=False)
+    elif select_page_fn is None:
+        selected = None
+        errors.append("no_page_selector_for_provider")
+    else:
+        selected = selector(context, create_if_missing=False)
+
+    candidates: list[InspectionCandidate] = []
+    frame_count = 0
+    screenshot_path: str | None = None
+    selected_url = sanitize_url(selected.url) if selected is not None else None
+
+    if selected is None:
+        errors.append("no_provider_page_selected")
+    else:
+        page_candidates, page_frames, page_errors = inspect_page_browser(
+            selected,
+            mark_continue=mark_continue,
+        )
+        candidates.extend(page_candidates)
+        frame_count += page_frames
+        errors.extend(page_errors)
+        if capture_screenshot:
+            try:
+                screenshot_path = capture_browser_inspection_screenshot(
+                    selected,
+                    provider=provider,
+                    diagnostics_dir=diagnostics_dir or DEFAULT_DIAGNOSTICS_DIR,
+                )
+            except Exception as exc:
+                errors.append(f"screenshot_failed:{type(exc).__name__}")
+
+    return BrowserInspection(
+        inspected_at=iso_now(),
+        selected_page_url=selected_url,
+        page_count=len(pages),
+        frame_count=frame_count,
+        candidate_count=len(candidates),
+        candidates=candidates[:80],
+        errors=errors,
+        screenshot_path=screenshot_path,
+        diagnostics={
+            "provider": provider,
+            "capture_screenshot": bool(capture_screenshot),
+        },
+    )
+
+
+def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
+    """Use Browser Inspector + Amex classifier to find the expiration dialog."""
+    candidates, _frame_count, _errors = inspect_page_browser(page, mark_continue=True)
+    inspection = BrowserInspection(
+        inspected_at=iso_now(),
+        selected_page_url=sanitize_url(getattr(page, "url", None)),
+        page_count=1,
+        frame_count=_frame_count,
+        candidate_count=len(candidates),
+        candidates=candidates,
+        errors=list(_errors),
+    )
+    classified = classify_amex_expiration_from_inspection(inspection)
+    if not classified["detected"] or not classified.get("candidate"):
+        return {
+            "detected": False,
+            "continue_token": None,
+            "dialog_text": None,
+            "source_type": None,
+            "role_tag_class_summary": None,
+            "conditions": classified.get("conditions"),
+        }
+    candidate: InspectionCandidate = classified["candidate"]
+    summary_parts = [part for part in (candidate.tag_name, candidate.role, candidate.class_summary) if part]
+    return {
+        "detected": True,
+        "continue_token": candidate.continue_token,
+        "dialog_text": candidate.text_snippet,
+        "source_type": candidate.source_type,
+        "role_tag_class_summary": " ".join(summary_parts)[:200] or None,
+        "conditions": classified["conditions"],
+    }
+
+
+def diagnose_amex_expiration_dialog_on_page(page: Page) -> dict[str, Any]:
+    """Developer diagnostic wrapper over Browser Inspector + Amex classifier."""
+    candidates, frame_count, errors = inspect_page_browser(page, mark_continue=False)
+    flat: list[dict[str, Any]] = []
+    for candidate in candidates:
+        conditions = classify_amex_expiration_candidate(candidate)
+        payload = candidate.to_sanitized_dict()
+        payload["button_labels"] = list(candidate.visible_button_labels)
+        payload["role_tag_class_summary"] = " ".join(
+            part
+            for part in (candidate.tag_name, candidate.role, candidate.class_summary)
+            if part
+        )[:200]
+        payload["detector_matched"] = bool(conditions["classified_as_expiration_dialog"])
+        legacy = evaluate_expiration_dialog_conditions(
+            candidate.text_snippet or "",
+            has_continue_button=conditions["continue_action_match"],
+            action_labels=list(candidate.visible_button_labels),
+        )
+        payload["conditions"] = {
+            **conditions,
+            "has_headline": conditions["headline_match"],
+            "has_expiration_language": conditions["expiration_language_match"],
+            "has_continue_button": conditions["continue_action_match"],
+            "passed": list(legacy.get("passed") or []),
+            "failed": list(legacy.get("failed") or []),
+        }
+        flat.append(payload)
     return {
         "page_url": sanitize_url(getattr(page, "url", None)),
-        "frame_count": len(frame_reports),
-        "candidate_count": len(flat_candidates),
-        "detector_matched": any(item.get("detector_matched") for item in flat_candidates),
-        "frames": frame_reports,
-        "candidates": flat_candidates,
+        "frame_count": frame_count,
+        "candidate_count": len(flat),
+        "detector_matched": any(item.get("detector_matched") for item in flat),
+        "errors": errors,
+        "frames": [],
+        "candidates": flat,
     }
 
 
@@ -993,8 +1591,18 @@ class KeepaliveActionResult:
     error: str | None = None
 
 
-def inspect_amex_page_signals(page: Page) -> dict[str, Any]:
-    """Lightweight page inspection without navigation or Continue clicks."""
+def inspect_amex_page_signals(
+    page: Page,
+    *,
+    latest_canonical_state: str | None = None,
+    fresh_verification_state: str | None = None,
+) -> dict[str, Any]:
+    """Observation helpers for keepalive/maintenance.
+
+    Browser Inspector classifies the expiration dialog. Authentication remains
+    canonical: prefer a fresh verification result, else the latest committed
+    canonical state. DOM inspection alone never fabricates LOGIN_UNKNOWN.
+    """
     dialog = inspect_amex_expiration_dialog(page)
     final_url = sanitize_url(page.url)
     login_url_detected = is_login_url(final_url)
@@ -1003,18 +1611,28 @@ def inspect_amex_page_signals(page: Page) -> dict[str, Any]:
         body_text = page.locator("body").inner_text(timeout=3_000)
     except Exception:
         body_text = ""
-    auth_hits = count_markers(body_text, AUTHENTICATED_MARKERS)
     login_hits = count_markers(body_text, LOGIN_MARKERS)
-    if login_url_detected or (login_hits >= 2 and auth_hits == 0):
-        auth_state = "SIGNED_OUT"
-    elif auth_hits >= 2 and login_hits == 0:
-        auth_state = "SIGNED_IN"
+    login_page_detected = bool(login_url_detected or login_hits >= 2)
+
+    if fresh_verification_state:
+        auth_state = fresh_verification_state
+        auth_source = AUTH_STATE_SOURCE_FRESH_VERIFICATION
+    elif latest_canonical_state:
+        auth_state = latest_canonical_state
+        auth_source = AUTH_STATE_SOURCE_LATEST_CANONICAL
     else:
-        auth_state = "LOGIN_UNKNOWN"
+        auth_state = None
+        auth_source = AUTH_STATE_SOURCE_NONE
+
+    # Strong login-page evidence can mark logout without inventing LOGIN_UNKNOWN.
+    if login_page_detected:
+        auth_state = "SIGNED_OUT"
+
     return {
         "authentication_state": auth_state,
+        "inspection_authentication_state_source": auth_source,
         "expiration_dialog_detected": bool(dialog.get("detected")),
-        "login_page_detected": bool(login_url_detected or login_hits >= 2),
+        "login_page_detected": login_page_detected,
         "final_url": final_url,
     }
 
@@ -1080,6 +1698,7 @@ def sanitize_keepalive_event(event: dict[str, Any]) -> dict[str, Any]:
         "action_result",
         "response_status",
         "authentication_state",
+        "inspection_authentication_state_source",
         "expiration_dialog_detected",
         "login_page_detected",
     }
@@ -1225,6 +1844,9 @@ class ProviderRuntime:
         self._keepalive_thread: threading.Thread | None = None
         self._keepalive_deadline_mono: float | None = None
         self._shutting_down = False
+
+        self.diagnostics_dir = self.root / "diagnostics"
+        self._latest_browser_inspection: dict[str, Any] | None = None
 
     def matching_chrome_pids(self) -> list[int]:
         """PIDs whose command line uses the exact dedicated Amex profile."""
@@ -1478,8 +2100,21 @@ class ProviderRuntime:
                         reason="No existing americanexpress.com page to inspect",
                     )
                 if observation_only:
-                    info = inspect_amex_expiration_dialog(page)
-                    detected = bool(info.get("detected"))
+                    # Observation-only: Browser Inspector + classifier, never click.
+                    inspection_candidates, _, _ = inspect_page_browser(
+                        page,
+                        mark_continue=False,
+                    )
+                    inspection = BrowserInspection(
+                        inspected_at=iso_now(),
+                        selected_page_url=sanitize_url(getattr(page, "url", None)),
+                        page_count=1,
+                        frame_count=0,
+                        candidate_count=len(inspection_candidates),
+                        candidates=inspection_candidates,
+                    )
+                    classified = classify_amex_expiration_from_inspection(inspection)
+                    detected = bool(classified.get("detected"))
                     if detected:
                         self._note_keepalive_expiration_dialog(
                             source="maintenance_observation",
@@ -1530,8 +2165,13 @@ class ProviderRuntime:
             self.write_state()
             return self.last_result
 
-    def diagnose_expiration_dialog(self, provider: str = "amex") -> dict[str, Any]:
-        """Developer-only CDP inspection of expiration-dialog candidates."""
+    def inspect_browser(
+        self,
+        provider: str = "amex",
+        *,
+        capture_screenshot: bool = False,
+    ) -> dict[str, Any]:
+        """Developer-only Browser Inspector over the live provider session."""
         if provider != "amex":
             raise ValueError(f"Unsupported provider: {provider}")
         with self.lock:
@@ -1543,51 +2183,100 @@ class ProviderRuntime:
                 if not browser.contexts:
                     raise RuntimeError("Chrome exposed no persistent browser context")
                 context = browser.contexts[0]
-                pages = list(context.pages)
-                selected = select_amex_page(context, create_if_missing=False)
-                ordered_pages: list[Page] = []
-                if selected is not None:
-                    ordered_pages.append(selected)
-                for page in pages:
-                    if selected is None or page is not selected:
-                        ordered_pages.append(page)
-
-                page_reports: list[dict[str, Any]] = []
-                all_candidates: list[dict[str, Any]] = []
-                selected_url = sanitize_url(selected.url) if selected is not None else None
-                frame_count = 0
-
-                for page in ordered_pages:
-                    report = diagnose_amex_expiration_dialog_on_page(page)
-                    page_url = report.get("page_url")
-                    is_selected = selected is not None and page is selected
-                    if is_selected:
-                        selected_url = page_url or selected_url
-                    frame_count += int(report.get("frame_count") or 0)
-                    candidates = list(report.get("candidates") or [])
-                    all_candidates.extend(candidates)
-                    page_reports.append(
-                        {
-                            "url": page_url,
-                            "selected": is_selected,
-                            "frame_count": report.get("frame_count"),
-                            "candidate_count": report.get("candidate_count"),
-                            "frames": report.get("frames") or [],
-                        }
-                    )
-
-                return {
-                    "ok": True,
-                    "selected_page_url": selected_url,
-                    "page_count": len(pages),
-                    "frame_count": frame_count,
-                    "candidate_count": len(all_candidates),
-                    "detector_matched": any(
-                        item.get("detector_matched") for item in all_candidates
-                    ),
-                    "pages": page_reports,
-                    "candidates": all_candidates[:80],
+                inspection = inspect_browser_context(
+                    context,
+                    provider=provider,
+                    capture_screenshot=bool(capture_screenshot),
+                    mark_continue=False,
+                    diagnostics_dir=self.diagnostics_dir,
+                )
+                classified = classify_amex_expiration_from_inspection(inspection)
+                payload = inspection.to_sanitized_dict()
+                payload["ok"] = True
+                payload["amex_expiration"] = {
+                    "detected": bool(classified.get("detected")),
+                    "conditions": classified.get("conditions"),
+                    "source_type": classified.get("source_type"),
                 }
+                # Never persist screenshot bytes — path only, and only when enabled.
+                self._latest_browser_inspection = {
+                    key: value
+                    for key, value in payload.items()
+                    if key != "ok"
+                }
+                return payload
+
+    def latest_browser_inspection(self, provider: str = "amex") -> dict[str, Any]:
+        """Return the most recent sanitized inspection metadata (no screenshot bytes)."""
+        if provider != "amex":
+            raise ValueError(f"Unsupported provider: {provider}")
+        with self.lock:
+            if not self._latest_browser_inspection:
+                return {
+                    "ok": False,
+                    "error": "no_browser_inspection",
+                    "reason": "No browser inspection has been captured yet",
+                }
+            payload = dict(self._latest_browser_inspection)
+            payload["ok"] = True
+            return payload
+
+    def diagnose_expiration_dialog(self, provider: str = "amex") -> dict[str, Any]:
+        """Backward-compatible diagnostic wrapper over Browser Inspector."""
+        payload = self.inspect_browser(provider, capture_screenshot=False)
+        candidates = []
+        for raw in payload.get("candidates") or []:
+            conditions = classify_amex_expiration_candidate(raw)
+            item = dict(raw)
+            item["button_labels"] = list(raw.get("visible_button_labels") or [])
+            item["role_tag_class_summary"] = " ".join(
+                part
+                for part in (
+                    raw.get("tag_name"),
+                    raw.get("role"),
+                    raw.get("class_summary"),
+                )
+                if part
+            )[:200]
+            item["detector_matched"] = bool(
+                conditions["classified_as_expiration_dialog"]
+            )
+            item["conditions"] = {
+                **conditions,
+                "has_headline": conditions["headline_match"],
+                "has_expiration_language": conditions["expiration_language_match"],
+                "has_continue_button": conditions["continue_action_match"],
+                "passed": [
+                    key
+                    for key, value in conditions.items()
+                    if key != "classified_as_expiration_dialog" and value
+                ],
+                "failed": [
+                    key
+                    for key, value in conditions.items()
+                    if key != "classified_as_expiration_dialog" and not value
+                ],
+            }
+            candidates.append(item)
+        return {
+            "ok": True,
+            "selected_page_url": payload.get("selected_page_url"),
+            "page_count": payload.get("page_count"),
+            "frame_count": payload.get("frame_count"),
+            "candidate_count": len(candidates),
+            "detector_matched": any(item.get("detector_matched") for item in candidates),
+            "pages": [
+                {
+                    "url": payload.get("selected_page_url"),
+                    "selected": True,
+                    "frame_count": payload.get("frame_count"),
+                    "candidate_count": len(candidates),
+                    "frames": [],
+                }
+            ],
+            "candidates": candidates[:80],
+            "errors": payload.get("errors") or [],
+        }
 
     def _append_keepalive_event(self, event: dict[str, Any]) -> None:
         cleaned = sanitize_keepalive_event(event)
@@ -1807,7 +2496,17 @@ class ProviderRuntime:
                 if page is None:
                     raise RuntimeError("No existing americanexpress.com page for keepalive")
 
-                before = inspect_amex_page_signals(page)
+                latest_canonical = (
+                    self.last_result.authentication_state if self.last_result else None
+                )
+                before = inspect_amex_page_signals(
+                    page,
+                    latest_canonical_state=latest_canonical,
+                )
+                before_auth_source = before.get(
+                    "inspection_authentication_state_source",
+                    AUTH_STATE_SOURCE_NONE,
+                )
                 if before["expiration_dialog_detected"]:
                     self._note_keepalive_expiration_dialog(source="pre_action")
                 if before["login_page_detected"] or before["authentication_state"] == "SIGNED_OUT":
@@ -1820,6 +2519,7 @@ class ProviderRuntime:
                             "action_result": None,
                             "response_status": None,
                             "authentication_state": before["authentication_state"],
+                            "inspection_authentication_state_source": before_auth_source,
                             "expiration_dialog_detected": before["expiration_dialog_detected"],
                             "login_page_detected": before["login_page_detected"],
                         }
@@ -1845,12 +2545,20 @@ class ProviderRuntime:
                             "action_result": action_result.result,
                             "response_status": action_result.response_status,
                             "authentication_state": before["authentication_state"],
+                            "inspection_authentication_state_source": before_auth_source,
                             "expiration_dialog_detected": before["expiration_dialog_detected"],
                             "login_page_detected": before["login_page_detected"],
                         }
                     )
 
-                after = inspect_amex_page_signals(page)
+                after = inspect_amex_page_signals(
+                    page,
+                    latest_canonical_state=latest_canonical,
+                )
+                after_auth_source = after.get(
+                    "inspection_authentication_state_source",
+                    AUTH_STATE_SOURCE_NONE,
+                )
                 if after["expiration_dialog_detected"]:
                     self._note_keepalive_expiration_dialog(source="post_action")
                 self._append_keepalive_event(
@@ -1861,6 +2569,7 @@ class ProviderRuntime:
                         "action_result": action_result.result if action_result else "skipped",
                         "response_status": action_result.response_status if action_result else None,
                         "authentication_state": after["authentication_state"],
+                        "inspection_authentication_state_source": after_auth_source,
                         "expiration_dialog_detected": after["expiration_dialog_detected"],
                         "login_page_detected": after["login_page_detected"],
                     }
@@ -1875,6 +2584,7 @@ class ProviderRuntime:
                             "action_result": action_result.result if action_result else None,
                             "response_status": action_result.response_status if action_result else None,
                             "authentication_state": after["authentication_state"],
+                            "inspection_authentication_state_source": after_auth_source,
                             "expiration_dialog_detected": after["expiration_dialog_detected"],
                             "login_page_detected": after["login_page_detected"],
                         }
@@ -2007,6 +2717,17 @@ class RuntimeHandler(BaseHTTPRequestHandler):
         if self.path == "/providers/amex/keepalive/status":
             self._send_json(HTTPStatus.OK, self.server.runtime.keepalive_status())
             return
+        if self.path == "/providers/amex/diagnostics/browser-inspection/latest":
+            try:
+                payload = self.server.runtime.latest_browser_inspection("amex")
+                status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.NOT_FOUND
+                self._send_json(status, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"ok": False, "error": str(exc)},
+                )
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
 
     def do_POST(self) -> None:
@@ -2069,6 +2790,21 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                 payload = self.server.runtime.stop_keepalive_trial(reason="manually_stopped")
                 status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.CONFLICT
                 self._send_json(status, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"ok": False, "error": str(exc)},
+                )
+            return
+        if self.path == "/providers/amex/diagnostics/browser-inspection":
+            try:
+                body = self._read_json_body()
+                capture_screenshot = bool(body.get("capture_screenshot", False))
+                payload = self.server.runtime.inspect_browser(
+                    "amex",
+                    capture_screenshot=capture_screenshot,
+                )
+                self._send_json(HTTPStatus.OK, payload)
             except Exception as exc:
                 self._send_json(
                     HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -2249,9 +2985,23 @@ def parse_args() -> argparse.Namespace:
     keepalive_stop = subparsers.add_parser("keepalive-stop")
     keepalive_stop.add_argument("provider", choices=("amex",))
 
+    browser_inspect = subparsers.add_parser(
+        "browser-inspect",
+        help="Developer-only Browser Inspector over the live provider session",
+    )
+    browser_inspect.add_argument("provider", choices=("amex",))
+    browser_inspect.add_argument(
+        "--capture-screenshot",
+        action="store_true",
+        help=(
+            "Optionally capture one local screenshot under "
+            "~/.mighty/provider_runtime/diagnostics/ (may contain sensitive data)"
+        ),
+    )
+
     inspect_expiration = subparsers.add_parser(
         "inspect-expiration-dialog",
-        help="Developer-only CDP diagnostic for Amex expiration-dialog candidates",
+        help="Deprecated alias for browser-inspect + Amex expiration classification",
     )
     inspect_expiration.add_argument("provider", choices=("amex",))
     return parser.parse_args()
@@ -2306,6 +3056,17 @@ def main() -> int:
         payload = request_json(
             "POST",
             f"http://{args.host}:{args.port}/providers/{args.provider}/keepalive/stop",
+        )
+        print(json.dumps(payload, indent=2))
+        return 0 if payload.get("ok") else 1
+    if args.command == "browser-inspect":
+        payload = request_json(
+            "POST",
+            (
+                f"http://{args.host}:{args.port}/providers/"
+                f"{args.provider}/diagnostics/browser-inspection"
+            ),
+            {"capture_screenshot": bool(getattr(args, "capture_screenshot", False))},
         )
         print(json.dumps(payload, indent=2))
         return 0 if payload.get("ok") else 1
