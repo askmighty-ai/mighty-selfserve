@@ -13,6 +13,13 @@ from mighty.provider_runtime import (
     inspect_amex_expiration_dialog,
     sanitize_expiration_snippet,
 )
+from tests.test_provider_runtime_browser_inspector import (
+    CdpSessionMock,
+    PAGE_URL,
+    _amex_page,
+    _bind_cdp,
+    _dialog_tree,
+)
 
 
 LIVE_AMEX_DIALOG_TEXT = (
@@ -20,17 +27,6 @@ LIVE_AMEX_DIALOG_TEXT = (
     "You will be signed out due to inactivity. "
     "Select Continue to stay signed in."
 )
-
-
-def _match_payload(*, source_type: str = "DOM") -> dict:
-    return {
-        "detected": True,
-        "continue_token": "tok-live",
-        "dialog_text": LIVE_AMEX_DIALOG_TEXT.lower(),
-        "source_type": source_type,
-        "role_tag_class_summary": 'div class="sessionTimeoutPanel"',
-        "candidates": [],
-    }
 
 
 def test_exact_live_amex_wording_matches():
@@ -62,59 +58,66 @@ def test_unrelated_continue_button_remains_ignored():
 
 
 def test_modal_without_role_dialog_is_detected():
-    # Detector JS must include generic modal/session containers, not only role=dialog.
     joined = ",".join(EXPIRATION_DIALOG_CONTAINER_SELECTORS)
     assert '[role="dialog"]' in joined
     assert '[class*="modal"]' in joined or ".modal" in joined
     assert '[class*="session"]' in joined or '[class*="timeout"]' in joined
-    assert "shadowRoot" in INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS
+    assert "retired" in INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS
 
-    page = MagicMock()
-    page.main_frame = page
-    page.frames = [page]
-    page.url = "https://global.americanexpress.com/overview"
-    page.evaluate.return_value = {
-        **_match_payload(source_type="DOM"),
-        "role_tag_class_summary": 'div class="axp-session-timeout-panel"',
-    }
+    page = _amex_page()
+    session = CdpSessionMock(document=_dialog_tree(role=None))
+    _bind_cdp(page, session)
 
     info = inspect_amex_expiration_dialog(page)
     assert info["detected"] is True
-    assert info["continue_token"] == "tok-live"
+    assert info["continue_token"]
+    assert info["continue_token"].startswith("cdp-backend:")
     assert "session is about to expire" in (info["dialog_text"] or "")
+    assert page.evaluate.call_count == 0
 
 
 def test_modal_in_iframe_is_detected():
     main = MagicMock(name="main")
-    main.url = "https://global.americanexpress.com/overview"
-    main.evaluate.return_value = {
-        "detected": False,
-        "continue_token": None,
-        "dialog_text": None,
-        "candidates": [],
-    }
+    main.url = PAGE_URL
+    main.is_detached.return_value = False
+    main.parent_frame = None
 
     iframe = MagicMock(name="iframe")
     iframe.url = "https://functions.americanexpress.com/session-timeout"
-    iframe.evaluate.return_value = _match_payload(source_type="IFRAME")
+    iframe.is_detached.return_value = False
+    iframe.parent_frame = main
 
-    page = MagicMock()
-    page.url = main.url
+    page = _amex_page(frames=[main, iframe])
     page.main_frame = main
-    page.frames = [main, iframe]
+    session = CdpSessionMock(
+        document=_dialog_tree(source="iframe"),
+        frame_tree={
+            "frameTree": {
+                "frame": {"id": "main", "url": PAGE_URL},
+                "childFrames": [
+                    {
+                        "frame": {
+                            "id": "child",
+                            "url": "https://functions.americanexpress.com/session-timeout",
+                        },
+                        "childFrames": [],
+                    }
+                ],
+            }
+        },
+    )
+    _bind_cdp(page, session)
 
     info = inspect_amex_expiration_dialog(page)
     assert info["detected"] is True
     assert info["source_type"] == "IFRAME"
-    assert info["continue_token"] == "tok-live"
+    assert info["continue_token"]
 
 
 def test_modal_in_open_shadow_root_is_detected():
-    page = MagicMock()
-    page.main_frame = page
-    page.frames = [page]
-    page.url = "https://global.americanexpress.com/overview"
-    page.evaluate.return_value = _match_payload(source_type="SHADOW_DOM")
+    page = _amex_page()
+    session = CdpSessionMock(document=_dialog_tree(source="shadow"))
+    _bind_cdp(page, session)
 
     info = inspect_amex_expiration_dialog(page)
     assert info["detected"] is True
@@ -122,53 +125,20 @@ def test_modal_in_open_shadow_root_is_detected():
 
 
 def test_diagnose_reports_candidates_and_conditions():
-    main = MagicMock(name="main")
-    main.url = "https://global.americanexpress.com/overview?account=secret"
-    main.evaluate.return_value = {
-        "detected": True,
-        "continue_token": None,
-        "dialog_text": None,
-        "candidates": [
-            {
-                "source_type": "DOM",
-                "role_tag_class_summary": 'div class="sessionTimeoutPanel"',
-                "text_snippet": LIVE_AMEX_DIALOG_TEXT.lower(),
-                "button_labels": ["continue"],
-                "detector_matched": True,
-                "conditions": evaluate_expiration_dialog_conditions(
-                    LIVE_AMEX_DIALOG_TEXT,
-                    has_continue_button=True,
-                ),
-            },
-            {
-                "source_type": "DOM",
-                "role_tag_class_summary": "button",
-                "text_snippet": "continue to view rewards balance 1234",
-                "button_labels": ["continue"],
-                "detector_matched": False,
-                "conditions": evaluate_expiration_dialog_conditions(
-                    "continue to view rewards balance 1234",
-                    has_continue_button=True,
-                ),
-            },
-        ],
-    }
-
-    page = MagicMock()
-    page.url = main.url
-    page.main_frame = main
-    page.frames = [main]
+    page = _amex_page(url="https://global.americanexpress.com/overview?account=secret")
+    session = CdpSessionMock(document=_dialog_tree())
+    _bind_cdp(page, session)
 
     report = diagnose_amex_expiration_dialog_on_page(page)
-    assert report["frame_count"] == 1
-    assert report["candidate_count"] == 2
+    assert report["frame_count"] >= 1
+    assert report["candidate_count"] >= 1
     assert report["detector_matched"] is True
-    assert report["page_url"] == "https://global.americanexpress.com/overview"
+    assert report["page_url"] == PAGE_URL
     candidate = report["candidates"][0]
-    assert candidate["source_type"] == "DOM"
+    assert candidate["source_type"] in {"DOM", "IFRAME", "SHADOW_DOM"}
     assert candidate["detector_matched"] is True
     assert "has_headline" in candidate["conditions"]["passed"]
-    assert candidate["button_labels"] == ["continue"]
+    assert "continue" in candidate["button_labels"]
     assert "account=secret" not in (candidate["frame_url"] or "")
     assert len(candidate["text_snippet"]) <= 300
 
@@ -176,3 +146,17 @@ def test_diagnose_reports_candidates_and_conditions():
 def test_sanitize_snippet_rejects_unrelated_text():
     assert sanitize_expiration_snippet("Available credit and statement balance") is None
     assert sanitize_expiration_snippet(LIVE_AMEX_DIALOG_TEXT) is not None
+
+
+def test_unrelated_panel_with_continue_is_not_expiration_dialog():
+    page = _amex_page()
+    # Class matches container selectors, but wording is unrelated.
+    session = CdpSessionMock(
+        document=_dialog_tree(
+            text="Continue to view your card benefits and offers.",
+            class_name="sessionTimeoutPanel",
+        )
+    )
+    _bind_cdp(page, session)
+    info = inspect_amex_expiration_dialog(page)
+    assert info["detected"] is False

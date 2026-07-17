@@ -21,6 +21,14 @@ from mighty.provider_runtime import (
     extend_amex_session_on_page,
     inspect_amex_expiration_dialog,
 )
+from tests.test_provider_runtime_browser_inspector import (
+    CdpSessionMock,
+    _amex_page,
+    _bind_cdp,
+    _dialog_tree,
+    _document,
+    _element,
+)
 
 
 GENUINE_DIALOG_TEXT = (
@@ -64,21 +72,21 @@ def test_missing_expiration_language_is_ignored():
 
 
 def test_inspect_requires_dialog_continue_and_expiration_text():
-    page = MagicMock()
-    page.evaluate.return_value = {
-        "detected": True,
-        "continue_token": "tok-1",
-        "dialog_text": GENUINE_DIALOG_TEXT.lower(),
-    }
+    page = _amex_page()
+    session = CdpSessionMock(document=_dialog_tree())
+    _bind_cdp(page, session)
     info = inspect_amex_expiration_dialog(page)
     assert info["detected"] is True
-    assert info["continue_token"] == "tok-1"
+    assert info["continue_token"]
+    assert info["continue_token"].startswith("cdp-backend:")
 
-    page.evaluate.return_value = {
-        "detected": True,
-        "continue_token": "tok-2",
-        "dialog_text": "click continue for rewards",
-    }
+    unrelated = CdpSessionMock(
+        document=_dialog_tree(
+            text="click continue for rewards",
+            class_name="sessionTimeoutPanel",
+        )
+    )
+    _bind_cdp(page, unrelated)
     assert inspect_amex_expiration_dialog(page)["detected"] is False
 
 
@@ -166,28 +174,30 @@ def test_duplicate_concurrent_attempts_are_prevented(tmp_path: Path):
     assert any(item["result"] == MAINTENANCE_RESULT_NO_DIALOG for item in results)
 
 
-def test_dismiss_clicks_only_marked_continue_inside_dialog():
-    page = MagicMock()
-    page.evaluate.side_effect = [
-        {
-            "detected": True,
-            "continue_token": "tok-xyz",
-            "dialog_text": GENUINE_DIALOG_TEXT.lower(),
-        },
-        {"detected": False, "continue_token": None, "dialog_text": None},
-    ]
-    button = MagicMock()
-    button.is_visible.return_value = True
-    locator = MagicMock()
-    locator.count.return_value = 1
-    locator.first = button
-    page.locator.return_value = locator
+def test_dismiss_clicks_only_matched_continue_via_cdp():
+    page = _amex_page()
+    session = CdpSessionMock(document=_dialog_tree())
+    empty = CdpSessionMock(
+        document=_document(_element(10, 10, "HTML", children=[_element(20, 20, "BODY")])),
+        container_node_ids=[],
+    )
+    phase = {"n": 0}
+
+    def next_session(_page):
+        phase["n"] += 1
+        return session if phase["n"] <= 2 else empty
+
+    page.context = MagicMock()
+    page.context.new_cdp_session.side_effect = next_session
+    page.viewport_size = {"width": 1200, "height": 800}
     page.wait_for_timeout.return_value = None
 
     early = dismiss_amex_expiration_dialog(page)
     assert early is None
-    page.locator.assert_called_with('[data-mighty-amex-continue="tok-xyz"]')
-    button.click.assert_called_once()
+    click_calls = [call for call in session.calls if call[0] == "Input.dispatchMouseEvent"]
+    assert len(click_calls) == 2
+    assert page.evaluate.call_count == 0
+    page.locator.assert_not_called()
 
 
 def test_status_includes_maintenance_fields(tmp_path: Path):

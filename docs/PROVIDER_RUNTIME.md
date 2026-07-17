@@ -186,17 +186,45 @@ curl -X POST http://127.0.0.1:8765/providers/amex/maintenance/check
 The Browser Inspector is a reusable, provider-agnostic view of what the attached
 browser is visibly rendering. It does **not** own provider-specific meaning.
 
+#### Why Amex breaks Playwright `evaluate`
+
+Amex monkey-patches `eval` in page JavaScript. Playwright’s
+`frame.evaluate` / `page.evaluate` therefore fail with `Error: eval is disabled`
+on authenticated Amex pages. Canonical verify still works because it uses
+navigation, locators, title, `body.inner_text`, and response listeners — not
+in-page evaluate.
+
+Live Browser Inspector collection therefore uses **Chrome DevTools Protocol
+(CDP)** only. No production inspection path calls `frame.evaluate` or
+`page.evaluate`.
+
+#### CDP-backed architecture
+
 ```text
 Provider Runtime
     ↓
-Browser Inspector
-    ├── pages
-    ├── frames
-    ├── visible modal candidates
-    ├── visible controls
-    ├── accessible open shadow roots
+Browser Inspector (CDP)
+    ├── Page.getFrameTree
+    ├── DOM.getDocument(pierce=true)
+    ├── Accessibility.getFullAXTree
+    ├── bounded DOM/AX candidate extraction (Python)
+    ├── CSS.getComputedStyleForNode + DOM.getBoxModel (visibility/geometry)
     └── sanitized screenshots/diagnostics metadata
 ```
+
+Flow:
+
+1. open a page-bound CDP session;
+2. enable DOM / CSS / Accessibility domains;
+3. take pierced DOM + full AX snapshots;
+4. discover a bounded union of modal-like nodes (selectors, AX dialog roles,
+   fixed/absolute containers) — not a full-page serialize;
+5. build `InspectionCandidate` records in Python;
+6. dedupe nested/overlapping candidates, preferring the outer useful container.
+
+Open shadow roots and same-origin child-frame documents are included through
+pierced DOM. Closed/inaccessible roots and cross-origin frames produce sanitized
+diagnostics rather than fabricated content.
 
 Responsibilities:
 
@@ -204,15 +232,21 @@ Responsibilities:
 - inspect the selected page’s main frame, nested child frames, and open shadow
   roots without failing the whole run when one context is inaccessible;
 - emit bounded `InspectionCandidate` records for visible modal-like containers
-  (not every page shell), including `role="dialog"`, `aria-modal`, substantial
-  fixed/absolute overlays, high z-index layers, actionable controls, and
-  modal-related text;
+  (not every page shell), including `role="dialog"`, `aria-modal`, AX
+  dialog/alertdialog/alert nodes, substantial fixed/absolute overlays, high
+  z-index layers, actionable controls, and modal-related text;
 - deduplicate nested candidates so the outer useful container wins;
 - keep text snippets ≤300 characters and mask runs of 6+ digits as
   `[REDACTED_NUMBER]`;
 - never persist credentials, cookies, authorization headers, request/response
   bodies, full HTML, balances, card numbers, transaction values, or full query
   strings.
+
+Developer diagnostics for failed CDP operations include frame URL/id, target id
+when available, CDP method, exception class/message/traceback, failure phase,
+failure scope (entire frame vs node), and same-origin/cross-origin when known.
+
+#### Provider-specific classification boundary
 
 Amex-specific expiration classification consumes inspector output in a separate
 classifier. A candidate is the Amex expiration dialog only when:
@@ -236,6 +270,14 @@ classified_as_expiration_dialog
 ```
 
 `role="dialog"` is not required.
+
+#### Maintenance Continue click
+
+After classification, maintenance retains a stable CDP identity for the matched
+Continue control (`backendNodeId`, encoded as an internal continue token) and
+clicks it with CDP `Input.dispatchMouseEvent` at the control’s box-model center.
+It does not write marker attributes via JavaScript and does not use
+`page.evaluate` / `frame.evaluate`.
 
 #### Developer Browser Inspector API / CLI
 
@@ -318,6 +360,13 @@ Keepalive trials:
 | `SESSION_API` | Periodic read-only `ReadUserSession.v1` fetch from the Amex page context |
 | `PAGE_ACTIVITY` | Harmless focus + small scroll/return (no clicks/forms) |
 | `OVERVIEW_RELOAD` | Reload/navigate to the Amex overview page (experimental) |
+
+**Current limitation:** `SESSION_API` and `PAGE_ACTIVITY` still use
+`page.evaluate` and are incompatible with Amex’s eval monkey-patch. They were
+not migrated in the CDP Browser Inspector change. Prefer `NONE` /
+`OVERVIEW_RELOAD` for Amex trials until a non-evaluate keepalive path exists.
+Keepalive trials remain observation experiments and must not silently change
+behavior.
 
 Defaults: `duration_seconds=1800` (30 minutes), `interval_seconds=60`.
 Developer trials may use shorter values such as 8 minutes / 30 seconds.

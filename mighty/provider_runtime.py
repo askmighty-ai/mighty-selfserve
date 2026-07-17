@@ -182,8 +182,14 @@ EXPIRATION_DIALOG_CONTAINER_SELECTORS = (
     ".modal",
     '[class*="modal"]',
     '[class*="Modal"]',
+    '[class*="dialog"]',
+    '[class*="Dialog"]',
     '[class*="overlay"]',
     '[class*="Overlay"]',
+    '[class*="drawer"]',
+    '[class*="Drawer"]',
+    '[class*="popover"]',
+    '[class*="Popover"]',
     '[class*="popup"]',
     '[class*="Popup"]',
     '[class*="timeout"]',
@@ -198,334 +204,21 @@ EXPIRATION_DIALOG_CONTAINER_SELECTORS = (
     '[id*="timeout"]',
 )
 
-# Generic Browser Inspector: finds visible modal-like candidates only.
-# Provider-specific classification (e.g. Amex expiration) happens in Python.
-BROWSER_INSPECTOR_JS = """
-(options) => {
-  const opts = options || {};
-  const markContinue = !!opts.mark_continue;
-  const defaultSourceType = opts.default_source_type || "DOM";
-  const maxSnippet = 300;
-  const keywords = [
-    "session",
-    "expire",
-    "inactivity",
-    "continue",
-    "log out",
-    "sign in",
-    "verify",
-    "challenge",
-    "security",
-    "authentication",
-  ];
-  const containerSelector = [
-    '[role="dialog"]',
-    '[aria-modal="true"]',
-    "dialog",
-    ".modal",
-    '[class*="modal"]',
-    '[class*="Modal"]',
-    '[class*="overlay"]',
-    '[class*="Overlay"]',
-    '[class*="popup"]',
-    '[class*="Popup"]',
-    '[class*="timeout"]',
-    '[class*="Timeout"]',
-    '[class*="session"]',
-    '[class*="Session"]',
-    '[class*="expire"]',
-    '[class*="Expire"]',
-    '[data-testid*="session"]',
-    '[data-testid*="timeout"]',
-    '[id*="session"]',
-    '[id*="timeout"]',
-  ].join(", ");
-
-  const errors = [];
-  const closedShadowMarkers = [];
-
-  const isVisible = (el) => {
-    if (!el || !(el instanceof Element)) return false;
-    const style = window.getComputedStyle(el);
-    if (
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      style.opacity === "0"
-    ) {
-      return false;
-    }
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  };
-
-  const normalize = (text) => (text || "").replace(/\\s+/g, " ").trim().toLowerCase();
-  const redactDigits = (text) => (text || "").replace(/\\d{6,}/g, "[REDACTED_NUMBER]");
-  const hasModalKeyword = (text) => keywords.some((keyword) => text.includes(keyword));
-
-  const buttonLabel = (el) =>
-    normalize(
-      el.innerText ||
-        el.textContent ||
-        el.getAttribute("value") ||
-        el.getAttribute("aria-label") ||
-        ""
-    );
-
-  const collectActions = (container) => {
-    const buttons = [];
-    const links = [];
-    const continueButtons = [];
-    let nodes = [];
-    try {
-      nodes = Array.from(
-        container.querySelectorAll(
-          'button, [role="button"], input[type="button"], input[type="submit"], a'
-        )
-      ).filter(isVisible);
-    } catch (err) {
-      nodes = [];
-    }
-    for (const node of nodes) {
-      const label = buttonLabel(node);
-      if (!label) continue;
-      const tag = (node.tagName || "").toLowerCase();
-      if (tag === "a") {
-        if (links.length < 12) links.push(label);
-      } else if (buttons.length < 12) {
-        buttons.push(label);
-      }
-      if (label === "continue" || label.startsWith("continue ")) {
-        continueButtons.push(node);
-      }
-    }
-    return { buttons, links, continueButtons };
-  };
-
-  const viewportArea = () => {
-    const w = window.innerWidth || document.documentElement.clientWidth || 1;
-    const h = window.innerHeight || document.documentElement.clientHeight || 1;
-    return Math.max(1, w * h);
-  };
-
-  const classSummary = (el) =>
-    (el.getAttribute("class") || "").replace(/\\s+/g, " ").trim().slice(0, 120);
-
-  const hostSummary = (el) => {
-    const tag = (el.tagName || "").toLowerCase();
-    const cls = classSummary(el);
-    return cls ? tag + " class=" + cls : tag;
-  };
-
-  const accessibleName = (el) => {
-    const labelledBy = el.getAttribute("aria-labelledby");
-    if (labelledBy) {
-      try {
-        const parts = labelledBy
-          .split(/\\s+/)
-          .map((id) => {
-            const node = document.getElementById(id);
-            return node ? normalize(node.innerText || node.textContent || "") : "";
-          })
-          .filter(Boolean);
-        if (parts.length) return parts.join(" ").slice(0, 120);
-      } catch (err) {}
-    }
-    return normalize(
-      el.getAttribute("aria-label") ||
-        el.getAttribute("title") ||
-        el.getAttribute("name") ||
-        ""
-    ).slice(0, 120);
-  };
-
-  const considerCandidate = (el, sourceType, hostTagClass, out, seen) => {
-    if (!el || seen.has(el) || !isVisible(el)) return;
-    let style;
-    try {
-      style = window.getComputedStyle(el);
-    } catch (err) {
-      return;
-    }
-    const rect = el.getBoundingClientRect();
-    const coverage = (rect.width * rect.height) / viewportArea();
-    const position = style.position || "";
-    const fixedOrAbsolute = position === "fixed" || position === "absolute";
-    const zRaw = style.zIndex;
-    const z = parseInt(zRaw, 10);
-    const role = el.getAttribute("role") || "";
-    const ariaModal = el.getAttribute("aria-modal");
-    const text = redactDigits(normalize(el.innerText || el.textContent || ""));
-    const actions = collectActions(el);
-    const hasActions = actions.buttons.length + actions.links.length > 0;
-    const tags = [];
-
-    if (role === "dialog") tags.push("role_dialog");
-    if (ariaModal === "true") tags.push("aria_modal");
-    if (fixedOrAbsolute && coverage >= 0.15) tags.push("substantial_coverage");
-    if (Number.isFinite(z) && z >= 100) tags.push("high_z_index");
-    if (hasActions && (role === "dialog" || ariaModal === "true" || fixedOrAbsolute)) {
-      tags.push("actionable_controls");
-    }
-    if (coverage >= 0.35 && fixedOrAbsolute) tags.push("viewport_overlay");
-    if (text && hasModalKeyword(text)) tags.push("modal_text");
-
-    // Require at least one detector signal, and avoid capturing plain page shells.
-    if (!tags.length) return;
-    if (
-      !tags.includes("role_dialog") &&
-      !tags.includes("aria_modal") &&
-      !tags.includes("modal_text") &&
-      !(tags.includes("substantial_coverage") && hasActions) &&
-      !(tags.includes("viewport_overlay") && hasActions)
-    ) {
-      return;
-    }
-    if (text.length < 8 && !tags.includes("role_dialog") && !tags.includes("aria_modal")) {
-      return;
-    }
-
-    seen.add(el);
-    let continueToken = null;
-    if (markContinue && actions.continueButtons.length) {
-      continueToken = "mighty-amex-continue-" + Date.now().toString(36) + "-" + out.length;
-      actions.continueButtons[0].setAttribute("data-mighty-amex-continue", continueToken);
-    }
-
-    out.push({
-      element: el,
-      source_type: sourceType,
-      tag_name: (el.tagName || "").toLowerCase(),
-      role: role || null,
-      class_summary: classSummary(el) || null,
-      host_tag_class_summary: hostTagClass || null,
-      text_snippet: text.slice(0, maxSnippet),
-      visible_button_labels: actions.buttons,
-      visible_link_labels: actions.links,
-      bounding_box: {
-        x: Math.round(rect.x),
-        y: Math.round(rect.y),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-      },
-      viewport_coverage_ratio: Math.round(coverage * 1000) / 1000,
-      z_index: Number.isFinite(z) ? z : zRaw || null,
-      fixed_or_absolute: fixedOrAbsolute,
-      aria_modal: ariaModal === null ? null : ariaModal === "true",
-      accessible_name: accessibleName(el) || null,
-      detector_tags: tags,
-      continue_token: continueToken,
-      errors: [],
-    });
-  };
-
-  const collectFromRoot = (root, sourceType, hostTagClass, out, seen) => {
-    if (!root) return;
-    let nodes = [];
-    try {
-      nodes = Array.from(root.querySelectorAll(containerSelector));
-    } catch (err) {
-      errors.push("query_containers_failed");
-      nodes = [];
-    }
-    for (const el of nodes) {
-      considerCandidate(el, sourceType, hostTagClass, out, seen);
-    }
-
-    let overlayNodes = [];
-    try {
-      overlayNodes = Array.from(root.querySelectorAll("div, section, aside, article"));
-    } catch (err) {
-      overlayNodes = [];
-    }
-    for (const el of overlayNodes) {
-      if (!isVisible(el)) continue;
-      let style;
-      try {
-        style = window.getComputedStyle(el);
-      } catch (err) {
-        continue;
-      }
-      const position = style.position;
-      if (position !== "fixed" && position !== "absolute") continue;
-      const z = parseInt(style.zIndex, 10);
-      const rect = el.getBoundingClientRect();
-      const coverage = (rect.width * rect.height) / viewportArea();
-      if ((!Number.isFinite(z) || z < 5) && coverage < 0.15) continue;
-      if (rect.width < 80 || rect.height < 40) continue;
-      considerCandidate(el, sourceType, hostTagClass, out, seen);
-    }
-
-    let all = [];
-    try {
-      all = Array.from(root.querySelectorAll("*"));
-    } catch (err) {
-      all = [];
-    }
-    for (const el of all) {
-      try {
-        if (el.shadowRoot) {
-          collectFromRoot(el.shadowRoot, "SHADOW_DOM", hostSummary(el), out, seen);
-        } else if (el.attachShadow) {
-          // Closed shadow roots are not exposed via element.shadowRoot.
-          // Detect only when open root is absent but shadow exists via openOrClosed?
-          // Standard DOM: closed roots yield null shadowRoot; record marker once per host
-          // only when the host advertises shadow via known attributes/custom elements.
-        }
-      } catch (err) {
-        errors.push("shadow_traversal_error");
-      }
-    }
-  };
-
-  const raw = [];
-  const seen = new Set();
-  collectFromRoot(document, defaultSourceType, null, raw, seen);
-
-  // Deduplicate nested candidates: keep outermost useful containers.
-  const keep = [];
-  for (const item of raw) {
-    const nestedInsideKept = keep.some(
-      (outer) => outer.element !== item.element && outer.element.contains(item.element)
-    );
-    if (nestedInsideKept) continue;
-    // Drop previously kept descendants of this new outer candidate.
-    for (let i = keep.length - 1; i >= 0; i -= 1) {
-      if (item.element.contains(keep[i].element) && item.element !== keep[i].element) {
-        keep.splice(i, 1);
-      }
-    }
-    keep.push(item);
-  }
-
-  return {
-    candidates: keep.slice(0, 40).map((item) => ({
-      source_type: item.source_type,
-      tag_name: item.tag_name,
-      role: item.role,
-      class_summary: item.class_summary,
-      host_tag_class_summary: item.host_tag_class_summary,
-      text_snippet: item.text_snippet,
-      visible_button_labels: item.visible_button_labels,
-      visible_link_labels: item.visible_link_labels,
-      bounding_box: item.bounding_box,
-      viewport_coverage_ratio: item.viewport_coverage_ratio,
-      z_index: item.z_index,
-      fixed_or_absolute: item.fixed_or_absolute,
-      aria_modal: item.aria_modal,
-      accessible_name: item.accessible_name,
-      detector_tags: item.detector_tags,
-      continue_token: item.continue_token,
-      errors: item.errors,
-    })),
-    closed_shadow_markers: closedShadowMarkers,
-    errors,
-  };
-}
-"""
+# Browser Inspector candidates are collected via CDP DOM/Accessibility APIs.
+# Amex monkey-patches eval, so Playwright frame.evaluate/page.evaluate cannot
+# be used for live inspection. BROWSER_INSPECTOR_JS is retired from production.
+BROWSER_INSPECTOR_JS = (
+    "/* retired: Browser Inspector uses CDP DOM/AX, not in-page evaluate */"
+)
 
 # Backward-compatible aliases used by older call sites/tests.
 INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS = BROWSER_INSPECTOR_JS
 FIND_AMEX_EXPIRATION_DIALOG_JS = BROWSER_INSPECTOR_JS
+
+# TODO: SESSION_API and PAGE_ACTIVITY keepalive strategies still use
+# page.evaluate and are incompatible with Amex's eval monkey-patch. Do not
+# migrate them in the Browser Inspector CDP change; trials remain observation
+# experiments until a non-evaluate keepalive path exists.
 
 PAGE_ACTIVITY_JS = """
 () => {
@@ -1015,18 +708,13 @@ def _host_matches_suffixes(host: str, suffixes: tuple[str, ...]) -> bool:
 
 
 def _page_viewport_area(page: Page) -> float:
+    """Viewport area for page ranking; avoids page.evaluate (broken on Amex)."""
     try:
         viewport = getattr(page, "viewport_size", None)
         if isinstance(viewport, dict):
             return float(viewport.get("width", 0) or 0) * float(
                 viewport.get("height", 0) or 0
             )
-    except Exception:
-        pass
-    try:
-        size = page.evaluate("() => ({ w: window.innerWidth || 0, h: window.innerHeight || 0 })")
-        if isinstance(size, dict):
-            return float(size.get("w", 0) or 0) * float(size.get("h", 0) or 0)
     except Exception:
         pass
     return 0.0
@@ -1107,6 +795,1380 @@ def _iter_page_frames(page: Page) -> list[Any]:
     return frame_list or [page]
 
 
+def _frame_parent_url(frame: Any) -> str | None:
+    try:
+        parent = getattr(frame, "parent_frame", None)
+        if parent is None:
+            return None
+        return sanitize_url(getattr(parent, "url", None))
+    except Exception:
+        return None
+
+
+def _frame_appears_cross_origin(
+    frame_url: str | None,
+    page_url: str | None,
+) -> bool | None:
+    frame_host = _hostname(frame_url)
+    page_host = _hostname(page_url)
+    if not frame_host or not page_host:
+        return None
+    return frame_host != page_host
+
+
+CDP_CONTINUE_TOKEN_PREFIX = "cdp-backend:"
+
+INSPECTION_CONTAINER_SELECTORS = EXPIRATION_DIALOG_CONTAINER_SELECTORS
+
+AX_CANDIDATE_ROLES = frozenset({"dialog", "alertdialog", "alert"})
+ACTION_NODE_SELECTOR = (
+    'button, [role="button"], input[type="button"], input[type="submit"], a'
+)
+OVERLAY_NODE_SELECTOR = "div, section, aside, article"
+CDP_CAPABILITY_PROBES: tuple[tuple[str, str, dict[str, Any] | None], ...] = (
+    ("Page.getFrameTree", "Page.getFrameTree", None),
+    ("DOM.enable", "DOM.enable", None),
+    ("CSS.enable", "CSS.enable", None),
+    ("Accessibility.enable", "Accessibility.enable", None),
+    (
+        "DOM.getDocument",
+        "DOM.getDocument",
+        {"depth": -1, "pierce": True},
+    ),
+    ("Accessibility.getFullAXTree", "Accessibility.getFullAXTree", None),
+)
+
+
+def open_page_cdp_session(page: Page) -> Any:
+    """Open a CDP session bound to the selected page."""
+    return page.context.new_cdp_session(page)
+
+
+def _cdp_send(session: Any, method: str, params: dict[str, Any] | None = None) -> Any:
+    if params is None:
+        return session.send(method)
+    return session.send(method, params)
+
+
+def enable_inspection_domains(session: Any) -> None:
+    _cdp_send(session, "DOM.enable")
+    _cdp_send(session, "CSS.enable")
+    _cdp_send(session, "Accessibility.enable")
+
+
+def get_frame_tree(session: Any) -> dict[str, Any]:
+    return _cdp_send(session, "Page.getFrameTree")
+
+
+def get_pierced_document(session: Any) -> dict[str, Any]:
+    return _cdp_send(session, "DOM.getDocument", {"depth": -1, "pierce": True})
+
+
+def query_selector_all(session: Any, node_id: int, selector: str) -> list[int]:
+    result = _cdp_send(
+        session,
+        "DOM.querySelectorAll",
+        {"nodeId": int(node_id), "selector": selector},
+    )
+    return [int(item) for item in (result.get("nodeIds") or []) if item is not None]
+
+
+def describe_node(
+    session: Any,
+    *,
+    node_id: int | None = None,
+    backend_node_id: int | None = None,
+    depth: int = 0,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"depth": depth}
+    if node_id is not None:
+        params["nodeId"] = int(node_id)
+    if backend_node_id is not None:
+        params["backendNodeId"] = int(backend_node_id)
+    return _cdp_send(session, "DOM.describeNode", params)
+
+
+def get_node_attributes(session: Any, node_id: int) -> dict[str, str]:
+    result = _cdp_send(session, "DOM.getAttributes", {"nodeId": int(node_id)})
+    attrs = result.get("attributes") or []
+    out: dict[str, str] = {}
+    for index in range(0, len(attrs) - 1, 2):
+        out[str(attrs[index])] = str(attrs[index + 1])
+    return out
+
+
+def get_node_box_model(session: Any, backend_node_id: int) -> dict[str, Any]:
+    return _cdp_send(
+        session,
+        "DOM.getBoxModel",
+        {"backendNodeId": int(backend_node_id)},
+    )
+
+
+def get_node_computed_style(session: Any, node_id: int) -> dict[str, str]:
+    result = _cdp_send(
+        session,
+        "CSS.getComputedStyleForNode",
+        {"nodeId": int(node_id)},
+    )
+    styles: dict[str, str] = {}
+    for item in result.get("computedStyle") or []:
+        name = item.get("name")
+        if name:
+            styles[str(name)] = str(item.get("value") or "")
+    return styles
+
+
+def get_accessibility_tree(session: Any) -> dict[str, Any]:
+    return _cdp_send(session, "Accessibility.getFullAXTree")
+
+
+def resolve_backend_node(session: Any, backend_node_id: int) -> dict[str, Any]:
+    return _cdp_send(
+        session,
+        "DOM.resolveNode",
+        {"backendNodeId": int(backend_node_id)},
+    )
+
+
+def _summarize_cdp_result(method: str, result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {"type": type(result).__name__}
+    if method == "Page.getFrameTree":
+        frame = (result.get("frameTree") or {}).get("frame") or {}
+        child_count = len((result.get("frameTree") or {}).get("childFrames") or [])
+        return {
+            "frame_id": frame.get("id"),
+            "frame_url": sanitize_url(frame.get("url")),
+            "child_frame_count": child_count,
+        }
+    if method == "DOM.getDocument":
+        root = result.get("root") or {}
+        return {
+            "root_node_id": root.get("nodeId"),
+            "root_backend_node_id": root.get("backendNodeId"),
+            "node_name": root.get("nodeName"),
+            "child_count": len(root.get("children") or []),
+        }
+    if method == "Accessibility.getFullAXTree":
+        nodes = result.get("nodes") or []
+        roles = set()
+        for node in nodes[:200]:
+            role = ((node.get("role") or {}).get("value") or "").lower()
+            if role in AX_CANDIDATE_ROLES:
+                roles.add(role)
+        return {"node_count": len(nodes), "dialog_like_roles": sorted(roles)}
+    return {"keys": sorted(str(key) for key in result.keys())[:12]}
+
+
+def probe_cdp_operation(
+    session: Any,
+    *,
+    probe: str,
+    method: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run one CDP capability probe; never raises."""
+    try:
+        result = _cdp_send(session, method, params)
+        return {
+            "probe": probe,
+            "cdp_method": method,
+            "ok": True,
+            "summary": _summarize_cdp_result(method, result),
+            "exception_class": None,
+            "exception_message": None,
+            "traceback": None,
+        }
+    except Exception as exc:
+        return {
+            "probe": probe,
+            "cdp_method": method,
+            "ok": False,
+            "summary": None,
+            "exception_class": type(exc).__name__,
+            "exception_message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+
+def probe_page_cdp_capabilities(
+    page: Page,
+    *,
+    stop_on_first_failure: bool = True,
+) -> dict[str, Any]:
+    """Temporary internal helper: confirm CDP inspection primitives on a page."""
+    session = None
+    probes: list[dict[str, Any]] = []
+    first_failure: dict[str, Any] | None = None
+    try:
+        session = open_page_cdp_session(page)
+    except Exception as exc:
+        failure = {
+            "probe": "open_page_cdp_session",
+            "cdp_method": "Target.attachToTarget",
+            "ok": False,
+            "summary": None,
+            "exception_class": type(exc).__name__,
+            "exception_message": str(exc),
+            "traceback": traceback.format_exc(),
+            "failure_phase": "open_session",
+            "failure_scope": "entire_page",
+        }
+        return {
+            "ok": False,
+            "probes": [failure],
+            "first_failure": failure,
+            "stopped_early": True,
+        }
+
+    try:
+        for probe_name, method, params in CDP_CAPABILITY_PROBES:
+            result = probe_cdp_operation(
+                session,
+                probe=probe_name,
+                method=method,
+                params=params,
+            )
+            probes.append(result)
+            if not result["ok"]:
+                first_failure = {
+                    **result,
+                    "failure_phase": "cdp_capability_probe",
+                    "failure_scope": "entire_page",
+                    "frame_url": sanitize_url(getattr(page, "url", None)),
+                }
+                if stop_on_first_failure:
+                    break
+    finally:
+        try:
+            if session is not None and hasattr(session, "detach"):
+                session.detach()
+        except Exception:
+            pass
+
+    return {
+        "ok": first_failure is None,
+        "probes": probes,
+        "first_failure": first_failure,
+        "stopped_early": bool(first_failure and stop_on_first_failure),
+    }
+
+
+def _safe_detach_cdp_session(session: Any) -> None:
+    try:
+        if session is not None and hasattr(session, "detach"):
+            session.detach()
+    except Exception:
+        pass
+
+
+def _ax_value(node: dict[str, Any], key: str) -> str:
+    raw = node.get(key)
+    if isinstance(raw, dict):
+        value = raw.get("value")
+        return str(value) if value is not None else ""
+    if raw is None:
+        return ""
+    return str(raw)
+
+
+def _normalize_text(text: str | None) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def _class_summary_from_attrs(attrs: dict[str, str]) -> str | None:
+    value = (attrs.get("class") or "").strip()
+    return value[:120] or None
+
+
+def _host_summary(tag_name: str | None, class_summary: str | None) -> str | None:
+    tag = (tag_name or "").lower()
+    if not tag and not class_summary:
+        return None
+    if class_summary:
+        return f"{tag} class={class_summary}"[:160]
+    return tag[:160] or None
+
+
+def _box_from_model(model_payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(model_payload, dict):
+        return None
+    model = model_payload.get("model") or model_payload
+    content = model.get("content") if isinstance(model, dict) else None
+    if not isinstance(content, list) or len(content) < 8:
+        return None
+    xs = [float(content[i]) for i in range(0, 8, 2)]
+    ys = [float(content[i]) for i in range(1, 8, 2)]
+    x = min(xs)
+    y = min(ys)
+    width = max(xs) - x
+    height = max(ys) - y
+    if width <= 0 or height <= 0:
+        return None
+    return {
+        "x": round(x),
+        "y": round(y),
+        "width": round(width),
+        "height": round(height),
+    }
+
+
+def _build_dom_index(node: dict[str, Any], index: dict[int, dict[str, Any]], parent_backend_id: int | None = None) -> None:
+    backend_id = node.get("backendNodeId")
+    node_id = node.get("nodeId")
+    if backend_id is not None:
+        backend_int = int(backend_id)
+        attrs = _attrs_list_to_dict(node.get("attributes"))
+        index[backend_int] = {
+            "node": node,
+            "node_id": int(node_id) if node_id is not None else None,
+            "parent_backend_id": parent_backend_id,
+            "backend_node_id": backend_int,
+            "node_name": str(node.get("nodeName") or ""),
+            "node_type": node.get("nodeType"),
+            "attributes": attrs,
+            "frame_id": node.get("frameId"),
+        }
+        current_parent = backend_int
+    else:
+        current_parent = parent_backend_id
+
+    for child in node.get("children") or []:
+        if isinstance(child, dict):
+            _build_dom_index(child, index, current_parent)
+    for shadow in node.get("shadowRoots") or []:
+        if isinstance(shadow, dict):
+            _build_dom_index(shadow, index, current_parent)
+    content = node.get("contentDocument")
+    if isinstance(content, dict):
+        _build_dom_index(content, index, current_parent)
+
+
+def _attrs_list_to_dict(attrs: Any) -> dict[str, str]:
+    if isinstance(attrs, dict):
+        return {str(k): str(v) for k, v in attrs.items()}
+    if not isinstance(attrs, list):
+        return {}
+    out: dict[str, str] = {}
+    for index in range(0, len(attrs) - 1, 2):
+        out[str(attrs[index])] = str(attrs[index + 1])
+    return out
+
+
+def _is_document_node(node: dict[str, Any]) -> bool:
+    node_type = node.get("nodeType")
+    # 9 = Document, 11 = DocumentFragment (open shadow roots).
+    if node_type in {9, 11}:
+        return True
+    name = str(node.get("nodeName") or "").upper()
+    return name in {"#DOCUMENT", "DOCUMENT", "#DOCUMENT-FRAGMENT", "DOCUMENT-FRAGMENT"}
+
+
+def _iter_document_contexts(
+    node: dict[str, Any],
+    *,
+    source_type: str,
+    frame_url: str | None,
+    host_tag_class_summary: str | None = None,
+    frame_id: str | None = None,
+) -> list[dict[str, Any]]:
+    contexts: list[dict[str, Any]] = []
+
+    def walk(
+        current: dict[str, Any],
+        *,
+        current_source: str,
+        current_frame_url: str | None,
+        current_host: str | None,
+        current_frame_id: str | None,
+    ) -> None:
+        if _is_document_node(current):
+            contexts.append(
+                {
+                    "document_node": current,
+                    "node_id": current.get("nodeId"),
+                    "source_type": current_source,
+                    "frame_url": current_frame_url,
+                    "host_tag_class_summary": current_host,
+                    "frame_id": current.get("frameId") or current_frame_id,
+                }
+            )
+        tag = str(current.get("nodeName") or "").lower()
+        attrs = _attrs_list_to_dict(current.get("attributes"))
+        class_summary = _class_summary_from_attrs(attrs)
+        host_summary = _host_summary(tag, class_summary)
+        for shadow in current.get("shadowRoots") or []:
+            if isinstance(shadow, dict):
+                walk(
+                    shadow,
+                    current_source=SOURCE_TYPE_SHADOW_DOM,
+                    current_frame_url=current_frame_url,
+                    current_host=host_summary,
+                    current_frame_id=current_frame_id,
+                )
+        content = current.get("contentDocument")
+        if isinstance(content, dict):
+            walk(
+                content,
+                current_source=SOURCE_TYPE_IFRAME,
+                current_frame_url=current_frame_url,
+                current_host=current_host,
+                current_frame_id=content.get("frameId") or current_frame_id,
+            )
+        elif tag == "iframe":
+            # Inaccessible / closed iframe document — recorded by caller.
+            contexts.append(
+                {
+                    "document_node": None,
+                    "node_id": None,
+                    "source_type": SOURCE_TYPE_IFRAME,
+                    "frame_url": current_frame_url,
+                    "host_tag_class_summary": host_summary,
+                    "frame_id": current.get("frameId") or current_frame_id,
+                    "inaccessible_iframe": True,
+                    "iframe_backend_node_id": current.get("backendNodeId"),
+                    "iframe_node_id": current.get("nodeId"),
+                }
+            )
+        for child in current.get("children") or []:
+            if isinstance(child, dict):
+                walk(
+                    child,
+                    current_source=current_source,
+                    current_frame_url=current_frame_url,
+                    current_host=current_host,
+                    current_frame_id=current_frame_id,
+                )
+
+    walk(
+        node,
+        current_source=source_type,
+        current_frame_url=frame_url,
+        current_host=host_tag_class_summary,
+        current_frame_id=frame_id,
+    )
+    return contexts
+
+
+def _collect_text_from_dom_node(node: dict[str, Any], *, limit: int = INSPECTION_TEXT_MAX_CHARS) -> str:
+    parts: list[str] = []
+
+    def walk(current: dict[str, Any]) -> None:
+        if sum(len(part) for part in parts) >= limit:
+            return
+        if current.get("nodeType") == 3:
+            value = current.get("nodeValue") or ""
+            if value.strip():
+                parts.append(str(value))
+            return
+        for child in current.get("children") or []:
+            if isinstance(child, dict):
+                walk(child)
+        for shadow in current.get("shadowRoots") or []:
+            if isinstance(shadow, dict):
+                walk(shadow)
+
+    walk(node)
+    return _normalize_text(" ".join(parts))[:limit]
+
+
+def _is_ancestor_backend(
+    index: dict[int, dict[str, Any]],
+    ancestor_backend_id: int,
+    descendant_backend_id: int,
+) -> bool:
+    current: int | None = descendant_backend_id
+    seen: set[int] = set()
+    while current is not None and current not in seen:
+        if current == ancestor_backend_id:
+            return True
+        seen.add(current)
+        parent = index.get(current, {}).get("parent_backend_id")
+        current = int(parent) if parent is not None else None
+    return False
+
+
+def _viewport_size(page: Page, session: Any | None = None) -> tuple[float, float]:
+    if session is not None:
+        try:
+            metrics = _cdp_send(session, "Page.getLayoutMetrics")
+            for key in ("cssVisualViewport", "visualViewport", "cssLayoutViewport", "layoutViewport"):
+                viewport = metrics.get(key) or {}
+                width = float(viewport.get("clientWidth") or viewport.get("width") or 0)
+                height = float(viewport.get("clientHeight") or viewport.get("height") or 0)
+                if width > 0 and height > 0:
+                    return width, height
+        except Exception:
+            pass
+    try:
+        viewport = getattr(page, "viewport_size", None)
+        if isinstance(viewport, dict):
+            width = float(viewport.get("width", 0) or 0)
+            height = float(viewport.get("height", 0) or 0)
+            if width > 0 and height > 0:
+                return width, height
+    except Exception:
+        pass
+    return 0.0, 0.0
+
+
+def _node_visibility_and_geometry(
+    session: Any,
+    *,
+    node_id: int | None,
+    backend_node_id: int | None,
+    attrs: dict[str, str],
+    node_diagnostics: list[dict[str, Any]],
+    frame_url: str | None,
+    frame_id: str | None,
+) -> tuple[bool, dict[str, str], dict[str, Any] | None, Any, bool]:
+    """Return visible, style, bounding_box, z_index, fixed_or_absolute."""
+    if attrs.get("hidden") is not None or attrs.get("aria-hidden") == "true":
+        return False, {}, None, None, False
+
+    style: dict[str, str] = {}
+    if node_id is not None:
+        try:
+            style = get_node_computed_style(session, node_id)
+        except Exception as exc:
+            node_diagnostics.append(
+                {
+                    "frame_url": frame_url,
+                    "frame_id": frame_id,
+                    "cdp_method": "CSS.getComputedStyleForNode",
+                    "exception_class": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "failure_phase": "computed_style",
+                    "failure_scope": "node",
+                    "backend_node_id": backend_node_id,
+                }
+            )
+
+    display = (style.get("display") or "").lower()
+    visibility = (style.get("visibility") or "").lower()
+    opacity = style.get("opacity") or "1"
+    if display == "none" or visibility == "hidden" or opacity == "0":
+        return False, style, None, style.get("z-index"), False
+
+    position = (style.get("position") or "").lower()
+    fixed_or_absolute = position in {"fixed", "absolute"}
+    z_raw = style.get("z-index")
+    try:
+        z_index: Any = int(float(z_raw)) if z_raw not in (None, "", "auto") else z_raw
+    except Exception:
+        z_index = z_raw
+
+    bounding_box = None
+    if backend_node_id is not None:
+        try:
+            bounding_box = _box_from_model(get_node_box_model(session, backend_node_id))
+        except Exception as exc:
+            node_diagnostics.append(
+                {
+                    "frame_url": frame_url,
+                    "frame_id": frame_id,
+                    "cdp_method": "DOM.getBoxModel",
+                    "exception_class": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "failure_phase": "geometry",
+                    "failure_scope": "node",
+                    "backend_node_id": backend_node_id,
+                }
+            )
+            return False, style, None, z_index, fixed_or_absolute
+
+    if not bounding_box:
+        return False, style, None, z_index, fixed_or_absolute
+    return True, style, bounding_box, z_index, fixed_or_absolute
+
+
+def _action_label_from_node(
+    node_info: dict[str, Any],
+    *,
+    ax_name_by_backend: dict[int, str],
+) -> str:
+    backend_id = node_info.get("backend_node_id")
+    if backend_id is not None and backend_id in ax_name_by_backend:
+        label = _normalize_text(ax_name_by_backend[backend_id])
+        if label:
+            return label[:80]
+    attrs = node_info.get("attributes") or {}
+    for key in ("aria-label", "value", "title", "name"):
+        if attrs.get(key):
+            label = _normalize_text(attrs.get(key))
+            if label:
+                return label[:80]
+    text = _collect_text_from_dom_node(node_info["node"], limit=80)
+    return text[:80]
+
+
+def _collect_actions_for_candidate(
+    session: Any,
+    *,
+    candidate_node_id: int,
+    index: dict[int, dict[str, Any]],
+    ax_name_by_backend: dict[int, str],
+    mark_continue: bool,
+) -> tuple[list[str], list[str], str | None, int | None]:
+    buttons: list[str] = []
+    links: list[str] = []
+    continue_token: str | None = None
+    continue_backend_id: int | None = None
+    try:
+        action_ids = query_selector_all(session, candidate_node_id, ACTION_NODE_SELECTOR)
+    except Exception:
+        action_ids = []
+
+    for action_node_id in action_ids:
+        info = None
+        for item in index.values():
+            if item.get("node_id") == action_node_id:
+                info = item
+                break
+        if info is None:
+            try:
+                described = describe_node(session, node_id=action_node_id, depth=1)
+                node = described.get("node") or {}
+                backend_id = node.get("backendNodeId")
+                info = {
+                    "node": node,
+                    "node_id": action_node_id,
+                    "backend_node_id": int(backend_id) if backend_id is not None else None,
+                    "attributes": _attrs_list_to_dict(node.get("attributes")),
+                    "node_name": str(node.get("nodeName") or ""),
+                }
+            except Exception:
+                continue
+        tag = str(info.get("node_name") or "").lower()
+        label = _action_label_from_node(info, ax_name_by_backend=ax_name_by_backend)
+        if not label:
+            continue
+        if tag == "a":
+            if len(links) < 12:
+                links.append(label)
+        elif len(buttons) < 12:
+            buttons.append(label)
+        if mark_continue and continue_token is None and _label_is_continue(label):
+            backend_id = info.get("backend_node_id")
+            if backend_id is not None:
+                continue_backend_id = int(backend_id)
+                continue_token = f"{CDP_CONTINUE_TOKEN_PREFIX}{continue_backend_id}"
+    return buttons, links, continue_token, continue_backend_id
+
+
+def _candidate_raw_from_node(
+    session: Any,
+    *,
+    node_id: int,
+    index: dict[int, dict[str, Any]],
+    ax_name_by_backend: dict[int, str],
+    ax_role_by_backend: dict[int, str],
+    source_type: str,
+    host_tag_class_summary: str | None,
+    viewport_area: float,
+    mark_continue: bool,
+    node_diagnostics: list[dict[str, Any]],
+    frame_url: str | None,
+    frame_id: str | None,
+    force_tags: list[str] | None = None,
+) -> dict[str, Any] | None:
+    info = None
+    for item in index.values():
+        if item.get("node_id") == node_id:
+            info = item
+            break
+    if info is None:
+        try:
+            described = describe_node(session, node_id=node_id, depth=2)
+            node = described.get("node") or {}
+            backend_id = node.get("backendNodeId")
+            if backend_id is None:
+                return None
+            info = {
+                "node": node,
+                "node_id": node_id,
+                "backend_node_id": int(backend_id),
+                "parent_backend_id": None,
+                "attributes": _attrs_list_to_dict(node.get("attributes")),
+                "node_name": str(node.get("nodeName") or ""),
+            }
+            index[int(backend_id)] = info
+        except Exception as exc:
+            node_diagnostics.append(
+                {
+                    "frame_url": frame_url,
+                    "frame_id": frame_id,
+                    "cdp_method": "DOM.describeNode",
+                    "exception_class": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "failure_phase": "describe_node",
+                    "failure_scope": "node",
+                }
+            )
+            return None
+
+    backend_node_id = info.get("backend_node_id")
+    # Shadow hosts are inspected via their open shadow document context so the
+    # candidate source_type stays SHADOW_DOM instead of the light-DOM host.
+    if source_type != SOURCE_TYPE_SHADOW_DOM and (info.get("node") or {}).get("shadowRoots"):
+        return None
+    attrs = dict(info.get("attributes") or {})
+    # Prefer live attributes when available.
+    if info.get("node_id") is not None:
+        try:
+            attrs = get_node_attributes(session, int(info["node_id"])) or attrs
+        except Exception as exc:
+            node_diagnostics.append(
+                {
+                    "frame_url": frame_url,
+                    "frame_id": frame_id,
+                    "cdp_method": "DOM.getAttributes",
+                    "exception_class": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "failure_phase": "attributes",
+                    "failure_scope": "node",
+                    "backend_node_id": backend_node_id,
+                }
+            )
+
+    visible, style, bounding_box, z_index, fixed_or_absolute = _node_visibility_and_geometry(
+        session,
+        node_id=info.get("node_id"),
+        backend_node_id=backend_node_id,
+        attrs=attrs,
+        node_diagnostics=node_diagnostics,
+        frame_url=frame_url,
+        frame_id=frame_id,
+    )
+    if not visible or not bounding_box:
+        return None
+
+    role = (attrs.get("role") or "").strip() or None
+    if backend_node_id is not None and backend_node_id in ax_role_by_backend:
+        role = role or ax_role_by_backend[backend_node_id]
+    aria_modal_attr = attrs.get("aria-modal")
+    aria_modal = None if aria_modal_attr is None else aria_modal_attr == "true"
+    class_summary = _class_summary_from_attrs(attrs)
+    tag_name = str(info.get("node_name") or "").lower() or None
+
+    accessible_name = None
+    if backend_node_id is not None and backend_node_id in ax_name_by_backend:
+        accessible_name = _normalize_text(ax_name_by_backend[backend_node_id])[:120] or None
+    if not accessible_name:
+        accessible_name = _normalize_text(
+            attrs.get("aria-label") or attrs.get("title") or attrs.get("name") or ""
+        )[:120] or None
+
+    text = ""
+    if accessible_name:
+        text = accessible_name
+    text_from_dom = _collect_text_from_dom_node(info["node"], limit=INSPECTION_TEXT_MAX_CHARS)
+    if len(text_from_dom) > len(text):
+        text = text_from_dom
+    text = redact_long_digit_sequences(text)
+
+    buttons, links, continue_token, _continue_backend = _collect_actions_for_candidate(
+        session,
+        candidate_node_id=int(info["node_id"]),
+        index=index,
+        ax_name_by_backend=ax_name_by_backend,
+        mark_continue=mark_continue,
+    )
+    has_actions = bool(buttons or links)
+    coverage = 0.0
+    if viewport_area > 0:
+        coverage = (bounding_box["width"] * bounding_box["height"]) / viewport_area
+
+    tags: list[str] = list(force_tags or [])
+    if role == "dialog":
+        tags.append("role_dialog")
+    if role in {"alertdialog", "alert"} and "ax_dialog" not in tags:
+        tags.append("ax_dialog")
+    if aria_modal is True:
+        tags.append("aria_modal")
+    if fixed_or_absolute and coverage >= 0.15:
+        tags.append("substantial_coverage")
+    if isinstance(z_index, int) and z_index >= 100:
+        tags.append("high_z_index")
+    if has_actions and (role == "dialog" or aria_modal is True or fixed_or_absolute):
+        tags.append("actionable_controls")
+    if coverage >= 0.35 and fixed_or_absolute:
+        tags.append("viewport_overlay")
+    if text and snippet_is_expiration_candidate(text):
+        tags.append("modal_text")
+    # Dedupe tags while preserving order.
+    seen_tags: set[str] = set()
+    ordered_tags: list[str] = []
+    for tag in tags:
+        if tag not in seen_tags:
+            seen_tags.add(tag)
+            ordered_tags.append(tag)
+    tags = ordered_tags
+
+    if not tags:
+        return None
+    if (
+        "role_dialog" not in tags
+        and "aria_modal" not in tags
+        and "ax_dialog" not in tags
+        and "modal_text" not in tags
+        and not ("substantial_coverage" in tags and has_actions)
+        and not ("viewport_overlay" in tags and has_actions)
+    ):
+        return None
+    if (
+        len(text) < 8
+        and "role_dialog" not in tags
+        and "aria_modal" not in tags
+        and "ax_dialog" not in tags
+    ):
+        return None
+
+    return {
+        "source_type": source_type,
+        "tag_name": tag_name,
+        "role": role,
+        "class_summary": class_summary,
+        "host_tag_class_summary": host_tag_class_summary,
+        "text_snippet": text[:INSPECTION_TEXT_MAX_CHARS],
+        "visible_button_labels": buttons,
+        "visible_link_labels": links,
+        "bounding_box": bounding_box,
+        "viewport_coverage_ratio": round(coverage, 3),
+        "z_index": z_index,
+        "fixed_or_absolute": fixed_or_absolute,
+        "aria_modal": aria_modal,
+        "accessible_name": accessible_name,
+        "detector_tags": tags,
+        "continue_token": continue_token,
+        "errors": [],
+        "backend_node_id": backend_node_id,
+        "node_id": info.get("node_id"),
+        "frame_url": frame_url,
+        "style_position": style.get("position"),
+    }
+
+
+def _dedupe_candidate_raws(
+    raw_candidates: list[dict[str, Any]],
+    index: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    keep: list[dict[str, Any]] = []
+    for item in raw_candidates:
+        backend_id = item.get("backend_node_id")
+        if backend_id is None:
+            keep.append(item)
+            continue
+        nested_inside_kept = False
+        for outer in keep:
+            outer_id = outer.get("backend_node_id")
+            if outer_id is None or outer_id == backend_id:
+                continue
+            if _is_ancestor_backend(index, int(outer_id), int(backend_id)):
+                nested_inside_kept = True
+                break
+        if nested_inside_kept:
+            continue
+        for index_i in range(len(keep) - 1, -1, -1):
+            kept_id = keep[index_i].get("backend_node_id")
+            if kept_id is None or kept_id == backend_id:
+                continue
+            if _is_ancestor_backend(index, int(backend_id), int(kept_id)):
+                keep.pop(index_i)
+        keep.append(item)
+    return keep[:40]
+
+
+def _build_ax_maps(
+    ax_tree: dict[str, Any],
+) -> tuple[dict[int, str], dict[int, str], list[int]]:
+    name_by_backend: dict[int, str] = {}
+    role_by_backend: dict[int, str] = {}
+    dialog_backends: list[int] = []
+    for node in ax_tree.get("nodes") or []:
+        if not isinstance(node, dict) or node.get("ignored"):
+            continue
+        backend_id = node.get("backendDOMNodeId")
+        if backend_id is None:
+            continue
+        backend_int = int(backend_id)
+        role = _ax_value(node, "role").lower()
+        name = _normalize_text(_ax_value(node, "name"))
+        if role:
+            role_by_backend[backend_int] = role
+        if name:
+            name_by_backend[backend_int] = name
+        if role in AX_CANDIDATE_ROLES:
+            dialog_backends.append(backend_int)
+    return name_by_backend, role_by_backend, dialog_backends
+
+
+def _frame_entries_from_tree(frame_tree: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+
+    def walk(node: dict[str, Any], *, parent_url: str | None) -> None:
+        frame = node.get("frame") or {}
+        frame_url = sanitize_url(frame.get("url"))
+        entries.append(
+            {
+                "frame_id": frame.get("id"),
+                "frame_url": frame_url,
+                "parent_frame_url": parent_url,
+                "child_frames": len(node.get("childFrames") or []),
+            }
+        )
+        for child in node.get("childFrames") or []:
+            if isinstance(child, dict):
+                walk(child, parent_url=frame_url)
+
+    root = frame_tree.get("frameTree") or frame_tree
+    if isinstance(root, dict):
+        walk(root, parent_url=None)
+    return entries
+
+
+def _build_cdp_frame_failure_diagnostics(
+    *,
+    frame_url: str | None,
+    frame_id: str | None,
+    target_id: str | None,
+    page_url: str | None,
+    parent_frame_url: str | None,
+    is_main: bool,
+    cdp_method: str,
+    exception_class: str | None,
+    exception_message: str | None,
+    traceback_text: str | None,
+    failure_phase: str,
+    failure_scope: str = "entire_frame",
+) -> dict[str, Any]:
+    return {
+        "frame_url": frame_url,
+        "frame_id": frame_id,
+        "target_id": target_id,
+        "is_main_frame": bool(is_main),
+        "parent_frame_url": parent_frame_url,
+        "cdp_method": cdp_method,
+        "playwright_operation": f"cdp:{cdp_method}",
+        "exception_class": exception_class,
+        "exception_message": exception_message,
+        "traceback": traceback_text,
+        "failure_phase": failure_phase,
+        "failure_scope": failure_scope,
+        "appears_cross_origin": _frame_appears_cross_origin(frame_url, page_url),
+    }
+
+
+def _collect_candidates_via_cdp(
+    page: Page,
+    *,
+    mark_continue: bool = False,
+) -> tuple[list[InspectionCandidate], int, list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+    """CDP DOM/AX snapshots → Python candidate extraction."""
+    page_url = sanitize_url(getattr(page, "url", None))
+    errors: list[str] = []
+    frame_diagnostics: list[dict[str, Any]] = []
+    node_diagnostics: list[dict[str, Any]] = []
+    candidates: list[InspectionCandidate] = []
+    session = None
+    frame_count = 1
+
+    try:
+        session = open_page_cdp_session(page)
+        enable_inspection_domains(session)
+    except Exception as exc:
+        diag = _build_cdp_frame_failure_diagnostics(
+            frame_url=page_url,
+            frame_id=None,
+            target_id=None,
+            page_url=page_url,
+            parent_frame_url=None,
+            is_main=True,
+            cdp_method="Target.attachToTarget",
+            exception_class=type(exc).__name__,
+            exception_message=str(exc),
+            traceback_text=traceback.format_exc(),
+            failure_phase="open_session",
+        )
+        frame_diagnostics.append(diag)
+        errors.append(f"inaccessible_frame:{page_url or 'unknown'}:cdp_session_failed")
+        candidates.append(
+            InspectionCandidate(
+                source_type=SOURCE_TYPE_DOM,
+                page_url=page_url,
+                frame_url=page_url,
+                tag_name=None,
+                role=None,
+                class_summary=None,
+                text_snippet=None,
+                errors=["frame_inaccessible"],
+                detector_tags=["inaccessible_frame"],
+            )
+        )
+        return candidates, frame_count, errors, frame_diagnostics, node_diagnostics
+
+    try:
+        try:
+            frame_tree = get_frame_tree(session)
+            frame_entries = _frame_entries_from_tree(frame_tree)
+            frame_count = max(1, len(frame_entries))
+        except Exception as exc:
+            frame_entries = [
+                {
+                    "frame_id": None,
+                    "frame_url": page_url,
+                    "parent_frame_url": None,
+                    "child_frames": 0,
+                }
+            ]
+            frame_diagnostics.append(
+                _build_cdp_frame_failure_diagnostics(
+                    frame_url=page_url,
+                    frame_id=None,
+                    target_id=None,
+                    page_url=page_url,
+                    parent_frame_url=None,
+                    is_main=True,
+                    cdp_method="Page.getFrameTree",
+                    exception_class=type(exc).__name__,
+                    exception_message=str(exc),
+                    traceback_text=traceback.format_exc(),
+                    failure_phase="frame_tree",
+                    failure_scope="entire_page",
+                )
+            )
+
+        try:
+            document_payload = get_pierced_document(session)
+            root = document_payload.get("root") or {}
+        except Exception as exc:
+            frame_diagnostics.append(
+                _build_cdp_frame_failure_diagnostics(
+                    frame_url=page_url,
+                    frame_id=None,
+                    target_id=None,
+                    page_url=page_url,
+                    parent_frame_url=None,
+                    is_main=True,
+                    cdp_method="DOM.getDocument",
+                    exception_class=type(exc).__name__,
+                    exception_message=str(exc),
+                    traceback_text=traceback.format_exc(),
+                    failure_phase="get_document",
+                )
+            )
+            errors.append(f"inaccessible_frame:{page_url or 'unknown'}:get_document_failed")
+            candidates.append(
+                InspectionCandidate(
+                    source_type=SOURCE_TYPE_DOM,
+                    page_url=page_url,
+                    frame_url=page_url,
+                    tag_name=None,
+                    role=None,
+                    class_summary=None,
+                    text_snippet=None,
+                    errors=["frame_inaccessible"],
+                    detector_tags=["inaccessible_frame"],
+                )
+            )
+            return candidates, frame_count, errors, frame_diagnostics, node_diagnostics
+
+        index: dict[int, dict[str, Any]] = {}
+        if isinstance(root, dict):
+            _build_dom_index(root, index)
+
+        ax_name_by_backend: dict[int, str] = {}
+        ax_role_by_backend: dict[int, str] = {}
+        ax_dialog_backends: list[int] = []
+        try:
+            ax_tree = get_accessibility_tree(session)
+            ax_name_by_backend, ax_role_by_backend, ax_dialog_backends = _build_ax_maps(ax_tree)
+        except Exception as exc:
+            node_diagnostics.append(
+                {
+                    "frame_url": page_url,
+                    "frame_id": None,
+                    "cdp_method": "Accessibility.getFullAXTree",
+                    "exception_class": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "failure_phase": "accessibility_tree",
+                    "failure_scope": "entire_page",
+                }
+            )
+
+        width, height = _viewport_size(page, session)
+        viewport_area = max(1.0, width * height) if width and height else 0.0
+        contexts = _iter_document_contexts(
+            root if isinstance(root, dict) else {},
+            source_type=SOURCE_TYPE_DOM,
+            frame_url=page_url,
+        )
+        # Map frame ids from CDP tree onto iframe contexts when possible.
+        frame_url_by_id = {
+            entry.get("frame_id"): entry.get("frame_url")
+            for entry in frame_entries
+            if entry.get("frame_id")
+        }
+        for context in contexts:
+            frame_id = context.get("frame_id")
+            if frame_id and frame_url_by_id.get(frame_id):
+                context["frame_url"] = frame_url_by_id[frame_id]
+
+        raw_candidates: list[dict[str, Any]] = []
+        seen_backend_ids: set[int] = set()
+        closed_shadow_note = False
+
+        for context in contexts:
+            if context.get("inaccessible_iframe"):
+                frame_url = context.get("frame_url")
+                # Prefer Playwright frame URLs for cross-origin iframe diagnostics.
+                continue
+
+            document_node = context.get("document_node")
+            doc_node_id = context.get("node_id")
+            if document_node is None or doc_node_id is None:
+                continue
+            source_type = str(context.get("source_type") or SOURCE_TYPE_DOM)
+            frame_url = context.get("frame_url") or page_url
+            frame_id = context.get("frame_id")
+            host_summary = context.get("host_tag_class_summary")
+
+            selector = ", ".join(INSPECTION_CONTAINER_SELECTORS)
+            try:
+                node_ids = query_selector_all(session, int(doc_node_id), selector)
+            except Exception as exc:
+                node_diagnostics.append(
+                    {
+                        "frame_url": frame_url,
+                        "frame_id": frame_id,
+                        "cdp_method": "DOM.querySelectorAll",
+                        "exception_class": type(exc).__name__,
+                        "exception_message": str(exc),
+                        "traceback": traceback.format_exc(),
+                        "failure_phase": "query_containers",
+                        "failure_scope": "entire_frame",
+                    }
+                )
+                node_ids = []
+                errors.append("query_containers_failed")
+
+            # Bounded overlay discovery: only common container tags, then style filter.
+            try:
+                overlay_ids = query_selector_all(
+                    session,
+                    int(doc_node_id),
+                    OVERLAY_NODE_SELECTOR,
+                )
+            except Exception:
+                overlay_ids = []
+            # Cap overlay scan to avoid serializing the whole page.
+            overlay_ids = overlay_ids[:120]
+
+            candidate_node_ids = list(dict.fromkeys([*node_ids, *overlay_ids]))
+            for node_id in candidate_node_ids:
+                raw = _candidate_raw_from_node(
+                    session,
+                    node_id=int(node_id),
+                    index=index,
+                    ax_name_by_backend=ax_name_by_backend,
+                    ax_role_by_backend=ax_role_by_backend,
+                    source_type=source_type,
+                    host_tag_class_summary=host_summary,
+                    viewport_area=viewport_area,
+                    mark_continue=mark_continue,
+                    node_diagnostics=node_diagnostics,
+                    frame_url=frame_url,
+                    frame_id=frame_id,
+                )
+                if raw is None:
+                    continue
+                # Overlay-only nodes must pass fixed/absolute filter when not selector-hit.
+                if (
+                    node_id in overlay_ids
+                    and node_id not in node_ids
+                    and not raw.get("fixed_or_absolute")
+                ):
+                    continue
+                backend_id = raw.get("backend_node_id")
+                if backend_id in seen_backend_ids:
+                    continue
+                if backend_id is not None:
+                    seen_backend_ids.add(int(backend_id))
+                raw_candidates.append(raw)
+
+        # AX dialog-like roles may point at nodes missed by CSS selectors.
+        for backend_id in ax_dialog_backends:
+            if backend_id in seen_backend_ids:
+                continue
+            info = index.get(backend_id)
+            if not info or info.get("node_id") is None:
+                try:
+                    described = describe_node(session, backend_node_id=backend_id, depth=2)
+                    node = described.get("node") or {}
+                    node_id = node.get("nodeId")
+                    if node_id is None:
+                        resolved = resolve_backend_node(session, backend_id)
+                        object_id = (resolved.get("object") or {}).get("objectId")
+                        if not object_id:
+                            continue
+                        requested = _cdp_send(
+                            session,
+                            "DOM.requestNode",
+                            {"objectId": object_id},
+                        )
+                        node_id = requested.get("nodeId")
+                        if node_id is None:
+                            continue
+                        described = describe_node(session, node_id=int(node_id), depth=2)
+                        node = described.get("node") or node
+                    info = {
+                        "node": node,
+                        "node_id": int(node_id),
+                        "backend_node_id": backend_id,
+                        "parent_backend_id": None,
+                        "attributes": _attrs_list_to_dict(node.get("attributes")),
+                        "node_name": str(node.get("nodeName") or ""),
+                    }
+                    index[backend_id] = info
+                except Exception as exc:
+                    node_diagnostics.append(
+                        {
+                            "frame_url": page_url,
+                            "frame_id": None,
+                            "cdp_method": "DOM.describeNode",
+                            "exception_class": type(exc).__name__,
+                            "exception_message": str(exc),
+                            "traceback": traceback.format_exc(),
+                            "failure_phase": "ax_resolve",
+                            "failure_scope": "node",
+                            "backend_node_id": backend_id,
+                        }
+                    )
+                    continue
+            raw = _candidate_raw_from_node(
+                session,
+                node_id=int(info["node_id"]),
+                index=index,
+                ax_name_by_backend=ax_name_by_backend,
+                ax_role_by_backend=ax_role_by_backend,
+                source_type=SOURCE_TYPE_DOM,
+                host_tag_class_summary=None,
+                viewport_area=viewport_area,
+                mark_continue=mark_continue,
+                node_diagnostics=node_diagnostics,
+                frame_url=page_url,
+                frame_id=None,
+                force_tags=["ax_dialog"],
+            )
+            if raw is None:
+                continue
+            seen_backend_ids.add(backend_id)
+            raw_candidates.append(raw)
+
+        # Closed shadow roots are not present in pierced open roots; note once.
+        if any("shadow" in " ".join(err.get("exception_message") or "").lower() for err in node_diagnostics):
+            closed_shadow_note = True
+        if closed_shadow_note:
+            errors.append("closed_shadow_root_inaccessible")
+
+        # Cross-origin / inaccessible child frames from Playwright frame list.
+        playwright_frames = _iter_page_frames(page)
+        main_frame = getattr(page, "main_frame", None)
+        accessible_frame_urls = {
+            sanitize_url(ctx.get("frame_url"))
+            for ctx in contexts
+            if ctx.get("document_node") is not None
+        }
+        accessible_frame_urls.add(page_url)
+        for frame in playwright_frames:
+            is_main = main_frame is not None and frame is main_frame
+            if main_frame is None and frame is page:
+                is_main = True
+            if is_main:
+                continue
+            try:
+                frame_url = sanitize_url(getattr(frame, "url", None))
+            except Exception as exc:
+                frame_diagnostics.append(
+                    _build_cdp_frame_failure_diagnostics(
+                        frame_url=None,
+                        frame_id=None,
+                        target_id=None,
+                        page_url=page_url,
+                        parent_frame_url=_frame_parent_url(frame),
+                        is_main=False,
+                        cdp_method="frame.url",
+                        exception_class=type(exc).__name__,
+                        exception_message=str(exc),
+                        traceback_text=traceback.format_exc(),
+                        failure_phase="frame_url",
+                    )
+                )
+                continue
+            if frame_url in accessible_frame_urls:
+                continue
+            appears_xorigin = _frame_appears_cross_origin(frame_url, page_url)
+            if appears_xorigin is False:
+                continue
+            # Treat unresolved child frames as inaccessible rather than fabricating content.
+            diag = _build_cdp_frame_failure_diagnostics(
+                frame_url=frame_url,
+                frame_id=None,
+                target_id=None,
+                page_url=page_url,
+                parent_frame_url=_frame_parent_url(frame),
+                is_main=False,
+                cdp_method="DOM.getDocument",
+                exception_class="RuntimeError",
+                exception_message="Frame document not present in pierced DOM snapshot",
+                traceback_text=None,
+                failure_phase="frame_document",
+            )
+            frame_diagnostics.append(diag)
+            errors.append(
+                f"inaccessible_frame:{frame_url or 'unknown'}:frame_inaccessible:pierced_dom_missing"
+            )
+            candidates.append(
+                InspectionCandidate(
+                    source_type=SOURCE_TYPE_IFRAME,
+                    page_url=page_url,
+                    frame_url=frame_url,
+                    tag_name=None,
+                    role=None,
+                    class_summary=None,
+                    text_snippet=None,
+                    errors=["frame_inaccessible"],
+                    detector_tags=["inaccessible_frame"],
+                )
+            )
+
+        deduped = _dedupe_candidate_raws(raw_candidates, index)
+        for raw in deduped:
+            candidate = _candidate_from_raw(
+                raw,
+                page_url=page_url,
+                frame_url=sanitize_url(raw.get("frame_url")) or page_url,
+                default_source_type=str(raw.get("source_type") or SOURCE_TYPE_DOM),
+            )
+            if candidate is not None:
+                # Preserve frame_url from context when encoded on raw.
+                if raw.get("frame_url"):
+                    candidate.frame_url = sanitize_url(raw.get("frame_url"))
+                candidates.append(candidate)
+
+        # Attach frame_url onto raw during construction for iframe/shadow contexts.
+        # Re-run assignment from contexts for candidates that still point at page URL.
+        return candidates, frame_count, errors, frame_diagnostics, node_diagnostics
+    finally:
+        _safe_detach_cdp_session(session)
+
+
 def _normalize_inspector_frame_payload(
     payload: dict[str, Any],
     *,
@@ -1145,289 +2207,6 @@ def _normalize_inspector_frame_payload(
     return {"candidates": [], "errors": list(payload.get("errors") or [])}
 
 
-FRAME_ACCESS_PROBE_EXPRESSIONS: tuple[tuple[str, str], ...] = (
-    ("document.readyState", "document.readyState"),
-    ("document.title", "document.title"),
-    ("location.href", "location.href"),
-    ("document.body != null", "document.body != null"),
-    (
-        "document.body.innerText.slice(0,100)",
-        "document.body ? document.body.innerText.slice(0, 100) : null",
-    ),
-)
-
-# Progressive statements used when title works but the inspector evaluate fails.
-INSPECTOR_FAILURE_LOCALIZATION_PROBES: tuple[tuple[str, str], ...] = (
-    ("document.documentElement != null", "document.documentElement != null"),
-    (
-        "document.querySelectorAll('*').length",
-        "document.querySelectorAll('*').length",
-    ),
-    (
-        "document.body.innerText.slice(0, 20)",
-        "document.body ? document.body.innerText.slice(0, 20) : null",
-    ),
-    (
-        "shadow_root_enumeration",
-        "(() => { let n = 0; for (const el of document.querySelectorAll('*')) {"
-        " if (el.shadowRoot) n += 1; } return n; })()",
-    ),
-)
-
-
-def _frame_parent_url(frame: Any) -> str | None:
-    try:
-        parent = getattr(frame, "parent_frame", None)
-        if parent is None:
-            return None
-        return sanitize_url(getattr(parent, "url", None))
-    except Exception:
-        return None
-
-
-def _frame_appears_cross_origin(
-    frame_url: str | None,
-    page_url: str | None,
-) -> bool | None:
-    frame_host = _hostname(frame_url)
-    page_host = _hostname(page_url)
-    if not frame_host or not page_host:
-        return None
-    return frame_host != page_host
-
-
-def _safe_frame_is_detached(frame: Any) -> bool | None:
-    try:
-        is_detached = getattr(frame, "is_detached", None)
-        if not callable(is_detached):
-            return None
-        value = is_detached()
-        # Only trust real booleans — mocks may return truthy non-bool sentinels.
-        if isinstance(value, bool):
-            return value
-    except Exception:
-        return None
-    return None
-
-
-def _probe_frame_evaluate(frame: Any, expression: str) -> dict[str, Any]:
-    """Run one evaluate probe; never raises."""
-    try:
-        value = frame.evaluate(expression)
-        return {
-            "ok": True,
-            "value": value,
-            "exception_class": None,
-            "exception_message": None,
-            "traceback": None,
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "value": None,
-            "exception_class": type(exc).__name__,
-            "exception_message": str(exc),
-            "traceback": traceback.format_exc(),
-        }
-
-
-def _collect_frame_evaluate_probes(
-    frame: Any,
-    *,
-    stop_on_first_failure: bool = False,
-) -> list[dict[str, Any]]:
-    probes: list[dict[str, Any]] = []
-    for name, expression in FRAME_ACCESS_PROBE_EXPRESSIONS:
-        result = _probe_frame_evaluate(frame, expression)
-        probes.append({"probe": name, "expression": expression, **result})
-        if stop_on_first_failure and not result["ok"]:
-            break
-    return probes
-
-
-def _localize_inspector_failure_statement(frame: Any) -> dict[str, Any]:
-    """Identify the earliest evaluate statement that fails after title works."""
-    localization: list[dict[str, Any]] = []
-    for name, expression in INSPECTOR_FAILURE_LOCALIZATION_PROBES:
-        result = _probe_frame_evaluate(frame, expression)
-        localization.append({"probe": name, "expression": expression, **result})
-        if not result["ok"]:
-            return {
-                "failing_statement": expression,
-                "failing_probe": name,
-                "localization_probes": localization,
-            }
-    return {
-        "failing_statement": (
-            "frame.evaluate(BROWSER_INSPECTOR_JS, "
-            "{mark_continue, default_source_type})"
-        ),
-        "failing_probe": "BROWSER_INSPECTOR_JS",
-        "localization_probes": localization,
-    }
-
-
-def _build_frame_failure_diagnostics(
-    frame: Any,
-    *,
-    page_url: str | None,
-    frame_url: str | None,
-    is_main: bool,
-    parent_frame_url: str | None,
-    playwright_operation: str,
-    exception_class: str | None,
-    exception_message: str | None,
-    traceback_text: str | None,
-    failure_phase: str,
-    failing_statement: str | None = None,
-) -> dict[str, Any]:
-    """Developer-only detail for a frame that could not be inspected."""
-    title_probe = _probe_frame_evaluate(frame, "document.title")
-    ready_probe = _probe_frame_evaluate(frame, "document.readyState")
-    body_probe = _probe_frame_evaluate(frame, "document.body != null")
-    execution_context_exists = any(
-        probe["ok"] for probe in (title_probe, ready_probe, body_probe)
-    )
-    resolved_failing_statement = failing_statement
-    localization: dict[str, Any] | None = None
-    if (
-        title_probe["ok"]
-        and failure_phase == "during_evaluate"
-        and playwright_operation.startswith("frame.evaluate(BROWSER_INSPECTOR_JS")
-    ):
-        localization = _localize_inspector_failure_statement(frame)
-        resolved_failing_statement = localization.get("failing_statement")
-
-    return {
-        "frame_url": frame_url,
-        "is_main_frame": bool(is_main),
-        "parent_frame_url": parent_frame_url,
-        "playwright_operation": playwright_operation,
-        "exception_class": exception_class,
-        "exception_message": exception_message,
-        "traceback": traceback_text,
-        "is_detached": _safe_frame_is_detached(frame),
-        "execution_context_exists": execution_context_exists,
-        "failure_phase": failure_phase,
-        "appears_cross_origin": _frame_appears_cross_origin(frame_url, page_url),
-        "evaluate_document_title": title_probe,
-        "evaluate_document_readyState": ready_probe,
-        "evaluate_document_body_not_null": body_probe,
-        "failing_statement": resolved_failing_statement or playwright_operation,
-        "failure_localization": localization,
-    }
-
-
-def _evaluate_browser_inspector_in_frame(
-    frame: Any,
-    *,
-    mark_continue: bool,
-    default_source_type: str,
-    page_url: str | None = None,
-    frame_url: str | None = None,
-    is_main: bool = False,
-    parent_frame_url: str | None = None,
-) -> dict[str, Any]:
-    detached = _safe_frame_is_detached(frame)
-    if detached is True:
-        diag = _build_frame_failure_diagnostics(
-            frame,
-            page_url=page_url,
-            frame_url=frame_url,
-            is_main=is_main,
-            parent_frame_url=parent_frame_url,
-            playwright_operation="frame.is_detached",
-            exception_class=None,
-            exception_message="Frame is detached",
-            traceback_text=None,
-            failure_phase="before_evaluate",
-            failing_statement="frame.is_detached() == True",
-        )
-        return {
-            "candidates": [],
-            "errors": ["frame_inaccessible:detached"],
-            "developer_diagnostics": diag,
-        }
-
-    inspector_options = {
-        "mark_continue": mark_continue,
-        "default_source_type": default_source_type,
-    }
-    try:
-        payload = frame.evaluate(BROWSER_INSPECTOR_JS, inspector_options)
-    except TypeError:
-        try:
-            payload = frame.evaluate(BROWSER_INSPECTOR_JS)
-        except Exception as exc:
-            tb = traceback.format_exc()
-            diag = _build_frame_failure_diagnostics(
-                frame,
-                page_url=page_url,
-                frame_url=frame_url,
-                is_main=is_main,
-                parent_frame_url=parent_frame_url,
-                playwright_operation="frame.evaluate(BROWSER_INSPECTOR_JS)",
-                exception_class=type(exc).__name__,
-                exception_message=str(exc),
-                traceback_text=tb,
-                failure_phase="during_evaluate",
-                failing_statement="frame.evaluate(BROWSER_INSPECTOR_JS)",
-            )
-            return {
-                "candidates": [],
-                "errors": [f"frame_inaccessible:{type(exc).__name__}"],
-                "developer_diagnostics": diag,
-            }
-    except Exception as exc:
-        tb = traceback.format_exc()
-        diag = _build_frame_failure_diagnostics(
-            frame,
-            page_url=page_url,
-            frame_url=frame_url,
-            is_main=is_main,
-            parent_frame_url=parent_frame_url,
-            playwright_operation=(
-                "frame.evaluate(BROWSER_INSPECTOR_JS, "
-                "{mark_continue, default_source_type})"
-            ),
-            exception_class=type(exc).__name__,
-            exception_message=str(exc),
-            traceback_text=tb,
-            failure_phase="during_evaluate",
-            failing_statement=(
-                "frame.evaluate(BROWSER_INSPECTOR_JS, "
-                "{mark_continue, default_source_type})"
-            ),
-        )
-        return {
-            "candidates": [],
-            "errors": [f"frame_inaccessible:{type(exc).__name__}"],
-            "developer_diagnostics": diag,
-        }
-    if not isinstance(payload, dict):
-        return {"candidates": [], "errors": ["invalid_inspector_payload"]}
-    normalized = _normalize_inspector_frame_payload(
-        payload,
-        default_source_type=default_source_type,
-    )
-    js_errors = [str(err) for err in (normalized.get("errors") or []) if err]
-    if any("shadow_traversal" in err for err in js_errors):
-        normalized["developer_diagnostics"] = _build_frame_failure_diagnostics(
-            frame,
-            page_url=page_url,
-            frame_url=frame_url,
-            is_main=is_main,
-            parent_frame_url=parent_frame_url,
-            playwright_operation="BROWSER_INSPECTOR_JS shadow DOM traversal",
-            exception_class=None,
-            exception_message="; ".join(js_errors),
-            traceback_text=None,
-            failure_phase="shadow_dom_traversal",
-            failing_statement="collectFromRoot(... el.shadowRoot ...)",
-        )
-    return normalized
-
-
 def _candidate_from_raw(
     raw: dict[str, Any],
     *,
@@ -1447,7 +2226,9 @@ def _candidate_from_raw(
     if not snippet and not detector_tags and not errors:
         return None
     if snippet is None and not (
-        raw.get("role") == "dialog" or raw.get("aria_modal") is True
+        raw.get("role") == "dialog"
+        or raw.get("aria_modal") is True
+        or "ax_dialog" in detector_tags
     ):
         # Keep dialog/aria-modal candidates even if keyword gate rejects text.
         snippet = redact_long_digit_sequences(
@@ -1502,104 +2283,22 @@ def inspect_page_browser(
     *,
     mark_continue: bool = False,
 ) -> tuple[list[InspectionCandidate], int, list[str], list[dict[str, Any]]]:
-    """Inspect one page across frames/shadow roots into generic candidates."""
-    frames = _iter_page_frames(page)
-    main_frame = getattr(page, "main_frame", None)
-    page_url = sanitize_url(getattr(page, "url", None))
-    candidates: list[InspectionCandidate] = []
-    errors: list[str] = []
-    frame_diagnostics: list[dict[str, Any]] = []
-    frame_count = 0
-
-    for frame in frames:
-        frame_count += 1
-        is_main = main_frame is not None and frame is main_frame
-        if main_frame is None and frame is page:
-            is_main = True
-        default_source = SOURCE_TYPE_DOM if is_main else SOURCE_TYPE_IFRAME
-        parent_frame_url = _frame_parent_url(frame)
-        try:
-            frame_url = sanitize_url(getattr(frame, "url", None))
-        except Exception as exc:
-            frame_url = None
-            diag = _build_frame_failure_diagnostics(
-                frame,
-                page_url=page_url,
-                frame_url=None,
-                is_main=is_main,
-                parent_frame_url=parent_frame_url,
-                playwright_operation="frame.url",
-                exception_class=type(exc).__name__,
-                exception_message=str(exc),
-                traceback_text=traceback.format_exc(),
-                failure_phase="before_evaluate",
-                failing_statement="getattr(frame, 'url')",
-            )
-            frame_diagnostics.append(diag)
-            errors.append(
-                f"inaccessible_frame:unknown:frame_inaccessible:{type(exc).__name__}"
-            )
-            candidates.append(
-                InspectionCandidate(
-                    source_type=default_source,
-                    page_url=page_url,
-                    frame_url=None,
-                    tag_name=None,
-                    role=None,
-                    class_summary=None,
-                    text_snippet=None,
-                    errors=["frame_inaccessible"],
-                    detector_tags=["inaccessible_frame"],
-                )
-            )
-            continue
-        payload = _evaluate_browser_inspector_in_frame(
-            frame,
-            mark_continue=mark_continue,
-            default_source_type=default_source,
-            page_url=page_url,
-            frame_url=frame_url,
-            is_main=is_main,
-            parent_frame_url=parent_frame_url,
-        )
-        if isinstance(payload.get("developer_diagnostics"), dict):
-            frame_diagnostics.append(payload["developer_diagnostics"])
-        frame_errors = [
-            str(err)[:120] for err in (payload.get("errors") or []) if err
-        ][:12]
-        if frame_errors:
-            inaccessible = any("inaccessible" in err for err in frame_errors)
-            if inaccessible:
-                errors.append(
-                    f"inaccessible_frame:{frame_url or 'unknown'}:{frame_errors[0]}"
-                )
-                candidates.append(
-                    InspectionCandidate(
-                        source_type=default_source,
-                        page_url=page_url,
-                        frame_url=frame_url,
-                        tag_name=None,
-                        role=None,
-                        class_summary=None,
-                        text_snippet=None,
-                        errors=["frame_inaccessible"],
-                        detector_tags=["inaccessible_frame"],
-                    )
-                )
-                continue
-            errors.extend(frame_errors)
-
-        for raw in payload.get("candidates") or []:
-            if not isinstance(raw, dict):
-                continue
-            candidate = _candidate_from_raw(
-                raw,
-                page_url=page_url,
-                frame_url=frame_url,
-                default_source_type=default_source,
-            )
-            if candidate is not None:
-                candidates.append(candidate)
+    """Inspect one page via CDP DOM/AX into generic InspectionCandidate records."""
+    candidates, frame_count, errors, frame_diagnostics, node_diagnostics = (
+        _collect_candidates_via_cdp(page, mark_continue=mark_continue)
+    )
+    # Node-level style/geometry failures stay in developer diagnostics only.
+    if node_diagnostics:
+        frame_diagnostics = [
+            *frame_diagnostics,
+            *[
+                {
+                    **item,
+                    "playwright_operation": f"cdp:{item.get('cdp_method')}",
+                }
+                for item in node_diagnostics
+            ],
+        ]
     return candidates, frame_count, errors, frame_diagnostics
 
 
@@ -1673,6 +2372,16 @@ def inspect_browser_context(
             except Exception as exc:
                 errors.append(f"screenshot_failed:{type(exc).__name__}")
 
+    node_failures = [
+        item
+        for item in frame_diagnostics
+        if item.get("failure_scope") == "node"
+    ]
+    frame_failures = [
+        item
+        for item in frame_diagnostics
+        if item.get("failure_scope") != "node"
+    ]
     return BrowserInspection(
         inspected_at=iso_now(),
         selected_page_url=selected_url,
@@ -1685,10 +2394,13 @@ def inspect_browser_context(
         diagnostics={
             "provider": provider,
             "capture_screenshot": bool(capture_screenshot),
+            "collector": "cdp_dom_ax",
         },
         developer_diagnostics={
-            "inaccessible_frames": frame_diagnostics,
-            "inaccessible_frame_count": len(frame_diagnostics),
+            "inaccessible_frames": frame_failures,
+            "inaccessible_frame_count": len(frame_failures),
+            "node_diagnostics": node_failures,
+            "node_diagnostic_count": len(node_failures),
         },
     )
 
@@ -1699,10 +2411,11 @@ def debug_inspect_browser_context(
     provider: str = "amex",
     select_page_fn: Any = None,
 ) -> dict[str, Any]:
-    """Temporary developer probe: pages/frames with per-evaluate success/failure.
+    """Temporary developer probe: CDP capability checks on the selected page.
 
-    Stops at the first failed evaluate probe and returns its exception/traceback.
-    Does not run classifier, keepalive, or maintenance logic.
+    Confirms Page.getFrameTree, DOM/CSS/Accessibility.enable, pierced
+    DOM.getDocument, and Accessibility.getFullAXTree. Does not use
+    frame.evaluate/page.evaluate. Stops at the first failed CDP operation.
     """
     pages_info: list[dict[str, Any]] = []
     for index, page in enumerate(list(context.pages)):
@@ -1730,17 +2443,16 @@ def debug_inspect_browser_context(
         selected = selector(context, create_if_missing=False)
 
     selected_url = sanitize_url(getattr(selected, "url", None)) if selected else None
-    frames_info: list[dict[str, Any]] = []
-    first_failure: dict[str, Any] | None = None
-
     if selected is None:
         return {
             "ok": False,
             "provider": provider,
             "pages": pages_info,
             "selected_page_url": None,
-            "frames": frames_info,
+            "frames": [],
+            "cdp_probes": [],
             "first_failure": {
+                "cdp_method": "select_provider_page",
                 "playwright_operation": "select_provider_page",
                 "exception_class": "RuntimeError",
                 "exception_message": "No provider page selected",
@@ -1749,84 +2461,29 @@ def debug_inspect_browser_context(
             "stopped_early": True,
         }
 
-    main_frame = getattr(selected, "main_frame", None)
-    for index, frame in enumerate(_iter_page_frames(selected)):
-        is_main = main_frame is not None and frame is main_frame
-        if main_frame is None and frame is selected:
-            is_main = True
-        try:
-            frame_url = getattr(frame, "url", None)
-        except Exception as exc:
-            frame_url = None
-            first_failure = {
-                "frame_index": index,
-                "frame_url": None,
-                "is_main_frame": is_main,
-                "parent_frame_url": _frame_parent_url(frame),
-                "probe": "frame.url",
-                "expression": "getattr(frame, 'url')",
-                "playwright_operation": "frame.url",
-                "exception_class": type(exc).__name__,
-                "exception_message": str(exc),
-                "traceback": traceback.format_exc(),
-            }
-            frames_info.append(
-                {
-                    "index": index,
-                    "url": None,
-                    "is_main_frame": is_main,
-                    "parent_frame_url": _frame_parent_url(frame),
-                    "is_detached": _safe_frame_is_detached(frame),
-                    "probes": [],
-                    "failed": True,
-                }
-            )
-            break
-
-        frame_entry: dict[str, Any] = {
-            "index": index,
-            "url": frame_url,
-            "is_main_frame": is_main,
-            "parent_frame_url": _frame_parent_url(frame),
-            "is_detached": _safe_frame_is_detached(frame),
-            "appears_cross_origin": _frame_appears_cross_origin(
-                sanitize_url(frame_url),
-                selected_url,
-            ),
-            "probes": [],
-            "failed": False,
+    capability = probe_page_cdp_capabilities(selected, stop_on_first_failure=True)
+    first_failure = capability.get("first_failure")
+    frames_info = [
+        {
+            "index": 0,
+            "url": selected_url,
+            "is_main_frame": True,
+            "parent_frame_url": None,
+            "is_detached": False,
+            "appears_cross_origin": False,
+            "probes": capability.get("probes") or [],
+            "failed": not capability.get("ok", False),
         }
-        probes = _collect_frame_evaluate_probes(frame, stop_on_first_failure=True)
-        frame_entry["probes"] = probes
-        failed_probe = next((probe for probe in probes if not probe["ok"]), None)
-        if failed_probe is not None:
-            frame_entry["failed"] = True
-            first_failure = {
-                "frame_index": index,
-                "frame_url": sanitize_url(frame_url),
-                "is_main_frame": is_main,
-                "parent_frame_url": frame_entry["parent_frame_url"],
-                "probe": failed_probe.get("probe"),
-                "expression": failed_probe.get("expression"),
-                "playwright_operation": (
-                    f"frame.evaluate({failed_probe.get('expression')!r})"
-                ),
-                "exception_class": failed_probe.get("exception_class"),
-                "exception_message": failed_probe.get("exception_message"),
-                "traceback": failed_probe.get("traceback"),
-            }
-            frames_info.append(frame_entry)
-            break
-        frames_info.append(frame_entry)
-
+    ]
     return {
-        "ok": first_failure is None,
+        "ok": bool(capability.get("ok")),
         "provider": provider,
         "pages": pages_info,
         "selected_page_url": selected_url,
         "frames": frames_info,
+        "cdp_probes": capability.get("probes") or [],
         "first_failure": first_failure,
-        "stopped_early": first_failure is not None,
+        "stopped_early": bool(capability.get("stopped_early")),
     }
 
 
@@ -1846,35 +2503,36 @@ def format_browser_inspect_debug_report(payload: dict[str, Any]) -> str:
     lines.append("=== Selected page ===")
     lines.append(f"url={payload.get('selected_page_url')!r}")
     lines.append("")
-    frames = payload.get("frames") or []
-    lines.append(f"=== Frames ({len(frames)}) ===")
-    for frame in frames:
-        role = "main" if frame.get("is_main_frame") else "child"
-        lines.append(f"--- Frame {frame.get('index')} ({role}) ---")
-        lines.append(f"url={frame.get('url')!r}")
-        lines.append(f"parent_frame_url={frame.get('parent_frame_url')!r}")
-        lines.append(f"is_detached={frame.get('is_detached')}")
-        lines.append(f"appears_cross_origin={frame.get('appears_cross_origin')}")
-        for probe in frame.get("probes") or []:
-            if probe.get("ok"):
-                lines.append(
-                    f"PROBE {probe.get('probe')}: OK -> {probe.get('value')!r}"
-                )
-            else:
-                lines.append(f"PROBE {probe.get('probe')}: FAIL")
-                lines.append(
-                    f"  exception={probe.get('exception_class')}: "
-                    f"{probe.get('exception_message')}"
-                )
+    lines.append("=== CDP capability probes ===")
+    probes = payload.get("cdp_probes") or []
+    if not probes:
+        for frame in payload.get("frames") or []:
+            probes.extend(frame.get("probes") or [])
+    for probe in probes:
+        if probe.get("ok"):
+            lines.append(
+                f"PROBE {probe.get('probe')}: OK -> {probe.get('summary')!r}"
+            )
+        else:
+            lines.append(f"PROBE {probe.get('probe')}: FAIL")
+            lines.append(
+                f"  cdp_method={probe.get('cdp_method')}"
+            )
+            lines.append(
+                f"  exception={probe.get('exception_class')}: "
+                f"{probe.get('exception_message')}"
+            )
+            tb = probe.get("traceback")
+            if tb:
+                lines.append("  traceback:")
+                lines.append(tb.rstrip())
     lines.append("")
     failure = payload.get("first_failure")
     if failure:
         lines.append("=== FIRST FAILURE (stopped) ===")
-        lines.append(f"frame_index={failure.get('frame_index')}")
-        lines.append(f"frame_url={failure.get('frame_url')!r}")
         lines.append(f"probe={failure.get('probe')!r}")
-        lines.append(f"expression={failure.get('expression')!r}")
-        lines.append(f"playwright_operation={failure.get('playwright_operation')!r}")
+        lines.append(f"cdp_method={failure.get('cdp_method')!r}")
+        lines.append(f"frame_url={failure.get('frame_url')!r}")
         lines.append(
             f"exception={failure.get('exception_class')}: "
             f"{failure.get('exception_message')}"
@@ -1885,8 +2543,9 @@ def format_browser_inspect_debug_report(payload: dict[str, Any]) -> str:
             lines.append(tb.rstrip())
     else:
         lines.append("=== FIRST FAILURE ===")
-        lines.append("None (all probes succeeded)")
+        lines.append("None (all CDP probes succeeded)")
     return "\n".join(lines) + "\n"
+
 
 
 def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
@@ -1969,22 +2628,49 @@ def diagnose_amex_expiration_dialog_on_page(page: Page) -> dict[str, Any]:
 
 
 def click_expiration_continue(page: Page, continue_token: str) -> bool:
-    """Click the Continue button marked inside the validated expiration dialog."""
-    selector = f'[data-mighty-amex-continue="{continue_token}"]'
-    targets: list[Any] = [page]
-    for frame in _iter_page_frames(page):
-        if frame is not page:
-            targets.append(frame)
-    for target in targets:
+    """Click the Continue control retained via CDP backendNodeId identity."""
+    token = str(continue_token or "")
+    if not token.startswith(CDP_CONTINUE_TOKEN_PREFIX):
+        return False
+    try:
+        backend_node_id = int(token[len(CDP_CONTINUE_TOKEN_PREFIX) :])
+    except ValueError:
+        return False
+
+    session = None
+    try:
+        session = open_page_cdp_session(page)
+        _cdp_send(session, "DOM.enable")
         try:
-            locator = target.locator(selector)
-            if locator.count() < 1 or not locator.first.is_visible():
-                continue
-            locator.first.click(timeout=5_000)
-            return True
+            _cdp_send(
+                session,
+                "DOM.scrollIntoViewIfNeeded",
+                {"backendNodeId": backend_node_id},
+            )
         except Exception:
-            continue
-    return False
+            pass
+        box = _box_from_model(get_node_box_model(session, backend_node_id))
+        if not box:
+            return False
+        cx = float(box["x"]) + float(box["width"]) / 2.0
+        cy = float(box["y"]) + float(box["height"]) / 2.0
+        for event_type in ("mousePressed", "mouseReleased"):
+            _cdp_send(
+                session,
+                "Input.dispatchMouseEvent",
+                {
+                    "type": event_type,
+                    "x": cx,
+                    "y": cy,
+                    "button": "left",
+                    "clickCount": 1,
+                },
+            )
+        return True
+    except Exception:
+        return False
+    finally:
+        _safe_detach_cdp_session(session)
 
 
 def wait_for_expiration_dialog_close(page: Page, timeout_seconds: float) -> bool:
@@ -2140,7 +2826,12 @@ def inspect_amex_page_signals(
 
 
 def perform_keepalive_action(page: Page, strategy: str) -> KeepaliveActionResult:
-    """Dispatch one strategy action on the existing Amex page."""
+    """Dispatch one strategy action on the existing Amex page.
+
+    TODO: SESSION_API and PAGE_ACTIVITY still use page.evaluate and are
+    incompatible with Amex's eval monkey-patch. Keepalive trials remain
+    observation experiments; do not silently alter these strategies here.
+    """
     if strategy == "NONE":
         return KeepaliveActionResult(ok=True, result="skipped")
     if strategy == "SESSION_API":

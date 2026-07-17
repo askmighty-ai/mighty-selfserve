@@ -298,14 +298,14 @@ def test_maintenance_watcher_does_not_click_continue_during_trial(tmp_path: Path
     runtime = _runtime(tmp_path)
     runtime.keepalive_trial_running = True
     page = MagicMock()
-    page.evaluate.return_value = {
-        "detected": True,
-        "continue_token": "tok",
-        "dialog_text": (
-            "your session is about to expire. "
-            "you will be signed out due to inactivity."
-        ),
-    }
+    from tests.test_provider_runtime_browser_inspector import (
+        CdpSessionMock,
+        _bind_cdp,
+        _dialog_tree,
+    )
+
+    session = CdpSessionMock(document=_dialog_tree())
+    _bind_cdp(page, session)
 
     with patch(
         "mighty.provider_runtime.sync_playwright",
@@ -325,6 +325,7 @@ def test_maintenance_watcher_does_not_click_continue_during_trial(tmp_path: Path
     dismiss.assert_not_called()
     click.assert_not_called()
     assert runtime.keepalive_expiration_dialog_seen is True
+    assert page.evaluate.call_count == 0
 
 
 def test_no_sensitive_data_in_serialized_trial_state(tmp_path: Path):
@@ -372,16 +373,26 @@ def test_no_sensitive_data_in_serialized_trial_state(tmp_path: Path):
 
 
 def test_inspect_amex_page_signals_detects_login_page():
+    from tests.test_provider_runtime_browser_inspector import (
+        CdpSessionMock,
+        _bind_cdp,
+        _document,
+        _element,
+    )
+
     page = MagicMock()
     page.url = "https://www.americanexpress.com/en-us/account/login"
-    page.evaluate.return_value = {
-        "detected": False,
-        "continue_token": None,
-        "dialog_text": None,
-    }
+    page.main_frame = page
+    page.frames = [page]
+    session = CdpSessionMock(
+        document=_document(_element(10, 10, "HTML", children=[_element(20, 20, "BODY")])),
+        container_node_ids=[],
+    )
+    _bind_cdp(page, session)
     page.locator.return_value.inner_text.return_value = (
         "Sign in to your account User ID Show password Forgot password"
     )
     signals = inspect_amex_page_signals(page)
     assert signals["login_page_detected"] is True
     assert signals["authentication_state"] == "SIGNED_OUT"
+    assert page.evaluate.call_count == 0
