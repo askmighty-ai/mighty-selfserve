@@ -208,15 +208,80 @@ maintenance_success_count
 These fields never store page HTML, account values, cookies, credentials,
 request bodies, or query strings.
 
-## 6. Stop the runtime
+## 6. Developer-only Amex keepalive trials (experiment)
+
+This is an **experiment** to learn which controlled background action, if any,
+resets Amex’s inactivity timer. It is **not** automatic production keepalive.
+Do not enable a strategy as always-on behavior until trials prove it works.
+
+Keepalive trials:
+
+- require `SIGNED_IN` before start;
+- attach to the existing live CDP Amex browser (no new Chrome process/tab);
+- run only one trial at a time;
+- put the maintenance watcher into observation-only mode (detect dialog, do
+  **not** click Continue) while a trial is active;
+- never convert keepalive exceptions into `SIGNED_OUT`;
+- always terminalize with canonical verification and a sanitized persisted
+  result.
+
+### Strategies
+
+| Strategy | Behavior |
+| --- | --- |
+| `NONE` | No maintenance action; baseline expiration timing |
+| `SESSION_API` | Periodic read-only `ReadUserSession.v1` fetch from the Amex page context |
+| `PAGE_ACTIVITY` | Harmless focus + small scroll/return (no clicks/forms) |
+| `OVERVIEW_RELOAD` | Reload/navigate to the Amex overview page (experimental) |
+
+Defaults: `duration_seconds=1800` (30 minutes), `interval_seconds=60`.
+Developer trials may use shorter values such as 8 minutes / 30 seconds.
+
+### CLI
+
+```bash
+.venv/bin/python scripts/provider_runtime.py keepalive-start amex \
+  --strategy SESSION_API \
+  --duration-seconds 1800 \
+  --interval-seconds 60
+
+.venv/bin/python scripts/provider_runtime.py keepalive-status amex
+
+.venv/bin/python scripts/provider_runtime.py keepalive-stop amex
+```
+
+### Localhost API
+
+```bash
+curl -X POST http://127.0.0.1:8765/providers/amex/keepalive/start \
+  -H 'Content-Type: application/json' \
+  -d '{"strategy":"SESSION_API","duration_seconds":1800,"interval_seconds":60}'
+
+curl http://127.0.0.1:8765/providers/amex/keepalive/status
+
+curl -X POST http://127.0.0.1:8765/providers/amex/keepalive/stop
+```
+
+Trial state includes counters, dialog/logout flags, final canonical
+authentication state/reason, and a bounded sanitized event list. Events never
+store credentials, cookies, authorization headers, request/response bodies,
+account values, full query strings, or page HTML.
+
+Persisted trial result path:
+
+```text
+~/.mighty/provider_runtime/amex_keepalive_last_trial.json
+```
+
+## 7. Stop the runtime
 
 ```bash
 .venv/bin/python scripts/provider_runtime.py stop
 ```
 
-Stopping ends the maintenance watcher, then terminates only Chrome processes
-whose command line contains the exact dedicated Mighty Amex profile path.
-Normal Chrome windows and profiles are never affected.
+Stopping ends any active keepalive trial, stops the maintenance watcher, then
+terminates only Chrome processes whose command line contains the exact dedicated
+Mighty Amex profile path. Normal Chrome windows and profiles are never affected.
 
 ## Current scope
 
@@ -230,9 +295,10 @@ It currently provides:
 - headless launch fallback when no CDP endpoint is live;
 - CDP-based verification that disconnects without killing Chrome;
 - automatic Amex inactivity-dialog session extension;
-- localhost status, verification, maintenance-check, and shutdown commands;
+- developer-only Amex keepalive trials (experiment, not production keepalive);
+- localhost status, verification, maintenance-check, keepalive, and shutdown commands;
 - canonical authentication results;
-- sanitized persisted runtime state (including maintenance counters).
+- sanitized persisted runtime state (including maintenance counters and trial results).
 
 It does not yet:
 
@@ -241,4 +307,5 @@ It does not yet:
 - communicate with Railway;
 - perform account-data extraction;
 - recover from MFA or CAPTCHA;
-- manage multiple providers.
+- manage multiple providers;
+- enable automatic keepalive as production behavior.
