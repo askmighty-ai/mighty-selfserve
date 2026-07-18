@@ -54,6 +54,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
@@ -2576,6 +2577,158 @@ DEFAULT_BROWSER_RECORD_SEARCH_TERMS = (
 )
 BROWSER_RECORD_TEXT_SUMMARY_MAX_CHARS = INSPECTION_TEXT_MAX_CHARS
 BROWSER_RECORD_MATCH_SUMMARY_MAX = 5
+# CLI POST body and HTTP parser must stay aligned on these field names.
+BROWSER_RECORD_EXPIRATION_REQUEST_FIELDS = (
+    "provider",
+    "interval_seconds",
+    "timeout_seconds",
+    "rolling_window_seconds",
+    "screenshot_every_seconds",
+    "output_dir",
+)
+BROWSER_RECORD_DOCUMENTED_OUTCOMES = frozenset(
+    {"logged_out", "timeout", "initial_not_signed_in", "fatal_error"}
+)
+REQUEST_JSON_ERROR_BODY_MAX_CHARS = 4_000
+
+
+class ProviderRuntimeHTTPError(Exception):
+    """Raised when a localhost runtime HTTP call returns an unexpected 4xx/5xx."""
+
+    def __init__(self, status: int, path: str, body: str) -> None:
+        self.status = status
+        self.path = path
+        self.body = body
+        super().__init__(f"HTTP {status} from {path}")
+
+
+def _sanitize_validation_error(message: str) -> str:
+    """Bound a validation error for logs (no headers, cookies, or page content)."""
+    text = " ".join(str(message or "").split())
+    if len(text) > 240:
+        return text[:240] + "…"
+    return text
+
+
+def log_rejected_diagnostic_request(
+    *,
+    route: str,
+    status: int,
+    error: str,
+) -> None:
+    """Log a sanitized rejection for a developer-diagnostic HTTP request."""
+    line = (
+        f"{iso_now()} rejected_diagnostic_request "
+        f"route={route} status={status} "
+        f"error={_sanitize_validation_error(error)}"
+    )
+    print(line, file=sys.stderr)
+    try:
+        DEFAULT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with DEFAULT_LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except Exception:
+        pass
+
+
+def _parse_non_negative_float_field(
+    body: dict[str, Any],
+    name: str,
+    default: float,
+) -> float:
+    if name not in body or body.get(name) is None:
+        raw: Any = default
+    else:
+        raw = body.get(name)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        raise ValueError(f"{name} must be a number")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if value != value or value < 0:  # NaN or negative
+        raise ValueError(f"{name} must be a non-negative number")
+    return value
+
+
+def parse_browser_record_expiration_request(body: dict[str, Any]) -> dict[str, Any]:
+    """Validate and normalize a browser-record-expiration JSON body.
+
+    Field names/types match the CLI payload constructed for this command.
+    Raises ValueError with a sanitized message on malformed input.
+    """
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object")
+
+    provider_raw = body.get("provider", "amex")
+    if provider_raw is None:
+        provider = "amex"
+    else:
+        provider = str(provider_raw).strip()
+    if provider != "amex":
+        raise ValueError("provider must be 'amex'")
+
+    interval_seconds = _parse_non_negative_float_field(
+        body,
+        "interval_seconds",
+        float(DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS),
+    )
+    timeout_seconds = _parse_non_negative_float_field(
+        body,
+        "timeout_seconds",
+        float(DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS),
+    )
+    rolling_window_seconds = _parse_non_negative_float_field(
+        body,
+        "rolling_window_seconds",
+        float(DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS),
+    )
+    screenshot_every_seconds = _parse_non_negative_float_field(
+        body,
+        "screenshot_every_seconds",
+        float(DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS),
+    )
+
+    output_raw = body.get("output_dir")
+    if output_raw is not None and not isinstance(output_raw, str):
+        raise ValueError("output_dir must be a string or null")
+    output_dir = Path(output_raw).expanduser() if output_raw else None
+
+    return {
+        "provider": provider,
+        "interval_seconds": interval_seconds,
+        "timeout_seconds": timeout_seconds,
+        "rolling_window_seconds": rolling_window_seconds,
+        "screenshot_every_seconds": screenshot_every_seconds,
+        "output_dir": output_dir,
+    }
+
+
+def browser_record_expiration_http_status(payload: dict[str, Any]) -> HTTPStatus:
+    """Map recorder diagnostic payloads to HTTP status codes.
+
+    Documented recorder outcomes (including initial_not_signed_in) are HTTP 200
+    with a structured JSON body. Request validation failures use HTTP 400.
+    """
+    outcome = payload.get("outcome")
+    if payload.get("ok") or outcome in BROWSER_RECORD_DOCUMENTED_OUTCOMES:
+        return HTTPStatus.OK
+    return HTTPStatus.OK
+
+
+def build_browser_record_expiration_cli_payload(args: argparse.Namespace) -> dict[str, Any]:
+    """Build the POST JSON body for the browser-record-expiration CLI command."""
+    output_dir = getattr(args, "output_dir", None)
+    if output_dir is not None:
+        output_dir = Path(output_dir).expanduser().resolve()
+    return {
+        "provider": str(args.provider),
+        "interval_seconds": float(args.interval_seconds),
+        "timeout_seconds": float(args.timeout_seconds),
+        "rolling_window_seconds": float(args.rolling_window_seconds),
+        "screenshot_every_seconds": float(args.screenshot_every_seconds),
+        "output_dir": str(output_dir) if output_dir else None,
+    }
 
 
 def _explorer_tag_label(node: dict[str, Any] | None) -> str:
@@ -5916,42 +6069,29 @@ class RuntimeHandler(BaseHTTPRequestHandler):
         if self.path == "/providers/amex/diagnostics/browser-record-expiration":
             try:
                 body = self._read_json_body()
-                interval_seconds = float(
-                    body.get(
-                        "interval_seconds",
-                        DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS,
-                    )
-                )
-                timeout_seconds = float(
-                    body.get(
-                        "timeout_seconds",
-                        DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS,
-                    )
-                )
-                rolling_window_seconds = float(
-                    body.get(
-                        "rolling_window_seconds",
-                        DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS,
-                    )
-                )
-                screenshot_every_seconds = float(
-                    body.get(
-                        "screenshot_every_seconds",
-                        DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS,
-                    )
-                )
-                output_raw = body.get("output_dir")
-                output_dir = Path(str(output_raw)).expanduser() if output_raw else None
+                parsed = parse_browser_record_expiration_request(body)
                 payload = self.server.runtime.record_browser_expiration(
-                    "amex",
-                    interval_seconds=interval_seconds,
-                    timeout_seconds=timeout_seconds,
-                    rolling_window_seconds=rolling_window_seconds,
-                    screenshot_every_seconds=screenshot_every_seconds,
-                    output_dir=output_dir,
+                    parsed["provider"],
+                    interval_seconds=parsed["interval_seconds"],
+                    timeout_seconds=parsed["timeout_seconds"],
+                    rolling_window_seconds=parsed["rolling_window_seconds"],
+                    screenshot_every_seconds=parsed["screenshot_every_seconds"],
+                    output_dir=parsed["output_dir"],
                 )
-                status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.BAD_REQUEST
+                status = browser_record_expiration_http_status(payload)
                 self._send_json(status, payload)
+            except ValueError as exc:
+                error_payload = {
+                    "ok": False,
+                    "error": str(exc),
+                    "error_type": "validation_error",
+                }
+                log_rejected_diagnostic_request(
+                    route=self.path,
+                    status=int(HTTPStatus.BAD_REQUEST),
+                    error=str(exc),
+                )
+                self._send_json(HTTPStatus.BAD_REQUEST, error_payload)
             except Exception as exc:
                 self._send_json(
                     HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -6023,6 +6163,22 @@ def bootstrap_amex(root: Path, cdp_port: int, result_path: Path) -> int:
     return 0
 
 
+def _format_http_error_body(raw: bytes) -> str:
+    """Decode an HTTP error body for CLI display (bounded; no headers/secrets)."""
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return ""
+    if len(text) > REQUEST_JSON_ERROR_BODY_MAX_CHARS:
+        text = text[:REQUEST_JSON_ERROR_BODY_MAX_CHARS] + "\n...[truncated]"
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return text
+    if isinstance(parsed, (dict, list)):
+        return json.dumps(parsed, indent=2)
+    return text
+
+
 def request_json(
     method: str,
     url: str,
@@ -6036,8 +6192,21 @@ def request_json(
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = Request(url, data=data, method=method, headers=headers)
-    with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    path = urlsplit(url).path or url
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raw = b""
+        try:
+            raw = exc.read() or b""
+        except Exception:
+            raw = b""
+        body_text = _format_http_error_body(raw)
+        print(f"HTTP {exc.code} from {path}", file=sys.stderr)
+        if body_text:
+            print(body_text, file=sys.stderr)
+        raise ProviderRuntimeHTTPError(int(exc.code), path, body_text) from None
 
 
 def run_server(args: argparse.Namespace) -> int:
@@ -6290,6 +6459,14 @@ def main() -> int:
         return bootstrap_amex(args.root, args.cdp_port, args.result_path)
     if args.command == "serve":
         return run_server(args)
+    try:
+        return run_client_command(args)
+    except ProviderRuntimeHTTPError:
+        # request_json already printed status + bounded response body.
+        return 1
+
+
+def run_client_command(args: argparse.Namespace) -> int:
     if args.command == "verify":
         payload = request_json(
             "POST",
@@ -6413,9 +6590,6 @@ def main() -> int:
             return 0
         return 0 if payload.get("ok") else 1
     if args.command == "browser-record-expiration":
-        output_dir = args.output_dir
-        if output_dir is not None:
-            output_dir = output_dir.expanduser().resolve()
         http_timeout = float(args.timeout_seconds) + 120.0
         payload = request_json(
             "POST",
@@ -6423,13 +6597,7 @@ def main() -> int:
                 f"http://{args.host}:{args.port}/providers/"
                 f"{args.provider}/diagnostics/browser-record-expiration"
             ),
-            {
-                "interval_seconds": float(args.interval_seconds),
-                "timeout_seconds": float(args.timeout_seconds),
-                "rolling_window_seconds": float(args.rolling_window_seconds),
-                "screenshot_every_seconds": float(args.screenshot_every_seconds),
-                "output_dir": str(output_dir) if output_dir else None,
-            },
+            build_browser_record_expiration_cli_payload(args),
             timeout=http_timeout,
         )
         saved = payload.get("recording_json") or (

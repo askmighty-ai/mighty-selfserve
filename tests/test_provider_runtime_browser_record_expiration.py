@@ -2,16 +2,32 @@
 
 from __future__ import annotations
 
+import argparse
+import io
 import json
+import threading
+from http import HTTPStatus
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
+
+import pytest
 
 from mighty.provider_runtime import (
+    BROWSER_RECORD_EXPIRATION_REQUEST_FIELDS,
     DEFAULT_BROWSER_RECORD_SEARCH_TERMS,
+    ProviderRuntime,
+    ProviderRuntimeHTTPError,
     RollingExpirationObservationWindow,
+    RuntimeHTTPServer,
+    RuntimeHandler,
+    browser_record_expiration_http_status,
+    build_browser_record_expiration_cli_payload,
     collect_expiration_recording_observation,
+    parse_browser_record_expiration_request,
     record_amex_expiration_in_browser_context,
     record_amex_expiration_on_page,
+    request_json,
     summarize_browser_targets_for_recording,
     summarize_frame_tree_for_recording,
 )
@@ -619,3 +635,311 @@ def test_context_wrapper_writes_fatal_when_no_page(tmp_path: Path):
     assert payload["outcome"] == "fatal_error"
     assert "no_provider_page_selected" in payload["run_errors"]
     assert (out / "recording.json").is_file()
+
+
+def _runtime(tmp_path: Path) -> ProviderRuntime:
+    runtime = ProviderRuntime(
+        root=tmp_path,
+        cdp_port=9333,
+        state_path=tmp_path / "state.json",
+        result_path=tmp_path / "result.json",
+        keepalive_result_path=tmp_path / "keepalive.json",
+    )
+    runtime.cdp_url = "http://127.0.0.1:9333"
+    return runtime
+
+
+def _start_runtime_http(runtime: ProviderRuntime):
+    server = RuntimeHTTPServer(("127.0.0.1", 0), RuntimeHandler)
+    server.runtime = runtime
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    return server, f"http://{host}:{port}"
+
+
+def test_parse_browser_record_expiration_request_accepts_valid_fields():
+    parsed = parse_browser_record_expiration_request(
+        {
+            "provider": "amex",
+            "interval_seconds": 1,
+            "timeout_seconds": 900,
+            "rolling_window_seconds": 90,
+            "screenshot_every_seconds": 1,
+            "output_dir": None,
+        }
+    )
+    assert parsed["provider"] == "amex"
+    assert parsed["interval_seconds"] == 1.0
+    assert parsed["timeout_seconds"] == 900.0
+    assert parsed["rolling_window_seconds"] == 90.0
+    assert parsed["screenshot_every_seconds"] == 1.0
+    assert parsed["output_dir"] is None
+
+
+def test_parse_browser_record_expiration_request_rejects_malformed():
+    with pytest.raises(ValueError, match="interval_seconds must be a number"):
+        parse_browser_record_expiration_request({"interval_seconds": "nope"})
+    with pytest.raises(ValueError, match="provider must be 'amex'"):
+        parse_browser_record_expiration_request({"provider": "chase"})
+    with pytest.raises(ValueError, match="output_dir must be a string or null"):
+        parse_browser_record_expiration_request({"output_dir": 123})
+
+
+def test_cli_and_server_field_names_remain_aligned():
+    args = argparse.Namespace(
+        provider="amex",
+        interval_seconds=1,
+        timeout_seconds=900,
+        rolling_window_seconds=90,
+        screenshot_every_seconds=1,
+        output_dir=None,
+    )
+    payload = build_browser_record_expiration_cli_payload(args)
+    assert tuple(payload.keys()) == BROWSER_RECORD_EXPIRATION_REQUEST_FIELDS
+    parsed = parse_browser_record_expiration_request(payload)
+    assert set(parsed.keys()) == set(BROWSER_RECORD_EXPIRATION_REQUEST_FIELDS)
+
+
+def test_initial_not_signed_in_is_http_ok_not_unexplained_400():
+    payload = {
+        "ok": False,
+        "outcome": "initial_not_signed_in",
+        "initial_authentication_state": "SIGNED_OUT",
+    }
+    assert browser_record_expiration_http_status(payload) == HTTPStatus.OK
+
+
+def test_http_valid_browser_record_expiration_request(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    out = tmp_path / "http-valid"
+    expected = {
+        "ok": True,
+        "outcome": "timeout",
+        "recording_json": str(out / "recording.json"),
+        "output_dir": str(out),
+    }
+    runtime.record_browser_expiration = MagicMock(return_value=expected)
+    server, base = _start_runtime_http(runtime)
+    try:
+        payload = request_json(
+            "POST",
+            f"{base}/providers/amex/diagnostics/browser-record-expiration",
+            {
+                "provider": "amex",
+                "interval_seconds": 1,
+                "timeout_seconds": 5,
+                "rolling_window_seconds": 90,
+                "screenshot_every_seconds": 1,
+                "output_dir": str(out),
+            },
+        )
+        assert payload["outcome"] == "timeout"
+        runtime.record_browser_expiration.assert_called_once()
+        kwargs = runtime.record_browser_expiration.call_args.kwargs
+        assert kwargs["interval_seconds"] == 1.0
+        assert kwargs["timeout_seconds"] == 5.0
+        assert kwargs["rolling_window_seconds"] == 90.0
+        assert kwargs["screenshot_every_seconds"] == 1.0
+        assert kwargs["output_dir"] == out
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_malformed_browser_record_expiration_returns_useful_json(
+    tmp_path: Path, capsys
+):
+    runtime = _runtime(tmp_path)
+    server, base = _start_runtime_http(runtime)
+    try:
+        with pytest.raises(ProviderRuntimeHTTPError) as exc_info:
+            request_json(
+                "POST",
+                f"{base}/providers/amex/diagnostics/browser-record-expiration",
+                {"interval_seconds": "not-a-number"},
+            )
+        err = exc_info.value
+        assert err.status == 400
+        assert err.path.endswith("/providers/amex/diagnostics/browser-record-expiration")
+        body = json.loads(err.body)
+        assert body["ok"] is False
+        assert body["error_type"] == "validation_error"
+        assert "interval_seconds" in body["error"]
+        captured = capsys.readouterr()
+        assert "HTTP 400" in captured.err
+        assert "interval_seconds" in captured.err
+        assert "Traceback" not in captured.err
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_initial_not_signed_in_returns_documented_result(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    out = tmp_path / "initial-out"
+    expected = {
+        "ok": False,
+        "outcome": "initial_not_signed_in",
+        "initial_authentication_state": "SIGNED_OUT",
+        "recording_json": str(out / "recording.json"),
+        "output_dir": str(out),
+        "run_errors": [
+            "initial_authentication_state_was_SIGNED_OUT; "
+            "recorder requires SIGNED_IN to start"
+        ],
+    }
+    runtime.record_browser_expiration = MagicMock(return_value=expected)
+    server, base = _start_runtime_http(runtime)
+    try:
+        payload = request_json(
+            "POST",
+            f"{base}/providers/amex/diagnostics/browser-record-expiration",
+            build_browser_record_expiration_cli_payload(
+                argparse.Namespace(
+                    provider="amex",
+                    interval_seconds=1,
+                    timeout_seconds=5,
+                    rolling_window_seconds=90,
+                    screenshot_every_seconds=1,
+                    output_dir=out,
+                )
+            ),
+        )
+        assert payload["outcome"] == "initial_not_signed_in"
+        assert payload["initial_authentication_state"] == "SIGNED_OUT"
+        assert payload["ok"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_request_json_displays_400_response_body(capsys):
+    class FakeHTTPError(HTTPError):
+        def __init__(self):
+            super().__init__(
+                url="http://127.0.0.1:8765/providers/amex/diagnostics/browser-record-expiration",
+                code=400,
+                msg="Bad Request",
+                hdrs=None,
+                fp=io.BytesIO(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": "interval_seconds must be a number",
+                            "error_type": "validation_error",
+                        }
+                    ).encode("utf-8")
+                ),
+            )
+
+    with patch("mighty.provider_runtime.urlopen", side_effect=FakeHTTPError()):
+        with pytest.raises(ProviderRuntimeHTTPError) as exc_info:
+            request_json(
+                "POST",
+                "http://127.0.0.1:8765/providers/amex/diagnostics/browser-record-expiration",
+                {"interval_seconds": "bad"},
+            )
+    captured = capsys.readouterr()
+    assert "HTTP 400 from /providers/amex/diagnostics/browser-record-expiration" in (
+        captured.err
+    )
+    assert "interval_seconds must be a number" in captured.err
+    assert "validation_error" in captured.err
+    assert "Traceback" not in captured.err
+    assert "Cookie" not in captured.err
+    assert exc_info.value.status == 400
+
+
+def test_serve_registers_browser_record_expiration_route():
+    source = Path("mighty/provider_runtime.py").read_text(encoding="utf-8")
+    assert 'if self.path == "/providers/amex/diagnostics/browser-record-expiration":' in (
+        source
+    )
+    assert "def run_server(" in source
+    assert "RuntimeHTTPServer((args.host, args.port), RuntimeHandler)" in source
+
+
+def test_recorder_can_start_while_keepalive_trial_exists(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    runtime.keepalive_trial_running = True
+    runtime.keepalive_trial_id = "trial-alive"
+    out = tmp_path / "with-keepalive"
+    page = _amex_page()
+    context = MagicMock()
+    browser = MagicMock()
+    browser.contexts = [context]
+    playwright = MagicMock()
+    playwright.chromium.connect_over_cdp.return_value = browser
+    cm = MagicMock()
+    cm.__enter__.return_value = playwright
+    cm.__exit__.return_value = None
+
+    with patch("mighty.provider_runtime.sync_playwright", return_value=cm), patch(
+        "mighty.provider_runtime.record_amex_expiration_in_browser_context",
+        return_value={
+            "ok": True,
+            "outcome": "timeout",
+            "output_dir": str(out),
+            "recording_json": str(out / "recording.json"),
+        },
+    ) as record_fn:
+        payload = runtime.record_browser_expiration(
+            "amex",
+            interval_seconds=1,
+            timeout_seconds=5,
+            output_dir=out,
+        )
+    assert payload["outcome"] == "timeout"
+    assert runtime.keepalive_trial_running is True
+    record_fn.assert_called_once()
+    assert page.evaluate.call_count == 0
+
+
+def test_recorder_poll_loop_does_not_hold_runtime_lock(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    out = tmp_path / "lock-free"
+    lock_acquired_during_poll = threading.Event()
+
+    def collect(_page, **_kwargs):
+        acquired = runtime.lock.acquire(blocking=False)
+        if acquired:
+            lock_acquired_during_poll.set()
+            runtime.lock.release()
+        return _obs("SIGNED_IN")
+
+    page = _amex_page()
+    context = MagicMock()
+    browser = MagicMock()
+    browser.contexts = [context]
+    playwright = MagicMock()
+    playwright.chromium.connect_over_cdp.return_value = browser
+    cm = MagicMock()
+    cm.__enter__.return_value = playwright
+    cm.__exit__.return_value = None
+
+    with patch("mighty.provider_runtime.sync_playwright", return_value=cm), patch(
+        "mighty.provider_runtime.record_amex_expiration_in_browser_context",
+        side_effect=lambda *_a, **kwargs: record_amex_expiration_on_page(
+            page,
+            output_dir=kwargs.get("output_dir") or out,
+            interval_seconds=kwargs.get("interval_seconds", 1),
+            timeout_seconds=kwargs.get("timeout_seconds", 2),
+            screenshot_every_seconds=10_000,
+            collect_fn=collect,
+            sleep_fn=lambda _s: None,
+            monotonic_fn=_clock([0.0, 1.0, 2.0]),
+        ),
+    ):
+        payload = runtime.record_browser_expiration(
+            "amex",
+            interval_seconds=1,
+            timeout_seconds=2,
+            output_dir=out,
+        )
+    assert payload["outcome"] == "timeout"
+    assert lock_acquired_during_poll.is_set()
+    assert page.evaluate.call_count == 0
+    page.goto.assert_not_called()
+    page.reload.assert_not_called()
+    page.click.assert_not_called()
