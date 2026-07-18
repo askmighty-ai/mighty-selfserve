@@ -311,6 +311,53 @@ Canonical authentication still comes from verification / the latest committed
 canonical state (`inspection_authentication_state_source`:
 `LATEST_CANONICAL` | `FRESH_VERIFICATION` | `NONE`), not from DOM guessing.
 
+#### Developer browser text watcher
+
+The timeout dialog appears only briefly, so repeatedly running
+`browser-find-text` by hand is impractical. `browser-watch-text` is a
+developer-only diagnostic that polls CDP DOM/AX for configured substrings and
+writes one sanitized JSON bundle at the first match.
+
+It does **not** start a keepalive trial, does not click Continue (or any other
+control), does not mutate the page, and does not use `page.evaluate` /
+`frame.evaluate`. Intended workflow:
+
+1. Start a `NONE` keepalive trial.
+2. In another terminal, start `browser-watch-text`.
+3. Leave both running; the watcher captures the dialog automatically.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  browser-watch-text amex \
+  --terms "expire,Your session,Continue,Log Out" \
+  --interval-seconds 1 \
+  --timeout-seconds 600 \
+  --stop-after-first-match
+```
+
+Options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--terms` | `expire,Your session,Continue,Log Out` | Comma-separated case-insensitive substrings |
+| `--interval-seconds` | `1` | CDP poll interval |
+| `--timeout-seconds` | `600` | Exit cleanly if no match |
+| `--stop-after-first-match` / `--no-stop-after-first-match` | stop | Whether to exit after the first capture |
+| `--output-file` | auto under diagnostics | Optional explicit JSON path |
+
+Default output path:
+
+```text
+~/.mighty/provider_runtime/diagnostics/amex-text-watch-<UTC timestamp>.json
+```
+
+The CLI prints the exact saved path. The bundle includes `started_at`,
+`matched_at`, `completed_at`, configured/matched terms, selected page URL,
+canonical authentication state + source, per-term `browser-find-text` results,
+a normal Browser Inspector snapshot, and bounded `errors`. Snippets stay
+bounded with long-number redaction; credentials, cookies, headers,
+request/response bodies, and full HTML are never stored.
+
 ## 5. Inspect runtime status
 
 ```bash
@@ -431,8 +478,8 @@ It currently provides:
 - reusable Browser Inspector (pages/frames/shadow/modal candidates);
 - automatic Amex inactivity-dialog session extension via inspector + classifier;
 - developer-only Amex keepalive trials (experiment, not production keepalive);
-- localhost status, verification, maintenance-check, browser-inspect, keepalive,
-  and shutdown commands;
+- localhost status, verification, maintenance-check, browser-inspect,
+  browser-find-text, browser-watch-text, keepalive, and shutdown commands;
 - canonical authentication results;
 - sanitized persisted runtime state (including maintenance counters and trial results).
 

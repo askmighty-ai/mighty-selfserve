@@ -16,6 +16,7 @@ Commands:
     python scripts/provider_runtime.py browser-inspect amex
     python scripts/provider_runtime.py browser-inspect-debug amex
     python scripts/provider_runtime.py browser-find-text amex "expire"
+    python scripts/provider_runtime.py browser-watch-text amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
 
 Lifecycle:
@@ -2553,6 +2554,10 @@ FIND_TEXT_MAX_MATCHES = 40
 FIND_TEXT_PARENT_CHAIN_MAX = 5
 FIND_TEXT_ACTION_DESCENDANT_MAX = 12
 
+DEFAULT_BROWSER_WATCH_TERMS = ("expire", "Your session", "Continue", "Log Out")
+DEFAULT_BROWSER_WATCH_INTERVAL_SECONDS = 1
+DEFAULT_BROWSER_WATCH_TIMEOUT_SECONDS = 600
+
 
 def _explorer_tag_label(node: dict[str, Any] | None) -> str:
     if not node:
@@ -3053,6 +3058,489 @@ def format_browser_find_text_report(payload: dict[str, Any]) -> str:
         lines.append(f"geometry:\n{match.get('geometry')}")
         lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def parse_browser_watch_terms(raw: str | None) -> list[str]:
+    """Split comma-separated watch terms; preserve caller wording, drop empties."""
+    if raw is None:
+        return list(DEFAULT_BROWSER_WATCH_TERMS)
+    terms = [part.strip() for part in str(raw).split(",")]
+    return [term for term in terms if term]
+
+
+def default_browser_watch_output_path(
+    diagnostics_dir: Path | None = None,
+    *,
+    when: datetime | None = None,
+) -> Path:
+    """Default ~/.mighty/provider_runtime/diagnostics/amex-text-watch-<UTC>.json."""
+    stamp = (when or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    base = diagnostics_dir or DEFAULT_DIAGNOSTICS_DIR
+    return base / f"amex-text-watch-{stamp}.json"
+
+
+def matched_terms_in_page_cdp(
+    page: Page,
+    terms: list[str],
+) -> dict[str, Any]:
+    """One CDP DOM/AX snapshot; which configured terms match (no evaluate)."""
+    page_url = sanitize_url(getattr(page, "url", None))
+    cleaned = [term for term in terms if _normalize_text(term)]
+    if not cleaned:
+        return {
+            "ok": False,
+            "matched_terms": [],
+            "selected_page_url": page_url,
+            "error": "empty_terms",
+        }
+
+    session = None
+    try:
+        session = open_page_cdp_session(page)
+        enable_inspection_domains(session)
+        try:
+            frame_tree = get_frame_tree(session)
+            frame_entries = _frame_entries_from_tree(frame_tree)
+        except Exception:
+            frame_entries = [{"frame_id": None, "frame_url": page_url}]
+        frame_url_by_id = {
+            str(entry["frame_id"]): entry.get("frame_url")
+            for entry in frame_entries
+            if entry.get("frame_id")
+        }
+        document_payload = get_pierced_document(session)
+        root = document_payload.get("root") or {}
+        index: dict[int, dict[str, Any]] = {}
+        if isinstance(root, dict):
+            _build_explorer_index(
+                root,
+                index,
+                frame_url=page_url,
+                frame_url_by_id=frame_url_by_id,
+            )
+
+        ax_name_by_backend: dict[int, str] = {}
+        try:
+            ax_tree = get_accessibility_tree(session)
+            ax_name_by_backend, _ax_role_by_backend, _dialog_backends = _build_ax_maps(
+                ax_tree
+            )
+        except Exception:
+            ax_name_by_backend = {}
+
+        corpus: list[str] = []
+        for info in index.values():
+            if info.get("node_type") != 3:
+                continue
+            corpus.append(_normalize_text(str(info.get("node_value") or "")))
+        for name in ax_name_by_backend.values():
+            corpus.append(_normalize_text(name))
+
+        matched: list[str] = []
+        for term in cleaned:
+            needle = _normalize_text(term)
+            if any(needle and needle in text for text in corpus):
+                matched.append(term)
+        return {
+            "ok": True,
+            "matched_terms": matched,
+            "selected_page_url": page_url,
+            "collector": "cdp_dom_ax_text_watch_poll",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "matched_terms": [],
+            "selected_page_url": page_url,
+            "error": f"{type(exc).__name__}: {exc}",
+            "exception_class": type(exc).__name__,
+            "traceback": traceback.format_exc(),
+        }
+    finally:
+        _safe_detach_cdp_session(session)
+
+
+def _sanitize_watch_text_field(text: str | None) -> str | None:
+    """Bound and redact a find-text string for watch diagnostic persistence."""
+    if text is None:
+        return None
+    cleaned = redact_long_digit_sequences(" ".join(str(text).lower().split()))
+    return cleaned[:FIND_TEXT_SNIPPET_MAX_CHARS] or None
+
+
+def _sanitize_find_text_payload_for_watch(payload: dict[str, Any]) -> dict[str, Any]:
+    """Bound/redact find-text fields before persisting a watch diagnostic bundle."""
+    cleaned = dict(payload)
+    matches_out: list[dict[str, Any]] = []
+    for match in cleaned.get("matches") or []:
+        if not isinstance(match, dict):
+            continue
+        item = dict(match)
+        for key in ("matched_text", "text_snippet", "accessible_name"):
+            if key in item:
+                item[key] = _sanitize_watch_text_field(
+                    None if item[key] is None else str(item[key])
+                )
+        matches_out.append(item)
+    cleaned["matches"] = matches_out
+    if cleaned.get("error"):
+        cleaned["error"] = redact_long_digit_sequences(str(cleaned["error"]))[:300]
+    # Never persist CDP tracebacks with potential page content in watch files.
+    cleaned.pop("traceback", None)
+    return cleaned
+
+
+def _capture_browser_text_watch_bundle(
+    page: Page,
+    *,
+    terms: list[str],
+    matched_terms: list[str],
+    started_at: str,
+    matched_at: str,
+    interval_seconds: float,
+    timeout_seconds: float,
+    canonical_authentication_state: str | None,
+    canonical_authentication_state_source: str,
+    output_file: Path,
+    provider: str,
+    errors: list[str],
+    find_text_fn: Any = None,
+    inspect_fn: Any = None,
+) -> dict[str, Any]:
+    """Build and persist one sanitized text-watch diagnostic bundle."""
+    find_fn = find_text_fn or find_text_in_page_cdp
+    find_text_results_by_term: dict[str, Any] = {}
+    for term in terms:
+        try:
+            find_text_results_by_term[term] = _sanitize_find_text_payload_for_watch(
+                find_fn(page, term)
+            )
+        except Exception as exc:
+            find_text_results_by_term[term] = {
+                "ok": False,
+                "query": term,
+                "match_count": 0,
+                "matches": [],
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            errors.append(f"find_text:{term}:{type(exc).__name__}")
+
+    browser_inspection: dict[str, Any] | None = None
+    try:
+        if inspect_fn is not None:
+            browser_inspection = inspect_fn(page)
+        else:
+            context = page.context
+            inspection = inspect_browser_context(
+                context,
+                provider=provider,
+                capture_screenshot=False,
+                mark_continue=False,
+                select_page_fn=lambda _ctx, create_if_missing=False: page,
+            )
+            browser_inspection = inspection.to_sanitized_dict()
+    except Exception as exc:
+        errors.append(f"browser_inspection:{type(exc).__name__}: {exc}")
+        browser_inspection = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "exception_class": type(exc).__name__,
+        }
+
+    completed_at = iso_now()
+    output_file = Path(output_file)
+    bundle = {
+        "ok": True,
+        "started_at": started_at,
+        "matched_at": matched_at,
+        "completed_at": completed_at,
+        "configured_terms": list(terms),
+        "matched_terms": list(matched_terms),
+        "interval_seconds": interval_seconds,
+        "timeout_seconds": timeout_seconds,
+        "selected_page_url": sanitize_url(getattr(page, "url", None)),
+        "canonical_authentication_state": canonical_authentication_state,
+        "canonical_authentication_state_source": canonical_authentication_state_source,
+        "find_text_results_by_term": find_text_results_by_term,
+        "browser_inspection": browser_inspection,
+        "errors": list(errors),
+        "timed_out": False,
+        "output_file": str(output_file),
+    }
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
+    return bundle
+
+
+def watch_text_on_page(
+    page: Page,
+    terms: list[str],
+    *,
+    interval_seconds: float = DEFAULT_BROWSER_WATCH_INTERVAL_SECONDS,
+    timeout_seconds: float = DEFAULT_BROWSER_WATCH_TIMEOUT_SECONDS,
+    stop_after_first_match: bool = True,
+    output_file: Path | None = None,
+    diagnostics_dir: Path | None = None,
+    canonical_authentication_state: str | None = None,
+    canonical_authentication_state_source: str = AUTH_STATE_SOURCE_NONE,
+    provider: str = "amex",
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    poll_fn: Any = None,
+    find_text_fn: Any = None,
+    inspect_fn: Any = None,
+) -> dict[str, Any]:
+    """Poll CDP DOM/AX for configured terms; capture one diagnostic on match.
+
+    Developer diagnostics only: never clicks, never mutates the page, never uses
+    page.evaluate / frame.evaluate. Independent of keepalive trial threads.
+    """
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    poll = poll_fn or matched_terms_in_page_cdp
+    started_at = iso_now()
+    started_mono = monotonic()
+    deadline = started_mono + max(0.0, float(timeout_seconds))
+    interval = max(0.0, float(interval_seconds))
+    errors: list[str] = []
+    poll_count = 0
+    last_poll_at: str | None = None
+    output_paths: list[str] = []
+    last_bundle: dict[str, Any] | None = None
+    configured = list(terms)
+
+    if not configured:
+        completed_at = iso_now()
+        path = Path(output_file) if output_file else default_browser_watch_output_path(
+            diagnostics_dir
+        )
+        bundle = {
+            "ok": False,
+            "started_at": started_at,
+            "matched_at": None,
+            "completed_at": completed_at,
+            "configured_terms": [],
+            "matched_terms": [],
+            "interval_seconds": interval,
+            "timeout_seconds": float(timeout_seconds),
+            "selected_page_url": sanitize_url(getattr(page, "url", None)),
+            "canonical_authentication_state": canonical_authentication_state,
+            "canonical_authentication_state_source": canonical_authentication_state_source,
+            "find_text_results_by_term": {},
+            "browser_inspection": None,
+            "errors": ["empty_terms"],
+            "timed_out": False,
+            "poll_count": 0,
+            "last_poll_at": None,
+            "matched": False,
+            "output_file": str(path),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
+        return bundle
+
+    while True:
+        poll_count += 1
+        last_poll_at = iso_now()
+        try:
+            poll_result = poll(page, configured)
+        except Exception as exc:
+            errors.append(f"poll:{type(exc).__name__}: {exc}")
+            poll_result = {
+                "ok": False,
+                "matched_terms": [],
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+        if not poll_result.get("ok"):
+            err = poll_result.get("error")
+            if err:
+                errors.append(f"poll:{err}")
+            matched_now: list[str] = []
+        else:
+            matched_now = list(poll_result.get("matched_terms") or [])
+
+        if matched_now:
+            matched_at = last_poll_at
+            if output_file is not None and not output_paths:
+                path = Path(output_file)
+            else:
+                path = default_browser_watch_output_path(diagnostics_dir)
+            try:
+                last_bundle = _capture_browser_text_watch_bundle(
+                    page,
+                    terms=configured,
+                    matched_terms=matched_now,
+                    started_at=started_at,
+                    matched_at=matched_at,
+                    interval_seconds=interval,
+                    timeout_seconds=float(timeout_seconds),
+                    canonical_authentication_state=canonical_authentication_state,
+                    canonical_authentication_state_source=(
+                        canonical_authentication_state_source
+                    ),
+                    output_file=path,
+                    provider=provider,
+                    errors=list(errors),
+                    find_text_fn=find_text_fn,
+                    inspect_fn=inspect_fn,
+                )
+                output_paths.append(str(path))
+            except Exception as exc:
+                errors.append(f"capture:{type(exc).__name__}: {exc}")
+                last_bundle = {
+                    "ok": False,
+                    "started_at": started_at,
+                    "matched_at": matched_at,
+                    "completed_at": iso_now(),
+                    "configured_terms": configured,
+                    "matched_terms": matched_now,
+                    "interval_seconds": interval,
+                    "timeout_seconds": float(timeout_seconds),
+                    "selected_page_url": sanitize_url(getattr(page, "url", None)),
+                    "canonical_authentication_state": canonical_authentication_state,
+                    "canonical_authentication_state_source": (
+                        canonical_authentication_state_source
+                    ),
+                    "find_text_results_by_term": {},
+                    "browser_inspection": None,
+                    "errors": list(errors),
+                    "timed_out": False,
+                    "output_file": str(path),
+                }
+            if stop_after_first_match:
+                last_bundle["poll_count"] = poll_count
+                last_bundle["last_poll_at"] = last_poll_at
+                last_bundle["matched"] = True
+                return last_bundle
+
+        now = monotonic()
+        if now >= deadline:
+            break
+        remaining = deadline - now
+        if interval > 0:
+            sleep(min(interval, remaining))
+        elif remaining > 0:
+            # Zero interval: still yield so tests/mocks can advance time.
+            sleep(0)
+
+    completed_at = iso_now()
+    path = Path(output_file) if output_file else default_browser_watch_output_path(
+        diagnostics_dir
+    )
+    if last_bundle is not None:
+        # Continued after first match until timeout; return the latest capture.
+        last_bundle["poll_count"] = poll_count
+        last_bundle["last_poll_at"] = last_poll_at
+        last_bundle["matched"] = True
+        last_bundle["completed_at"] = completed_at
+        last_bundle["timed_out"] = True
+        last_bundle["output_files"] = output_paths
+        return last_bundle
+
+    bundle = {
+        "ok": True,
+        "started_at": started_at,
+        "matched_at": None,
+        "completed_at": completed_at,
+        "configured_terms": configured,
+        "matched_terms": [],
+        "interval_seconds": interval,
+        "timeout_seconds": float(timeout_seconds),
+        "selected_page_url": sanitize_url(getattr(page, "url", None)),
+        "canonical_authentication_state": canonical_authentication_state,
+        "canonical_authentication_state_source": canonical_authentication_state_source,
+        "find_text_results_by_term": {},
+        "browser_inspection": None,
+        "errors": list(errors),
+        "timed_out": True,
+        "poll_count": poll_count,
+        "last_poll_at": last_poll_at,
+        "matched": False,
+        "output_file": str(path),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
+    return bundle
+
+
+def watch_text_in_browser_context(
+    context: BrowserContext,
+    terms: list[str],
+    *,
+    provider: str = "amex",
+    select_page_fn: Any = None,
+    interval_seconds: float = DEFAULT_BROWSER_WATCH_INTERVAL_SECONDS,
+    timeout_seconds: float = DEFAULT_BROWSER_WATCH_TIMEOUT_SECONDS,
+    stop_after_first_match: bool = True,
+    output_file: Path | None = None,
+    diagnostics_dir: Path | None = None,
+    canonical_authentication_state: str | None = None,
+    canonical_authentication_state_source: str = AUTH_STATE_SOURCE_NONE,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    poll_fn: Any = None,
+    find_text_fn: Any = None,
+    inspect_fn: Any = None,
+) -> dict[str, Any]:
+    """Run developer text watcher against the selected provider page."""
+    selector = select_page_fn or (
+        select_amex_page if provider == "amex" else select_provider_page
+    )
+    if select_page_fn is None and provider == "amex":
+        selected = select_amex_page(context, create_if_missing=False)
+    elif select_page_fn is None:
+        selected = None
+    else:
+        selected = selector(context, create_if_missing=False)
+    if selected is None:
+        started_at = iso_now()
+        path = Path(output_file) if output_file else default_browser_watch_output_path(
+            diagnostics_dir
+        )
+        bundle = {
+            "ok": False,
+            "started_at": started_at,
+            "matched_at": None,
+            "completed_at": iso_now(),
+            "configured_terms": list(terms),
+            "matched_terms": [],
+            "interval_seconds": float(interval_seconds),
+            "timeout_seconds": float(timeout_seconds),
+            "selected_page_url": None,
+            "canonical_authentication_state": canonical_authentication_state,
+            "canonical_authentication_state_source": (
+                canonical_authentication_state_source
+            ),
+            "find_text_results_by_term": {},
+            "browser_inspection": None,
+            "errors": ["no_provider_page_selected"],
+            "timed_out": False,
+            "poll_count": 0,
+            "last_poll_at": None,
+            "matched": False,
+            "output_file": str(path),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
+        return bundle
+    return watch_text_on_page(
+        selected,
+        terms,
+        interval_seconds=interval_seconds,
+        timeout_seconds=timeout_seconds,
+        stop_after_first_match=stop_after_first_match,
+        output_file=output_file,
+        diagnostics_dir=diagnostics_dir,
+        canonical_authentication_state=canonical_authentication_state,
+        canonical_authentication_state_source=canonical_authentication_state_source,
+        provider=provider,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        poll_fn=poll_fn,
+        find_text_fn=find_text_fn,
+        inspect_fn=inspect_fn,
+    )
 
 
 def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
@@ -3955,6 +4443,55 @@ class ProviderRuntime:
                     provider=provider,
                 )
 
+    def watch_browser_text(
+        self,
+        provider: str,
+        terms: list[str],
+        *,
+        interval_seconds: float = DEFAULT_BROWSER_WATCH_INTERVAL_SECONDS,
+        timeout_seconds: float = DEFAULT_BROWSER_WATCH_TIMEOUT_SECONDS,
+        stop_after_first_match: bool = True,
+        output_file: Path | None = None,
+    ) -> dict[str, Any]:
+        """Developer-only timeout text watcher over the live provider session.
+
+        Runs independently of the keepalive trial thread: does not start a trial,
+        does not hold the runtime lock across polls, and never clicks controls.
+        """
+        if provider != "amex":
+            raise ValueError(f"Unsupported provider: {provider}")
+        with self.lock:
+            if not self.cdp_url:
+                raise RuntimeError("Provider runtime is not started")
+            cdp_url = self.cdp_url
+            if self.last_result is not None:
+                auth_state = self.last_result.authentication_state
+                auth_source = AUTH_STATE_SOURCE_LATEST_CANONICAL
+            else:
+                auth_state = None
+                auth_source = AUTH_STATE_SOURCE_NONE
+            diagnostics_dir = self.diagnostics_dir
+
+        # CDP attach + poll loop outside the runtime lock so keepalive/maintenance
+        # can continue while this developer watcher runs in another terminal.
+        with sync_playwright() as playwright:
+            browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+            if not browser.contexts:
+                raise RuntimeError("Chrome exposed no persistent browser context")
+            context = browser.contexts[0]
+            return watch_text_in_browser_context(
+                context,
+                terms,
+                provider=provider,
+                interval_seconds=interval_seconds,
+                timeout_seconds=timeout_seconds,
+                stop_after_first_match=stop_after_first_match,
+                output_file=output_file,
+                diagnostics_dir=diagnostics_dir,
+                canonical_authentication_state=auth_state,
+                canonical_authentication_state_source=auth_source,
+            )
+
     def diagnose_expiration_dialog(self, provider: str = "amex") -> dict[str, Any]:
         """Backward-compatible diagnostic wrapper over Browser Inspector."""
         payload = self.inspect_browser(provider, capture_screenshot=False)
@@ -4578,6 +5115,54 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                     },
                 )
             return
+        if self.path == "/providers/amex/diagnostics/browser-watch-text":
+            try:
+                body = self._read_json_body()
+                terms_raw = body.get("terms")
+                if isinstance(terms_raw, list):
+                    terms = [str(item).strip() for item in terms_raw if str(item).strip()]
+                else:
+                    terms = parse_browser_watch_terms(
+                        None if terms_raw is None else str(terms_raw)
+                    )
+                interval_seconds = float(
+                    body.get(
+                        "interval_seconds",
+                        DEFAULT_BROWSER_WATCH_INTERVAL_SECONDS,
+                    )
+                )
+                timeout_seconds = float(
+                    body.get(
+                        "timeout_seconds",
+                        DEFAULT_BROWSER_WATCH_TIMEOUT_SECONDS,
+                    )
+                )
+                stop_after_first_match = bool(
+                    body.get("stop_after_first_match", True)
+                )
+                output_raw = body.get("output_file")
+                output_file = Path(str(output_raw)).expanduser() if output_raw else None
+                payload = self.server.runtime.watch_browser_text(
+                    "amex",
+                    terms,
+                    interval_seconds=interval_seconds,
+                    timeout_seconds=timeout_seconds,
+                    stop_after_first_match=stop_after_first_match,
+                    output_file=output_file,
+                )
+                status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.BAD_REQUEST
+                self._send_json(status, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "exception_class": type(exc).__name__,
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+            return
         if self.path == "/providers/amex/diagnostics/inspect-expiration-dialog":
             try:
                 payload = self.server.runtime.diagnose_expiration_dialog("amex")
@@ -4642,6 +5227,8 @@ def request_json(
     method: str,
     url: str,
     payload: dict[str, Any] | None = None,
+    *,
+    timeout: float = 60,
 ) -> dict[str, Any]:
     data = None
     headers: dict[str, str] = {}
@@ -4649,7 +5236,7 @@ def request_json(
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = Request(url, data=data, method=method, headers=headers)
-    with urlopen(request, timeout=60) as response:
+    with urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -4788,6 +5375,50 @@ def parse_args() -> argparse.Namespace:
         help='Case-insensitive substring to locate (e.g. "expire")',
     )
 
+    browser_watch_text = subparsers.add_parser(
+        "browser-watch-text",
+        help=(
+            "Developer-only: poll CDP DOM/AX for timeout-related text and capture "
+            "a sanitized diagnostic bundle on first match (no clicks)"
+        ),
+    )
+    browser_watch_text.add_argument("provider", choices=("amex",))
+    browser_watch_text.add_argument(
+        "--terms",
+        default=",".join(DEFAULT_BROWSER_WATCH_TERMS),
+        help=(
+            "Comma-separated case-insensitive substrings to watch "
+            '(default: "expire,Your session,Continue,Log Out")'
+        ),
+    )
+    browser_watch_text.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=DEFAULT_BROWSER_WATCH_INTERVAL_SECONDS,
+        help=f"Poll interval (default: {DEFAULT_BROWSER_WATCH_INTERVAL_SECONDS})",
+    )
+    browser_watch_text.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=DEFAULT_BROWSER_WATCH_TIMEOUT_SECONDS,
+        help=f"Give up after this many seconds (default: {DEFAULT_BROWSER_WATCH_TIMEOUT_SECONDS})",
+    )
+    browser_watch_text.add_argument(
+        "--stop-after-first-match",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stop after the first match capture (default: true)",
+    )
+    browser_watch_text.add_argument(
+        "--output-file",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path for the diagnostic JSON "
+            "(default: ~/.mighty/provider_runtime/diagnostics/amex-text-watch-<UTC>.json)"
+        ),
+    )
+
     inspect_expiration = subparsers.add_parser(
         "inspect-expiration-dialog",
         help="Deprecated alias for browser-inspect + Amex expiration classification",
@@ -4896,6 +5527,38 @@ def main() -> int:
             {"query": str(args.query)},
         )
         print(format_browser_find_text_report(payload))
+        return 0 if payload.get("ok") else 1
+    if args.command == "browser-watch-text":
+        terms = parse_browser_watch_terms(args.terms)
+        output_file = args.output_file
+        if output_file is not None:
+            output_file = output_file.expanduser().resolve()
+        # Allow the HTTP call to outlive the watch timeout (server blocks until done).
+        http_timeout = float(args.timeout_seconds) + 120.0
+        payload = request_json(
+            "POST",
+            (
+                f"http://{args.host}:{args.port}/providers/"
+                f"{args.provider}/diagnostics/browser-watch-text"
+            ),
+            {
+                "terms": terms,
+                "interval_seconds": float(args.interval_seconds),
+                "timeout_seconds": float(args.timeout_seconds),
+                "stop_after_first_match": bool(args.stop_after_first_match),
+                "output_file": str(output_file) if output_file else None,
+            },
+            timeout=http_timeout,
+        )
+        saved = payload.get("output_file")
+        if saved:
+            print(str(saved))
+        else:
+            print(json.dumps(payload, indent=2))
+        if payload.get("matched"):
+            return 0
+        if payload.get("timed_out"):
+            return 0
         return 0 if payload.get("ok") else 1
     if args.command == "inspect-expiration-dialog":
         payload = request_json(
