@@ -17,6 +17,7 @@ Commands:
     python scripts/provider_runtime.py browser-inspect-debug amex
     python scripts/provider_runtime.py browser-find-text amex "expire"
     python scripts/provider_runtime.py browser-watch-text amex
+    python scripts/provider_runtime.py browser-record-expiration amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
 
 Lifecycle:
@@ -34,6 +35,7 @@ Lifecycle:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -45,6 +47,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -2558,6 +2561,22 @@ DEFAULT_BROWSER_WATCH_TERMS = ("expire", "Your session", "Continue", "Log Out")
 DEFAULT_BROWSER_WATCH_INTERVAL_SECONDS = 1
 DEFAULT_BROWSER_WATCH_TIMEOUT_SECONDS = 600
 
+DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS = 1
+DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS = 900
+DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS = 90
+DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS = 1
+# Observation-only search terms. Deliberately omits "Log Out" (always in nav).
+DEFAULT_BROWSER_RECORD_SEARCH_TERMS = (
+    "expire",
+    "session",
+    "continue",
+    "stay signed in",
+    "still there",
+    "timed out",
+)
+BROWSER_RECORD_TEXT_SUMMARY_MAX_CHARS = INSPECTION_TEXT_MAX_CHARS
+BROWSER_RECORD_MATCH_SUMMARY_MAX = 5
+
 
 def _explorer_tag_label(node: dict[str, Any] | None) -> str:
     if not node:
@@ -3543,6 +3562,696 @@ def watch_text_in_browser_context(
     )
 
 
+def default_browser_record_output_dir(
+    diagnostics_dir: Path | None = None,
+    *,
+    when: datetime | None = None,
+) -> Path:
+    """Default ~/.mighty/provider_runtime/diagnostics/amex-expiration-recording-<UTC>/."""
+    stamp = (when or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    base = diagnostics_dir or DEFAULT_DIAGNOSTICS_DIR
+    return base / f"amex-expiration-recording-{stamp}"
+
+
+def summarize_frame_tree_for_recording(frame_tree: dict[str, Any]) -> list[dict[str, Any]]:
+    """Bounded Page.getFrameTree summary for expiration recordings."""
+    entries: list[dict[str, Any]] = []
+
+    def walk(node: dict[str, Any], *, parent_frame_id: str | None) -> None:
+        frame = node.get("frame") or {}
+        frame_id = frame.get("id")
+        entries.append(
+            {
+                "frame_id": frame_id,
+                "parent_frame_id": parent_frame_id,
+                "frame_url": sanitize_url(frame.get("url")),
+                "security_origin": frame.get("securityOrigin"),
+                "mime_type": frame.get("mimeType"),
+            }
+        )
+        for child in node.get("childFrames") or []:
+            if isinstance(child, dict):
+                walk(child, parent_frame_id=str(frame_id) if frame_id is not None else None)
+
+    root = frame_tree.get("frameTree") or frame_tree
+    if isinstance(root, dict):
+        walk(root, parent_frame_id=None)
+    return entries
+
+
+def summarize_browser_targets_for_recording(
+    targets_payload: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Bounded Target.getTargets summary (no cookies/headers/bodies)."""
+    out: list[dict[str, Any]] = []
+    if not isinstance(targets_payload, dict):
+        return out
+    for info in targets_payload.get("targetInfos") or []:
+        if not isinstance(info, dict):
+            continue
+        item = {
+            "targetId": info.get("targetId"),
+            "type": info.get("type"),
+            "title": _sanitize_watch_text_field(info.get("title")),
+            "url": sanitize_url(info.get("url")),
+            "attached": info.get("attached"),
+        }
+        if info.get("openerId") is not None:
+            item["openerId"] = info.get("openerId")
+        out.append(item)
+    return out
+
+
+def _bounded_redacted_text_summary(parts: list[str], *, limit: int) -> str:
+    joined = _normalize_text(" ".join(part for part in parts if part))
+    cleaned = redact_long_digit_sequences(joined)
+    return cleaned[:limit]
+
+
+def capture_viewport_screenshot_cdp(session: Any, path: Path) -> None:
+    """Capture a PNG viewport screenshot via CDP Page.captureScreenshot."""
+    result = _cdp_send(session, "Page.captureScreenshot", {"format": "png"})
+    data = result.get("data") if isinstance(result, dict) else None
+    if not data:
+        raise RuntimeError("Page.captureScreenshot returned no image data")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(base64.b64decode(data))
+
+
+def _browser_inspector_summary_for_recording(
+    page: Page,
+    *,
+    inspect_fn: Any = None,
+) -> dict[str, Any]:
+    """Sanitized Browser Inspector summary for one recording poll."""
+    if inspect_fn is not None:
+        payload = inspect_fn(page)
+        if isinstance(payload, dict):
+            candidates = list(payload.get("candidates") or [])
+            return {
+                "candidate_count": int(
+                    payload.get("candidate_count", len(candidates)) or len(candidates)
+                ),
+                "candidates": candidates,
+                "errors": list(payload.get("errors") or []),
+            }
+        return {"candidate_count": 0, "candidates": [], "errors": ["invalid_inspect_payload"]}
+
+    candidates, _frame_count, errors, _frame_diagnostics = inspect_page_browser(
+        page,
+        mark_continue=False,
+    )
+    return {
+        "candidate_count": len(candidates),
+        "candidates": [item.to_sanitized_dict() for item in candidates],
+        "errors": list(errors),
+    }
+
+
+def _optional_text_search_summaries(
+    page: Page,
+    terms: list[str] | tuple[str, ...],
+    *,
+    find_text_fn: Any = None,
+) -> list[dict[str, Any]]:
+    """Run optional CDP text searches; never used as completion trigger."""
+    finder = find_text_fn or find_text_in_page_cdp
+    summaries: list[dict[str, Any]] = []
+    for term in terms:
+        try:
+            payload = finder(page, term)
+        except Exception as exc:
+            summaries.append(
+                {
+                    "term": term,
+                    "match_count": 0,
+                    "match_summaries": [],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            continue
+        cleaned = _sanitize_find_text_payload_for_watch(
+            payload if isinstance(payload, dict) else {}
+        )
+        match_summaries: list[dict[str, Any]] = []
+        for match in (cleaned.get("matches") or [])[:BROWSER_RECORD_MATCH_SUMMARY_MAX]:
+            if not isinstance(match, dict):
+                continue
+            match_summaries.append(
+                {
+                    "matched_text": match.get("matched_text"),
+                    "text_snippet": match.get("text_snippet"),
+                    "match_source": match.get("match_source"),
+                    "frame_url": match.get("frame_url"),
+                }
+            )
+        summaries.append(
+            {
+                "term": term,
+                "match_count": int(cleaned.get("match_count") or 0),
+                "match_summaries": match_summaries,
+            }
+        )
+    return summaries
+
+
+def collect_expiration_recording_observation(
+    page: Page,
+    *,
+    screenshot_path: Path | None = None,
+    search_terms: list[str] | tuple[str, ...] = DEFAULT_BROWSER_RECORD_SEARCH_TERMS,
+    inspect_fn: Any = None,
+    find_text_fn: Any = None,
+    screenshot_fn: Any = None,
+) -> dict[str, Any]:
+    """Collect one bounded non-mutating CDP observation for expiration recording."""
+    collection_errors: list[str] = []
+    page_url = sanitize_url(getattr(page, "url", None))
+    page_title: str | None = None
+    try:
+        page_title = _sanitize_watch_text_field(page.title())
+    except Exception as exc:
+        collection_errors.append(f"title:{type(exc).__name__}: {exc}")
+
+    browser_targets: list[dict[str, Any]] = []
+    frame_tree_summary: list[dict[str, Any]] = []
+    dom_text_summary = ""
+    ax_text_summary = ""
+    runtime_error: str | None = None
+    session = None
+    try:
+        session = open_page_cdp_session(page)
+        enable_inspection_domains(session)
+        try:
+            targets_payload = _cdp_send(session, "Target.getTargets")
+            browser_targets = summarize_browser_targets_for_recording(targets_payload)
+        except Exception as exc:
+            collection_errors.append(f"Target.getTargets:{type(exc).__name__}: {exc}")
+        try:
+            frame_tree = get_frame_tree(session)
+            frame_tree_summary = summarize_frame_tree_for_recording(frame_tree)
+            frame_entries = _frame_entries_from_tree(frame_tree)
+        except Exception as exc:
+            collection_errors.append(f"Page.getFrameTree:{type(exc).__name__}: {exc}")
+            frame_entries = [{"frame_id": None, "frame_url": page_url}]
+        frame_url_by_id = {
+            str(entry["frame_id"]): entry.get("frame_url")
+            for entry in frame_entries
+            if entry.get("frame_id")
+        }
+        try:
+            document_payload = get_pierced_document(session)
+            root = document_payload.get("root") or {}
+            index: dict[int, dict[str, Any]] = {}
+            if isinstance(root, dict):
+                _build_explorer_index(
+                    root,
+                    index,
+                    frame_url=page_url,
+                    frame_url_by_id=frame_url_by_id,
+                )
+            dom_parts = [
+                str(info.get("node_value") or "")
+                for info in index.values()
+                if info.get("node_type") == 3
+            ]
+            dom_text_summary = _bounded_redacted_text_summary(
+                dom_parts,
+                limit=BROWSER_RECORD_TEXT_SUMMARY_MAX_CHARS,
+            )
+        except Exception as exc:
+            collection_errors.append(f"DOM:{type(exc).__name__}: {exc}")
+            runtime_error = f"dom_collection_error: {type(exc).__name__}: {exc}"
+        try:
+            ax_tree = get_accessibility_tree(session)
+            ax_name_by_backend, _roles, _dialogs = _build_ax_maps(ax_tree)
+            ax_text_summary = _bounded_redacted_text_summary(
+                list(ax_name_by_backend.values()),
+                limit=BROWSER_RECORD_TEXT_SUMMARY_MAX_CHARS,
+            )
+        except Exception as exc:
+            collection_errors.append(f"Accessibility:{type(exc).__name__}: {exc}")
+
+        if screenshot_path is not None:
+            try:
+                if screenshot_fn is not None:
+                    screenshot_fn(page, screenshot_path)
+                else:
+                    capture_viewport_screenshot_cdp(session, screenshot_path)
+            except Exception as exc:
+                collection_errors.append(
+                    f"Page.captureScreenshot:{type(exc).__name__}: {exc}"
+                )
+                screenshot_path = None
+    except Exception as exc:
+        collection_errors.append(f"cdp_session:{type(exc).__name__}: {exc}")
+        runtime_error = f"cdp_session_error: {type(exc).__name__}: {exc}"
+    finally:
+        _safe_detach_cdp_session(session)
+
+    body_text = " ".join(part for part in (dom_text_summary, ax_text_summary) if part)
+    state, reason = classify_amex(
+        final_url=page_url,
+        body_text=body_text,
+        session_api_statuses=[],
+        runtime_error=runtime_error,
+    )
+
+    try:
+        inspector = _browser_inspector_summary_for_recording(page, inspect_fn=inspect_fn)
+    except Exception as exc:
+        collection_errors.append(f"browser_inspector:{type(exc).__name__}: {exc}")
+        inspector = {
+            "candidate_count": 0,
+            "candidates": [],
+            "errors": [f"{type(exc).__name__}: {exc}"],
+        }
+
+    try:
+        text_searches = _optional_text_search_summaries(
+            page,
+            search_terms,
+            find_text_fn=find_text_fn,
+        )
+    except Exception as exc:
+        collection_errors.append(f"text_search:{type(exc).__name__}: {exc}")
+        text_searches = []
+
+    return {
+        "observed_at": iso_now(),
+        "canonical_authentication_state": state,
+        "canonical_authentication_state_source": AUTH_STATE_SOURCE_FRESH_VERIFICATION,
+        "canonical_reason": reason,
+        "selected_page_url": page_url,
+        "selected_page_title": page_title,
+        "login_url_detected": is_login_url(page_url),
+        "browser_targets": browser_targets,
+        "frame_tree": frame_tree_summary,
+        "browser_inspector": inspector,
+        "accessibility_text_summary": ax_text_summary or None,
+        "dom_text_summary": dom_text_summary or None,
+        "optional_text_searches": text_searches,
+        "screenshot_path": str(screenshot_path) if screenshot_path is not None else None,
+        "collection_errors": collection_errors,
+    }
+
+
+@dataclass
+class _RollingObservation:
+    mono_at: float
+    observation: dict[str, Any]
+    screenshot_path: Path | None
+
+
+class RollingExpirationObservationWindow:
+    """Time-bounded in-memory observation buffer with screenshot pruning."""
+
+    def __init__(self, rolling_window_seconds: float) -> None:
+        self.rolling_window_seconds = max(0.0, float(rolling_window_seconds))
+        self._entries: deque[_RollingObservation] = deque()
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    @property
+    def observations(self) -> list[dict[str, Any]]:
+        return [entry.observation for entry in self._entries]
+
+    def add(self, *, mono_at: float, observation: dict[str, Any]) -> None:
+        screenshot_raw = observation.get("screenshot_path")
+        screenshot_path = Path(screenshot_raw) if screenshot_raw else None
+        self._entries.append(
+            _RollingObservation(
+                mono_at=mono_at,
+                observation=observation,
+                screenshot_path=screenshot_path,
+            )
+        )
+        self._prune(now_mono=mono_at)
+
+    def _prune(self, *, now_mono: float) -> None:
+        if not self._entries:
+            return
+        cutoff = now_mono - self.rolling_window_seconds
+        while len(self._entries) > 1 and self._entries[0].mono_at < cutoff:
+            discarded = self._entries.popleft()
+            self._delete_screenshot(discarded.screenshot_path)
+
+    @staticmethod
+    def _delete_screenshot(path: Path | None) -> None:
+        if path is None:
+            return
+        try:
+            if path.is_file():
+                path.unlink()
+        except Exception:
+            pass
+
+
+def _write_expiration_recording_bundle(
+    *,
+    output_dir: Path,
+    bundle: dict[str, Any],
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    screenshots_dir = output_dir / "screenshots"
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+    retained_paths: set[str] = set()
+    for observation in bundle.get("observations") or []:
+        if not isinstance(observation, dict):
+            continue
+        raw = observation.get("screenshot_path")
+        if not raw:
+            continue
+        src = Path(str(raw))
+        if not src.is_file():
+            observation["screenshot_path"] = None
+            continue
+        dest = screenshots_dir / src.name
+        if src.resolve() != dest.resolve():
+            try:
+                dest.write_bytes(src.read_bytes())
+                if src.parent != screenshots_dir:
+                    try:
+                        src.unlink()
+                    except Exception:
+                        pass
+            except Exception:
+                observation["screenshot_path"] = str(src)
+                retained_paths.add(str(src))
+                continue
+        observation["screenshot_path"] = str(dest)
+        retained_paths.add(str(dest))
+
+    # Drop any screenshot files in the run directory that are no longer retained.
+    try:
+        for path in screenshots_dir.glob("*.png"):
+            if str(path) not in retained_paths:
+                try:
+                    path.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    recording_path = output_dir / "recording.json"
+    recording_path.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
+    bundle["output_dir"] = str(output_dir)
+    bundle["recording_json"] = str(recording_path)
+    return recording_path
+
+
+def record_amex_expiration_on_page(
+    page: Page,
+    *,
+    interval_seconds: float = DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS,
+    timeout_seconds: float = DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS,
+    rolling_window_seconds: float = DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS,
+    screenshot_every_seconds: float = DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS,
+    output_dir: Path | None = None,
+    diagnostics_dir: Path | None = None,
+    search_terms: list[str] | tuple[str, ...] = DEFAULT_BROWSER_RECORD_SEARCH_TERMS,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    collect_fn: Any = None,
+    inspect_fn: Any = None,
+    find_text_fn: Any = None,
+    screenshot_fn: Any = None,
+) -> dict[str, Any]:
+    """Poll CDP evidence in a rolling window until SIGNED_IN→SIGNED_OUT or timeout.
+
+    Developer diagnostics only: never clicks, navigates, reloads, types, or uses
+    page.evaluate / frame.evaluate. Independent of keepalive trial threads.
+    """
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    collector = collect_fn or collect_expiration_recording_observation
+    started_at = iso_now()
+    started_mono = monotonic()
+    deadline = started_mono + max(0.0, float(timeout_seconds))
+    interval = max(0.0, float(interval_seconds))
+    screenshot_every = max(0.0, float(screenshot_every_seconds))
+    run_errors: list[str] = []
+    terms = [term for term in search_terms if _normalize_text(term)]
+    if any(_normalize_text(term) == "log out" for term in terms):
+        terms = [term for term in terms if _normalize_text(term) != "log out"]
+        run_errors.append("removed_forbidden_search_term:Log Out")
+
+    out_dir = Path(output_dir) if output_dir is not None else default_browser_record_output_dir(
+        diagnostics_dir
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    screenshots_dir = out_dir / "screenshots"
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+    window = RollingExpirationObservationWindow(rolling_window_seconds)
+    saw_signed_in = False
+    initial_state: str | None = None
+    final_state: str | None = None
+    logout_detected_at: str | None = None
+    outcome = "fatal_error"
+    screenshot_index = 0
+    last_screenshot_mono: float | None = None
+    poll_count = 0
+
+    def build_bundle(*, ok: bool, completed_at: str) -> dict[str, Any]:
+        observations = window.observations
+        first_at = observations[0].get("observed_at") if observations else None
+        last_at = observations[-1].get("observed_at") if observations else None
+        return {
+            "ok": ok,
+            "outcome": outcome,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "logout_detected_at": logout_detected_at,
+            "interval_seconds": interval,
+            "timeout_seconds": float(timeout_seconds),
+            "rolling_window_seconds": float(rolling_window_seconds),
+            "screenshot_every_seconds": screenshot_every,
+            "observation_count": len(observations),
+            "first_retained_observation_at": first_at,
+            "last_observation_at": last_at,
+            "initial_authentication_state": initial_state,
+            "final_authentication_state": final_state,
+            "observations": observations,
+            "run_errors": list(run_errors),
+            "search_terms": list(terms),
+            "output_dir": str(out_dir),
+        }
+
+    try:
+        while True:
+            poll_count += 1
+            now_mono = monotonic()
+            take_screenshot = False
+            if screenshot_every == 0:
+                take_screenshot = True
+            elif last_screenshot_mono is None:
+                take_screenshot = True
+            elif (now_mono - last_screenshot_mono) >= screenshot_every:
+                take_screenshot = True
+
+            screenshot_path: Path | None = None
+            if take_screenshot:
+                screenshot_index += 1
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                screenshot_path = screenshots_dir / f"{screenshot_index:04d}-{stamp}.png"
+
+            try:
+                observation = collector(
+                    page,
+                    screenshot_path=screenshot_path,
+                    search_terms=terms,
+                    inspect_fn=inspect_fn,
+                    find_text_fn=find_text_fn,
+                    screenshot_fn=screenshot_fn,
+                )
+            except TypeError:
+                # Allow simple test doubles that only accept the page.
+                try:
+                    observation = collector(page)
+                except Exception as exc:
+                    run_errors.append(f"collect:{type(exc).__name__}: {exc}")
+                    outcome = "fatal_error"
+                    bundle = build_bundle(ok=False, completed_at=iso_now())
+                    recording_path = _write_expiration_recording_bundle(
+                        output_dir=out_dir,
+                        bundle=bundle,
+                    )
+                    bundle["recording_json"] = str(recording_path)
+                    return bundle
+            except Exception as exc:
+                run_errors.append(f"collect:{type(exc).__name__}: {exc}")
+                outcome = "fatal_error"
+                bundle = build_bundle(ok=False, completed_at=iso_now())
+                bundle["run_errors"] = list(run_errors)
+                recording_path = _write_expiration_recording_bundle(
+                    output_dir=out_dir,
+                    bundle=bundle,
+                )
+                bundle["recording_json"] = str(recording_path)
+                return bundle
+
+            if not isinstance(observation, dict):
+                run_errors.append("collect:invalid_observation_payload")
+                outcome = "fatal_error"
+                bundle = build_bundle(ok=False, completed_at=iso_now())
+                recording_path = _write_expiration_recording_bundle(
+                    output_dir=out_dir,
+                    bundle=bundle,
+                )
+                bundle["recording_json"] = str(recording_path)
+                return bundle
+
+            # Injected collectors may omit screenshot scheduling; honor path when present.
+            if take_screenshot and observation.get("screenshot_path"):
+                last_screenshot_mono = now_mono
+            elif take_screenshot and screenshot_path is not None and Path(screenshot_path).is_file():
+                last_screenshot_mono = now_mono
+                observation["screenshot_path"] = str(screenshot_path)
+            elif take_screenshot and not observation.get("screenshot_path"):
+                # Screenshot failed; do not advance schedule so the next eligible poll retries.
+                observation["screenshot_path"] = None
+
+            state = str(observation.get("canonical_authentication_state") or "LOGIN_UNKNOWN")
+            final_state = state
+            if initial_state is None:
+                initial_state = state
+                if state != "SIGNED_IN":
+                    outcome = "initial_not_signed_in"
+                    window.add(mono_at=now_mono, observation=observation)
+                    run_errors.append(
+                        f"initial_authentication_state_was_{state}; "
+                        "recorder requires SIGNED_IN to start"
+                    )
+                    bundle = build_bundle(ok=False, completed_at=iso_now())
+                    recording_path = _write_expiration_recording_bundle(
+                        output_dir=out_dir,
+                        bundle=bundle,
+                    )
+                    bundle["recording_json"] = str(recording_path)
+                    return bundle
+
+            window.add(mono_at=now_mono, observation=observation)
+
+            if state == "SIGNED_IN":
+                saw_signed_in = True
+            elif state == "SIGNED_OUT" and saw_signed_in:
+                logout_detected_at = str(observation.get("observed_at") or iso_now())
+                outcome = "logged_out"
+                bundle = build_bundle(ok=True, completed_at=iso_now())
+                recording_path = _write_expiration_recording_bundle(
+                    output_dir=out_dir,
+                    bundle=bundle,
+                )
+                bundle["recording_json"] = str(recording_path)
+                return bundle
+
+            now_mono = monotonic()
+            if now_mono >= deadline:
+                outcome = "timeout"
+                bundle = build_bundle(ok=True, completed_at=iso_now())
+                recording_path = _write_expiration_recording_bundle(
+                    output_dir=out_dir,
+                    bundle=bundle,
+                )
+                bundle["recording_json"] = str(recording_path)
+                return bundle
+
+            remaining = deadline - now_mono
+            if interval > 0:
+                sleep(min(interval, remaining))
+            elif remaining > 0:
+                sleep(0)
+    except Exception as exc:
+        run_errors.append(f"fatal:{type(exc).__name__}: {exc}")
+        outcome = "fatal_error"
+        bundle = build_bundle(ok=False, completed_at=iso_now())
+        recording_path = _write_expiration_recording_bundle(
+            output_dir=out_dir,
+            bundle=bundle,
+        )
+        bundle["recording_json"] = str(recording_path)
+        return bundle
+
+
+def record_amex_expiration_in_browser_context(
+    context: BrowserContext,
+    *,
+    provider: str = "amex",
+    select_page_fn: Any = None,
+    interval_seconds: float = DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS,
+    timeout_seconds: float = DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS,
+    rolling_window_seconds: float = DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS,
+    screenshot_every_seconds: float = DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS,
+    output_dir: Path | None = None,
+    diagnostics_dir: Path | None = None,
+    search_terms: list[str] | tuple[str, ...] = DEFAULT_BROWSER_RECORD_SEARCH_TERMS,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    collect_fn: Any = None,
+    inspect_fn: Any = None,
+    find_text_fn: Any = None,
+    screenshot_fn: Any = None,
+) -> dict[str, Any]:
+    """Run developer expiration recorder against the selected provider page."""
+    if select_page_fn is None and provider == "amex":
+        selected = select_amex_page(context, create_if_missing=False)
+    elif select_page_fn is None:
+        selected = None
+    else:
+        selected = select_page_fn(context, create_if_missing=False)
+
+    out_dir = Path(output_dir) if output_dir is not None else default_browser_record_output_dir(
+        diagnostics_dir
+    )
+    if selected is None:
+        started_at = iso_now()
+        bundle = {
+            "ok": False,
+            "outcome": "fatal_error",
+            "started_at": started_at,
+            "completed_at": iso_now(),
+            "logout_detected_at": None,
+            "interval_seconds": float(interval_seconds),
+            "timeout_seconds": float(timeout_seconds),
+            "rolling_window_seconds": float(rolling_window_seconds),
+            "screenshot_every_seconds": float(screenshot_every_seconds),
+            "observation_count": 0,
+            "first_retained_observation_at": None,
+            "last_observation_at": None,
+            "initial_authentication_state": None,
+            "final_authentication_state": None,
+            "observations": [],
+            "run_errors": ["no_provider_page_selected"],
+            "search_terms": list(search_terms),
+            "output_dir": str(out_dir),
+        }
+        recording_path = _write_expiration_recording_bundle(
+            output_dir=out_dir,
+            bundle=bundle,
+        )
+        bundle["recording_json"] = str(recording_path)
+        return bundle
+
+    return record_amex_expiration_on_page(
+        selected,
+        interval_seconds=interval_seconds,
+        timeout_seconds=timeout_seconds,
+        rolling_window_seconds=rolling_window_seconds,
+        screenshot_every_seconds=screenshot_every_seconds,
+        output_dir=out_dir,
+        diagnostics_dir=diagnostics_dir,
+        search_terms=search_terms,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        collect_fn=collect_fn,
+        inspect_fn=inspect_fn,
+        find_text_fn=find_text_fn,
+        screenshot_fn=screenshot_fn,
+    )
+
+
 def inspect_amex_expiration_dialog(page: Page) -> dict[str, Any]:
     """Use Browser Inspector + Amex classifier to find the expiration dialog."""
     candidates, _frame_count, _errors, _frame_diagnostics = inspect_page_browser(
@@ -4492,6 +5201,47 @@ class ProviderRuntime:
                 canonical_authentication_state_source=auth_source,
             )
 
+    def record_browser_expiration(
+        self,
+        provider: str,
+        *,
+        interval_seconds: float = DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS,
+        timeout_seconds: float = DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS,
+        rolling_window_seconds: float = DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS,
+        screenshot_every_seconds: float = DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS,
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        """Developer-only rolling recorder for Amex SIGNED_IN→SIGNED_OUT evidence.
+
+        Runs independently of the keepalive trial thread: does not start a trial,
+        does not hold the runtime lock across polls, and never mutates the page.
+        """
+        if provider != "amex":
+            raise ValueError(f"Unsupported provider: {provider}")
+        with self.lock:
+            if not self.cdp_url:
+                raise RuntimeError("Provider runtime is not started")
+            cdp_url = self.cdp_url
+            diagnostics_dir = self.diagnostics_dir
+
+        # CDP attach + poll loop outside the runtime lock so keepalive/maintenance
+        # can continue while this developer recorder runs in another terminal.
+        with sync_playwright() as playwright:
+            browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+            if not browser.contexts:
+                raise RuntimeError("Chrome exposed no persistent browser context")
+            context = browser.contexts[0]
+            return record_amex_expiration_in_browser_context(
+                context,
+                provider=provider,
+                interval_seconds=interval_seconds,
+                timeout_seconds=timeout_seconds,
+                rolling_window_seconds=rolling_window_seconds,
+                screenshot_every_seconds=screenshot_every_seconds,
+                output_dir=output_dir,
+                diagnostics_dir=diagnostics_dir,
+            )
+
     def diagnose_expiration_dialog(self, provider: str = "amex") -> dict[str, Any]:
         """Backward-compatible diagnostic wrapper over Browser Inspector."""
         payload = self.inspect_browser(provider, capture_screenshot=False)
@@ -5163,6 +5913,56 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                     },
                 )
             return
+        if self.path == "/providers/amex/diagnostics/browser-record-expiration":
+            try:
+                body = self._read_json_body()
+                interval_seconds = float(
+                    body.get(
+                        "interval_seconds",
+                        DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS,
+                    )
+                )
+                timeout_seconds = float(
+                    body.get(
+                        "timeout_seconds",
+                        DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS,
+                    )
+                )
+                rolling_window_seconds = float(
+                    body.get(
+                        "rolling_window_seconds",
+                        DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS,
+                    )
+                )
+                screenshot_every_seconds = float(
+                    body.get(
+                        "screenshot_every_seconds",
+                        DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS,
+                    )
+                )
+                output_raw = body.get("output_dir")
+                output_dir = Path(str(output_raw)).expanduser() if output_raw else None
+                payload = self.server.runtime.record_browser_expiration(
+                    "amex",
+                    interval_seconds=interval_seconds,
+                    timeout_seconds=timeout_seconds,
+                    rolling_window_seconds=rolling_window_seconds,
+                    screenshot_every_seconds=screenshot_every_seconds,
+                    output_dir=output_dir,
+                )
+                status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.BAD_REQUEST
+                self._send_json(status, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "exception_class": type(exc).__name__,
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+            return
         if self.path == "/providers/amex/diagnostics/inspect-expiration-dialog":
             try:
                 payload = self.server.runtime.diagnose_expiration_dialog("amex")
@@ -5419,6 +6219,58 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    browser_record_expiration = subparsers.add_parser(
+        "browser-record-expiration",
+        help=(
+            "Developer-only: retain a rolling CDP evidence window and save it on "
+            "SIGNED_IN→SIGNED_OUT (no clicks, no dialog-text trigger)"
+        ),
+    )
+    browser_record_expiration.add_argument("provider", choices=("amex",))
+    browser_record_expiration.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS,
+        help=f"Poll interval (default: {DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS})",
+    )
+    browser_record_expiration.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS,
+        help=(
+            "Give up after this many seconds "
+            f"(default: {DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS})"
+        ),
+    )
+    browser_record_expiration.add_argument(
+        "--rolling-window-seconds",
+        type=float,
+        default=DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS,
+        help=(
+            "Retain only observations within this trailing window "
+            f"(default: {DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS})"
+        ),
+    )
+    browser_record_expiration.add_argument(
+        "--screenshot-every-seconds",
+        type=float,
+        default=DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS,
+        help=(
+            "Capture a viewport PNG on this interval "
+            f"(default: {DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS})"
+        ),
+    )
+    browser_record_expiration.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional directory for recording.json + screenshots "
+            "(default: ~/.mighty/provider_runtime/diagnostics/"
+            "amex-expiration-recording-<UTC>/)"
+        ),
+    )
+
     inspect_expiration = subparsers.add_parser(
         "inspect-expiration-dialog",
         help="Deprecated alias for browser-inspect + Amex expiration classification",
@@ -5558,6 +6410,39 @@ def main() -> int:
         if payload.get("matched"):
             return 0
         if payload.get("timed_out"):
+            return 0
+        return 0 if payload.get("ok") else 1
+    if args.command == "browser-record-expiration":
+        output_dir = args.output_dir
+        if output_dir is not None:
+            output_dir = output_dir.expanduser().resolve()
+        http_timeout = float(args.timeout_seconds) + 120.0
+        payload = request_json(
+            "POST",
+            (
+                f"http://{args.host}:{args.port}/providers/"
+                f"{args.provider}/diagnostics/browser-record-expiration"
+            ),
+            {
+                "interval_seconds": float(args.interval_seconds),
+                "timeout_seconds": float(args.timeout_seconds),
+                "rolling_window_seconds": float(args.rolling_window_seconds),
+                "screenshot_every_seconds": float(args.screenshot_every_seconds),
+                "output_dir": str(output_dir) if output_dir else None,
+            },
+            timeout=http_timeout,
+        )
+        saved = payload.get("recording_json") or (
+            str(Path(payload["output_dir"]) / "recording.json")
+            if payload.get("output_dir")
+            else None
+        )
+        if saved:
+            print(str(saved))
+        else:
+            print(json.dumps(payload, indent=2))
+        outcome = payload.get("outcome")
+        if outcome in {"logged_out", "timeout", "initial_not_signed_in"}:
             return 0
         return 0 if payload.get("ok") else 1
     if args.command == "inspect-expiration-dialog":

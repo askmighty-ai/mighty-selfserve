@@ -358,6 +358,65 @@ a normal Browser Inspector snapshot, and bounded `errors`. Snippets stay
 bounded with long-number redaction; credentials, cookies, headers,
 request/response bodies, and full HTML are never stored.
 
+#### Developer Amex expiration recorder
+
+`browser-watch-text` can false-positive immediately because Amex global
+navigation permanently contains “Log Out”. `browser-record-expiration` is a
+developer-only alternative that does **not** treat dialog text as the trigger.
+It keeps a rolling in-memory window of CDP evidence and saves that window when
+canonical authentication transitions from `SIGNED_IN` to `SIGNED_OUT`.
+
+It does **not** start or stop a keepalive trial, does not click/navigate/reload,
+does not use `page.evaluate` / `frame.evaluate`, and runs outside the runtime
+lock so keepalive inspection can continue. Intended three-terminal workflow:
+
+```bash
+# Terminal 1
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve
+
+# Terminal 2
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  keepalive-start amex --strategy NONE \
+  --duration-seconds 1800 \
+  --interval-seconds 60
+
+# Terminal 3
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  browser-record-expiration amex \
+  --interval-seconds 1 \
+  --timeout-seconds 900 \
+  --rolling-window-seconds 90 \
+  --screenshot-every-seconds 1
+```
+
+Options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--interval-seconds` | `1` | CDP poll interval |
+| `--timeout-seconds` | `900` | Exit cleanly if logout never occurs |
+| `--rolling-window-seconds` | `90` | Retain only the trailing observation window |
+| `--screenshot-every-seconds` | `1` | Viewport PNG cadence via `Page.captureScreenshot` |
+| `--output-dir` | auto under diagnostics | Optional directory for the JSON + screenshots |
+
+Default output:
+
+```text
+~/.mighty/provider_runtime/diagnostics/
+  amex-expiration-recording-<UTC timestamp>/
+    recording.json
+    screenshots/
+      0001-<UTC timestamp>.png
+      ...
+```
+
+The CLI prints the final `recording.json` path. Completion triggers only on a
+true `SIGNED_IN` → `SIGNED_OUT` transition from canonical verification logic;
+`LOGIN_UNKNOWN` and optional text matches (`expire`, `session`, `continue`,
+`stay signed in`, `still there`, `timed out`) never complete the recording.
+“Log Out” is intentionally not searched. Credentials, cookies, headers,
+request/response bodies, full HTML, and unbounded page text are never stored.
+
 ## 5. Inspect runtime status
 
 ```bash
@@ -479,7 +538,8 @@ It currently provides:
 - automatic Amex inactivity-dialog session extension via inspector + classifier;
 - developer-only Amex keepalive trials (experiment, not production keepalive);
 - localhost status, verification, maintenance-check, browser-inspect,
-  browser-find-text, browser-watch-text, keepalive, and shutdown commands;
+  browser-find-text, browser-watch-text, browser-record-expiration, keepalive,
+  and shutdown commands;
 - canonical authentication results;
 - sanitized persisted runtime state (including maintenance counters and trial results).
 

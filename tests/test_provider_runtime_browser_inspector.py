@@ -232,6 +232,8 @@ class CdpSessionMock:
         fail_methods: dict[str, Exception] | None = None,
         container_node_ids: list[int] | None = None,
         action_node_ids_by_parent: dict[int, list[int]] | None = None,
+        target_infos: list[dict] | None = None,
+        screenshot_png_base64: str | None = None,
     ) -> None:
         self.document = document
         self.ax_nodes = ax_nodes or []
@@ -246,6 +248,20 @@ class CdpSessionMock:
         self.fail_methods = fail_methods or {}
         self.container_node_ids = container_node_ids
         self.action_node_ids_by_parent = action_node_ids_by_parent or {}
+        self.target_infos = target_infos or [
+            {
+                "targetId": "t1",
+                "type": "page",
+                "title": "American Express",
+                "url": PAGE_URL,
+                "attached": True,
+                "openerId": "opener-1",
+            }
+        ]
+        # Minimal valid 1x1 PNG.
+        self.screenshot_png_base64 = screenshot_png_base64 or (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
         self.calls: list[tuple[str, dict | None]] = []
         self._node_index = {}
         self._index_tree(document)
@@ -326,6 +342,10 @@ class CdpSessionMock:
             raise self.fail_methods[method]
         if method in {"DOM.enable", "CSS.enable", "Accessibility.enable"}:
             return {}
+        if method == "Target.getTargets":
+            return {"targetInfos": list(self.target_infos)}
+        if method == "Page.captureScreenshot":
+            return {"data": self.screenshot_png_base64}
         if method == "Page.getFrameTree":
             return self.frame_tree
         if method == "DOM.getDocument":
