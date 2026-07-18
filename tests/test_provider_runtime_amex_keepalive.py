@@ -106,7 +106,7 @@ def test_prevents_concurrent_trials(tmp_path: Path):
     assert payload["error"] == "keepalive_trial_already_running"
 
 
-def test_none_performs_no_actions(tmp_path: Path):
+def test_none_performs_no_actions(tmp_path: Path, capsys):
     page = MagicMock()
     result = perform_keepalive_action(page, "NONE")
     assert result.result == "skipped"
@@ -139,6 +139,13 @@ def test_none_performs_no_actions(tmp_path: Path):
     assert logged_out is False
     assert runtime.keepalive_action_count == 0
     action.assert_not_called()
+    out = capsys.readouterr().out
+    assert "inspection number=1" in out
+    assert "inspection started (pre_action)" in out
+    assert "inspection finished (pre_action)" in out
+    assert "inspection number=2" in out
+    assert "inspection started (post_action)" in out
+    assert "status object updated=" in out
 
 
 def test_each_strategy_dispatches_correct_action():

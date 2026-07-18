@@ -5967,6 +5967,7 @@ class ProviderRuntime:
         self._keepalive_stop = threading.Event()
         self._keepalive_thread: threading.Thread | None = None
         self._keepalive_deadline_mono: float | None = None
+        self._keepalive_inspection_number = 0
         self._shutting_down = False
 
         self.diagnostics_dir = self.root / "diagnostics"
@@ -6624,6 +6625,7 @@ class ProviderRuntime:
             self.keepalive_final_authentication_state = None
             self.keepalive_final_reason = None
             self.keepalive_events = []
+            self._keepalive_inspection_number = 0
             self._keepalive_deadline_mono = time.monotonic() + float(duration_seconds)
             self._append_keepalive_event(
                 {
@@ -6644,10 +6646,15 @@ class ProviderRuntime:
             )
             self._keepalive_thread.start()
             self.write_state()
+            # Temporary developer instrumentation.
             print(
                 f"[Mighty Keepalive] trial {self.keepalive_trial_id} started "
                 f"strategy={strategy} duration={duration_seconds}s "
                 f"interval={interval_seconds}s"
+            )
+            print(
+                "[Mighty Keepalive] status object updated: trial start "
+                "(keepalive_final_authentication_state=None until finalize)"
             )
             return {
                 "ok": True,
@@ -6685,6 +6692,11 @@ class ProviderRuntime:
                 deadline = self._keepalive_deadline_mono or 0.0
                 if time.monotonic() >= deadline:
                     final_reason = "duration_completed"
+                    # Temporary developer instrumentation.
+                    print(
+                        "[Mighty Keepalive] inspections stopped: "
+                        "trial duration deadline reached"
+                    )
                     break
 
                 try:
@@ -6712,26 +6724,73 @@ class ProviderRuntime:
                         f"[Mighty Keepalive] action error ignored for auth state: "
                         f"{type(exc).__name__}"
                     )
+                    # Temporary developer instrumentation.
+                    print(
+                        "[Mighty Keepalive] status object updated: "
+                        "action_error counters/events only "
+                        "(keepalive_final_authentication_state unchanged)"
+                    )
+                    print(
+                        "[Mighty Keepalive] inspections continue after action error "
+                        f"({type(exc).__name__})"
+                    )
                     logged_out = False
 
                 if logged_out:
                     final_reason = "logged_out"
+                    # Temporary developer instrumentation.
+                    print(
+                        "[Mighty Keepalive] inspections stopped: "
+                        "tick reported logged_out"
+                    )
                     break
 
                 interval = float(self.keepalive_interval_seconds or KEEPALIVE_DEFAULT_INTERVAL_SECONDS)
                 remaining = max(0.0, (self._keepalive_deadline_mono or 0.0) - time.monotonic())
-                self._keepalive_stop.wait(min(interval, remaining if remaining > 0 else interval))
+                wait_seconds = min(interval, remaining if remaining > 0 else interval)
+                # Temporary developer instrumentation.
+                print(
+                    "[Mighty Keepalive] inspections paused: waiting on interval sleep "
+                    f"(wait_seconds={wait_seconds:.3f}, "
+                    f"interval_seconds={interval:.3f}, "
+                    f"remaining_until_deadline={remaining:.3f})"
+                )
+                print(
+                    "[Mighty Keepalive] status updates paused until next tick "
+                    "(keepalive_final_authentication_state remains "
+                    f"{self.keepalive_final_authentication_state!r}; "
+                    f"keepalive_trial_running={self.keepalive_trial_running})"
+                )
+                self._keepalive_stop.wait(wait_seconds)
+                if self._keepalive_stop.is_set():
+                    # Temporary developer instrumentation.
+                    print(
+                        "[Mighty Keepalive] interval wait interrupted: "
+                        "stop event set"
+                    )
 
             if self._shutting_down:
                 final_reason = "runtime_shutdown"
+                print(
+                    "[Mighty Keepalive] inspections stopped: runtime_shutdown"
+                )
             elif self._keepalive_stop.is_set() and final_reason == "duration_completed":
                 # Stop requested before natural completion.
                 if self._keepalive_deadline_mono and time.monotonic() < self._keepalive_deadline_mono:
                     final_reason = "manually_stopped"
+                    print(
+                        "[Mighty Keepalive] inspections stopped: manually_stopped"
+                    )
         finally:
             with self.lock:
                 if self.keepalive_trial_running:
                     self._finalize_keepalive_trial(reason=final_reason)
+                else:
+                    # Temporary developer instrumentation.
+                    print(
+                        "[Mighty Keepalive] status updates stopped: "
+                        "trial already not running in finally"
+                    )
 
     def _keepalive_tick(self) -> bool:
         """Run one inspection (+ optional action). Returns True if logged out."""
@@ -6753,6 +6812,18 @@ class ProviderRuntime:
                 latest_canonical = (
                     self.last_result.authentication_state if self.last_result else None
                 )
+                # Temporary developer instrumentation.
+                print(
+                    "[Mighty Keepalive] tick begin "
+                    f"(strategy={strategy}, "
+                    f"latest_canonical_state={latest_canonical!r}, "
+                    f"holding runtime lock=true)"
+                )
+                self._keepalive_inspection_number += 1
+                print(
+                    f"[Mighty Keepalive] inspection number={self._keepalive_inspection_number}"
+                )
+                print("[Mighty Keepalive] inspection started (pre_action)")
                 before = inspect_amex_page_signals(
                     page,
                     latest_canonical_state=latest_canonical,
@@ -6761,6 +6832,14 @@ class ProviderRuntime:
                     "inspection_authentication_state_source",
                     AUTH_STATE_SOURCE_NONE,
                 )
+                before_reason = (
+                    f"source={before_auth_source}; "
+                    f"login_page_detected={before['login_page_detected']}; "
+                    f"expiration_dialog_detected={before['expiration_dialog_detected']}"
+                )
+                print("[Mighty Keepalive] inspection finished (pre_action)")
+                print(f"[Mighty Keepalive] auth state={before.get('authentication_state')}")
+                print(f"[Mighty Keepalive] reason={before_reason}")
                 if before["expiration_dialog_detected"]:
                     self._note_keepalive_expiration_dialog(source="pre_action")
                 if before["login_page_detected"] or before["authentication_state"] == "SIGNED_OUT":
@@ -6779,7 +6858,20 @@ class ProviderRuntime:
                         }
                     )
                     self.write_state()
+                    print(
+                        "[Mighty Keepalive] status object updated="
+                        "write_state after pre_action logged_out "
+                        "(keepalive_logged_out=True; "
+                        "keepalive_final_authentication_state still None until finalize)"
+                    )
+                    print()
                     return True
+                print(
+                    "[Mighty Keepalive] status object updated="
+                    "no final fields yet after pre_action "
+                    "(event not appended for SIGNED_IN pre_action alone)"
+                )
+                print()
 
                 action_result: KeepaliveActionResult | None = None
                 if strategy != "NONE":
@@ -6805,6 +6897,11 @@ class ProviderRuntime:
                         }
                     )
 
+                self._keepalive_inspection_number += 1
+                print(
+                    f"[Mighty Keepalive] inspection number={self._keepalive_inspection_number}"
+                )
+                print("[Mighty Keepalive] inspection started (post_action)")
                 after = inspect_amex_page_signals(
                     page,
                     latest_canonical_state=latest_canonical,
@@ -6813,6 +6910,14 @@ class ProviderRuntime:
                     "inspection_authentication_state_source",
                     AUTH_STATE_SOURCE_NONE,
                 )
+                after_reason = (
+                    f"source={after_auth_source}; "
+                    f"login_page_detected={after['login_page_detected']}; "
+                    f"expiration_dialog_detected={after['expiration_dialog_detected']}"
+                )
+                print("[Mighty Keepalive] inspection finished (post_action)")
+                print(f"[Mighty Keepalive] auth state={after.get('authentication_state')}")
+                print(f"[Mighty Keepalive] reason={after_reason}")
                 if after["expiration_dialog_detected"]:
                     self._note_keepalive_expiration_dialog(source="post_action")
                 self._append_keepalive_event(
@@ -6844,13 +6949,33 @@ class ProviderRuntime:
                         }
                     )
                     self.write_state()
+                    print(
+                        "[Mighty Keepalive] status object updated="
+                        "write_state after post_action logged_out "
+                        "(keepalive_logged_out=True; "
+                        "keepalive_final_authentication_state still None until finalize)"
+                    )
+                    print()
                     return True
 
                 self.write_state()
+                print(
+                    "[Mighty Keepalive] status object updated="
+                    "write_state after post_action inspection event "
+                    "(keepalive_final_authentication_state still None until finalize; "
+                    f"keepalive_trial_running={self.keepalive_trial_running})"
+                )
+                print()
                 return False
 
     def _finalize_keepalive_trial(self, *, reason: str) -> None:
         """Terminalize the trial with canonical verification and persisted result."""
+        # Temporary developer instrumentation.
+        print(
+            "[Mighty Keepalive] finalize begin "
+            f"(reason={reason}; "
+            "writing keepalive_final_authentication_state via canonical verify)"
+        )
         final_state: str | None = None
         try:
             if self.cdp_url:
@@ -6900,6 +7025,17 @@ class ProviderRuntime:
         print(
             f"[Mighty Keepalive] trial {self.keepalive_trial_id} completed "
             f"reason={reason} auth={final_state}"
+        )
+        print(
+            "[Mighty Keepalive] status object updated="
+            f"finalize wrote keepalive_final_authentication_state={final_state!r}, "
+            f"keepalive_final_reason={reason!r}, keepalive_trial_running=False"
+        )
+        print(
+            "[Mighty Keepalive] inspections stopped: trial finalized"
+        )
+        print(
+            "[Mighty Keepalive] status updates stopped: trial finalized"
         )
 
     def status(self) -> dict[str, Any]:
