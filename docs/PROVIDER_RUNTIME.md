@@ -402,29 +402,10 @@ It does **not** start or stop a keepalive trial, does not click/navigate/reload,
 does not use `page.evaluate` / `frame.evaluate`, does not invoke keepalive
 actions, and runs outside the runtime lock so keepalive inspection can continue.
 
-Exact three-terminal live workflow:
-
-```bash
-# Terminal 1 — runtime (attach to already-bootstrapped Amex Chrome)
-PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve
-
-# Terminal 2 — optional baseline trial (observation only; no session API)
-PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
-  keepalive-start amex --strategy NONE \
-  --duration-seconds 1800 \
-  --interval-seconds 60
-
-# Terminal 3 — confirm canonical SIGNED_IN, then record until logout
-PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py verify amex
-
-PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
-  browser-record-expiration amex \
-  --interval-seconds 1 \
-  --timeout-seconds 900 \
-  --rolling-window-seconds 90 \
-  --screenshot-every-seconds 1 \
-  --verification-interval-seconds 5
-```
+For the recommended one-command experiment workflow (NONE keepalive + recorder +
+evidence ZIP), see **Developer Amex expiration experiment** below. The lower-level
+`browser-record-expiration` command remains available when you need the recorder
+alone.
 
 Options:
 
@@ -455,6 +436,78 @@ The CLI prints the final `recording.json` path. Each observation stores both
 canonical and browser-observation auth fields. “Log Out” is intentionally not
 searched. Credentials, cookies, headers, request/response bodies, full HTML,
 and unbounded page text are never stored.
+
+#### Developer Amex expiration experiment
+
+`browser-run-expiration-experiment` is the recommended developer workflow for
+idle-expiration evidence. It replaces the old three-terminal dance with one
+command that:
+
+1. checks that `serve` is already reachable (does **not** auto-launch it);
+2. runs a fresh canonical Amex verification (`SIGNED_OUT` → bootstrap hint;
+   `LOGIN_UNKNOWN` → retry up to ~10s; requires `SIGNED_IN` to continue);
+3. starts a `NONE` keepalive trial;
+4. immediately starts `browser-record-expiration` concurrently (HTTP client
+   orchestration; does not hold the runtime lock while waiting);
+5. waits for the recorder to finish;
+6. collects `keepalive-status`, writes experiment metadata, and builds one ZIP.
+
+Recommended workflow:
+
+```bash
+# Terminal 1 — runtime (attach to already-bootstrapped Amex Chrome)
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve
+
+# Terminal 2 — one-time login if needed
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py bootstrap amex
+
+# Then, for each experiment:
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  browser-run-expiration-experiment amex
+```
+
+Defaults:
+
+| Option | Default |
+| --- | --- |
+| `--trial-duration-seconds` | `600` |
+| `--keepalive-interval-seconds` | `30` |
+| `--recording-timeout-seconds` | `900` |
+| `--evidence-interval-seconds` | `1` |
+| `--verification-interval-seconds` | `5` |
+| `--rolling-window-seconds` | `90` |
+| `--screenshot-every-seconds` | `1` |
+| `--output-dir` | auto under diagnostics |
+
+Output:
+
+```text
+~/.mighty/provider_runtime/diagnostics/
+  amex-expiration-experiment-<UTC timestamp>/
+    experiment-summary.json
+    keepalive-status.json
+    runtime-status.json
+    recorder/
+      recording.json
+      screenshots/
+        ...
+    amex-expiration-experiment-<UTC timestamp>.zip
+```
+
+The CLI prints a concise final result including the absolute Evidence ZIP path.
+Upload that single ZIP after the run.
+
+Ctrl+C stops orchestration only: it preserves any recorder output already
+created, collects current keepalive status, writes a partial ZIP with
+`outcome: interrupted`, and does **not** kill the authenticated Amex Chrome or
+stop `serve`.
+
+Convenience (macOS Finder):
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  browser-open-latest-expiration-experiment amex
+```
 
 ## 5. Inspect runtime status
 
@@ -577,8 +630,9 @@ It currently provides:
 - automatic Amex inactivity-dialog session extension via inspector + classifier;
 - developer-only Amex keepalive trials (experiment, not production keepalive);
 - localhost status, verification, maintenance-check, browser-inspect,
-  browser-find-text, browser-watch-text, browser-record-expiration, keepalive,
-  and shutdown commands;
+  browser-find-text, browser-watch-text, browser-record-expiration,
+  browser-run-expiration-experiment, browser-open-latest-expiration-experiment,
+  keepalive, and shutdown commands;
 - canonical authentication results;
 - sanitized persisted runtime state (including maintenance counters and trial results).
 

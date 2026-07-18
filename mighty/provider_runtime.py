@@ -18,6 +18,8 @@ Commands:
     python scripts/provider_runtime.py browser-find-text amex "expire"
     python scripts/provider_runtime.py browser-watch-text amex
     python scripts/provider_runtime.py browser-record-expiration amex
+    python scripts/provider_runtime.py browser-run-expiration-experiment amex
+    python scripts/provider_runtime.py browser-open-latest-expiration-experiment amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
 
 Lifecycle:
@@ -47,6 +49,7 @@ import threading
 import time
 import traceback
 import uuid
+import zipfile
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -54,7 +57,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
@@ -2604,6 +2607,26 @@ BROWSER_RECORD_DOCUMENTED_OUTCOMES = frozenset(
 )
 REQUEST_JSON_ERROR_BODY_MAX_CHARS = 4_000
 
+# One-command Amex expiration experiment (developer-only orchestration).
+DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS = 600
+DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_INTERVAL_SECONDS = 30
+DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS = 900
+DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS = 1
+DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS = 5
+DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS = 90
+DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS = 1
+DEFAULT_EXPIRATION_EXPERIMENT_VERIFY_RETRY_SECONDS = 10
+DEFAULT_EXPIRATION_EXPERIMENT_VERIFY_RETRY_INTERVAL_SECONDS = 1
+EXPIRATION_EXPERIMENT_DIR_PREFIX = "amex-expiration-experiment-"
+EXPIRATION_EXPERIMENT_SERVE_HINT = (
+    "Start the Provider Runtime with: "
+    "PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve"
+)
+EXPIRATION_EXPERIMENT_BOOTSTRAP_HINT = (
+    "Amex is SIGNED_OUT. Sign in first with: "
+    "PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py bootstrap amex"
+)
+
 
 class ProviderRuntimeHTTPError(Exception):
     """Raised when a localhost runtime HTTP call returns an unexpected 4xx/5xx."""
@@ -2755,6 +2778,527 @@ def build_browser_record_expiration_cli_payload(args: argparse.Namespace) -> dic
         ),
         "output_dir": str(output_dir) if output_dir else None,
     }
+
+
+def default_expiration_experiment_dir(
+    diagnostics_dir: Path | None = None,
+    *,
+    when: datetime | None = None,
+) -> Path:
+    """Default ~/.mighty/provider_runtime/diagnostics/amex-expiration-experiment-<UTC>/."""
+    stamp = (when or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    base = diagnostics_dir or DEFAULT_DIAGNOSTICS_DIR
+    return base / f"{EXPIRATION_EXPERIMENT_DIR_PREFIX}{stamp}"
+
+
+def find_latest_expiration_experiment_dir(
+    diagnostics_dir: Path | None = None,
+) -> Path | None:
+    """Return the newest amex-expiration-experiment-* directory, if any."""
+    base = diagnostics_dir or DEFAULT_DIAGNOSTICS_DIR
+    if not base.is_dir():
+        return None
+    candidates = sorted(
+        (
+            path
+            for path in base.iterdir()
+            if path.is_dir() and path.name.startswith(EXPIRATION_EXPERIMENT_DIR_PREFIX)
+        ),
+        key=lambda path: path.name,
+    )
+    return candidates[-1] if candidates else None
+
+
+def open_latest_expiration_experiment(
+    diagnostics_dir: Path | None = None,
+    *,
+    open_fn: Any = None,
+) -> dict[str, Any]:
+    """Reveal the latest expiration experiment directory (macOS Finder via ``open``)."""
+    latest = find_latest_expiration_experiment_dir(diagnostics_dir)
+    if latest is None:
+        base = diagnostics_dir or DEFAULT_DIAGNOSTICS_DIR
+        return {
+            "ok": False,
+            "error": "no_expiration_experiment",
+            "message": (
+                "No Amex expiration experiment directory found under "
+                f"{base}. Run browser-run-expiration-experiment amex first."
+            ),
+            "experiment_dir": None,
+        }
+    opener = open_fn or (lambda path: subprocess.run(["open", str(path)], check=False))
+    opener(latest)
+    return {
+        "ok": True,
+        "experiment_dir": str(latest.resolve()),
+        "message": f"Opened {latest.resolve()}",
+    }
+
+
+def create_expiration_experiment_zip(experiment_dir: Path) -> Path:
+    """Zip experiment evidence (excluding the zip file itself)."""
+    experiment_dir = Path(experiment_dir)
+    zip_path = experiment_dir / f"{experiment_dir.name}.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(experiment_dir.rglob("*")):
+            if not path.is_file() or path == zip_path:
+                continue
+            archive.write(path, arcname=str(path.relative_to(experiment_dir)))
+    return zip_path.resolve()
+
+
+def _expiration_experiment_base_url(host: str, port: int) -> str:
+    return f"http://{host}:{port}"
+
+
+def _auth_state_from_verify_payload(payload: dict[str, Any]) -> str:
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if isinstance(result, dict):
+        return str(result.get("authentication_state") or "LOGIN_UNKNOWN")
+    return str(payload.get("authentication_state") or "LOGIN_UNKNOWN")
+
+
+def _keepalive_outcome_from_status(status: dict[str, Any] | None) -> str:
+    if not isinstance(status, dict):
+        return "unknown"
+    reason = status.get("keepalive_final_reason")
+    if reason:
+        return str(reason)
+    if status.get("keepalive_logged_out"):
+        return "logged_out"
+    if status.get("keepalive_trial_running"):
+        return "still_running"
+    return "unknown"
+
+
+def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _bounded_runtime_diagnostics_snapshot(
+    status_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Sanitize/bound status fields suitable for experiment evidence."""
+    if not isinstance(status_payload, dict):
+        return {"ok": False, "error": "status_unavailable"}
+    keys = (
+        "ok",
+        "runtime_pid",
+        "started_at",
+        "chrome_pid",
+        "chrome_running",
+        "cdp_url",
+        "profile_dir",
+        "maintenance_running",
+        "last_maintenance_attempt_at",
+        "last_maintenance_result",
+        "keepalive_trial_running",
+        "keepalive_trial_id",
+        "keepalive_strategy",
+        "keepalive_started_at",
+        "keepalive_completed_at",
+        "keepalive_final_authentication_state",
+        "keepalive_final_reason",
+        "keepalive_logged_out",
+    )
+    return {key: status_payload.get(key) for key in keys}
+
+
+def verify_amex_signed_in_for_experiment(
+    *,
+    base_url: str,
+    request_json_fn: Any,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    retry_seconds: float = DEFAULT_EXPIRATION_EXPERIMENT_VERIFY_RETRY_SECONDS,
+    retry_interval_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_VERIFY_RETRY_INTERVAL_SECONDS
+    ),
+) -> dict[str, Any]:
+    """Fresh canonical verify with LOGIN_UNKNOWN retry; require SIGNED_IN."""
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    deadline = monotonic() + max(0.0, float(retry_seconds))
+    last_payload: dict[str, Any] | None = None
+    last_state = "LOGIN_UNKNOWN"
+    while True:
+        last_payload = request_json_fn("POST", f"{base_url}/providers/amex/verify")
+        last_state = _auth_state_from_verify_payload(last_payload)
+        if last_state == "SIGNED_IN":
+            return {
+                "ok": True,
+                "authentication_state": last_state,
+                "verify_payload": last_payload,
+            }
+        if last_state == "SIGNED_OUT":
+            return {
+                "ok": False,
+                "authentication_state": last_state,
+                "outcome": "initial_not_signed_in",
+                "message": EXPIRATION_EXPERIMENT_BOOTSTRAP_HINT,
+                "verify_payload": last_payload,
+            }
+        now = monotonic()
+        if now >= deadline:
+            return {
+                "ok": False,
+                "authentication_state": last_state,
+                "outcome": "initial_authentication_unknown",
+                "message": (
+                    "Amex authentication remained LOGIN_UNKNOWN after "
+                    f"{float(retry_seconds):g}s. Re-run bootstrap or verify, then retry."
+                ),
+                "verify_payload": last_payload,
+            }
+        sleep(min(float(retry_interval_seconds), max(0.0, deadline - now)))
+
+
+def run_amex_expiration_experiment(
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    diagnostics_dir: Path | None = None,
+    output_dir: Path | None = None,
+    trial_duration_seconds: int = DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS,
+    keepalive_interval_seconds: int = (
+        DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_INTERVAL_SECONDS
+    ),
+    recording_timeout_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS
+    ),
+    evidence_interval_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS
+    ),
+    verification_interval_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS
+    ),
+    rolling_window_seconds: float = DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS,
+    screenshot_every_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS
+    ),
+    request_json_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    wait_poll_seconds: float = 0.2,
+) -> dict[str, Any]:
+    """Orchestrate NONE keepalive + expiration recorder into one evidence ZIP.
+
+    Client-side only: talks to an already-running ``serve`` over localhost HTTP.
+    Does not acquire the runtime lock, does not mutate the Amex page, and does
+    not start/stop ``serve`` or kill Chrome.
+    """
+    http = request_json_fn or request_json
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    base_url = _expiration_experiment_base_url(host, port)
+    diagnostics = Path(diagnostics_dir) if diagnostics_dir else DEFAULT_DIAGNOSTICS_DIR
+    started_at = iso_now()
+    call_log: list[str] = []
+
+    def tracked_request(method: str, url: str, payload: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+        path = urlsplit(url).path or url
+        call_log.append(f"{method} {path}")
+        if payload is None:
+            return http(method, url, **kwargs)
+        return http(method, url, payload, **kwargs)
+
+    # 1) Runtime must already be serving.
+    try:
+        tracked_request("GET", f"{base_url}/health")
+    except (URLError, TimeoutError, OSError, ConnectionError) as exc:
+        return {
+            "ok": False,
+            "outcome": "runtime_unavailable",
+            "keepalive_outcome": None,
+            "final_authentication_state": None,
+            "experiment_dir": None,
+            "zip_path": None,
+            "message": EXPIRATION_EXPERIMENT_SERVE_HINT,
+            "error": f"{type(exc).__name__}: {exc}",
+            "exit_code": 1,
+            "http_calls": list(call_log),
+        }
+
+    # 2) Fresh canonical verification before any trial/recorder work.
+    verified = verify_amex_signed_in_for_experiment(
+        base_url=base_url,
+        request_json_fn=tracked_request,
+        sleep_fn=sleep,
+        monotonic_fn=monotonic,
+    )
+    if not verified.get("ok"):
+        return {
+            "ok": False,
+            "outcome": verified.get("outcome") or "initial_not_signed_in",
+            "keepalive_outcome": None,
+            "final_authentication_state": verified.get("authentication_state"),
+            "experiment_dir": None,
+            "zip_path": None,
+            "message": verified.get("message"),
+            "verify_payload": verified.get("verify_payload"),
+            "exit_code": 1,
+            "http_calls": list(call_log),
+        }
+
+    experiment_dir = (
+        Path(output_dir).expanduser().resolve()
+        if output_dir is not None
+        else default_expiration_experiment_dir(diagnostics)
+    )
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+    recorder_dir = experiment_dir / "recorder"
+    recorder_dir.mkdir(parents=True, exist_ok=True)
+
+    keepalive_start_payload: dict[str, Any] | None = None
+    recorder_payload: dict[str, Any] | None = None
+    keepalive_status_payload: dict[str, Any] | None = None
+    runtime_status_payload: dict[str, Any] | None = None
+    interrupted = False
+    recorder_error: str | None = None
+    outcome = "fatal_error"
+
+    # 3) Start NONE keepalive trial (returns once the server thread is running).
+    try:
+        keepalive_start_payload = tracked_request(
+            "POST",
+            f"{base_url}/providers/amex/keepalive/start",
+            {
+                "strategy": "NONE",
+                "duration_seconds": int(trial_duration_seconds),
+                "interval_seconds": int(keepalive_interval_seconds),
+            },
+        )
+    except ProviderRuntimeHTTPError as exc:
+        return {
+            "ok": False,
+            "outcome": "keepalive_start_failed",
+            "keepalive_outcome": None,
+            "final_authentication_state": verified.get("authentication_state"),
+            "experiment_dir": str(experiment_dir),
+            "zip_path": None,
+            "message": f"Failed to start NONE keepalive trial: HTTP {exc.status}",
+            "error": exc.body or str(exc),
+            "exit_code": 1,
+            "http_calls": list(call_log),
+        }
+    if not keepalive_start_payload.get("ok"):
+        return {
+            "ok": False,
+            "outcome": "keepalive_start_failed",
+            "keepalive_outcome": None,
+            "final_authentication_state": verified.get("authentication_state"),
+            "experiment_dir": str(experiment_dir),
+            "zip_path": None,
+            "message": str(
+                keepalive_start_payload.get("reason")
+                or keepalive_start_payload.get("error")
+                or "keepalive_start_failed"
+            ),
+            "keepalive_start": keepalive_start_payload,
+            "exit_code": 1,
+            "http_calls": list(call_log),
+        }
+
+    # 4) Start recorder immediately; wait without holding any runtime lock.
+    #    Keepalive continues on the server in its own thread (same as the
+    #    three-terminal workflow).
+    http_timeout = float(recording_timeout_seconds) + 120.0
+    recorder_holder: dict[str, Any] = {"payload": None, "error": None}
+    recorder_done = threading.Event()
+
+    def _recorder_worker() -> None:
+        try:
+            recorder_holder["payload"] = tracked_request(
+                "POST",
+                f"{base_url}/providers/amex/diagnostics/browser-record-expiration",
+                {
+                    "provider": "amex",
+                    "interval_seconds": float(evidence_interval_seconds),
+                    "timeout_seconds": float(recording_timeout_seconds),
+                    "rolling_window_seconds": float(rolling_window_seconds),
+                    "screenshot_every_seconds": float(screenshot_every_seconds),
+                    "verification_interval_seconds": float(verification_interval_seconds),
+                    "output_dir": str(recorder_dir),
+                },
+                timeout=http_timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve evidence on any failure
+            recorder_holder["error"] = exc
+        finally:
+            recorder_done.set()
+
+    recorder_thread = threading.Thread(
+        target=_recorder_worker,
+        name="amex-expiration-experiment-recorder",
+        daemon=True,
+    )
+    recorder_thread.start()
+    try:
+        while not recorder_done.wait(timeout=max(0.05, float(wait_poll_seconds))):
+            # Cooperative wait so Ctrl+C can interrupt orchestration cleanly.
+            _ = monotonic()
+    except KeyboardInterrupt:
+        interrupted = True
+
+    if recorder_holder["payload"] is not None:
+        recorder_payload = recorder_holder["payload"]
+        outcome = str(recorder_payload.get("outcome") or "fatal_error")
+    elif recorder_holder["error"] is not None:
+        exc = recorder_holder["error"]
+        recorder_error = f"{type(exc).__name__}: {exc}"
+        outcome = "fatal_error"
+    if interrupted:
+        outcome = "interrupted"
+
+    # 5) Collect keepalive status (+ bounded runtime diagnostics). Stop trial
+    #    only when still running after recorder finished/failed/interrupted.
+    try:
+        keepalive_status_payload = tracked_request(
+            "GET",
+            f"{base_url}/providers/amex/keepalive/status",
+        )
+    except Exception as exc:  # noqa: BLE001
+        keepalive_status_payload = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    try:
+        runtime_status_payload = tracked_request("GET", f"{base_url}/status")
+    except Exception:
+        runtime_status_payload = None
+
+    should_stop_keepalive = bool(
+        isinstance(keepalive_status_payload, dict)
+        and keepalive_status_payload.get("keepalive_trial_running")
+        and (
+            interrupted
+            or outcome
+            in {
+                "fatal_error",
+                "initial_not_signed_in",
+                "initial_authentication_unknown",
+            }
+            or recorder_error is not None
+        )
+    )
+    if should_stop_keepalive:
+        try:
+            tracked_request(
+                "POST",
+                f"{base_url}/providers/amex/keepalive/stop",
+            )
+            keepalive_status_payload = tracked_request(
+                "GET",
+                f"{base_url}/providers/amex/keepalive/status",
+            )
+        except Exception:
+            pass
+
+    keepalive_status_path = experiment_dir / "keepalive-status.json"
+    _write_json_file(
+        keepalive_status_path,
+        keepalive_status_payload
+        if isinstance(keepalive_status_payload, dict)
+        else {"ok": False, "error": "keepalive_status_unavailable"},
+    )
+    diagnostics_path = experiment_dir / "runtime-status.json"
+    _write_json_file(
+        diagnostics_path,
+        _bounded_runtime_diagnostics_snapshot(runtime_status_payload),
+    )
+
+    final_auth = None
+    if isinstance(recorder_payload, dict):
+        final_auth = recorder_payload.get("final_canonical_authentication_state")
+        if final_auth is None:
+            final_auth = recorder_payload.get("final_authentication_state")
+    if final_auth is None and isinstance(keepalive_status_payload, dict):
+        final_auth = keepalive_status_payload.get("keepalive_final_authentication_state")
+    if final_auth is None:
+        final_auth = verified.get("authentication_state")
+
+    keepalive_outcome = _keepalive_outcome_from_status(keepalive_status_payload)
+    completed_at = iso_now()
+    summary = {
+        "provider": "amex",
+        "outcome": outcome,
+        "keepalive_outcome": keepalive_outcome,
+        "final_authentication_state": final_auth,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "interrupted": interrupted,
+        "keepalive_strategy": "NONE",
+        "trial_duration_seconds": int(trial_duration_seconds),
+        "keepalive_interval_seconds": int(keepalive_interval_seconds),
+        "recording_timeout_seconds": float(recording_timeout_seconds),
+        "evidence_interval_seconds": float(evidence_interval_seconds),
+        "verification_interval_seconds": float(verification_interval_seconds),
+        "rolling_window_seconds": float(rolling_window_seconds),
+        "screenshot_every_seconds": float(screenshot_every_seconds),
+        "experiment_dir": str(experiment_dir),
+        "recorder_dir": str(recorder_dir),
+        "recorder_outcome": (
+            None if recorder_payload is None else recorder_payload.get("outcome")
+        ),
+        "recorder_error": recorder_error,
+        "keepalive_start_ok": bool(
+            isinstance(keepalive_start_payload, dict) and keepalive_start_payload.get("ok")
+        ),
+        "keepalive_trial_id": (
+            None
+            if not isinstance(keepalive_start_payload, dict)
+            else keepalive_start_payload.get("trial_id")
+            or keepalive_start_payload.get("keepalive_trial_id")
+        ),
+    }
+    summary_path = experiment_dir / "experiment-summary.json"
+    _write_json_file(summary_path, summary)
+
+    zip_path = create_expiration_experiment_zip(experiment_dir)
+    summary["zip_path"] = str(zip_path)
+    _write_json_file(summary_path, summary)
+
+    exit_code = 130 if interrupted else 0
+    if outcome == "fatal_error" and not interrupted:
+        exit_code = 1
+
+    return {
+        "ok": outcome
+        in {
+            "logged_out",
+            "timeout",
+            "interrupted",
+            "initial_not_signed_in",
+            "initial_authentication_unknown",
+        },
+        "outcome": outcome,
+        "keepalive_outcome": keepalive_outcome,
+        "final_authentication_state": final_auth,
+        "experiment_dir": str(experiment_dir),
+        "zip_path": str(zip_path),
+        "summary": summary,
+        "recorder": recorder_payload,
+        "keepalive_status": keepalive_status_payload,
+        "exit_code": exit_code,
+        "http_calls": list(call_log),
+        "message": None,
+    }
+
+
+def print_expiration_experiment_result(result: dict[str, Any]) -> None:
+    """Print the concise experiment CLI result (or early failure hint)."""
+    message = result.get("message")
+    if message and result.get("zip_path") is None:
+        print(str(message), file=sys.stderr)
+        return
+    print(f"Experiment outcome: {result.get('outcome')}")
+    print(f"Keepalive outcome: {result.get('keepalive_outcome')}")
+    print(f"Final auth state: {result.get('final_authentication_state')}")
+    print("Evidence ZIP:")
+    print(str(result.get("zip_path") or ""))
 
 
 def _explorer_tag_label(node: dict[str, Any] | None) -> str:
@@ -6795,6 +7339,97 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    browser_run_expiration_experiment = subparsers.add_parser(
+        "browser-run-expiration-experiment",
+        help=(
+            "Developer-only: one-command Amex NONE keepalive + expiration "
+            "recorder, packaged into a single evidence ZIP"
+        ),
+    )
+    browser_run_expiration_experiment.add_argument("provider", choices=("amex",))
+    browser_run_expiration_experiment.add_argument(
+        "--trial-duration-seconds",
+        type=int,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS,
+        help=(
+            "NONE keepalive trial duration "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS})"
+        ),
+    )
+    browser_run_expiration_experiment.add_argument(
+        "--keepalive-interval-seconds",
+        type=int,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_INTERVAL_SECONDS,
+        help=(
+            "NONE keepalive poll interval "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_INTERVAL_SECONDS})"
+        ),
+    )
+    browser_run_expiration_experiment.add_argument(
+        "--recording-timeout-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS,
+        help=(
+            "Expiration recorder timeout "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS})"
+        ),
+    )
+    browser_run_expiration_experiment.add_argument(
+        "--evidence-interval-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS,
+        help=(
+            "Recorder browser-evidence poll interval "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS})"
+        ),
+    )
+    browser_run_expiration_experiment.add_argument(
+        "--verification-interval-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS,
+        help=(
+            "Recorder fresh canonical verification cadence "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS})"
+        ),
+    )
+    browser_run_expiration_experiment.add_argument(
+        "--rolling-window-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS,
+        help=(
+            "Recorder trailing observation window "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS})"
+        ),
+    )
+    browser_run_expiration_experiment.add_argument(
+        "--screenshot-every-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS,
+        help=(
+            "Recorder screenshot cadence "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS})"
+        ),
+    )
+    browser_run_expiration_experiment.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional experiment directory "
+            "(default: ~/.mighty/provider_runtime/diagnostics/"
+            "amex-expiration-experiment-<UTC>/)"
+        ),
+    )
+
+    browser_open_latest_expiration_experiment = subparsers.add_parser(
+        "browser-open-latest-expiration-experiment",
+        help="Open the latest Amex expiration experiment folder in Finder (macOS)",
+    )
+    browser_open_latest_expiration_experiment.add_argument(
+        "provider",
+        choices=("amex",),
+    )
+
     inspect_expiration = subparsers.add_parser(
         "inspect-expiration-dialog",
         help="Deprecated alias for browser-inspect + Amex expiration classification",
@@ -6973,6 +7608,32 @@ def run_client_command(args: argparse.Namespace) -> int:
         }:
             return 0
         return 0 if payload.get("ok") else 1
+    if args.command == "browser-run-expiration-experiment":
+        output_dir = args.output_dir
+        if output_dir is not None:
+            output_dir = output_dir.expanduser().resolve()
+        result = run_amex_expiration_experiment(
+            host=args.host,
+            port=args.port,
+            diagnostics_dir=args.root / "diagnostics",
+            output_dir=output_dir,
+            trial_duration_seconds=int(args.trial_duration_seconds),
+            keepalive_interval_seconds=int(args.keepalive_interval_seconds),
+            recording_timeout_seconds=float(args.recording_timeout_seconds),
+            evidence_interval_seconds=float(args.evidence_interval_seconds),
+            verification_interval_seconds=float(args.verification_interval_seconds),
+            rolling_window_seconds=float(args.rolling_window_seconds),
+            screenshot_every_seconds=float(args.screenshot_every_seconds),
+        )
+        print_expiration_experiment_result(result)
+        return int(result.get("exit_code") or (0 if result.get("ok") else 1))
+    if args.command == "browser-open-latest-expiration-experiment":
+        result = open_latest_expiration_experiment(args.root / "diagnostics")
+        if result.get("ok"):
+            print(result.get("message") or result.get("experiment_dir"))
+            return 0
+        print(str(result.get("message") or result.get("error")), file=sys.stderr)
+        return 1
     if args.command == "inspect-expiration-dialog":
         payload = request_json(
             "POST",
