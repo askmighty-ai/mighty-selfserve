@@ -626,6 +626,32 @@ def test_recorder_logs_out_immediately_waits_for_keepalive(tmp_path: Path):
     assert http.keepalive_naturally_finished.is_set()
 
 
+def test_convergence_branch_entered_after_recorder_logged_out(tmp_path: Path, capsys):
+    """Regression: logged_out must enter the keepalive convergence wait."""
+    http = _FakeHttp()
+    http.keepalive_converge_after_status_polls = 1
+    exp = tmp_path / "enter-convergence"
+    helper = _release_recorder(http)
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        request_json_fn=http,
+        sleep_fn=lambda _s: None,
+        wait_poll_seconds=0.01,
+        keepalive_convergence_poll_seconds=1,
+    )
+    helper.join(timeout=2)
+    out = capsys.readouterr().out
+    assert result["outcome"] == "logged_out"
+    assert result["convergence_wait_entered"] is True
+    assert "Recorder finished:" in out
+    assert "outcome=logged_out" in out
+    assert "Entering keepalive convergence wait..." in out
+    assert "Poll #1" in out
+    assert "Exit:" in out
+    assert "Skipping convergence wait:" not in out
+
+
 def test_keepalive_finishes_within_wait_window(tmp_path: Path, capsys):
     http = _FakeHttp()
     # Finish on the 4th post-recorder status poll → ~3s with 1s poll spacing.

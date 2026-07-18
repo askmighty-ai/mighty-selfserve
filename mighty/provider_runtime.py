@@ -2898,7 +2898,9 @@ def wait_for_keepalive_convergence(
     deadline = started + max(0.0, float(timeout_seconds))
     poll = max(0.0, float(poll_seconds))
     last_status: dict[str, Any] | None = None
+    poll_number = 0
     while True:
+        poll_number += 1
         try:
             last_status = request_json_fn(
                 "GET",
@@ -2914,19 +2916,45 @@ def wait_for_keepalive_convergence(
             isinstance(last_status, dict) and last_status.get("keepalive_trial_running")
         )
         now = monotonic()
+        elapsed = max(0.0, now - started)
+        poll_outcome = _keepalive_outcome_from_status(last_status)
+        auth_state = None
+        if isinstance(last_status, dict):
+            auth_state = last_status.get("keepalive_final_authentication_state")
+        # Temporary developer instrumentation for convergence diagnosis.
+        print(f"Poll #{poll_number}")
+        print(f"running={'true' if running else 'false'}")
+        print(f"outcome={poll_outcome}")
+        print(f"authentication_state={auth_state}")
+        print(f"elapsed={elapsed:.3f}")
+        print()
         if not running:
+            exit_reason = (
+                "running already false" if poll_number == 1 else "keepalive finished"
+            )
+            print("Exit:")
+            print(f"    {exit_reason}")
+            print()
             return {
                 "status": last_status,
                 "timed_out": False,
-                "wait_seconds": max(0.0, now - started),
+                "wait_seconds": elapsed,
                 "completed_at": iso_now(),
+                "exit_reason": exit_reason,
+                "poll_count": poll_number,
             }
         if now >= deadline:
+            exit_reason = "timeout reached"
+            print("Exit:")
+            print(f"    {exit_reason}")
+            print()
             return {
                 "status": last_status,
                 "timed_out": True,
-                "wait_seconds": max(0.0, now - started),
+                "wait_seconds": elapsed,
                 "completed_at": None,
+                "exit_reason": exit_reason,
+                "poll_count": poll_number,
             }
         sleep(min(poll, max(0.0, deadline - now)))
 
@@ -3235,7 +3263,16 @@ def run_amex_expiration_experiment(
 
     # 5) After logged_out, wait for keepalive to converge before packaging.
     #    Other outcomes collect status immediately (no indefinite hang).
+    convergence_wait_entered = False
     if outcome == "logged_out" and not interrupted:
+        convergence_wait_entered = True
+        # Temporary developer instrumentation for convergence diagnosis.
+        print("----------------------------------------")
+        print("Recorder finished:")
+        print(f"    outcome={outcome}")
+        print()
+        print("Entering keepalive convergence wait...")
+        print()
         convergence = wait_for_keepalive_convergence(
             base_url=base_url,
             request_json_fn=tracked_request,
@@ -3249,6 +3286,13 @@ def run_amex_expiration_experiment(
         keepalive_completion_timeout = bool(convergence.get("timed_out"))
         keepalive_completed_at = convergence.get("completed_at")
     else:
+        if interrupted:
+            skip_reason = "interrupted"
+        else:
+            skip_reason = f"recorder_outcome={outcome}"
+        print("Skipping convergence wait:")
+        print(f"    reason={skip_reason}")
+        print()
         try:
             keepalive_status_payload = tracked_request(
                 "GET",
@@ -3402,6 +3446,7 @@ def run_amex_expiration_experiment(
         "keepalive_completion_timeout": keepalive_completion_timeout,
         "recorder_duration_seconds": recorder_duration_seconds,
         "experiment_duration_seconds": experiment_duration_seconds,
+        "convergence_wait_entered": convergence_wait_entered,
         "exit_code": exit_code,
         "http_calls": list(call_log),
         "message": None,
