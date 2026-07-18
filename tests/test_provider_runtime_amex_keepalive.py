@@ -106,7 +106,7 @@ def test_prevents_concurrent_trials(tmp_path: Path):
     assert payload["error"] == "keepalive_trial_already_running"
 
 
-def test_none_performs_no_actions(tmp_path: Path, capsys):
+def test_none_performs_no_actions(tmp_path: Path):
     page = MagicMock()
     result = perform_keepalive_action(page, "NONE")
     assert result.result == "skipped"
@@ -127,6 +127,7 @@ def test_none_performs_no_actions(tmp_path: Path, capsys):
         "mighty.provider_runtime.inspect_amex_page_signals",
         return_value={
             "authentication_state": "SIGNED_IN",
+            "inspection_authentication_state_source": "LATEST_CANONICAL",
             "expiration_dialog_detected": False,
             "login_page_detected": False,
             "final_url": "https://global.americanexpress.com/overview",
@@ -139,13 +140,6 @@ def test_none_performs_no_actions(tmp_path: Path, capsys):
     assert logged_out is False
     assert runtime.keepalive_action_count == 0
     action.assert_not_called()
-    out = capsys.readouterr().out
-    assert "inspection number=1" in out
-    assert "inspection started (pre_action)" in out
-    assert "inspection finished (pre_action)" in out
-    assert "inspection number=2" in out
-    assert "inspection started (post_action)" in out
-    assert "status object updated=" in out
 
 
 def test_each_strategy_dispatches_correct_action():
@@ -403,3 +397,95 @@ def test_inspect_amex_page_signals_detects_login_page():
     assert signals["login_page_detected"] is True
     assert signals["authentication_state"] == "SIGNED_OUT"
     assert page.evaluate.call_count == 0
+
+
+def test_stale_canonical_signed_in_does_not_override_login_page_signed_out():
+    """Login URL/page evidence wins over a stale latest_canonical SIGNED_IN."""
+    from tests.test_provider_runtime_browser_inspector import (
+        CdpSessionMock,
+        _bind_cdp,
+        _document,
+        _element,
+    )
+
+    page = MagicMock()
+    page.url = "https://www.americanexpress.com/en-us/account/login"
+    page.main_frame = page
+    page.frames = [page]
+    session = CdpSessionMock(
+        document=_document(_element(10, 10, "HTML", children=[_element(20, 20, "BODY")])),
+        container_node_ids=[],
+    )
+    _bind_cdp(page, session)
+    page.locator.return_value.inner_text.return_value = (
+        "Sign in to your account User ID Show password Forgot password"
+    )
+    signals = inspect_amex_page_signals(
+        page,
+        latest_canonical_state="SIGNED_IN",
+    )
+    assert signals["login_page_detected"] is True
+    assert signals["authentication_state"] == "SIGNED_OUT"
+    assert signals["inspection_authentication_state_source"] == "LATEST_CANONICAL"
+    assert page.evaluate.call_count == 0
+
+
+def test_latest_auth_fields_update_on_tick_while_final_unset(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    runtime.keepalive_strategy = "NONE"
+    runtime.keepalive_trial_running = True
+    page = MagicMock()
+    with patch(
+        "mighty.provider_runtime.sync_playwright",
+        return_value=_playwright_page_ent(page),
+    ), patch(
+        "mighty.provider_runtime.select_amex_page",
+        return_value=page,
+    ), patch(
+        "mighty.provider_runtime.inspect_amex_page_signals",
+        return_value={
+            "authentication_state": "SIGNED_IN",
+            "inspection_authentication_state_source": "LATEST_CANONICAL",
+            "expiration_dialog_detected": False,
+            "login_page_detected": False,
+            "final_url": "https://global.americanexpress.com/overview",
+        },
+    ):
+        runtime._keepalive_tick()
+
+    status = runtime.keepalive_status()
+    assert status["keepalive_trial_running"] is True
+    assert status["keepalive_latest_authentication_state"] == "SIGNED_IN"
+    assert status["keepalive_latest_authentication_state_source"] == "LATEST_CANONICAL"
+    assert status["keepalive_latest_reason"] == "inspection"
+    assert status["keepalive_latest_observed_at"]
+    assert status["keepalive_final_authentication_state"] is None
+    assert status["keepalive_final_reason"] is None
+    assert status["authentication_state"] == "SIGNED_IN"
+
+
+def test_compatibility_auth_uses_final_state_after_completion(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    with patch(
+        "mighty.provider_runtime.verify_amex_over_cdp",
+        return_value=_signed_in_result(),
+    ), patch.object(runtime, "_keepalive_tick", return_value=False):
+        payload = runtime.start_keepalive_trial(
+            "amex",
+            strategy="NONE",
+            duration_seconds=30,
+            interval_seconds=5,
+        )
+        assert payload["ok"] is True
+        assert payload["keepalive_trial_running"] is True
+        assert payload["authentication_state"] == "SIGNED_IN"
+        assert payload["keepalive_final_authentication_state"] is None
+        stop_payload = runtime.stop_keepalive_trial(reason="manually_stopped")
+
+    assert stop_payload["keepalive_trial_running"] is False
+    assert stop_payload["keepalive_final_authentication_state"] == "SIGNED_IN"
+    assert stop_payload["authentication_state"] == "SIGNED_IN"
+    assert (
+        stop_payload["authentication_state"]
+        == stop_payload["keepalive_final_authentication_state"]
+    )

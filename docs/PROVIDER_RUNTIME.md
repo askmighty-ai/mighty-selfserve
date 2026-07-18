@@ -451,8 +451,10 @@ command that:
    orchestration; does not hold the runtime lock while waiting);
 5. waits for the recorder to finish;
 6. if the recorder outcome is `logged_out`, polls `keepalive-status` once per
-   second (up to 15s) until the keepalive trial stops, so the ZIP captures a
-   converged keepalive state rather than a still-running race;
+   second until the keepalive trial stops, with a dynamic cap of
+   `min(keepalive_interval_seconds + 10, 60)` so the worker can complete its
+   next naturally scheduled tick (the orchestrator never wakes or stops the
+   trial during this wait);
 7. collects final `keepalive-status`, writes experiment metadata (including
    recorder/keepalive timing fields), and builds one ZIP.
 
@@ -598,10 +600,28 @@ curl http://127.0.0.1:8765/providers/amex/keepalive/status
 curl -X POST http://127.0.0.1:8765/providers/amex/keepalive/stop
 ```
 
-Trial state includes counters, dialog/logout flags, final canonical
-authentication state/reason, and a bounded sanitized event list. Events never
-store credentials, cookies, authorization headers, request/response bodies,
-account values, full query strings, or page HTML.
+Trial state includes counters, dialog/logout flags, latest observed
+authentication fields (updated each tick), final canonical authentication
+state/reason (set only at finalization), and a bounded sanitized event list.
+
+Latest versus final authentication:
+
+| Field | When set |
+| --- | --- |
+| `keepalive_latest_authentication_state` | After every completed tick inspection |
+| `keepalive_latest_authentication_state_source` | Same tick |
+| `keepalive_latest_reason` | Same tick (`inspection` / `logged_out` / …) |
+| `keepalive_latest_observed_at` | Same tick |
+| `keepalive_final_authentication_state` | Only when the trial finalizes |
+| `keepalive_final_reason` | Only when the trial finalizes |
+
+Compatibility: the generic `authentication_state` field maps to
+`keepalive_latest_authentication_state` while a trial is running, and to
+`keepalive_final_authentication_state` after finalization. Prefer the explicit
+`keepalive_latest_*` / `keepalive_final_*` fields in new code.
+
+Events never store credentials, cookies, authorization headers, request/response
+bodies, account values, full query strings, or page HTML.
 
 Persisted trial result path:
 

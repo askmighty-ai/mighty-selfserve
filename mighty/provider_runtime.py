@@ -2617,9 +2617,21 @@ DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS = 90
 DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS = 1
 DEFAULT_EXPIRATION_EXPERIMENT_VERIFY_RETRY_SECONDS = 10
 DEFAULT_EXPIRATION_EXPERIMENT_VERIFY_RETRY_INTERVAL_SECONDS = 1
-DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_TIMEOUT_SECONDS = 15
+DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_SLACK_SECONDS = 10
+DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_MAX_SECONDS = 60
 DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_POLL_SECONDS = 1
 EXPIRATION_EXPERIMENT_DIR_PREFIX = "amex-expiration-experiment-"
+
+
+def expiration_experiment_keepalive_convergence_timeout_seconds(
+    keepalive_interval_seconds: float | int,
+) -> float:
+    """Allow one natural keepalive tick, plus slack, capped for safety."""
+    return min(
+        float(keepalive_interval_seconds)
+        + float(DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_SLACK_SECONDS),
+        float(DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_MAX_SECONDS),
+    )
 EXPIRATION_EXPERIMENT_SERVE_HINT = (
     "Start the Provider Runtime with: "
     "PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve"
@@ -2880,9 +2892,7 @@ def wait_for_keepalive_convergence(
     request_json_fn: Any,
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
-    timeout_seconds: float = (
-        DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_TIMEOUT_SECONDS
-    ),
+    timeout_seconds: float,
     poll_seconds: float = (
         DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_POLL_SECONDS
     ),
@@ -2890,7 +2900,8 @@ def wait_for_keepalive_convergence(
     """Poll keepalive-status until the trial stops or the timeout elapses.
 
     Used after the expiration recorder reports ``logged_out`` so the ZIP captures
-    a converged keepalive status instead of a still-running race.
+    a converged keepalive status instead of a still-running race. Does not wake
+    or stop the keepalive worker; it only observes ``keepalive-status``.
     """
     sleep = sleep_fn or time.sleep
     monotonic = monotonic_fn or time.monotonic
@@ -2898,9 +2909,7 @@ def wait_for_keepalive_convergence(
     deadline = started + max(0.0, float(timeout_seconds))
     poll = max(0.0, float(poll_seconds))
     last_status: dict[str, Any] | None = None
-    poll_number = 0
     while True:
-        poll_number += 1
         try:
             last_status = request_json_fn(
                 "GET",
@@ -2917,44 +2926,19 @@ def wait_for_keepalive_convergence(
         )
         now = monotonic()
         elapsed = max(0.0, now - started)
-        poll_outcome = _keepalive_outcome_from_status(last_status)
-        auth_state = None
-        if isinstance(last_status, dict):
-            auth_state = last_status.get("keepalive_final_authentication_state")
-        # Temporary developer instrumentation for convergence diagnosis.
-        print(f"Poll #{poll_number}")
-        print(f"running={'true' if running else 'false'}")
-        print(f"outcome={poll_outcome}")
-        print(f"authentication_state={auth_state}")
-        print(f"elapsed={elapsed:.3f}")
-        print()
         if not running:
-            exit_reason = (
-                "running already false" if poll_number == 1 else "keepalive finished"
-            )
-            print("Exit:")
-            print(f"    {exit_reason}")
-            print()
             return {
                 "status": last_status,
                 "timed_out": False,
                 "wait_seconds": elapsed,
                 "completed_at": iso_now(),
-                "exit_reason": exit_reason,
-                "poll_count": poll_number,
             }
         if now >= deadline:
-            exit_reason = "timeout reached"
-            print("Exit:")
-            print(f"    {exit_reason}")
-            print()
             return {
                 "status": last_status,
                 "timed_out": True,
                 "wait_seconds": elapsed,
                 "completed_at": None,
-                "exit_reason": exit_reason,
-                "poll_count": poll_number,
             }
         sleep(min(poll, max(0.0, deadline - now)))
 
@@ -2986,9 +2970,14 @@ def _bounded_runtime_diagnostics_snapshot(
         "keepalive_strategy",
         "keepalive_started_at",
         "keepalive_completed_at",
+        "keepalive_latest_authentication_state",
+        "keepalive_latest_authentication_state_source",
+        "keepalive_latest_reason",
+        "keepalive_latest_observed_at",
         "keepalive_final_authentication_state",
         "keepalive_final_reason",
         "keepalive_logged_out",
+        "authentication_state",
     )
     return {key: status_payload.get(key) for key in keys}
 
@@ -3069,9 +3058,7 @@ def run_amex_expiration_experiment(
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
     wait_poll_seconds: float = 0.2,
-    keepalive_convergence_timeout_seconds: float = (
-        DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_TIMEOUT_SECONDS
-    ),
+    keepalive_convergence_timeout_seconds: float | None = None,
     keepalive_convergence_poll_seconds: float = (
         DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_POLL_SECONDS
     ),
@@ -3082,8 +3069,9 @@ def run_amex_expiration_experiment(
     Does not acquire the runtime lock, does not mutate the Amex page, and does
     not start/stop ``serve`` or kill Chrome.
 
-    After the recorder reports ``logged_out``, waits briefly for the keepalive
-    trial to converge so the ZIP captures a consistent final state.
+    After the recorder reports ``logged_out``, waits for the keepalive trial to
+    finish on its natural schedule (up to interval + slack, capped) so the ZIP
+    captures a consistent final state. Does not wake or stop the worker.
     """
     http = request_json_fn or request_json
     sleep = sleep_fn or time.sleep
@@ -3092,6 +3080,16 @@ def run_amex_expiration_experiment(
     diagnostics = Path(diagnostics_dir) if diagnostics_dir else DEFAULT_DIAGNOSTICS_DIR
     started_at = iso_now()
     experiment_started_mono = monotonic()
+    if keepalive_convergence_timeout_seconds is None:
+        resolved_convergence_timeout_seconds = (
+            expiration_experiment_keepalive_convergence_timeout_seconds(
+                keepalive_interval_seconds
+            )
+        )
+    else:
+        resolved_convergence_timeout_seconds = float(
+            keepalive_convergence_timeout_seconds
+        )
     call_log: list[str] = []
 
     def tracked_request(method: str, url: str, payload: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -3263,22 +3261,16 @@ def run_amex_expiration_experiment(
 
     # 5) After logged_out, wait for keepalive to converge before packaging.
     #    Other outcomes collect status immediately (no indefinite hang).
+    #    Do not wake/stop the worker or invoke canonical verify here.
     convergence_wait_entered = False
     if outcome == "logged_out" and not interrupted:
         convergence_wait_entered = True
-        # Temporary developer instrumentation for convergence diagnosis.
-        print("----------------------------------------")
-        print("Recorder finished:")
-        print(f"    outcome={outcome}")
-        print()
-        print("Entering keepalive convergence wait...")
-        print()
         convergence = wait_for_keepalive_convergence(
             base_url=base_url,
             request_json_fn=tracked_request,
             sleep_fn=sleep,
             monotonic_fn=monotonic,
-            timeout_seconds=float(keepalive_convergence_timeout_seconds),
+            timeout_seconds=float(resolved_convergence_timeout_seconds),
             poll_seconds=float(keepalive_convergence_poll_seconds),
         )
         keepalive_status_payload = convergence.get("status")
@@ -3286,13 +3278,6 @@ def run_amex_expiration_experiment(
         keepalive_completion_timeout = bool(convergence.get("timed_out"))
         keepalive_completed_at = convergence.get("completed_at")
     else:
-        if interrupted:
-            skip_reason = "interrupted"
-        else:
-            skip_reason = f"recorder_outcome={outcome}"
-        print("Skipping convergence wait:")
-        print(f"    reason={skip_reason}")
-        print()
         try:
             keepalive_status_payload = tracked_request(
                 "GET",
@@ -3385,6 +3370,9 @@ def run_amex_expiration_experiment(
         "keepalive_completed_at": keepalive_completed_at,
         "keepalive_wait_seconds": keepalive_wait_seconds,
         "keepalive_completion_timeout": keepalive_completion_timeout,
+        "keepalive_convergence_timeout_seconds": float(
+            resolved_convergence_timeout_seconds
+        ),
         "recorder_duration_seconds": recorder_duration_seconds,
         "experiment_duration_seconds": experiment_duration_seconds,
         "interrupted": interrupted,
@@ -3444,6 +3432,9 @@ def run_amex_expiration_experiment(
         "keepalive_completed_at": keepalive_completed_at,
         "keepalive_wait_seconds": keepalive_wait_seconds,
         "keepalive_completion_timeout": keepalive_completion_timeout,
+        "keepalive_convergence_timeout_seconds": float(
+            resolved_convergence_timeout_seconds
+        ),
         "recorder_duration_seconds": recorder_duration_seconds,
         "experiment_duration_seconds": experiment_duration_seconds,
         "convergence_wait_entered": convergence_wait_entered,
@@ -3469,25 +3460,47 @@ def print_expiration_experiment_result(result: dict[str, Any]) -> None:
     timed_out = result.get("keepalive_completion_timeout")
     if timed_out is None:
         timed_out = summary.get("keepalive_completion_timeout")
+    interval_seconds = summary.get("keepalive_interval_seconds")
+    convergence_timeout = (
+        result.get("keepalive_convergence_timeout_seconds")
+        if result.get("keepalive_convergence_timeout_seconds") is not None
+        else summary.get("keepalive_convergence_timeout_seconds")
+    )
+    keepalive_status = (
+        result.get("keepalive_status")
+        if isinstance(result.get("keepalive_status"), dict)
+        else {}
+    )
+    latest_state = keepalive_status.get("keepalive_latest_authentication_state")
+    final_state = keepalive_status.get("keepalive_final_authentication_state")
+    if latest_state is None:
+        latest_state = summary.get("keepalive_latest_authentication_state")
+    if final_state is None:
+        final_state = result.get("final_authentication_state")
 
     print("----------------------------------------")
     print("Recorder:")
     print(f"    {outcome}")
-    if outcome == "logged_out" and not result.get("interrupted"):
+    if outcome == "logged_out":
         print()
         print("Waiting for keepalive convergence...")
+        if interval_seconds is not None:
+            print(f"    keepalive interval: {int(interval_seconds)} seconds")
+        if convergence_timeout is not None:
+            print(f"    maximum wait: {float(convergence_timeout):.0f} seconds")
         if timed_out:
-            timeout_s = (
-                summary.get("keepalive_wait_seconds")
-                if wait_seconds is None
-                else wait_seconds
+            print(
+                f"    timed out after {float(convergence_timeout or wait_seconds or 0):.0f} seconds"
             )
-            print(f"    timed out after {float(timeout_s or 15):.1f} seconds")
         else:
             print(f"    finished after {float(wait_seconds or 0.0):.1f} seconds")
     print()
     print("Keepalive:")
-    print(f"    {keepalive_outcome}")
+    print(f"    outcome: {keepalive_outcome}")
+    if latest_state is not None:
+        print(f"    latest observed state: {latest_state}")
+    if final_state is not None:
+        print(f"    final state: {final_state}")
     print()
     print("Creating evidence ZIP...")
     print("Done.")
@@ -5961,13 +5974,16 @@ class ProviderRuntime:
         self.keepalive_last_action_result: str | None = None
         self.keepalive_expiration_dialog_seen = False
         self.keepalive_logged_out = False
+        self.keepalive_latest_authentication_state: str | None = None
+        self.keepalive_latest_authentication_state_source: str | None = None
+        self.keepalive_latest_reason: str | None = None
+        self.keepalive_latest_observed_at: str | None = None
         self.keepalive_final_authentication_state: str | None = None
         self.keepalive_final_reason: str | None = None
         self.keepalive_events: list[dict[str, Any]] = []
         self._keepalive_stop = threading.Event()
         self._keepalive_thread: threading.Thread | None = None
         self._keepalive_deadline_mono: float | None = None
-        self._keepalive_inspection_number = 0
         self._shutting_down = False
 
         self.diagnostics_dir = self.root / "diagnostics"
@@ -5995,6 +6011,37 @@ class ProviderRuntime:
             "maintenance_success_count": self.maintenance_success_count,
         }
 
+    def _keepalive_compatibility_authentication_state(self) -> str | None:
+        """Generic ``authentication_state``: latest while running, final after.
+
+        While a trial is running, callers must not treat this as a finalized
+        result — prefer ``keepalive_latest_*`` / ``keepalive_final_*``.
+        """
+        if self.keepalive_trial_running:
+            return self.keepalive_latest_authentication_state
+        if self.keepalive_completed_at is not None:
+            return self.keepalive_final_authentication_state
+        return self.keepalive_latest_authentication_state
+
+    def _set_keepalive_latest_observation(
+        self,
+        *,
+        authentication_state: Any,
+        authentication_state_source: Any,
+        reason: str,
+        observed_at: str | None = None,
+    ) -> None:
+        self.keepalive_latest_authentication_state = (
+            None if authentication_state is None else str(authentication_state)
+        )
+        self.keepalive_latest_authentication_state_source = (
+            None
+            if authentication_state_source is None
+            else str(authentication_state_source)
+        )
+        self.keepalive_latest_reason = str(reason)
+        self.keepalive_latest_observed_at = observed_at or iso_now()
+
     def _keepalive_fields(self) -> dict[str, Any]:
         kept_signed_in = (
             self.keepalive_final_authentication_state == "SIGNED_IN"
@@ -6016,8 +6063,18 @@ class ProviderRuntime:
             "keepalive_last_action_result": self.keepalive_last_action_result,
             "keepalive_expiration_dialog_seen": self.keepalive_expiration_dialog_seen,
             "keepalive_logged_out": self.keepalive_logged_out,
+            "keepalive_latest_authentication_state": (
+                self.keepalive_latest_authentication_state
+            ),
+            "keepalive_latest_authentication_state_source": (
+                self.keepalive_latest_authentication_state_source
+            ),
+            "keepalive_latest_reason": self.keepalive_latest_reason,
+            "keepalive_latest_observed_at": self.keepalive_latest_observed_at,
             "keepalive_final_authentication_state": self.keepalive_final_authentication_state,
             "keepalive_final_reason": self.keepalive_final_reason,
+            # Compatibility: latest while running, final after completion.
+            "authentication_state": self._keepalive_compatibility_authentication_state(),
             "keepalive_kept_signed_in": kept_signed_in if self.keepalive_completed_at else None,
             "keepalive_events": list(self.keepalive_events),
         }
@@ -6622,10 +6679,13 @@ class ProviderRuntime:
             self.keepalive_last_action_result = None
             self.keepalive_expiration_dialog_seen = False
             self.keepalive_logged_out = False
+            self.keepalive_latest_authentication_state = None
+            self.keepalive_latest_authentication_state_source = None
+            self.keepalive_latest_reason = None
+            self.keepalive_latest_observed_at = None
             self.keepalive_final_authentication_state = None
             self.keepalive_final_reason = None
             self.keepalive_events = []
-            self._keepalive_inspection_number = 0
             self._keepalive_deadline_mono = time.monotonic() + float(duration_seconds)
             self._append_keepalive_event(
                 {
@@ -6639,6 +6699,12 @@ class ProviderRuntime:
                     "login_page_detected": False,
                 }
             )
+            self._set_keepalive_latest_observation(
+                authentication_state=verification.authentication_state,
+                authentication_state_source=AUTH_STATE_SOURCE_FRESH_VERIFICATION,
+                reason="trial_started",
+                observed_at=self.keepalive_started_at,
+            )
             self._keepalive_thread = threading.Thread(
                 target=self._keepalive_trial_loop,
                 name="amex-keepalive-trial",
@@ -6646,15 +6712,10 @@ class ProviderRuntime:
             )
             self._keepalive_thread.start()
             self.write_state()
-            # Temporary developer instrumentation.
             print(
                 f"[Mighty Keepalive] trial {self.keepalive_trial_id} started "
                 f"strategy={strategy} duration={duration_seconds}s "
                 f"interval={interval_seconds}s"
-            )
-            print(
-                "[Mighty Keepalive] status object updated: trial start "
-                "(keepalive_final_authentication_state=None until finalize)"
             )
             return {
                 "ok": True,
@@ -6692,11 +6753,6 @@ class ProviderRuntime:
                 deadline = self._keepalive_deadline_mono or 0.0
                 if time.monotonic() >= deadline:
                     final_reason = "duration_completed"
-                    # Temporary developer instrumentation.
-                    print(
-                        "[Mighty Keepalive] inspections stopped: "
-                        "trial duration deadline reached"
-                    )
                     break
 
                 try:
@@ -6724,73 +6780,35 @@ class ProviderRuntime:
                         f"[Mighty Keepalive] action error ignored for auth state: "
                         f"{type(exc).__name__}"
                     )
-                    # Temporary developer instrumentation.
-                    print(
-                        "[Mighty Keepalive] status object updated: "
-                        "action_error counters/events only "
-                        "(keepalive_final_authentication_state unchanged)"
-                    )
-                    print(
-                        "[Mighty Keepalive] inspections continue after action error "
-                        f"({type(exc).__name__})"
-                    )
                     logged_out = False
 
                 if logged_out:
                     final_reason = "logged_out"
-                    # Temporary developer instrumentation.
-                    print(
-                        "[Mighty Keepalive] inspections stopped: "
-                        "tick reported logged_out"
-                    )
                     break
 
-                interval = float(self.keepalive_interval_seconds or KEEPALIVE_DEFAULT_INTERVAL_SECONDS)
-                remaining = max(0.0, (self._keepalive_deadline_mono or 0.0) - time.monotonic())
-                wait_seconds = min(interval, remaining if remaining > 0 else interval)
-                # Temporary developer instrumentation.
-                print(
-                    "[Mighty Keepalive] inspections paused: waiting on interval sleep "
-                    f"(wait_seconds={wait_seconds:.3f}, "
-                    f"interval_seconds={interval:.3f}, "
-                    f"remaining_until_deadline={remaining:.3f})"
+                interval = float(
+                    self.keepalive_interval_seconds or KEEPALIVE_DEFAULT_INTERVAL_SECONDS
                 )
-                print(
-                    "[Mighty Keepalive] status updates paused until next tick "
-                    "(keepalive_final_authentication_state remains "
-                    f"{self.keepalive_final_authentication_state!r}; "
-                    f"keepalive_trial_running={self.keepalive_trial_running})"
+                remaining = max(
+                    0.0, (self._keepalive_deadline_mono or 0.0) - time.monotonic()
                 )
-                self._keepalive_stop.wait(wait_seconds)
-                if self._keepalive_stop.is_set():
-                    # Temporary developer instrumentation.
-                    print(
-                        "[Mighty Keepalive] interval wait interrupted: "
-                        "stop event set"
-                    )
+                self._keepalive_stop.wait(
+                    min(interval, remaining if remaining > 0 else interval)
+                )
 
             if self._shutting_down:
                 final_reason = "runtime_shutdown"
-                print(
-                    "[Mighty Keepalive] inspections stopped: runtime_shutdown"
-                )
             elif self._keepalive_stop.is_set() and final_reason == "duration_completed":
                 # Stop requested before natural completion.
-                if self._keepalive_deadline_mono and time.monotonic() < self._keepalive_deadline_mono:
+                if (
+                    self._keepalive_deadline_mono
+                    and time.monotonic() < self._keepalive_deadline_mono
+                ):
                     final_reason = "manually_stopped"
-                    print(
-                        "[Mighty Keepalive] inspections stopped: manually_stopped"
-                    )
         finally:
             with self.lock:
                 if self.keepalive_trial_running:
                     self._finalize_keepalive_trial(reason=final_reason)
-                else:
-                    # Temporary developer instrumentation.
-                    print(
-                        "[Mighty Keepalive] status updates stopped: "
-                        "trial already not running in finally"
-                    )
 
     def _keepalive_tick(self) -> bool:
         """Run one inspection (+ optional action). Returns True if logged out."""
@@ -6812,18 +6830,6 @@ class ProviderRuntime:
                 latest_canonical = (
                     self.last_result.authentication_state if self.last_result else None
                 )
-                # Temporary developer instrumentation.
-                print(
-                    "[Mighty Keepalive] tick begin "
-                    f"(strategy={strategy}, "
-                    f"latest_canonical_state={latest_canonical!r}, "
-                    f"holding runtime lock=true)"
-                )
-                self._keepalive_inspection_number += 1
-                print(
-                    f"[Mighty Keepalive] inspection number={self._keepalive_inspection_number}"
-                )
-                print("[Mighty Keepalive] inspection started (pre_action)")
                 before = inspect_amex_page_signals(
                     page,
                     latest_canonical_state=latest_canonical,
@@ -6832,21 +6838,27 @@ class ProviderRuntime:
                     "inspection_authentication_state_source",
                     AUTH_STATE_SOURCE_NONE,
                 )
-                before_reason = (
-                    f"source={before_auth_source}; "
-                    f"login_page_detected={before['login_page_detected']}; "
-                    f"expiration_dialog_detected={before['expiration_dialog_detected']}"
+                before_observed_at = iso_now()
+                self._set_keepalive_latest_observation(
+                    authentication_state=before.get("authentication_state"),
+                    authentication_state_source=before_auth_source,
+                    reason=(
+                        "logged_out"
+                        if (
+                            before["login_page_detected"]
+                            or before["authentication_state"] == "SIGNED_OUT"
+                        )
+                        else "inspection"
+                    ),
+                    observed_at=before_observed_at,
                 )
-                print("[Mighty Keepalive] inspection finished (pre_action)")
-                print(f"[Mighty Keepalive] auth state={before.get('authentication_state')}")
-                print(f"[Mighty Keepalive] reason={before_reason}")
                 if before["expiration_dialog_detected"]:
                     self._note_keepalive_expiration_dialog(source="pre_action")
                 if before["login_page_detected"] or before["authentication_state"] == "SIGNED_OUT":
                     self.keepalive_logged_out = True
                     self._append_keepalive_event(
                         {
-                            "timestamp": iso_now(),
+                            "timestamp": before_observed_at,
                             "event_type": "logged_out",
                             "strategy": strategy,
                             "action_result": None,
@@ -6858,20 +6870,7 @@ class ProviderRuntime:
                         }
                     )
                     self.write_state()
-                    print(
-                        "[Mighty Keepalive] status object updated="
-                        "write_state after pre_action logged_out "
-                        "(keepalive_logged_out=True; "
-                        "keepalive_final_authentication_state still None until finalize)"
-                    )
-                    print()
                     return True
-                print(
-                    "[Mighty Keepalive] status object updated="
-                    "no final fields yet after pre_action "
-                    "(event not appended for SIGNED_IN pre_action alone)"
-                )
-                print()
 
                 action_result: KeepaliveActionResult | None = None
                 if strategy != "NONE":
@@ -6897,11 +6896,6 @@ class ProviderRuntime:
                         }
                     )
 
-                self._keepalive_inspection_number += 1
-                print(
-                    f"[Mighty Keepalive] inspection number={self._keepalive_inspection_number}"
-                )
-                print("[Mighty Keepalive] inspection started (post_action)")
                 after = inspect_amex_page_signals(
                     page,
                     latest_canonical_state=latest_canonical,
@@ -6910,19 +6904,25 @@ class ProviderRuntime:
                     "inspection_authentication_state_source",
                     AUTH_STATE_SOURCE_NONE,
                 )
-                after_reason = (
-                    f"source={after_auth_source}; "
-                    f"login_page_detected={after['login_page_detected']}; "
-                    f"expiration_dialog_detected={after['expiration_dialog_detected']}"
+                after_observed_at = iso_now()
+                self._set_keepalive_latest_observation(
+                    authentication_state=after.get("authentication_state"),
+                    authentication_state_source=after_auth_source,
+                    reason=(
+                        "logged_out"
+                        if (
+                            after["login_page_detected"]
+                            or after["authentication_state"] == "SIGNED_OUT"
+                        )
+                        else "inspection"
+                    ),
+                    observed_at=after_observed_at,
                 )
-                print("[Mighty Keepalive] inspection finished (post_action)")
-                print(f"[Mighty Keepalive] auth state={after.get('authentication_state')}")
-                print(f"[Mighty Keepalive] reason={after_reason}")
                 if after["expiration_dialog_detected"]:
                     self._note_keepalive_expiration_dialog(source="post_action")
                 self._append_keepalive_event(
                     {
-                        "timestamp": iso_now(),
+                        "timestamp": after_observed_at,
                         "event_type": "inspection",
                         "strategy": strategy,
                         "action_result": action_result.result if action_result else "skipped",
@@ -6937,7 +6937,7 @@ class ProviderRuntime:
                     self.keepalive_logged_out = True
                     self._append_keepalive_event(
                         {
-                            "timestamp": iso_now(),
+                            "timestamp": after_observed_at,
                             "event_type": "logged_out",
                             "strategy": strategy,
                             "action_result": action_result.result if action_result else None,
@@ -6949,33 +6949,13 @@ class ProviderRuntime:
                         }
                     )
                     self.write_state()
-                    print(
-                        "[Mighty Keepalive] status object updated="
-                        "write_state after post_action logged_out "
-                        "(keepalive_logged_out=True; "
-                        "keepalive_final_authentication_state still None until finalize)"
-                    )
-                    print()
                     return True
 
                 self.write_state()
-                print(
-                    "[Mighty Keepalive] status object updated="
-                    "write_state after post_action inspection event "
-                    "(keepalive_final_authentication_state still None until finalize; "
-                    f"keepalive_trial_running={self.keepalive_trial_running})"
-                )
-                print()
                 return False
 
     def _finalize_keepalive_trial(self, *, reason: str) -> None:
         """Terminalize the trial with canonical verification and persisted result."""
-        # Temporary developer instrumentation.
-        print(
-            "[Mighty Keepalive] finalize begin "
-            f"(reason={reason}; "
-            "writing keepalive_final_authentication_state via canonical verify)"
-        )
         final_state: str | None = None
         try:
             if self.cdp_url:
@@ -7025,17 +7005,6 @@ class ProviderRuntime:
         print(
             f"[Mighty Keepalive] trial {self.keepalive_trial_id} completed "
             f"reason={reason} auth={final_state}"
-        )
-        print(
-            "[Mighty Keepalive] status object updated="
-            f"finalize wrote keepalive_final_authentication_state={final_state!r}, "
-            f"keepalive_final_reason={reason!r}, keepalive_trial_running=False"
-        )
-        print(
-            "[Mighty Keepalive] inspections stopped: trial finalized"
-        )
-        print(
-            "[Mighty Keepalive] status updates stopped: trial finalized"
         )
 
     def status(self) -> dict[str, Any]:
