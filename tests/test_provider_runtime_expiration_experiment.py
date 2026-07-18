@@ -10,9 +10,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.error import URLError
 
+import pytest
+
 from mighty.provider_runtime import (
     EXPIRATION_EXPERIMENT_BOOTSTRAP_HINT,
     EXPIRATION_EXPERIMENT_SERVE_HINT,
+    KEEPALIVE_STRATEGIES,
     create_expiration_experiment_zip,
     expiration_experiment_keepalive_convergence_timeout_seconds,
     find_latest_expiration_experiment_dir,
@@ -36,12 +39,12 @@ def _verify_payload(state: str) -> dict:
     }
 
 
-def _keepalive_start_ok() -> dict:
+def _keepalive_start_ok(*, strategy: str = "NONE") -> dict:
     return {
         "ok": True,
         "trial_id": "trial-1",
         "keepalive_trial_running": True,
-        "keepalive_strategy": "NONE",
+        "keepalive_strategy": strategy,
         "keepalive_final_reason": None,
         "keepalive_logged_out": False,
         "keepalive_final_authentication_state": None,
@@ -54,6 +57,7 @@ def _keepalive_status(
     reason: str | None = "logged_out",
     auth: str | None = "SIGNED_OUT",
     latest_auth: str | None = None,
+    strategy: str = "NONE",
 ) -> dict:
     if latest_auth is None:
         latest_auth = auth if not running else "SIGNED_IN"
@@ -63,7 +67,7 @@ def _keepalive_status(
         "ok": True,
         "keepalive_trial_running": running,
         "keepalive_trial_id": "trial-1",
-        "keepalive_strategy": "NONE",
+        "keepalive_strategy": strategy,
         "keepalive_final_reason": final_reason,
         "keepalive_logged_out": (not running) and reason == "logged_out",
         "keepalive_latest_authentication_state": latest_auth,
@@ -110,6 +114,8 @@ class _FakeHttp:
         self.keepalive_stopped = threading.Event()
         self.keepalive_naturally_finished = threading.Event()
         self.keepalive_status_during_recorder: list[dict] = []
+        self.keepalive_start_payloads: list[dict] = []
+        self.keepalive_strategy = "NONE"
         self.recorder_outcome = "logged_out"
         self.recorder_raises: Exception | None = None
         self.health_raises: Exception | None = None
@@ -174,9 +180,17 @@ class _FakeHttp:
 
         if path == "/providers/amex/keepalive/start":
             assert payload is not None
-            assert payload.get("strategy") == "NONE"
+            strategy = str(payload.get("strategy") or "")
+            assert strategy in {
+                "NONE",
+                "SESSION_API",
+                "PAGE_ACTIVITY",
+                "OVERVIEW_RELOAD",
+            }
+            self.keepalive_strategy = strategy
+            self.keepalive_start_payloads.append(dict(payload))
             self.keepalive_started.set()
-            return _keepalive_start_ok()
+            return _keepalive_start_ok(strategy=strategy)
 
         if path == "/providers/amex/keepalive/status":
             if self.recorder_release.is_set() and self.recorder_raises is None:
@@ -193,6 +207,7 @@ class _FakeHttp:
                 ),
                 auth="SIGNED_OUT" if naturally_done else "SIGNED_IN",
                 latest_auth=latest,
+                strategy=self.keepalive_strategy,
             )
             if self.recorder_started.is_set() and running:
                 self.keepalive_status_during_recorder.append(status)
@@ -205,6 +220,7 @@ class _FakeHttp:
                 reason="manually_stopped",
                 auth="SIGNED_IN",
                 latest_auth="SIGNED_IN",
+                strategy=self.keepalive_strategy,
             )
 
         if path == "/providers/amex/diagnostics/browser-record-expiration":
@@ -360,16 +376,17 @@ def test_successful_orchestration_creates_zip(tmp_path: Path, capsys):
     assert (exp / "recorder" / "recording.json").is_file()
     print_expiration_experiment_result(result)
     out = capsys.readouterr().out
-    assert "Recorder:" in out
-    assert "logged_out" in out
+    assert "Strategy: NONE" in out
+    assert "Recorder outcome: logged_out" in out
     assert "Waiting for keepalive convergence..." in out
     assert "keepalive interval: 30 seconds" in out
     assert "maximum wait: 40 seconds" in out
-    assert "Keepalive:" in out
-    assert "outcome: logged_out" in out
+    assert "Keepalive outcome: logged_out" in out
+    assert "Final auth state: SIGNED_OUT" in out
     assert "Evidence ZIP:" in out
     assert str(zip_path) in out
     assert result["keepalive_completion_timeout"] is False
+    assert result["summary"]["keepalive_strategy"] == "NONE"
     assert result["summary"]["keepalive_convergence_timeout_seconds"] == 40.0
     assert result["summary"]["recorder_completed_at"]
     assert result["summary"]["keepalive_completed_at"]
@@ -596,6 +613,7 @@ def test_cli_registers_expiration_experiment_commands():
         args = parse_args()
     assert args.command == "browser-run-expiration-experiment"
     assert args.provider == "amex"
+    assert args.strategy == "NONE"
     assert args.trial_duration_seconds == 600
     assert args.keepalive_interval_seconds == 30
     assert args.recording_timeout_seconds == 900
@@ -710,8 +728,8 @@ def test_worker_completing_on_next_tick_is_captured(tmp_path: Path, capsys):
     print_expiration_experiment_result(result)
     out = capsys.readouterr().out
     assert "finished after" in out
-    assert "latest observed state: SIGNED_OUT" in out
-    assert "final state: SIGNED_OUT" in out
+    assert "Latest observed state: SIGNED_OUT" in out
+    assert "Final auth state: SIGNED_OUT" in out
 
 
 def test_worker_is_not_forcibly_awakened_during_convergence(tmp_path: Path):
@@ -897,3 +915,119 @@ def test_wait_for_keepalive_convergence_helper_timeout():
     assert result["completed_at"] is None
     assert float(result["wait_seconds"]) >= 40.0
     assert calls["n"] >= 40
+
+
+def test_default_strategy_is_none(tmp_path: Path):
+    http = _FakeHttp()
+    exp = tmp_path / "default-strategy"
+    helper = _release_recorder(http)
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        request_json_fn=http,
+        sleep_fn=lambda _s: None,
+        wait_poll_seconds=0.01,
+    )
+    helper.join(timeout=2)
+    assert http.keepalive_start_payloads
+    assert http.keepalive_start_payloads[0]["strategy"] == "NONE"
+    assert result["summary"]["keepalive_strategy"] == "NONE"
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    ["SESSION_API", "PAGE_ACTIVITY", "OVERVIEW_RELOAD"],
+)
+def test_strategy_is_accepted_and_passed_to_keepalive_start(
+    tmp_path: Path, strategy: str
+):
+    http = _FakeHttp()
+    exp = tmp_path / f"strategy-{strategy.lower()}"
+    helper = _release_recorder(http)
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        strategy=strategy,
+        request_json_fn=http,
+        sleep_fn=lambda _s: None,
+        wait_poll_seconds=0.01,
+    )
+    helper.join(timeout=2)
+    assert http.keepalive_start_payloads
+    assert http.keepalive_start_payloads[0]["strategy"] == strategy
+    assert result["summary"]["keepalive_strategy"] == strategy
+    assert ("POST", "/providers/amex/keepalive/start") in http.calls
+
+
+def test_cli_accepts_supported_strategies():
+    for strategy in KEEPALIVE_STRATEGIES:
+        with patch(
+            "sys.argv",
+            [
+                "provider_runtime.py",
+                "browser-run-expiration-experiment",
+                "amex",
+                "--strategy",
+                strategy,
+            ],
+        ):
+            args = parse_args()
+        assert args.strategy == strategy
+
+
+def test_cli_rejects_invalid_strategy(capsys):
+    with patch(
+        "sys.argv",
+        [
+            "provider_runtime.py",
+            "browser-run-expiration-experiment",
+            "amex",
+            "--strategy",
+            "NOT_A_STRATEGY",
+        ],
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            parse_args()
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "invalid choice" in err
+    assert "NOT_A_STRATEGY" in err
+
+
+def test_selected_strategy_appears_in_summary_output_and_zip(
+    tmp_path: Path, capsys
+):
+    http = _FakeHttp()
+    exp = tmp_path / "strategy-session-api-evidence"
+    helper = _release_recorder(http)
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        strategy="SESSION_API",
+        request_json_fn=http,
+        sleep_fn=lambda _s: None,
+        wait_poll_seconds=0.01,
+    )
+    helper.join(timeout=2)
+
+    summary_path = exp / "experiment-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["keepalive_strategy"] == "SESSION_API"
+    assert result["summary"]["keepalive_strategy"] == "SESSION_API"
+
+    print_expiration_experiment_result(result)
+    out = capsys.readouterr().out
+    assert "Strategy: SESSION_API" in out
+    assert "Recorder outcome:" in out
+    assert "Keepalive outcome:" in out
+    assert "Final auth state:" in out
+    assert "Evidence ZIP:" in out
+
+    zip_path = Path(result["zip_path"])
+    assert zip_path.is_file()
+    with zipfile.ZipFile(zip_path) as zf:
+        names = set(zf.namelist())
+        zipped_summary = json.loads(zf.read("experiment-summary.json"))
+    assert "experiment-summary.json" in names
+    assert "keepalive-status.json" in names
+    assert zipped_summary["keepalive_strategy"] == "SESSION_API"

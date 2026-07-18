@@ -402,8 +402,8 @@ It does **not** start or stop a keepalive trial, does not click/navigate/reload,
 does not use `page.evaluate` / `frame.evaluate`, does not invoke keepalive
 actions, and runs outside the runtime lock so keepalive inspection can continue.
 
-For the recommended one-command experiment workflow (NONE keepalive + recorder +
-evidence ZIP), see **Developer Amex expiration experiment** below. The lower-level
+For the recommended one-command experiment workflow (keepalive strategy +
+recorder + evidence ZIP), see **Developer Amex expiration experiment** below. The lower-level
 `browser-record-expiration` command remains available when you need the recorder
 alone.
 
@@ -446,7 +446,7 @@ command that:
 1. checks that `serve` is already reachable (does **not** auto-launch it);
 2. runs a fresh canonical Amex verification (`SIGNED_OUT` → bootstrap hint;
    `LOGIN_UNKNOWN` → retry up to ~10s; requires `SIGNED_IN` to continue);
-3. starts a `NONE` keepalive trial;
+3. starts a keepalive trial with the selected `--strategy` (default `NONE`);
 4. immediately starts `browser-record-expiration` concurrently (HTTP client
    orchestration; does not hold the runtime lock while waiting);
 5. waits for the recorder to finish;
@@ -456,7 +456,7 @@ command that:
    next naturally scheduled tick (the orchestrator never wakes or stops the
    trial during this wait);
 7. collects final `keepalive-status`, writes experiment metadata (including
-   recorder/keepalive timing fields), and builds one ZIP.
+   selected strategy and recorder/keepalive timing fields), and builds one ZIP.
 
 Recommended workflow:
 
@@ -467,15 +467,21 @@ PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve
 # Terminal 2 — one-time login if needed
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py bootstrap amex
 
-# Then, for each experiment:
+# Then, for each experiment (default strategy NONE):
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
   browser-run-expiration-experiment amex
+
+# Trial a keepalive strategy (e.g. SESSION_API):
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  browser-run-expiration-experiment amex \
+  --strategy SESSION_API
 ```
 
 Defaults:
 
 | Option | Default |
 | --- | --- |
+| `--strategy` | `NONE` (`NONE`, `SESSION_API`, `PAGE_ACTIVITY`, `OVERVIEW_RELOAD`) |
 | `--trial-duration-seconds` | `600` |
 | `--keepalive-interval-seconds` | `30` |
 | `--recording-timeout-seconds` | `900` |

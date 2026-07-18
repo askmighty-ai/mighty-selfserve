@@ -3037,6 +3037,7 @@ def run_amex_expiration_experiment(
     port: int = DEFAULT_PORT,
     diagnostics_dir: Path | None = None,
     output_dir: Path | None = None,
+    strategy: str = "NONE",
     trial_duration_seconds: int = DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS,
     keepalive_interval_seconds: int = (
         DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_INTERVAL_SECONDS
@@ -3063,7 +3064,7 @@ def run_amex_expiration_experiment(
         DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_POLL_SECONDS
     ),
 ) -> dict[str, Any]:
-    """Orchestrate NONE keepalive + expiration recorder into one evidence ZIP.
+    """Orchestrate keepalive + expiration recorder into one evidence ZIP.
 
     Client-side only: talks to an already-running ``serve`` over localhost HTTP.
     Does not acquire the runtime lock, does not mutate the Amex page, and does
@@ -3073,6 +3074,12 @@ def run_amex_expiration_experiment(
     finish on its natural schedule (up to interval + slack, capped) so the ZIP
     captures a consistent final state. Does not wake or stop the worker.
     """
+    selected_strategy = str(strategy or "NONE")
+    if selected_strategy not in KEEPALIVE_STRATEGIES:
+        raise ValueError(
+            f"Unsupported keepalive strategy {selected_strategy!r}. "
+            f"Expected one of {', '.join(KEEPALIVE_STRATEGIES)}"
+        )
     http = request_json_fn or request_json
     sleep = sleep_fn or time.sleep
     monotonic = monotonic_fn or time.monotonic
@@ -3160,13 +3167,13 @@ def run_amex_expiration_experiment(
     keepalive_wait_seconds = 0.0
     keepalive_completion_timeout = False
 
-    # 3) Start NONE keepalive trial (returns once the server thread is running).
+    # 3) Start keepalive trial (returns once the server thread is running).
     try:
         keepalive_start_payload = tracked_request(
             "POST",
             f"{base_url}/providers/amex/keepalive/start",
             {
-                "strategy": "NONE",
+                "strategy": selected_strategy,
                 "duration_seconds": int(trial_duration_seconds),
                 "interval_seconds": int(keepalive_interval_seconds),
             },
@@ -3179,7 +3186,10 @@ def run_amex_expiration_experiment(
             "final_authentication_state": verified.get("authentication_state"),
             "experiment_dir": str(experiment_dir),
             "zip_path": None,
-            "message": f"Failed to start NONE keepalive trial: HTTP {exc.status}",
+            "message": (
+                f"Failed to start {selected_strategy} keepalive trial: "
+                f"HTTP {exc.status}"
+            ),
             "error": exc.body or str(exc),
             "exit_code": 1,
             "http_calls": list(call_log),
@@ -3376,7 +3386,7 @@ def run_amex_expiration_experiment(
         "recorder_duration_seconds": recorder_duration_seconds,
         "experiment_duration_seconds": experiment_duration_seconds,
         "interrupted": interrupted,
-        "keepalive_strategy": "NONE",
+        "keepalive_strategy": selected_strategy,
         "trial_duration_seconds": int(trial_duration_seconds),
         "keepalive_interval_seconds": int(keepalive_interval_seconds),
         "recording_timeout_seconds": float(recording_timeout_seconds),
@@ -3454,6 +3464,7 @@ def print_expiration_experiment_result(result: dict[str, Any]) -> None:
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
     outcome = result.get("outcome")
     keepalive_outcome = result.get("keepalive_outcome")
+    strategy = summary.get("keepalive_strategy") or "NONE"
     wait_seconds = result.get("keepalive_wait_seconds")
     if wait_seconds is None:
         wait_seconds = summary.get("keepalive_wait_seconds")
@@ -3479,8 +3490,8 @@ def print_expiration_experiment_result(result: dict[str, Any]) -> None:
         final_state = result.get("final_authentication_state")
 
     print("----------------------------------------")
-    print("Recorder:")
-    print(f"    {outcome}")
+    print(f"Strategy: {strategy}")
+    print(f"Recorder outcome: {outcome}")
     if outcome == "logged_out":
         print()
         print("Waiting for keepalive convergence...")
@@ -3495,12 +3506,10 @@ def print_expiration_experiment_result(result: dict[str, Any]) -> None:
         else:
             print(f"    finished after {float(wait_seconds or 0.0):.1f} seconds")
     print()
-    print("Keepalive:")
-    print(f"    outcome: {keepalive_outcome}")
+    print(f"Keepalive outcome: {keepalive_outcome}")
     if latest_state is not None:
-        print(f"    latest observed state: {latest_state}")
-    if final_state is not None:
-        print(f"    final state: {final_state}")
+        print(f"Latest observed state: {latest_state}")
+    print(f"Final auth state: {final_state}")
     print()
     print("Creating evidence ZIP...")
     print("Done.")
@@ -7642,17 +7651,26 @@ def parse_args() -> argparse.Namespace:
     browser_run_expiration_experiment = subparsers.add_parser(
         "browser-run-expiration-experiment",
         help=(
-            "Developer-only: one-command Amex NONE keepalive + expiration "
+            "Developer-only: one-command Amex keepalive + expiration "
             "recorder, packaged into a single evidence ZIP"
         ),
     )
     browser_run_expiration_experiment.add_argument("provider", choices=("amex",))
     browser_run_expiration_experiment.add_argument(
+        "--strategy",
+        choices=KEEPALIVE_STRATEGIES,
+        default="NONE",
+        help=(
+            "Keepalive strategy passed to start_keepalive_trial "
+            f"(default: NONE; choices: {', '.join(KEEPALIVE_STRATEGIES)})"
+        ),
+    )
+    browser_run_expiration_experiment.add_argument(
         "--trial-duration-seconds",
         type=int,
         default=DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS,
         help=(
-            "NONE keepalive trial duration "
+            "Keepalive trial duration "
             f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS})"
         ),
     )
@@ -7661,7 +7679,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_INTERVAL_SECONDS,
         help=(
-            "NONE keepalive poll interval "
+            "Keepalive poll interval "
             f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_INTERVAL_SECONDS})"
         ),
     )
@@ -7917,6 +7935,7 @@ def run_client_command(args: argparse.Namespace) -> int:
             port=args.port,
             diagnostics_dir=args.root / "diagnostics",
             output_dir=output_dir,
+            strategy=str(args.strategy),
             trial_duration_seconds=int(args.trial_duration_seconds),
             keepalive_interval_seconds=int(args.keepalive_interval_seconds),
             recording_timeout_seconds=float(args.recording_timeout_seconds),
