@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import inspect
 import json
 import os
 import re
@@ -378,6 +379,106 @@ def cdp_endpoint_available(port: int, timeout: float = 1.0) -> str | None:
         return wait_for_cdp(port, timeout=timeout)
     except RuntimeError:
         return None
+
+
+CDP_ATTACH_NO_TARGETS_MESSAGE = (
+    "Unable to attach to the managed Amex browser.\n"
+    "\n"
+    "Browser websocket is alive, but there are no page targets.\n"
+    "\n"
+    "This usually indicates the managed Chrome session exited or is in an "
+    "invalid state.\n"
+    "\n"
+    "Recommended recovery:\n"
+    "1. provider_runtime.py stop\n"
+    "2. provider_runtime.py bootstrap amex\n"
+    "3. provider_runtime.py serve"
+)
+
+CDP_ATTACH_FAILED_MESSAGE = (
+    "Unable to attach to the managed Amex browser.\n"
+    "\n"
+    "Playwright could not connect over CDP to the managed Chrome session.\n"
+    "\n"
+    "This usually indicates the managed Chrome session exited or is in an "
+    "invalid state.\n"
+    "\n"
+    "Recommended recovery:\n"
+    "1. provider_runtime.py stop\n"
+    "2. provider_runtime.py bootstrap amex\n"
+    "3. provider_runtime.py serve"
+)
+
+
+def cdp_http_base_url(cdp_url: str) -> str:
+    """Normalize a CDP HTTP or websocket URL to an HTTP origin for /json/*."""
+    parts = urlsplit(cdp_url)
+    scheme = parts.scheme.lower()
+    if scheme in {"ws", "wss"}:
+        http_scheme = "https" if scheme == "wss" else "http"
+        return f"{http_scheme}://{parts.netloc}"
+    if scheme in {"http", "https"} and parts.netloc:
+        return f"{scheme}://{parts.netloc}"
+    return cdp_url.rstrip("/")
+
+
+def fetch_cdp_json(url: str, *, timeout: float = 1.0) -> Any:
+    with urlopen(url, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def playwright_supports_connect_over_cdp_no_defaults() -> bool:
+    """True when the installed Playwright sync API accepts no_defaults=True."""
+    try:
+        from playwright.sync_api._generated import BrowserType
+
+        return "no_defaults" in inspect.signature(BrowserType.connect_over_cdp).parameters
+    except Exception:
+        return False
+
+
+def ensure_cdp_page_targets_available(cdp_url: str) -> None:
+    """Raise a clear error when the browser WS is up but has no page targets.
+
+    Soft-skips when CDP HTTP diagnostics are unreachable so callers can still
+    attempt ``connect_over_cdp`` (and unit tests can mock attach without a live
+    Chrome).
+    """
+    base = cdp_http_base_url(cdp_url)
+    try:
+        version_payload = fetch_cdp_json(f"{base}/json/version")
+        targets_payload = fetch_cdp_json(f"{base}/json/list")
+    except Exception:
+        return
+
+    if not isinstance(version_payload, dict):
+        return
+    websocket_url = version_payload.get("webSocketDebuggerUrl")
+    if not websocket_url:
+        return
+    if not isinstance(targets_payload, list):
+        return
+    if len(targets_payload) == 0:
+        raise RuntimeError(CDP_ATTACH_NO_TARGETS_MESSAGE)
+
+
+def connect_chromium_over_cdp(playwright: Any, cdp_url: str) -> Browser:
+    """Attach to an externally managed Chrome over CDP with safer defaults.
+
+    Uses ``no_defaults=True`` when supported so Playwright skips applying
+    ``Browser.setDownloadBehavior`` (and related overrides) to the existing
+    persistent context. Surfaces zero-target CDP states with a recovery hint
+    instead of a raw Playwright protocol stack.
+    """
+    ensure_cdp_page_targets_available(cdp_url)
+    connect = playwright.chromium.connect_over_cdp
+    kwargs: dict[str, Any] = {}
+    if playwright_supports_connect_over_cdp_no_defaults():
+        kwargs["no_defaults"] = True
+    try:
+        return connect(cdp_url, **kwargs)
+    except Exception as exc:
+        raise RuntimeError(CDP_ATTACH_FAILED_MESSAGE) from exc
 
 
 def launch_native_chrome(
@@ -5872,7 +5973,7 @@ def verify_amex_over_cdp(cdp_url: str, result_path: Path) -> VerificationResult:
         # Attach only. Do not call browser.close() — that can terminate the
         # native Chrome process. Leaving the Playwright context disconnects
         # the client while Chrome stays alive.
-        browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+        browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
         if browser.contexts:
             context: BrowserContext = browser.contexts[0]
         else:
@@ -6278,7 +6379,7 @@ class ProviderRuntime:
         observation_only = self.keepalive_trial_running
         try:
             with sync_playwright() as playwright:
-                browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+                browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
                 if not browser.contexts:
                     raise RuntimeError("Chrome exposed no persistent browser context")
                 context = browser.contexts[0]
@@ -6370,7 +6471,7 @@ class ProviderRuntime:
                 raise RuntimeError("Provider runtime is not started")
             cdp_url = self.cdp_url
             with sync_playwright() as playwright:
-                browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+                browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
                 if not browser.contexts:
                     raise RuntimeError("Chrome exposed no persistent browser context")
                 context = browser.contexts[0]
@@ -6421,7 +6522,7 @@ class ProviderRuntime:
                 raise RuntimeError("Provider runtime is not started")
             cdp_url = self.cdp_url
             with sync_playwright() as playwright:
-                browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+                browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
                 if not browser.contexts:
                     raise RuntimeError("Chrome exposed no persistent browser context")
                 context = browser.contexts[0]
@@ -6436,7 +6537,7 @@ class ProviderRuntime:
                 raise RuntimeError("Provider runtime is not started")
             cdp_url = self.cdp_url
             with sync_playwright() as playwright:
-                browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+                browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
                 if not browser.contexts:
                     raise RuntimeError("Chrome exposed no persistent browser context")
                 context = browser.contexts[0]
@@ -6478,7 +6579,7 @@ class ProviderRuntime:
         # CDP attach + poll loop outside the runtime lock so keepalive/maintenance
         # can continue while this developer watcher runs in another terminal.
         with sync_playwright() as playwright:
-            browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+            browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
             if not browser.contexts:
                 raise RuntimeError("Chrome exposed no persistent browser context")
             context = browser.contexts[0]
@@ -6526,7 +6627,7 @@ class ProviderRuntime:
         # CDP attach + poll loop outside the runtime lock so keepalive/maintenance
         # can continue while this developer recorder runs in another terminal.
         with sync_playwright() as playwright:
-            browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+            browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
             if not browser.contexts:
                 raise RuntimeError("Chrome exposed no persistent browser context")
             context = browser.contexts[0]
@@ -6828,7 +6929,7 @@ class ProviderRuntime:
             strategy = self.keepalive_strategy or "NONE"
 
             with sync_playwright() as playwright:
-                browser: Browser = playwright.chromium.connect_over_cdp(cdp_url)
+                browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
                 if not browser.contexts:
                     raise RuntimeError("Chrome exposed no persistent browser context")
                 context = browser.contexts[0]
