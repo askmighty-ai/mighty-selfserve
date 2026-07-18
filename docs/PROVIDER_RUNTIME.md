@@ -363,41 +363,82 @@ request/response bodies, and full HTML are never stored.
 `browser-watch-text` can false-positive immediately because Amex global
 navigation permanently contains “Log Out”. `browser-record-expiration` is a
 developer-only alternative that does **not** treat dialog text as the trigger.
-It keeps a rolling in-memory window of CDP evidence and saves that window when
-canonical authentication transitions from `SIGNED_IN` to `SIGNED_OUT`.
+It keeps a rolling in-memory window of CDP browser evidence and saves that
+window when **canonical** authentication transitions from `SIGNED_IN` to
+`SIGNED_OUT`.
+
+**State channels (do not conflate them):**
+
+| Channel | Source | Used for lifecycle? |
+| --- | --- | --- |
+| Canonical | Fresh `ReadUserSession.v1` + current URL via `classify_amex` (same policy as `verify amex`, but **no navigation**) | Yes — start + completion |
+| Browser observation | Passive Inspector / DOM / AX text classification (no session API) | No — diagnostic evidence only |
+
+Browser observation may stay `LOGIN_UNKNOWN` while canonical is `SIGNED_IN`;
+that is expected and must not prevent recording. Browser `SIGNED_OUT` alone
+never completes the recorder.
+
+**Startup:**
+
+1. Run fresh canonical verification.
+2. `SIGNED_IN` → start recording.
+3. `SIGNED_OUT` → `initial_not_signed_in` (do not start).
+4. `LOGIN_UNKNOWN` → retry up to ~10s at 1s intervals; if still unknown →
+   `initial_authentication_unknown`.
+
+**Completion:** only when this run previously saw canonical `SIGNED_IN` and a
+later fresh canonical verification returns `SIGNED_OUT`. Canonical
+`LOGIN_UNKNOWN` during the run is recorded and polling continues; the last
+definitive canonical state is retained separately.
+
+**Idle-session caveat:** `ReadUserSession.v1` is also the `SESSION_API`
+keepalive action and **may refresh Amex idle timeout**. Therefore canonical
+verification defaults to every **5 seconds**, while screenshots / browser
+evidence continue at **1 second**. Do not set `--verification-interval-seconds`
+to `1` for idle-expiration experiments unless you intentionally accept that
+risk.
 
 It does **not** start or stop a keepalive trial, does not click/navigate/reload,
-does not use `page.evaluate` / `frame.evaluate`, and runs outside the runtime
-lock so keepalive inspection can continue. Intended three-terminal workflow:
+does not use `page.evaluate` / `frame.evaluate`, does not invoke keepalive
+actions, and runs outside the runtime lock so keepalive inspection can continue.
+
+Exact three-terminal live workflow:
 
 ```bash
-# Terminal 1
+# Terminal 1 — runtime (attach to already-bootstrapped Amex Chrome)
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve
 
-# Terminal 2
+# Terminal 2 — optional baseline trial (observation only; no session API)
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
   keepalive-start amex --strategy NONE \
   --duration-seconds 1800 \
   --interval-seconds 60
 
-# Terminal 3
+# Terminal 3 — confirm canonical SIGNED_IN, then record until logout
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py verify amex
+
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
   browser-record-expiration amex \
   --interval-seconds 1 \
   --timeout-seconds 900 \
   --rolling-window-seconds 90 \
-  --screenshot-every-seconds 1
+  --screenshot-every-seconds 1 \
+  --verification-interval-seconds 5
 ```
 
 Options:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--interval-seconds` | `1` | CDP poll interval |
+| `--interval-seconds` | `1` | Browser-evidence poll interval |
 | `--timeout-seconds` | `900` | Exit cleanly if logout never occurs |
 | `--rolling-window-seconds` | `90` | Retain only the trailing observation window |
 | `--screenshot-every-seconds` | `1` | Viewport PNG cadence via `Page.captureScreenshot` |
+| `--verification-interval-seconds` | `5` | Fresh canonical verification cadence (`ReadUserSession.v1`) |
 | `--output-dir` | auto under diagnostics | Optional directory for the JSON + screenshots |
+
+Documented outcomes: `logged_out`, `timeout`, `initial_not_signed_in`,
+`initial_authentication_unknown`, `fatal_error`.
 
 Default output:
 
@@ -410,12 +451,10 @@ Default output:
       ...
 ```
 
-The CLI prints the final `recording.json` path. Completion triggers only on a
-true `SIGNED_IN` → `SIGNED_OUT` transition from canonical verification logic;
-`LOGIN_UNKNOWN` and optional text matches (`expire`, `session`, `continue`,
-`stay signed in`, `still there`, `timed out`) never complete the recording.
-“Log Out” is intentionally not searched. Credentials, cookies, headers,
-request/response bodies, full HTML, and unbounded page text are never stored.
+The CLI prints the final `recording.json` path. Each observation stores both
+canonical and browser-observation auth fields. “Log Out” is intentionally not
+searched. Credentials, cookies, headers, request/response bodies, full HTML,
+and unbounded page text are never stored.
 
 ## 5. Inspect runtime status
 

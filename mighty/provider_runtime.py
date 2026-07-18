@@ -82,6 +82,7 @@ SOURCE_TYPE_SHADOW_DOM = "SHADOW_DOM"
 
 AUTH_STATE_SOURCE_LATEST_CANONICAL = "LATEST_CANONICAL"
 AUTH_STATE_SOURCE_FRESH_VERIFICATION = "FRESH_VERIFICATION"
+AUTH_STATE_SOURCE_BROWSER_OBSERVATION = "BROWSER_OBSERVATION"
 AUTH_STATE_SOURCE_NONE = "NONE"
 
 IGNORED_PAGE_URL_PREFIXES = (
@@ -2566,6 +2567,11 @@ DEFAULT_BROWSER_RECORD_INTERVAL_SECONDS = 1
 DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS = 900
 DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS = 90
 DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS = 1
+# ReadUserSession.v1 is also the SESSION_API keepalive action and may refresh
+# idle timeout. Keep canonical verification slower than browser evidence polls.
+DEFAULT_BROWSER_RECORD_VERIFICATION_INTERVAL_SECONDS = 5
+DEFAULT_BROWSER_RECORD_STARTUP_RETRY_SECONDS = 10
+DEFAULT_BROWSER_RECORD_STARTUP_RETRY_INTERVAL_SECONDS = 1
 # Observation-only search terms. Deliberately omits "Log Out" (always in nav).
 DEFAULT_BROWSER_RECORD_SEARCH_TERMS = (
     "expire",
@@ -2584,10 +2590,17 @@ BROWSER_RECORD_EXPIRATION_REQUEST_FIELDS = (
     "timeout_seconds",
     "rolling_window_seconds",
     "screenshot_every_seconds",
+    "verification_interval_seconds",
     "output_dir",
 )
 BROWSER_RECORD_DOCUMENTED_OUTCOMES = frozenset(
-    {"logged_out", "timeout", "initial_not_signed_in", "fatal_error"}
+    {
+        "logged_out",
+        "timeout",
+        "initial_not_signed_in",
+        "initial_authentication_unknown",
+        "fatal_error",
+    }
 )
 REQUEST_JSON_ERROR_BODY_MAX_CHARS = 4_000
 
@@ -2688,6 +2701,11 @@ def parse_browser_record_expiration_request(body: dict[str, Any]) -> dict[str, A
         "screenshot_every_seconds",
         float(DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS),
     )
+    verification_interval_seconds = _parse_non_negative_float_field(
+        body,
+        "verification_interval_seconds",
+        float(DEFAULT_BROWSER_RECORD_VERIFICATION_INTERVAL_SECONDS),
+    )
 
     output_raw = body.get("output_dir")
     if output_raw is not None and not isinstance(output_raw, str):
@@ -2700,6 +2718,7 @@ def parse_browser_record_expiration_request(body: dict[str, Any]) -> dict[str, A
         "timeout_seconds": timeout_seconds,
         "rolling_window_seconds": rolling_window_seconds,
         "screenshot_every_seconds": screenshot_every_seconds,
+        "verification_interval_seconds": verification_interval_seconds,
         "output_dir": output_dir,
     }
 
@@ -2727,6 +2746,13 @@ def build_browser_record_expiration_cli_payload(args: argparse.Namespace) -> dic
         "timeout_seconds": float(args.timeout_seconds),
         "rolling_window_seconds": float(args.rolling_window_seconds),
         "screenshot_every_seconds": float(args.screenshot_every_seconds),
+        "verification_interval_seconds": float(
+            getattr(
+                args,
+                "verification_interval_seconds",
+                DEFAULT_BROWSER_RECORD_VERIFICATION_INTERVAL_SECONDS,
+            )
+        ),
         "output_dir": str(output_dir) if output_dir else None,
     }
 
@@ -3963,7 +3989,10 @@ def collect_expiration_recording_observation(
         _safe_detach_cdp_session(session)
 
     body_text = " ".join(part for part in (dom_text_summary, ax_text_summary) if part)
-    state, reason = classify_amex(
+    # Browser-observation channel only. Never treat this as canonical auth:
+    # no session-API evidence is collected here, and DOM/AX markers must not
+    # drive recorder lifecycle decisions.
+    browser_state, browser_reason = classify_amex(
         final_url=page_url,
         body_text=body_text,
         session_api_statuses=[],
@@ -3992,9 +4021,11 @@ def collect_expiration_recording_observation(
 
     return {
         "observed_at": iso_now(),
-        "canonical_authentication_state": state,
-        "canonical_authentication_state_source": AUTH_STATE_SOURCE_FRESH_VERIFICATION,
-        "canonical_reason": reason,
+        "browser_observation_authentication_state": browser_state,
+        "browser_observation_authentication_state_source": (
+            AUTH_STATE_SOURCE_BROWSER_OBSERVATION
+        ),
+        "browser_observation_reason": browser_reason,
         "selected_page_url": page_url,
         "selected_page_title": page_title,
         "login_url_detected": is_login_url(page_url),
@@ -4121,29 +4152,44 @@ def record_amex_expiration_on_page(
     timeout_seconds: float = DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS,
     rolling_window_seconds: float = DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS,
     screenshot_every_seconds: float = DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS,
+    verification_interval_seconds: float = (
+        DEFAULT_BROWSER_RECORD_VERIFICATION_INTERVAL_SECONDS
+    ),
+    startup_retry_seconds: float = DEFAULT_BROWSER_RECORD_STARTUP_RETRY_SECONDS,
     output_dir: Path | None = None,
     diagnostics_dir: Path | None = None,
     search_terms: list[str] | tuple[str, ...] = DEFAULT_BROWSER_RECORD_SEARCH_TERMS,
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
     collect_fn: Any = None,
+    verify_fn: Any = None,
     inspect_fn: Any = None,
     find_text_fn: Any = None,
     screenshot_fn: Any = None,
 ) -> dict[str, Any]:
-    """Poll CDP evidence in a rolling window until SIGNED_IN→SIGNED_OUT or timeout.
+    """Poll browser evidence until canonical SIGNED_IN→SIGNED_OUT or timeout.
 
-    Developer diagnostics only: never clicks, navigates, reloads, types, or uses
-    page.evaluate / frame.evaluate. Independent of keepalive trial threads.
+    Lifecycle decisions use fresh canonical verification
+    (``verify_amex_canonical_on_page`` / same classify policy as ``verify amex``).
+    Browser Inspector / DOM/AX classification is retained only as diagnostic
+    evidence and never overwrites canonical state.
+
+    Developer diagnostics only: never clicks, navigates, reloads, types, uses
+    page.evaluate / frame.evaluate, or invokes keepalive actions. Independent of
+    keepalive trial threads.
     """
     sleep = sleep_fn or time.sleep
     monotonic = monotonic_fn or time.monotonic
     collector = collect_fn or collect_expiration_recording_observation
+    verifier = verify_fn or (lambda p: verify_amex_canonical_on_page(p))
     started_at = iso_now()
     started_mono = monotonic()
     deadline = started_mono + max(0.0, float(timeout_seconds))
     interval = max(0.0, float(interval_seconds))
     screenshot_every = max(0.0, float(screenshot_every_seconds))
+    verification_every = max(0.0, float(verification_interval_seconds))
+    startup_retry = max(0.0, float(startup_retry_seconds))
+    startup_retry_interval = float(DEFAULT_BROWSER_RECORD_STARTUP_RETRY_INTERVAL_SECONDS)
     run_errors: list[str] = []
     terms = [term for term in search_terms if _normalize_text(term)]
     if any(_normalize_text(term) == "log out" for term in terms):
@@ -4159,12 +4205,19 @@ def record_amex_expiration_on_page(
 
     window = RollingExpirationObservationWindow(rolling_window_seconds)
     saw_signed_in = False
-    initial_state: str | None = None
-    final_state: str | None = None
+    initial_canonical_state: str | None = None
+    initial_canonical_reason: str | None = None
+    final_canonical_state: str | None = None
+    final_canonical_reason: str | None = None
+    last_definitive_canonical_state: str | None = None
+    last_canonical_state: str | None = None
+    last_canonical_reason: str | None = None
     logout_detected_at: str | None = None
     outcome = "fatal_error"
     screenshot_index = 0
     last_screenshot_mono: float | None = None
+    last_verify_mono: float | None = None
+    verification_call_count = 0
     poll_count = 0
 
     def build_bundle(*, ok: bool, completed_at: str) -> dict[str, Any]:
@@ -4181,18 +4234,194 @@ def record_amex_expiration_on_page(
             "timeout_seconds": float(timeout_seconds),
             "rolling_window_seconds": float(rolling_window_seconds),
             "screenshot_every_seconds": screenshot_every,
+            "verification_interval_seconds": verification_every,
             "observation_count": len(observations),
             "first_retained_observation_at": first_at,
             "last_observation_at": last_at,
-            "initial_authentication_state": initial_state,
-            "final_authentication_state": final_state,
+            "initial_canonical_authentication_state": initial_canonical_state,
+            "initial_canonical_reason": initial_canonical_reason,
+            "final_canonical_authentication_state": final_canonical_state,
+            "final_canonical_reason": final_canonical_reason,
+            "last_definitive_canonical_authentication_state": (
+                last_definitive_canonical_state
+            ),
+            # Compatibility aliases (canonical channel).
+            "initial_authentication_state": initial_canonical_state,
+            "final_authentication_state": final_canonical_state,
             "observations": observations,
             "run_errors": list(run_errors),
             "search_terms": list(terms),
+            "verification_call_count": verification_call_count,
             "output_dir": str(out_dir),
         }
 
+    def _collect_browser_observation(
+        *,
+        screenshot_path: Path | None,
+    ) -> dict[str, Any]:
+        try:
+            observation = collector(
+                page,
+                screenshot_path=screenshot_path,
+                search_terms=terms,
+                inspect_fn=inspect_fn,
+                find_text_fn=find_text_fn,
+                screenshot_fn=screenshot_fn,
+            )
+        except TypeError:
+            observation = collector(page)
+        if not isinstance(observation, dict):
+            raise RuntimeError("collect:invalid_observation_payload")
+        return observation
+
+    def _normalize_observation_channels(
+        observation: dict[str, Any],
+        *,
+        canonical_state: str,
+        canonical_reason: str,
+        verified_this_poll: bool,
+    ) -> dict[str, Any]:
+        item = dict(observation)
+        browser_state = item.get("browser_observation_authentication_state")
+        browser_reason = item.get("browser_observation_reason")
+        browser_source = item.get("browser_observation_authentication_state_source")
+        # Compatibility: older test doubles may still populate canonical_* with
+        # browser-observation values. Prefer explicit browser_* fields.
+        if browser_state is None and item.get("canonical_authentication_state") is not None:
+            browser_state = item.get("canonical_authentication_state")
+            browser_reason = item.get("canonical_reason")
+            browser_source = AUTH_STATE_SOURCE_BROWSER_OBSERVATION
+        item["browser_observation_authentication_state"] = str(
+            browser_state or "LOGIN_UNKNOWN"
+        )
+        item["browser_observation_authentication_state_source"] = str(
+            browser_source or AUTH_STATE_SOURCE_BROWSER_OBSERVATION
+        )
+        item["browser_observation_reason"] = (
+            None if browser_reason is None else str(browser_reason)
+        )
+        item["canonical_authentication_state"] = canonical_state
+        item["canonical_authentication_state_source"] = (
+            AUTH_STATE_SOURCE_FRESH_VERIFICATION
+        )
+        item["canonical_reason"] = canonical_reason
+        item["canonical_verified_this_poll"] = bool(verified_this_poll)
+        return item
+
+    def _run_canonical_verify() -> VerificationResult:
+        nonlocal verification_call_count, last_canonical_state, last_canonical_reason
+        nonlocal last_definitive_canonical_state, final_canonical_state
+        nonlocal final_canonical_reason, last_verify_mono
+        verification_call_count += 1
+        result = _coerce_verification_result(verifier(page))
+        last_canonical_state = str(result.authentication_state or "LOGIN_UNKNOWN")
+        last_canonical_reason = str(result.reason or "")
+        final_canonical_state = last_canonical_state
+        final_canonical_reason = last_canonical_reason
+        if last_canonical_state in {"SIGNED_IN", "SIGNED_OUT"}:
+            last_definitive_canonical_state = last_canonical_state
+        if result.runtime_error:
+            run_errors.append(
+                f"verify:{result.runtime_error}"
+            )
+        last_verify_mono = monotonic()
+        return result
+
     try:
+        # --- Startup: require fresh canonical SIGNED_IN before recording. ---
+        startup_deadline = started_mono + startup_retry
+        while True:
+            verification = _run_canonical_verify()
+            state = str(verification.authentication_state or "LOGIN_UNKNOWN")
+            reason = str(verification.reason or "")
+            if initial_canonical_state is None:
+                initial_canonical_state = state
+                initial_canonical_reason = reason
+            else:
+                initial_canonical_state = state
+                initial_canonical_reason = reason
+
+            if state == "SIGNED_IN":
+                saw_signed_in = True
+                break
+            if state == "SIGNED_OUT":
+                outcome = "initial_not_signed_in"
+                try:
+                    browser_obs = _collect_browser_observation(screenshot_path=None)
+                except Exception as exc:
+                    run_errors.append(f"collect:{type(exc).__name__}: {exc}")
+                    browser_obs = {
+                        "observed_at": iso_now(),
+                        "browser_observation_authentication_state": "LOGIN_UNKNOWN",
+                        "browser_observation_authentication_state_source": (
+                            AUTH_STATE_SOURCE_BROWSER_OBSERVATION
+                        ),
+                        "browser_observation_reason": f"collect_failed: {exc}",
+                        "collection_errors": [str(exc)],
+                    }
+                observation = _normalize_observation_channels(
+                    browser_obs,
+                    canonical_state=state,
+                    canonical_reason=reason,
+                    verified_this_poll=True,
+                )
+                window.add(mono_at=monotonic(), observation=observation)
+                run_errors.append(
+                    f"initial_canonical_authentication_state_was_{state}; "
+                    "recorder requires SIGNED_IN to start"
+                )
+                if reason:
+                    run_errors.append(f"initial_canonical_reason: {reason}")
+                bundle = build_bundle(ok=False, completed_at=iso_now())
+                recording_path = _write_expiration_recording_bundle(
+                    output_dir=out_dir,
+                    bundle=bundle,
+                )
+                bundle["recording_json"] = str(recording_path)
+                return bundle
+
+            # LOGIN_UNKNOWN: bounded startup retries.
+            now_mono = monotonic()
+            if now_mono >= startup_deadline:
+                outcome = "initial_authentication_unknown"
+                try:
+                    browser_obs = _collect_browser_observation(screenshot_path=None)
+                except Exception as exc:
+                    run_errors.append(f"collect:{type(exc).__name__}: {exc}")
+                    browser_obs = {
+                        "observed_at": iso_now(),
+                        "browser_observation_authentication_state": "LOGIN_UNKNOWN",
+                        "browser_observation_authentication_state_source": (
+                            AUTH_STATE_SOURCE_BROWSER_OBSERVATION
+                        ),
+                        "browser_observation_reason": f"collect_failed: {exc}",
+                        "collection_errors": [str(exc)],
+                    }
+                observation = _normalize_observation_channels(
+                    browser_obs,
+                    canonical_state=state,
+                    canonical_reason=reason,
+                    verified_this_poll=True,
+                )
+                window.add(mono_at=now_mono, observation=observation)
+                run_errors.append(
+                    "initial_canonical_authentication_state_remained_LOGIN_UNKNOWN "
+                    f"after {startup_retry:g}s startup retry window"
+                )
+                if reason:
+                    run_errors.append(f"initial_canonical_reason: {reason}")
+                bundle = build_bundle(ok=False, completed_at=iso_now())
+                recording_path = _write_expiration_recording_bundle(
+                    output_dir=out_dir,
+                    bundle=bundle,
+                )
+                bundle["recording_json"] = str(recording_path)
+                return bundle
+
+            remaining_startup = startup_deadline - now_mono
+            sleep(min(startup_retry_interval, max(0.0, remaining_startup)))
+
+        # --- Rolling recording loop. ---
         while True:
             poll_count += 1
             now_mono = monotonic()
@@ -4204,6 +4433,14 @@ def record_amex_expiration_on_page(
             elif (now_mono - last_screenshot_mono) >= screenshot_every:
                 take_screenshot = True
 
+            run_verify = False
+            if last_verify_mono is None:
+                run_verify = True
+            elif verification_every == 0:
+                run_verify = True
+            elif (now_mono - last_verify_mono) >= verification_every:
+                run_verify = True
+
             screenshot_path: Path | None = None
             if take_screenshot:
                 screenshot_index += 1
@@ -4211,42 +4448,9 @@ def record_amex_expiration_on_page(
                 screenshot_path = screenshots_dir / f"{screenshot_index:04d}-{stamp}.png"
 
             try:
-                observation = collector(
-                    page,
-                    screenshot_path=screenshot_path,
-                    search_terms=terms,
-                    inspect_fn=inspect_fn,
-                    find_text_fn=find_text_fn,
-                    screenshot_fn=screenshot_fn,
-                )
-            except TypeError:
-                # Allow simple test doubles that only accept the page.
-                try:
-                    observation = collector(page)
-                except Exception as exc:
-                    run_errors.append(f"collect:{type(exc).__name__}: {exc}")
-                    outcome = "fatal_error"
-                    bundle = build_bundle(ok=False, completed_at=iso_now())
-                    recording_path = _write_expiration_recording_bundle(
-                        output_dir=out_dir,
-                        bundle=bundle,
-                    )
-                    bundle["recording_json"] = str(recording_path)
-                    return bundle
+                browser_obs = _collect_browser_observation(screenshot_path=screenshot_path)
             except Exception as exc:
                 run_errors.append(f"collect:{type(exc).__name__}: {exc}")
-                outcome = "fatal_error"
-                bundle = build_bundle(ok=False, completed_at=iso_now())
-                bundle["run_errors"] = list(run_errors)
-                recording_path = _write_expiration_recording_bundle(
-                    output_dir=out_dir,
-                    bundle=bundle,
-                )
-                bundle["recording_json"] = str(recording_path)
-                return bundle
-
-            if not isinstance(observation, dict):
-                run_errors.append("collect:invalid_observation_payload")
                 outcome = "fatal_error"
                 bundle = build_bundle(ok=False, completed_at=iso_now())
                 recording_path = _write_expiration_recording_bundle(
@@ -4257,48 +4461,51 @@ def record_amex_expiration_on_page(
                 return bundle
 
             # Injected collectors may omit screenshot scheduling; honor path when present.
-            if take_screenshot and observation.get("screenshot_path"):
+            if take_screenshot and browser_obs.get("screenshot_path"):
                 last_screenshot_mono = now_mono
-            elif take_screenshot and screenshot_path is not None and Path(screenshot_path).is_file():
+            elif (
+                take_screenshot
+                and screenshot_path is not None
+                and Path(screenshot_path).is_file()
+            ):
                 last_screenshot_mono = now_mono
-                observation["screenshot_path"] = str(screenshot_path)
-            elif take_screenshot and not observation.get("screenshot_path"):
-                # Screenshot failed; do not advance schedule so the next eligible poll retries.
-                observation["screenshot_path"] = None
+                browser_obs["screenshot_path"] = str(screenshot_path)
+            elif take_screenshot and not browser_obs.get("screenshot_path"):
+                browser_obs["screenshot_path"] = None
 
-            state = str(observation.get("canonical_authentication_state") or "LOGIN_UNKNOWN")
-            final_state = state
-            if initial_state is None:
-                initial_state = state
-                if state != "SIGNED_IN":
-                    outcome = "initial_not_signed_in"
-                    window.add(mono_at=now_mono, observation=observation)
-                    run_errors.append(
-                        f"initial_authentication_state_was_{state}; "
-                        "recorder requires SIGNED_IN to start"
-                    )
-                    bundle = build_bundle(ok=False, completed_at=iso_now())
+            verified_this_poll = False
+            if run_verify:
+                verification = _run_canonical_verify()
+                verified_this_poll = True
+                state = str(verification.authentication_state or "LOGIN_UNKNOWN")
+                reason = str(verification.reason or "")
+            else:
+                state = str(last_canonical_state or "LOGIN_UNKNOWN")
+                reason = str(last_canonical_reason or "")
+
+            observation = _normalize_observation_channels(
+                browser_obs,
+                canonical_state=state,
+                canonical_reason=reason,
+                verified_this_poll=verified_this_poll,
+            )
+            window.add(mono_at=now_mono, observation=observation)
+
+            # Completion decisions only on a fresh canonical verification tick.
+            if verified_this_poll:
+                if state == "SIGNED_IN":
+                    saw_signed_in = True
+                elif state == "SIGNED_OUT" and saw_signed_in:
+                    logout_detected_at = str(observation.get("observed_at") or iso_now())
+                    outcome = "logged_out"
+                    bundle = build_bundle(ok=True, completed_at=iso_now())
                     recording_path = _write_expiration_recording_bundle(
                         output_dir=out_dir,
                         bundle=bundle,
                     )
                     bundle["recording_json"] = str(recording_path)
                     return bundle
-
-            window.add(mono_at=now_mono, observation=observation)
-
-            if state == "SIGNED_IN":
-                saw_signed_in = True
-            elif state == "SIGNED_OUT" and saw_signed_in:
-                logout_detected_at = str(observation.get("observed_at") or iso_now())
-                outcome = "logged_out"
-                bundle = build_bundle(ok=True, completed_at=iso_now())
-                recording_path = _write_expiration_recording_bundle(
-                    output_dir=out_dir,
-                    bundle=bundle,
-                )
-                bundle["recording_json"] = str(recording_path)
-                return bundle
+                # LOGIN_UNKNOWN: record and continue; retain last definitive.
 
             now_mono = monotonic()
             if now_mono >= deadline:
@@ -4337,12 +4544,16 @@ def record_amex_expiration_in_browser_context(
     timeout_seconds: float = DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS,
     rolling_window_seconds: float = DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS,
     screenshot_every_seconds: float = DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS,
+    verification_interval_seconds: float = (
+        DEFAULT_BROWSER_RECORD_VERIFICATION_INTERVAL_SECONDS
+    ),
     output_dir: Path | None = None,
     diagnostics_dir: Path | None = None,
     search_terms: list[str] | tuple[str, ...] = DEFAULT_BROWSER_RECORD_SEARCH_TERMS,
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
     collect_fn: Any = None,
+    verify_fn: Any = None,
     inspect_fn: Any = None,
     find_text_fn: Any = None,
     screenshot_fn: Any = None,
@@ -4370,9 +4581,15 @@ def record_amex_expiration_in_browser_context(
             "timeout_seconds": float(timeout_seconds),
             "rolling_window_seconds": float(rolling_window_seconds),
             "screenshot_every_seconds": float(screenshot_every_seconds),
+            "verification_interval_seconds": float(verification_interval_seconds),
             "observation_count": 0,
             "first_retained_observation_at": None,
             "last_observation_at": None,
+            "initial_canonical_authentication_state": None,
+            "initial_canonical_reason": None,
+            "final_canonical_authentication_state": None,
+            "final_canonical_reason": None,
+            "last_definitive_canonical_authentication_state": None,
             "initial_authentication_state": None,
             "final_authentication_state": None,
             "observations": [],
@@ -4393,12 +4610,14 @@ def record_amex_expiration_in_browser_context(
         timeout_seconds=timeout_seconds,
         rolling_window_seconds=rolling_window_seconds,
         screenshot_every_seconds=screenshot_every_seconds,
+        verification_interval_seconds=verification_interval_seconds,
         output_dir=out_dir,
         diagnostics_dir=diagnostics_dir,
         search_terms=search_terms,
         sleep_fn=sleep_fn,
         monotonic_fn=monotonic_fn,
         collect_fn=collect_fn,
+        verify_fn=verify_fn,
         inspect_fn=inspect_fn,
         find_text_fn=find_text_fn,
         screenshot_fn=screenshot_fn,
@@ -4763,6 +4982,122 @@ def sanitize_keepalive_event(event: dict[str, Any]) -> dict[str, Any]:
             value = value[:240]
         cleaned[key] = value
     return cleaned
+
+
+def verify_amex_canonical_on_page(
+    page: Page,
+    *,
+    result_path: Path | None = None,
+    request_fn: Any = None,
+) -> VerificationResult:
+    """Fresh canonical Amex verification without navigation or page mutation.
+
+    Uses the same classify_amex policy as ``verify_amex_over_cdp``, but obtains
+    session-API evidence via a credentialed ``ReadUserSession.v1`` request
+    through the browser context APIRequestContext (no ``page.goto``, no
+    ``page.evaluate``, no clicks/reloads). DOM markers are intentionally not
+    used to infer ``SIGNED_IN`` on this path.
+
+    Important: ``ReadUserSession.v1`` is also the ``SESSION_API`` keepalive
+    action and may count as session activity / refresh idle timeout. The
+    expiration recorder therefore throttles this call via
+    ``verification_interval_seconds`` (default 5s) while continuing 1s browser
+    evidence polls.
+    """
+    runtime_error: str | None = None
+    session_api_statuses: list[int] = []
+    final_url = sanitize_url(getattr(page, "url", None))
+    title: str | None = None
+    # Empty on purpose: do not infer SIGNED_IN from DOM/AX markers here.
+    body_text = ""
+
+    try:
+        title = page.title()
+    except Exception:
+        pass
+
+    try:
+        if request_fn is not None:
+            status = request_fn(page)
+            if status is not None:
+                session_api_statuses.append(int(status))
+        else:
+            response = page.context.request.get(
+                AMEX_READ_USER_SESSION_URL,
+                headers={"Accept": "application/json"},
+                max_redirects=0,
+                timeout=15_000,
+            )
+            session_api_statuses.append(int(response.status))
+    except Exception as exc:
+        runtime_error = f"session_api_error: {type(exc).__name__}: {exc}"
+
+    state, reason = classify_amex(
+        final_url=final_url,
+        body_text=body_text,
+        session_api_statuses=session_api_statuses,
+        runtime_error=runtime_error,
+    )
+    result = VerificationResult(
+        provider="amex",
+        authentication_state=state,
+        reason=reason,
+        observed_at=iso_now(),
+        final_url=final_url,
+        page_title=title,
+        login_url_detected=is_login_url(final_url),
+        login_marker_count=0,
+        authenticated_marker_count=0,
+        session_api_200_count=sum(1 for status in session_api_statuses if status == 200),
+        session_api_denied_count=sum(
+            1 for status in session_api_statuses if status in {401, 403}
+        ),
+        runtime_error=runtime_error,
+    )
+    if result_path is not None:
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps(asdict(result), indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return result
+
+
+def _coerce_verification_result(raw: Any) -> VerificationResult:
+    """Normalize verify_fn return values used by the expiration recorder."""
+    if isinstance(raw, VerificationResult):
+        return raw
+    if isinstance(raw, dict):
+        state = str(raw.get("authentication_state") or "LOGIN_UNKNOWN")
+        return VerificationResult(
+            provider=str(raw.get("provider") or "amex"),
+            authentication_state=state,
+            reason=str(raw.get("reason") or ""),
+            observed_at=str(raw.get("observed_at") or iso_now()),
+            final_url=raw.get("final_url"),
+            page_title=raw.get("page_title"),
+            login_url_detected=bool(raw.get("login_url_detected")),
+            login_marker_count=int(raw.get("login_marker_count") or 0),
+            authenticated_marker_count=int(raw.get("authenticated_marker_count") or 0),
+            session_api_200_count=int(raw.get("session_api_200_count") or 0),
+            session_api_denied_count=int(raw.get("session_api_denied_count") or 0),
+            runtime_error=raw.get("runtime_error"),
+        )
+    state = str(raw or "LOGIN_UNKNOWN")
+    return VerificationResult(
+        provider="amex",
+        authentication_state=state,
+        reason=f"test_double:{state}",
+        observed_at=iso_now(),
+        final_url=None,
+        page_title=None,
+        login_url_detected=state == "SIGNED_OUT",
+        login_marker_count=0,
+        authenticated_marker_count=0,
+        session_api_200_count=1 if state == "SIGNED_IN" else 0,
+        session_api_denied_count=1 if state == "SIGNED_OUT" else 0,
+        runtime_error=None,
+    )
 
 
 def verify_amex_over_cdp(cdp_url: str, result_path: Path) -> VerificationResult:
@@ -5362,12 +5697,17 @@ class ProviderRuntime:
         timeout_seconds: float = DEFAULT_BROWSER_RECORD_TIMEOUT_SECONDS,
         rolling_window_seconds: float = DEFAULT_BROWSER_RECORD_ROLLING_WINDOW_SECONDS,
         screenshot_every_seconds: float = DEFAULT_BROWSER_RECORD_SCREENSHOT_EVERY_SECONDS,
+        verification_interval_seconds: float = (
+            DEFAULT_BROWSER_RECORD_VERIFICATION_INTERVAL_SECONDS
+        ),
         output_dir: Path | None = None,
     ) -> dict[str, Any]:
         """Developer-only rolling recorder for Amex SIGNED_IN→SIGNED_OUT evidence.
 
-        Runs independently of the keepalive trial thread: does not start a trial,
-        does not hold the runtime lock across polls, and never mutates the page.
+        Lifecycle uses fresh canonical verification (session API / login URL).
+        Browser observation is diagnostic only. Runs independently of the
+        keepalive trial thread: does not start a trial, does not hold the
+        runtime lock across polls, and never mutates the page.
         """
         if provider != "amex":
             raise ValueError(f"Unsupported provider: {provider}")
@@ -5391,6 +5731,7 @@ class ProviderRuntime:
                 timeout_seconds=timeout_seconds,
                 rolling_window_seconds=rolling_window_seconds,
                 screenshot_every_seconds=screenshot_every_seconds,
+                verification_interval_seconds=verification_interval_seconds,
                 output_dir=output_dir,
                 diagnostics_dir=diagnostics_dir,
             )
@@ -6076,6 +6417,9 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                     timeout_seconds=parsed["timeout_seconds"],
                     rolling_window_seconds=parsed["rolling_window_seconds"],
                     screenshot_every_seconds=parsed["screenshot_every_seconds"],
+                    verification_interval_seconds=parsed[
+                        "verification_interval_seconds"
+                    ],
                     output_dir=parsed["output_dir"],
                 )
                 status = browser_record_expiration_http_status(payload)
@@ -6430,6 +6774,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     browser_record_expiration.add_argument(
+        "--verification-interval-seconds",
+        type=float,
+        default=DEFAULT_BROWSER_RECORD_VERIFICATION_INTERVAL_SECONDS,
+        help=(
+            "Fresh canonical verification cadence for SIGNED_IN→SIGNED_OUT "
+            "detection. Uses ReadUserSession.v1 (may count as session activity); "
+            "keep slower than screenshot/browser evidence polls "
+            f"(default: {DEFAULT_BROWSER_RECORD_VERIFICATION_INTERVAL_SECONDS})"
+        ),
+    )
+    browser_record_expiration.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -6610,7 +6965,12 @@ def run_client_command(args: argparse.Namespace) -> int:
         else:
             print(json.dumps(payload, indent=2))
         outcome = payload.get("outcome")
-        if outcome in {"logged_out", "timeout", "initial_not_signed_in"}:
+        if outcome in {
+            "logged_out",
+            "timeout",
+            "initial_not_signed_in",
+            "initial_authentication_unknown",
+        }:
             return 0
         return 0 if payload.get("ok") else 1
     if args.command == "inspect-expiration-dialog":
