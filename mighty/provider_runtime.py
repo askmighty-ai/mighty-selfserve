@@ -2617,6 +2617,8 @@ DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS = 90
 DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS = 1
 DEFAULT_EXPIRATION_EXPERIMENT_VERIFY_RETRY_SECONDS = 10
 DEFAULT_EXPIRATION_EXPERIMENT_VERIFY_RETRY_INTERVAL_SECONDS = 1
+DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_TIMEOUT_SECONDS = 15
+DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_POLL_SECONDS = 1
 EXPIRATION_EXPERIMENT_DIR_PREFIX = "amex-expiration-experiment-"
 EXPIRATION_EXPERIMENT_SERVE_HINT = (
     "Start the Provider Runtime with: "
@@ -2872,6 +2874,63 @@ def _keepalive_outcome_from_status(status: dict[str, Any] | None) -> str:
     return "unknown"
 
 
+def wait_for_keepalive_convergence(
+    *,
+    base_url: str,
+    request_json_fn: Any,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    timeout_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_TIMEOUT_SECONDS
+    ),
+    poll_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_POLL_SECONDS
+    ),
+) -> dict[str, Any]:
+    """Poll keepalive-status until the trial stops or the timeout elapses.
+
+    Used after the expiration recorder reports ``logged_out`` so the ZIP captures
+    a converged keepalive status instead of a still-running race.
+    """
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    started = monotonic()
+    deadline = started + max(0.0, float(timeout_seconds))
+    poll = max(0.0, float(poll_seconds))
+    last_status: dict[str, Any] | None = None
+    while True:
+        try:
+            last_status = request_json_fn(
+                "GET",
+                f"{base_url}/providers/amex/keepalive/status",
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_status = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "keepalive_trial_running": True,
+            }
+        running = bool(
+            isinstance(last_status, dict) and last_status.get("keepalive_trial_running")
+        )
+        now = monotonic()
+        if not running:
+            return {
+                "status": last_status,
+                "timed_out": False,
+                "wait_seconds": max(0.0, now - started),
+                "completed_at": iso_now(),
+            }
+        if now >= deadline:
+            return {
+                "status": last_status,
+                "timed_out": True,
+                "wait_seconds": max(0.0, now - started),
+                "completed_at": None,
+            }
+        sleep(min(poll, max(0.0, deadline - now)))
+
+
 def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -2982,12 +3041,21 @@ def run_amex_expiration_experiment(
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
     wait_poll_seconds: float = 0.2,
+    keepalive_convergence_timeout_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_TIMEOUT_SECONDS
+    ),
+    keepalive_convergence_poll_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_POLL_SECONDS
+    ),
 ) -> dict[str, Any]:
     """Orchestrate NONE keepalive + expiration recorder into one evidence ZIP.
 
     Client-side only: talks to an already-running ``serve`` over localhost HTTP.
     Does not acquire the runtime lock, does not mutate the Amex page, and does
     not start/stop ``serve`` or kill Chrome.
+
+    After the recorder reports ``logged_out``, waits briefly for the keepalive
+    trial to converge so the ZIP captures a consistent final state.
     """
     http = request_json_fn or request_json
     sleep = sleep_fn or time.sleep
@@ -2995,6 +3063,7 @@ def run_amex_expiration_experiment(
     base_url = _expiration_experiment_base_url(host, port)
     diagnostics = Path(diagnostics_dir) if diagnostics_dir else DEFAULT_DIAGNOSTICS_DIR
     started_at = iso_now()
+    experiment_started_mono = monotonic()
     call_log: list[str] = []
 
     def tracked_request(method: str, url: str, payload: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -3058,6 +3127,12 @@ def run_amex_expiration_experiment(
     interrupted = False
     recorder_error: str | None = None
     outcome = "fatal_error"
+    recorder_started_mono: float | None = None
+    recorder_completed_at: str | None = None
+    recorder_duration_seconds: float | None = None
+    keepalive_completed_at: str | None = None
+    keepalive_wait_seconds = 0.0
+    keepalive_completion_timeout = False
 
     # 3) Start NONE keepalive trial (returns once the server thread is running).
     try:
@@ -3134,6 +3209,7 @@ def run_amex_expiration_experiment(
         name="amex-expiration-experiment-recorder",
         daemon=True,
     )
+    recorder_started_mono = monotonic()
     recorder_thread.start()
     try:
         while not recorder_done.wait(timeout=max(0.05, float(wait_poll_seconds))):
@@ -3141,6 +3217,11 @@ def run_amex_expiration_experiment(
             _ = monotonic()
     except KeyboardInterrupt:
         interrupted = True
+
+    recorder_completed_at = iso_now()
+    recorder_finished_mono = monotonic()
+    if recorder_started_mono is not None:
+        recorder_duration_seconds = max(0.0, recorder_finished_mono - recorder_started_mono)
 
     if recorder_holder["payload"] is not None:
         recorder_payload = recorder_holder["payload"]
@@ -3152,18 +3233,38 @@ def run_amex_expiration_experiment(
     if interrupted:
         outcome = "interrupted"
 
-    # 5) Collect keepalive status (+ bounded runtime diagnostics). Stop trial
-    #    only when still running after recorder finished/failed/interrupted.
-    try:
-        keepalive_status_payload = tracked_request(
-            "GET",
-            f"{base_url}/providers/amex/keepalive/status",
+    # 5) After logged_out, wait for keepalive to converge before packaging.
+    #    Other outcomes collect status immediately (no indefinite hang).
+    if outcome == "logged_out" and not interrupted:
+        convergence = wait_for_keepalive_convergence(
+            base_url=base_url,
+            request_json_fn=tracked_request,
+            sleep_fn=sleep,
+            monotonic_fn=monotonic,
+            timeout_seconds=float(keepalive_convergence_timeout_seconds),
+            poll_seconds=float(keepalive_convergence_poll_seconds),
         )
-    except Exception as exc:  # noqa: BLE001
-        keepalive_status_payload = {
-            "ok": False,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+        keepalive_status_payload = convergence.get("status")
+        keepalive_wait_seconds = float(convergence.get("wait_seconds") or 0.0)
+        keepalive_completion_timeout = bool(convergence.get("timed_out"))
+        keepalive_completed_at = convergence.get("completed_at")
+    else:
+        try:
+            keepalive_status_payload = tracked_request(
+                "GET",
+                f"{base_url}/providers/amex/keepalive/status",
+            )
+        except Exception as exc:  # noqa: BLE001
+            keepalive_status_payload = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        if isinstance(keepalive_status_payload, dict) and not keepalive_status_payload.get(
+            "keepalive_trial_running"
+        ):
+            keepalive_completed_at = (
+                keepalive_status_payload.get("keepalive_completed_at") or iso_now()
+            )
 
     try:
         runtime_status_payload = tracked_request("GET", f"{base_url}/status")
@@ -3194,6 +3295,12 @@ def run_amex_expiration_experiment(
                 "GET",
                 f"{base_url}/providers/amex/keepalive/status",
             )
+            if isinstance(keepalive_status_payload, dict) and not keepalive_status_payload.get(
+                "keepalive_trial_running"
+            ):
+                keepalive_completed_at = (
+                    keepalive_status_payload.get("keepalive_completed_at") or iso_now()
+                )
         except Exception:
             pass
 
@@ -3222,6 +3329,7 @@ def run_amex_expiration_experiment(
 
     keepalive_outcome = _keepalive_outcome_from_status(keepalive_status_payload)
     completed_at = iso_now()
+    experiment_duration_seconds = max(0.0, monotonic() - experiment_started_mono)
     summary = {
         "provider": "amex",
         "outcome": outcome,
@@ -3229,6 +3337,12 @@ def run_amex_expiration_experiment(
         "final_authentication_state": final_auth,
         "started_at": started_at,
         "completed_at": completed_at,
+        "recorder_completed_at": recorder_completed_at,
+        "keepalive_completed_at": keepalive_completed_at,
+        "keepalive_wait_seconds": keepalive_wait_seconds,
+        "keepalive_completion_timeout": keepalive_completion_timeout,
+        "recorder_duration_seconds": recorder_duration_seconds,
+        "experiment_duration_seconds": experiment_duration_seconds,
         "interrupted": interrupted,
         "keepalive_strategy": "NONE",
         "trial_duration_seconds": int(trial_duration_seconds),
@@ -3282,6 +3396,12 @@ def run_amex_expiration_experiment(
         "summary": summary,
         "recorder": recorder_payload,
         "keepalive_status": keepalive_status_payload,
+        "recorder_completed_at": recorder_completed_at,
+        "keepalive_completed_at": keepalive_completed_at,
+        "keepalive_wait_seconds": keepalive_wait_seconds,
+        "keepalive_completion_timeout": keepalive_completion_timeout,
+        "recorder_duration_seconds": recorder_duration_seconds,
+        "experiment_duration_seconds": experiment_duration_seconds,
         "exit_code": exit_code,
         "http_calls": list(call_log),
         "message": None,
@@ -3294,9 +3414,39 @@ def print_expiration_experiment_result(result: dict[str, Any]) -> None:
     if message and result.get("zip_path") is None:
         print(str(message), file=sys.stderr)
         return
-    print(f"Experiment outcome: {result.get('outcome')}")
-    print(f"Keepalive outcome: {result.get('keepalive_outcome')}")
-    print(f"Final auth state: {result.get('final_authentication_state')}")
+
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    outcome = result.get("outcome")
+    keepalive_outcome = result.get("keepalive_outcome")
+    wait_seconds = result.get("keepalive_wait_seconds")
+    if wait_seconds is None:
+        wait_seconds = summary.get("keepalive_wait_seconds")
+    timed_out = result.get("keepalive_completion_timeout")
+    if timed_out is None:
+        timed_out = summary.get("keepalive_completion_timeout")
+
+    print("----------------------------------------")
+    print("Recorder:")
+    print(f"    {outcome}")
+    if outcome == "logged_out" and not result.get("interrupted"):
+        print()
+        print("Waiting for keepalive convergence...")
+        if timed_out:
+            timeout_s = (
+                summary.get("keepalive_wait_seconds")
+                if wait_seconds is None
+                else wait_seconds
+            )
+            print(f"    timed out after {float(timeout_s or 15):.1f} seconds")
+        else:
+            print(f"    finished after {float(wait_seconds or 0.0):.1f} seconds")
+    print()
+    print("Keepalive:")
+    print(f"    {keepalive_outcome}")
+    print()
+    print("Creating evidence ZIP...")
+    print("Done.")
+    print()
     print("Evidence ZIP:")
     print(str(result.get("zip_path") or ""))
 

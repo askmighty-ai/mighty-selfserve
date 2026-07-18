@@ -20,6 +20,7 @@ from mighty.provider_runtime import (
     print_expiration_experiment_result,
     run_amex_expiration_experiment,
     verify_amex_signed_in_for_experiment,
+    wait_for_keepalive_convergence,
 )
 
 
@@ -95,15 +96,34 @@ class _FakeHttp:
         self.recorder_started = threading.Event()
         self.keepalive_started = threading.Event()
         self.keepalive_stopped = threading.Event()
+        self.keepalive_naturally_finished = threading.Event()
         self.keepalive_status_during_recorder: list[dict] = []
         self.recorder_outcome = "logged_out"
         self.recorder_raises: Exception | None = None
         self.health_raises: Exception | None = None
         self.lock_probe: MagicMock | None = None
         self._verify_index = 0
+        # After recorder release, converge on this many post-recorder status polls.
+        # 1 = first post-recorder status already finished (immediate convergence).
+        self.keepalive_converge_after_status_polls = 1
+        self.keepalive_never_converge = False
+        self._post_recorder_status_polls = 0
 
     def _keepalive_running(self) -> bool:
+        if self.keepalive_naturally_finished.is_set():
+            return False
         return self.keepalive_started.is_set() and not self.keepalive_stopped.is_set()
+
+    def _maybe_converge_keepalive(self) -> None:
+        if self.keepalive_never_converge:
+            return
+        if not self.recorder_release.is_set() or self.recorder_raises is not None:
+            return
+        if self.keepalive_stopped.is_set() or self.keepalive_naturally_finished.is_set():
+            return
+        self._post_recorder_status_polls += 1
+        if self._post_recorder_status_polls >= self.keepalive_converge_after_status_polls:
+            self.keepalive_naturally_finished.set()
 
     def __call__(
         self,
@@ -147,17 +167,20 @@ class _FakeHttp:
             return _keepalive_start_ok()
 
         if path == "/providers/amex/keepalive/status":
-            finished = self.recorder_release.is_set() and self.recorder_raises is None
+            if self.recorder_release.is_set() and self.recorder_raises is None:
+                self._maybe_converge_keepalive()
+            running = self._keepalive_running()
+            naturally_done = self.keepalive_naturally_finished.is_set()
             status = _keepalive_status(
-                running=self._keepalive_running(),
+                running=running,
                 reason=(
                     "manually_stopped"
                     if self.keepalive_stopped.is_set()
-                    else ("logged_out" if finished else None)
+                    else ("logged_out" if naturally_done else None)
                 ),
-                auth="SIGNED_OUT" if finished else "SIGNED_IN",
+                auth="SIGNED_OUT" if naturally_done else "SIGNED_IN",
             )
-            if self.recorder_started.is_set() and self._keepalive_running():
+            if self.recorder_started.is_set() and running:
                 self.keepalive_status_during_recorder.append(status)
             return status
 
@@ -182,6 +205,16 @@ class _FakeHttp:
             )
 
         raise AssertionError(f"unexpected request {method} {path}")
+
+
+def _release_recorder(http: _FakeHttp) -> threading.Thread:
+    def release_when_ready() -> None:
+        assert http.recorder_block.wait(timeout=2)
+        http.recorder_release.set()
+
+    helper = threading.Thread(target=release_when_ready, daemon=True)
+    helper.start()
+    return helper
 
 
 def test_runtime_unavailable(tmp_path: Path, capsys):
@@ -308,9 +341,17 @@ def test_successful_orchestration_creates_zip(tmp_path: Path, capsys):
     assert (exp / "recorder" / "recording.json").is_file()
     print_expiration_experiment_result(result)
     out = capsys.readouterr().out
-    assert "Experiment outcome: logged_out" in out
+    assert "Recorder:" in out
+    assert "logged_out" in out
+    assert "Waiting for keepalive convergence..." in out
+    assert "Keepalive:" in out
     assert "Evidence ZIP:" in out
     assert str(zip_path) in out
+    assert result["keepalive_completion_timeout"] is False
+    assert result["summary"]["recorder_completed_at"]
+    assert result["summary"]["keepalive_completed_at"]
+    assert result["summary"]["recorder_duration_seconds"] is not None
+    assert result["summary"]["experiment_duration_seconds"] is not None
 
 
 def test_keepalive_and_recorder_start_concurrently(tmp_path: Path):
@@ -562,3 +603,223 @@ def test_login_unknown_retry_then_fails_before_keepalive(tmp_path: Path):
     assert result["outcome"] == "initial_authentication_unknown"
     assert ("POST", "/providers/amex/keepalive/start") not in http.calls
     assert result["zip_path"] is None
+
+
+def test_recorder_logs_out_immediately_waits_for_keepalive(tmp_path: Path):
+    http = _FakeHttp()
+    http.keepalive_converge_after_status_polls = 1
+    exp = tmp_path / "immediate-logout"
+    helper = _release_recorder(http)
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        request_json_fn=http,
+        sleep_fn=lambda _s: None,
+        wait_poll_seconds=0.01,
+        keepalive_convergence_poll_seconds=1,
+    )
+    helper.join(timeout=2)
+    assert result["outcome"] == "logged_out"
+    assert result["keepalive_outcome"] == "logged_out"
+    assert result["keepalive_completion_timeout"] is False
+    assert result["keepalive_completed_at"] is not None
+    assert http.keepalive_naturally_finished.is_set()
+
+
+def test_keepalive_finishes_within_wait_window(tmp_path: Path, capsys):
+    http = _FakeHttp()
+    # Finish on the 4th post-recorder status poll → ~3s with 1s poll spacing.
+    http.keepalive_converge_after_status_polls = 4
+    exp = tmp_path / "converge-window"
+    clock = {"t": 0.0}
+    helper = _release_recorder(http)
+
+    def sleep(seconds: float) -> None:
+        clock["t"] += float(seconds)
+
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        request_json_fn=http,
+        sleep_fn=sleep,
+        monotonic_fn=lambda: clock["t"],
+        wait_poll_seconds=0.01,
+        keepalive_convergence_timeout_seconds=15,
+        keepalive_convergence_poll_seconds=1,
+    )
+    helper.join(timeout=2)
+    assert result["outcome"] == "logged_out"
+    assert result["keepalive_outcome"] == "logged_out"
+    assert result["keepalive_completion_timeout"] is False
+    wait_seconds = float(result["keepalive_wait_seconds"])
+    assert 2.9 <= wait_seconds <= 3.2
+    print_expiration_experiment_result(result)
+    out = capsys.readouterr().out
+    assert "finished after 3.0 seconds" in out
+    # Expose measured wait for the run report.
+    result["_measured_keepalive_wait_seconds"] = wait_seconds
+
+
+def test_keepalive_timeout_after_15_seconds(tmp_path: Path, capsys):
+    http = _FakeHttp()
+    http.keepalive_never_converge = True
+    exp = tmp_path / "keepalive-timeout"
+    clock = {"t": 0.0}
+    helper = _release_recorder(http)
+
+    def sleep(seconds: float) -> None:
+        clock["t"] += float(seconds)
+
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        request_json_fn=http,
+        sleep_fn=sleep,
+        monotonic_fn=lambda: clock["t"],
+        wait_poll_seconds=0.01,
+        keepalive_convergence_timeout_seconds=15,
+        keepalive_convergence_poll_seconds=1,
+    )
+    helper.join(timeout=2)
+    assert result["outcome"] == "logged_out"
+    assert result["keepalive_outcome"] == "still_running"
+    assert result["keepalive_completion_timeout"] is True
+    assert result["keepalive_completed_at"] is None
+    assert float(result["keepalive_wait_seconds"]) >= 15.0
+    saved = json.loads((exp / "keepalive-status.json").read_text(encoding="utf-8"))
+    assert saved["keepalive_trial_running"] is True
+    summary = json.loads((exp / "experiment-summary.json").read_text(encoding="utf-8"))
+    assert summary["keepalive_completion_timeout"] is True
+    print_expiration_experiment_result(result)
+    out = capsys.readouterr().out
+    assert "timed out after 15.0 seconds" in out
+    assert "still_running" in out
+
+
+def test_final_zip_contains_converged_keepalive_status(tmp_path: Path):
+    http = _FakeHttp()
+    http.keepalive_converge_after_status_polls = 2
+    exp = tmp_path / "zip-converged"
+    clock = {"t": 0.0}
+    helper = _release_recorder(http)
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        request_json_fn=http,
+        sleep_fn=lambda s: clock.__setitem__("t", clock["t"] + float(s)),
+        monotonic_fn=lambda: clock["t"],
+        wait_poll_seconds=0.01,
+        keepalive_convergence_poll_seconds=1,
+    )
+    helper.join(timeout=2)
+    assert result["keepalive_outcome"] == "logged_out"
+    with zipfile.ZipFile(result["zip_path"]) as zf:
+        status = json.loads(zf.read("keepalive-status.json"))
+        summary = json.loads(zf.read("experiment-summary.json"))
+    assert status["keepalive_trial_running"] is False
+    assert status["keepalive_final_reason"] == "logged_out"
+    assert summary["keepalive_outcome"] == "logged_out"
+    assert summary["keepalive_completion_timeout"] is False
+
+
+def test_summary_timestamps_are_populated(tmp_path: Path):
+    http = _FakeHttp()
+    exp = tmp_path / "timestamps"
+    helper = _release_recorder(http)
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        request_json_fn=http,
+        sleep_fn=lambda _s: None,
+        wait_poll_seconds=0.01,
+    )
+    helper.join(timeout=2)
+    summary = json.loads((exp / "experiment-summary.json").read_text(encoding="utf-8"))
+    for key in (
+        "recorder_completed_at",
+        "keepalive_completed_at",
+        "keepalive_wait_seconds",
+        "keepalive_completion_timeout",
+        "recorder_duration_seconds",
+        "experiment_duration_seconds",
+        "started_at",
+        "completed_at",
+    ):
+        assert key in summary
+        assert summary[key] is not None or key == "keepalive_completion_timeout"
+    assert summary["keepalive_completion_timeout"] is False
+    assert isinstance(summary["keepalive_wait_seconds"], (int, float))
+    assert isinstance(summary["recorder_duration_seconds"], (int, float))
+    assert isinstance(summary["experiment_duration_seconds"], (int, float))
+    assert result["summary"]["recorder_completed_at"] == summary["recorder_completed_at"]
+
+
+def test_recorder_outcome_timeout_skips_keepalive_wait(tmp_path: Path):
+    http = _FakeHttp()
+    http.recorder_outcome = "timeout"
+    http.keepalive_never_converge = True
+    exp = tmp_path / "recorder-timeout"
+    clock = {"t": 0.0}
+    helper = _release_recorder(http)
+
+    def sleep(seconds: float) -> None:
+        clock["t"] += float(seconds)
+
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        output_dir=exp,
+        request_json_fn=http,
+        sleep_fn=sleep,
+        monotonic_fn=lambda: clock["t"],
+        wait_poll_seconds=0.01,
+        keepalive_convergence_timeout_seconds=15,
+        keepalive_convergence_poll_seconds=1,
+    )
+    helper.join(timeout=2)
+    assert result["outcome"] == "timeout"
+    assert result["keepalive_completion_timeout"] is False
+    assert float(result["keepalive_wait_seconds"]) == 0.0
+    assert result["keepalive_completed_at"] is None
+    # Must not burn the 15s convergence budget when recorder times out.
+    assert clock["t"] < 2.0
+    status_calls = [
+        call for call in http.calls if call == ("GET", "/providers/amex/keepalive/status")
+    ]
+    assert len(status_calls) == 1
+
+
+def test_recorder_initial_not_signed_in_skips_wait(tmp_path: Path):
+    # initial_not_signed_in is a pre-trial verify failure; no keepalive/recorder.
+    http = _FakeHttp()
+    http.verify_states = ["SIGNED_OUT"]
+    result = run_amex_expiration_experiment(
+        diagnostics_dir=tmp_path,
+        request_json_fn=http,
+        sleep_fn=lambda _s: None,
+    )
+    assert result["outcome"] == "initial_not_signed_in"
+    assert result["zip_path"] is None
+    assert ("POST", "/providers/amex/keepalive/start") not in http.calls
+    assert ("GET", "/providers/amex/keepalive/status") not in http.calls
+
+
+def test_wait_for_keepalive_convergence_helper_timeout():
+    calls = {"n": 0}
+    clock = {"t": 0.0}
+
+    def request_json(method: str, url: str, payload=None, **kwargs):  # noqa: ANN001
+        calls["n"] += 1
+        return _keepalive_status(running=True, reason=None, auth="SIGNED_IN")
+
+    result = wait_for_keepalive_convergence(
+        base_url="http://127.0.0.1:8765",
+        request_json_fn=request_json,
+        sleep_fn=lambda s: clock.__setitem__("t", clock["t"] + float(s)),
+        monotonic_fn=lambda: clock["t"],
+        timeout_seconds=15,
+        poll_seconds=1,
+    )
+    assert result["timed_out"] is True
+    assert result["completed_at"] is None
+    assert float(result["wait_seconds"]) >= 15.0
+    assert calls["n"] >= 15

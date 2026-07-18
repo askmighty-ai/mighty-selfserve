@@ -450,7 +450,11 @@ command that:
 4. immediately starts `browser-record-expiration` concurrently (HTTP client
    orchestration; does not hold the runtime lock while waiting);
 5. waits for the recorder to finish;
-6. collects `keepalive-status`, writes experiment metadata, and builds one ZIP.
+6. if the recorder outcome is `logged_out`, polls `keepalive-status` once per
+   second (up to 15s) until the keepalive trial stops, so the ZIP captures a
+   converged keepalive state rather than a still-running race;
+7. collects final `keepalive-status`, writes experiment metadata (including
+   recorder/keepalive timing fields), and builds one ZIP.
 
 Recommended workflow:
 
