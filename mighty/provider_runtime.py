@@ -19,6 +19,7 @@ Commands:
     python scripts/provider_runtime.py browser-watch-text amex
     python scripts/provider_runtime.py browser-record-expiration amex
     python scripts/provider_runtime.py browser-run-expiration-experiment amex
+    python scripts/provider_runtime.py browser-run-expiration-campaign amex
     python scripts/provider_runtime.py browser-open-latest-expiration-experiment amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
 
@@ -38,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import inspect
 import json
 import os
@@ -2722,6 +2724,32 @@ DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_SLACK_SECONDS = 10
 DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_MAX_SECONDS = 60
 DEFAULT_EXPIRATION_EXPERIMENT_KEEPALIVE_CONVERGENCE_POLL_SECONDS = 1
 EXPIRATION_EXPERIMENT_DIR_PREFIX = "amex-expiration-experiment-"
+EXPIRATION_CAMPAIGN_DIR_PREFIX = "amex-expiration-campaign-"
+EXPIRATION_CAMPAIGN_MANIFEST_FILENAME = "campaign-manifest.json"
+EXPIRATION_CAMPAIGN_SUMMARY_JSON = "campaign-summary.json"
+EXPIRATION_CAMPAIGN_SUMMARY_CSV = "campaign-summary.csv"
+EXPIRATION_CAMPAIGN_REPORT_MD = "campaign-report.md"
+EXPIRATION_CAMPAIGN_TRIAL_SUMMARY_FIELDS = (
+    "trial_number",
+    "strategy",
+    "keepalive_interval_seconds",
+    "started_at",
+    "completed_at",
+    "duration_seconds",
+    "recorder_outcome",
+    "keepalive_outcome",
+    "initial_authentication_state",
+    "final_authentication_state",
+    "idle_warning_detected",
+    "idle_warning_first_observed_at",
+    "logged_out",
+    "logout_observed_at",
+    "warning_to_logout_seconds",
+    "keepalive_wait_seconds",
+    "keepalive_completion_timeout",
+    "error",
+    "evidence_directory",
+)
 
 
 def expiration_experiment_keepalive_convergence_timeout_seconds(
@@ -3617,6 +3645,1009 @@ def print_expiration_experiment_result(result: dict[str, Any]) -> None:
     print()
     print("Evidence ZIP:")
     print(str(result.get("zip_path") or ""))
+
+
+def parse_expiration_campaign_trial_spec(spec: str) -> dict[str, Any]:
+    """Parse ``STRATEGY:KEEPALIVE_INTERVAL_SECONDS`` into a validated trial dict."""
+    raw = str(spec or "").strip()
+    if ":" not in raw:
+        raise ValueError(
+            f"Invalid trial specification {raw!r}. Expected STRATEGY:INTERVAL "
+            f"(e.g. NONE:30). Strategies: {', '.join(KEEPALIVE_STRATEGIES)}"
+        )
+    strategy_raw, interval_raw = raw.split(":", 1)
+    strategy = strategy_raw.strip().upper()
+    if strategy not in KEEPALIVE_STRATEGIES:
+        raise ValueError(
+            f"Unsupported keepalive strategy {strategy_raw.strip()!r}. "
+            f"Expected one of {', '.join(KEEPALIVE_STRATEGIES)}"
+        )
+    interval_text = interval_raw.strip()
+    if not interval_text or not re.fullmatch(r"[0-9]+", interval_text):
+        raise ValueError(
+            f"Invalid keepalive interval {interval_raw!r} in trial {raw!r}. "
+            "Expected a positive integer number of seconds."
+        )
+    interval_seconds = int(interval_text)
+    if interval_seconds <= 0:
+        raise ValueError(
+            f"Invalid keepalive interval {interval_seconds} in trial {raw!r}. "
+            "Expected a positive integer number of seconds."
+        )
+    return {
+        "strategy": strategy,
+        "keepalive_interval_seconds": interval_seconds,
+        "spec": f"{strategy}:{interval_seconds}",
+    }
+
+
+def parse_expiration_campaign_trial_specs(
+    specs: list[str] | tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Validate all campaign trial specs before any trial starts."""
+    if not specs:
+        raise ValueError("At least one --trial STRATEGY:INTERVAL is required")
+    return [parse_expiration_campaign_trial_spec(spec) for spec in specs]
+
+
+def expiration_campaign_trial_dirname(
+    trial_number: int,
+    strategy: str,
+    keepalive_interval_seconds: int,
+) -> str:
+    """Stable per-trial directory name, e.g. ``001-none-30s``."""
+    slug = str(strategy).lower().replace("_", "-")
+    return f"{int(trial_number):03d}-{slug}-{int(keepalive_interval_seconds)}s"
+
+
+def default_expiration_campaign_dir(
+    diagnostics_dir: Path | None = None,
+    *,
+    when: datetime | None = None,
+) -> Path:
+    """Default ``~/.mighty/provider_runtime/diagnostics/amex-expiration-campaign-<UTC>/``."""
+    stamp = (when or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    base = diagnostics_dir or DEFAULT_DIAGNOSTICS_DIR
+    return base / f"{EXPIRATION_CAMPAIGN_DIR_PREFIX}{stamp}"
+
+
+def create_expiration_campaign_zip(campaign_dir: Path) -> Path:
+    """Zip campaign summaries + trial evidence (excluding the zip itself)."""
+    campaign_dir = Path(campaign_dir)
+    zip_path = campaign_dir / f"{campaign_dir.name}.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(campaign_dir.rglob("*")):
+            if not path.is_file() or path == zip_path:
+                continue
+            # Nested experiment ZIPs are evidence; include them. Exclude only
+            # the campaign-level archive being written.
+            archive.write(path, arcname=str(path.relative_to(campaign_dir)))
+    return zip_path.resolve()
+
+
+def _expiration_campaign_auth_pause_message(trial_number: int) -> str:
+    return (
+        f"Authentication required for trial {int(trial_number)}.\n"
+        "\n"
+        "Sign in in the managed Amex window and complete MFA.\n"
+        "Press Enter when the overview page is visible.\n"
+        "\n"
+        "If a clean browser restart is required:\n"
+        "PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py stop\n"
+        "PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py bootstrap amex\n"
+        "PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve\n"
+    )
+
+
+def _is_managed_browser_target_error(error: Any) -> bool:
+    text = str(error or "")
+    markers = (
+        "no page targets",
+        "Unable to attach to the managed Amex browser",
+        "Browser websocket is alive, but there are no page targets",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _parse_iso_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _observation_idle_warning_at(observation: dict[str, Any]) -> str | None:
+    """Return observation timestamp when structured idle-warning evidence is present."""
+    observed_at = observation.get("observed_at")
+    inspector = observation.get("browser_inspector")
+    if isinstance(inspector, dict):
+        for candidate in inspector.get("candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            conditions = classify_amex_expiration_candidate(candidate)
+            if conditions.get("classified_as_expiration_dialog"):
+                return str(observed_at) if observed_at else None
+            # Soft structured signal: expiration language + Continue action.
+            if (
+                conditions.get("expiration_language_match")
+                and conditions.get("continue_action_match")
+            ):
+                return str(observed_at) if observed_at else None
+
+    searches = observation.get("optional_text_searches")
+    if isinstance(searches, list):
+        matched_terms = {
+            str(item.get("term") or "").lower()
+            for item in searches
+            if isinstance(item, dict) and int(item.get("match_count") or 0) > 0
+        }
+        if "expire" in matched_terms and "continue" in matched_terms:
+            return str(observed_at) if observed_at else None
+    return None
+
+
+def derive_expiration_campaign_trial_metrics(
+    *,
+    experiment_result: dict[str, Any] | None,
+    experiment_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Derive warning/logout timing from recorder + keepalive structured evidence."""
+    recorder: dict[str, Any] = {}
+    if isinstance(experiment_result, dict):
+        if isinstance(experiment_result.get("recorder"), dict):
+            recorder = experiment_result["recorder"]
+        summary = experiment_result.get("summary")
+        if not recorder and isinstance(summary, dict):
+            recorder_dir = summary.get("recorder_dir")
+            if recorder_dir:
+                recording_path = Path(str(recorder_dir)) / "recording.json"
+                if recording_path.is_file():
+                    try:
+                        loaded = json.loads(recording_path.read_text(encoding="utf-8"))
+                        if isinstance(loaded, dict):
+                            recorder = loaded
+                    except (OSError, json.JSONDecodeError):
+                        pass
+    if not recorder and experiment_dir is not None:
+        recording_path = Path(experiment_dir) / "recorder" / "recording.json"
+        if recording_path.is_file():
+            try:
+                loaded = json.loads(recording_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    recorder = loaded
+            except (OSError, json.JSONDecodeError):
+                pass
+
+    keepalive_status: dict[str, Any] = {}
+    if isinstance(experiment_result, dict) and isinstance(
+        experiment_result.get("keepalive_status"), dict
+    ):
+        keepalive_status = experiment_result["keepalive_status"]
+    elif experiment_dir is not None:
+        status_path = Path(experiment_dir) / "keepalive-status.json"
+        if status_path.is_file():
+            try:
+                loaded = json.loads(status_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    keepalive_status = loaded
+            except (OSError, json.JSONDecodeError):
+                pass
+
+    idle_warning_detected = False
+    idle_warning_first_observed_at: str | None = None
+
+    events = keepalive_status.get("keepalive_events")
+    if isinstance(events, list):
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if event.get("event_type") == "expiration_dialog" or event.get(
+                "expiration_dialog_detected"
+            ):
+                idle_warning_detected = True
+                idle_warning_first_observed_at = (
+                    event.get("observed_at")
+                    or event.get("at")
+                    or event.get("timestamp")
+                )
+                if idle_warning_first_observed_at is not None:
+                    idle_warning_first_observed_at = str(idle_warning_first_observed_at)
+                break
+    if not idle_warning_detected and keepalive_status.get(
+        "keepalive_expiration_dialog_seen"
+    ):
+        idle_warning_detected = True
+
+    if not idle_warning_detected:
+        for observation in recorder.get("observations") or []:
+            if not isinstance(observation, dict):
+                continue
+            warning_at = _observation_idle_warning_at(observation)
+            if warning_at is not None:
+                idle_warning_detected = True
+                idle_warning_first_observed_at = warning_at
+                break
+
+    logout_observed_at = recorder.get("logout_detected_at")
+    if logout_observed_at is not None:
+        logout_observed_at = str(logout_observed_at)
+    recorder_outcome = recorder.get("outcome")
+    if isinstance(experiment_result, dict) and recorder_outcome is None:
+        recorder_outcome = experiment_result.get("outcome")
+    logged_out = bool(
+        recorder_outcome == "logged_out"
+        or logout_observed_at
+        or keepalive_status.get("keepalive_logged_out")
+    )
+    if logged_out and logout_observed_at is None and isinstance(experiment_result, dict):
+        summary = experiment_result.get("summary")
+        if isinstance(summary, dict):
+            logout_observed_at = summary.get("recorder_completed_at") or summary.get(
+                "completed_at"
+            )
+            if logout_observed_at is not None:
+                logout_observed_at = str(logout_observed_at)
+
+    warning_to_logout_seconds: float | None = None
+    if idle_warning_first_observed_at and logout_observed_at:
+        start = _parse_iso_timestamp(idle_warning_first_observed_at)
+        end = _parse_iso_timestamp(logout_observed_at)
+        if start is not None and end is not None:
+            warning_to_logout_seconds = max(0.0, (end - start).total_seconds())
+
+    initial_authentication_state = recorder.get(
+        "initial_canonical_authentication_state"
+    ) or recorder.get("initial_authentication_state")
+    final_authentication_state = recorder.get(
+        "final_canonical_authentication_state"
+    ) or recorder.get("final_authentication_state")
+    if isinstance(experiment_result, dict):
+        if final_authentication_state is None:
+            final_authentication_state = experiment_result.get(
+                "final_authentication_state"
+            )
+        summary = experiment_result.get("summary")
+        if isinstance(summary, dict) and final_authentication_state is None:
+            final_authentication_state = summary.get("final_authentication_state")
+
+    return {
+        "idle_warning_detected": idle_warning_detected,
+        "idle_warning_first_observed_at": idle_warning_first_observed_at,
+        "logged_out": logged_out,
+        "logout_observed_at": logout_observed_at,
+        "warning_to_logout_seconds": warning_to_logout_seconds,
+        "initial_authentication_state": initial_authentication_state,
+        "final_authentication_state": final_authentication_state,
+        "recorder_outcome": recorder_outcome,
+    }
+
+
+def _load_campaign_manifest(campaign_dir: Path) -> dict[str, Any]:
+    path = Path(campaign_dir) / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME
+    if not path.is_file():
+        return {"trials": []}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"trials": []}
+    if not isinstance(payload, dict):
+        return {"trials": []}
+    if not isinstance(payload.get("trials"), list):
+        payload["trials"] = []
+    return payload
+
+
+def _trial_completed_in_manifest(
+    manifest: dict[str, Any],
+    *,
+    strategy: str,
+    keepalive_interval_seconds: int,
+) -> bool:
+    for item in manifest.get("trials") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("strategy") or "") != strategy:
+            continue
+        if int(item.get("keepalive_interval_seconds") or -1) != int(
+            keepalive_interval_seconds
+        ):
+            continue
+        if str(item.get("status") or "") == "completed":
+            return True
+    return False
+
+
+def _completed_trial_summary_from_manifest(
+    manifest: dict[str, Any],
+    *,
+    strategy: str,
+    keepalive_interval_seconds: int,
+    trial_number: int,
+) -> dict[str, Any] | None:
+    for item in manifest.get("trials") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("strategy") or "") != strategy:
+            continue
+        if int(item.get("keepalive_interval_seconds") or -1) != int(
+            keepalive_interval_seconds
+        ):
+            continue
+        if str(item.get("status") or "") != "completed":
+            continue
+        summary = dict(item)
+        summary["trial_number"] = int(trial_number)
+        return summary
+    return None
+
+
+def write_expiration_campaign_summary_files(
+    campaign_dir: Path,
+    *,
+    campaign_name: str | None,
+    started_at: str,
+    completed_at: str,
+    interrupted: bool,
+    trial_summaries: list[dict[str, Any]],
+    zip_path: str | None = None,
+) -> dict[str, Any]:
+    """Write campaign JSON/CSV/Markdown summary artifacts."""
+    campaign_dir = Path(campaign_dir)
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "provider": "amex",
+        "campaign_name": campaign_name,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "interrupted": interrupted,
+        "trial_count": len(trial_summaries),
+        "trials": trial_summaries,
+        "campaign_dir": str(campaign_dir),
+        "zip_path": zip_path,
+    }
+    _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_SUMMARY_JSON, summary)
+
+    csv_path = campaign_dir / EXPIRATION_CAMPAIGN_SUMMARY_CSV
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=list(EXPIRATION_CAMPAIGN_TRIAL_SUMMARY_FIELDS),
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        for row in trial_summaries:
+            writer.writerow(
+                {key: row.get(key) for key in EXPIRATION_CAMPAIGN_TRIAL_SUMMARY_FIELDS}
+            )
+
+    lines = [
+        f"# Amex expiration campaign{f': {campaign_name}' if campaign_name else ''}",
+        "",
+        f"- Started: `{started_at}`",
+        f"- Completed: `{completed_at}`",
+        f"- Interrupted: `{interrupted}`",
+        f"- Trials: `{len(trial_summaries)}`",
+        "",
+        "| # | Strategy | Interval | Recorder | Keepalive | Idle warning | Logged out | Error |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in trial_summaries:
+        lines.append(
+            "| "
+            f"{row.get('trial_number')} | "
+            f"{row.get('strategy')} | "
+            f"{row.get('keepalive_interval_seconds')} | "
+            f"{row.get('recorder_outcome')} | "
+            f"{row.get('keepalive_outcome')} | "
+            f"{row.get('idle_warning_detected')} | "
+            f"{row.get('logged_out')} | "
+            f"{row.get('error') or ''} |"
+        )
+    lines.extend(["", "## Evidence directories", ""])
+    for row in trial_summaries:
+        lines.append(
+            f"- Trial {row.get('trial_number')}: `{row.get('evidence_directory')}`"
+        )
+    if zip_path:
+        lines.extend(["", f"Campaign ZIP: `{zip_path}`", ""])
+    else:
+        lines.append("")
+    (campaign_dir / EXPIRATION_CAMPAIGN_REPORT_MD).write_text(
+        "\n".join(lines),
+        encoding="utf-8",
+    )
+    return summary
+
+
+def print_expiration_campaign_result(result: dict[str, Any]) -> None:
+    """Print only the campaign result and final ZIP path."""
+    message = result.get("message")
+    if message and result.get("zip_path") is None:
+        print(str(message), file=sys.stderr)
+        return
+    campaign_name = result.get("campaign_name")
+    trial_summaries = result.get("trial_summaries") or []
+    completed = sum(
+        1
+        for row in trial_summaries
+        if isinstance(row, dict) and row.get("error") is None and not row.get("skipped")
+    )
+    skipped = sum(
+        1 for row in trial_summaries if isinstance(row, dict) and row.get("skipped")
+    )
+    failed = sum(
+        1 for row in trial_summaries if isinstance(row, dict) and row.get("error")
+    )
+    outcome = result.get("outcome") or ("interrupted" if result.get("interrupted") else "completed")
+    print("----------------------------------------")
+    if campaign_name:
+        print(f"Campaign: {campaign_name}")
+    print(f"Outcome: {outcome}")
+    print(
+        f"Trials: {len(trial_summaries)} "
+        f"(completed={completed}, failed={failed}, skipped={skipped})"
+    )
+    print()
+    print("Evidence ZIP:")
+    print(str(result.get("zip_path") or ""))
+
+
+def ensure_expiration_campaign_signed_in(
+    *,
+    trial_number: int,
+    base_url: str,
+    request_json_fn: Any,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    input_fn: Any = None,
+    print_fn: Any = None,
+) -> dict[str, Any]:
+    """Fresh canonical verify; pause for operator login when required."""
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    read_input = input_fn or input
+    emit = print_fn or print
+
+    def _verify() -> dict[str, Any]:
+        try:
+            return verify_amex_signed_in_for_experiment(
+                base_url=base_url,
+                request_json_fn=request_json_fn,
+                sleep_fn=sleep,
+                monotonic_fn=monotonic,
+            )
+        except ProviderRuntimeHTTPError as exc:
+            if _is_managed_browser_target_error(exc.body) or _is_managed_browser_target_error(
+                exc
+            ):
+                return {
+                    "ok": False,
+                    "authentication_state": "LOGIN_UNKNOWN",
+                    "outcome": "managed_browser_unavailable",
+                    "message": str(exc.body or exc),
+                    "verify_payload": {"ok": False, "error": str(exc.body or exc)},
+                }
+            raise
+        except (URLError, TimeoutError, OSError, ConnectionError) as exc:
+            if _is_managed_browser_target_error(exc):
+                return {
+                    "ok": False,
+                    "authentication_state": "LOGIN_UNKNOWN",
+                    "outcome": "managed_browser_unavailable",
+                    "message": str(exc),
+                    "verify_payload": None,
+                }
+            raise
+
+    verified = _verify()
+    if verified.get("ok"):
+        return {
+            "ok": True,
+            "authentication_state": verified.get("authentication_state"),
+            "paused": False,
+            "verify_payload": verified.get("verify_payload"),
+        }
+
+    needs_pause = verified.get("authentication_state") == "SIGNED_OUT" or verified.get(
+        "outcome"
+    ) in {
+        "initial_not_signed_in",
+        "managed_browser_unavailable",
+        "initial_authentication_unknown",
+    }
+    if not needs_pause:
+        return {
+            "ok": False,
+            "authentication_state": verified.get("authentication_state"),
+            "paused": False,
+            "outcome": verified.get("outcome") or "initial_not_signed_in",
+            "message": verified.get("message"),
+            "verify_payload": verified.get("verify_payload"),
+        }
+
+    emit(_expiration_campaign_auth_pause_message(trial_number))
+    read_input()
+    reverified = _verify()
+    if reverified.get("ok"):
+        return {
+            "ok": True,
+            "authentication_state": reverified.get("authentication_state"),
+            "paused": True,
+            "verify_payload": reverified.get("verify_payload"),
+        }
+    return {
+        "ok": False,
+        "authentication_state": reverified.get("authentication_state"),
+        "paused": True,
+        "outcome": "authentication_reverify_failed",
+        "message": (
+            reverified.get("message")
+            or "Amex was not SIGNED_IN after authentication confirmation."
+        ),
+        "verify_payload": reverified.get("verify_payload"),
+    }
+
+
+def run_amex_expiration_campaign(
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    diagnostics_dir: Path | None = None,
+    output_dir: Path | None = None,
+    trials: list[dict[str, Any]] | list[str] | tuple[str, ...] | None = None,
+    campaign_name: str | None = None,
+    trial_duration_seconds: int = DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS,
+    recording_timeout_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS
+    ),
+    evidence_interval_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS
+    ),
+    verification_interval_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS
+    ),
+    rolling_window_seconds: float = DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS,
+    screenshot_every_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS
+    ),
+    continue_on_error: bool = False,
+    skip_completed: bool = False,
+    request_json_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    input_fn: Any = None,
+    print_fn: Any = None,
+    run_experiment_fn: Any = None,
+) -> dict[str, Any]:
+    """Run multiple Amex expiration experiments sequentially into one campaign ZIP.
+
+    Reuses ``run_amex_expiration_experiment`` as the unit of execution. Does not
+    reveal folders via ``open``, mutate the Amex page, acquire the runtime lock,
+    or stop serve / Chrome on interrupt.
+    """
+    if trials is None:
+        raise ValueError("At least one --trial STRATEGY:INTERVAL is required")
+    if trials and isinstance(trials[0], str):
+        trial_specs = parse_expiration_campaign_trial_specs(
+            [str(item) for item in trials]  # type: ignore[arg-type]
+        )
+    else:
+        trial_specs = []
+        for item in trials:  # type: ignore[union-attr]
+            if not isinstance(item, dict):
+                raise ValueError(f"Invalid trial specification: {item!r}")
+            if "strategy" in item and "keepalive_interval_seconds" in item:
+                strategy = str(item["strategy"]).upper()
+                interval = int(item["keepalive_interval_seconds"])
+                if strategy not in KEEPALIVE_STRATEGIES:
+                    raise ValueError(
+                        f"Unsupported keepalive strategy {strategy!r}. "
+                        f"Expected one of {', '.join(KEEPALIVE_STRATEGIES)}"
+                    )
+                if interval <= 0:
+                    raise ValueError(
+                        f"Invalid keepalive interval {interval}. "
+                        "Expected a positive integer number of seconds."
+                    )
+                trial_specs.append(
+                    {
+                        "strategy": strategy,
+                        "keepalive_interval_seconds": interval,
+                        "spec": f"{strategy}:{interval}",
+                    }
+                )
+            else:
+                trial_specs.append(
+                    parse_expiration_campaign_trial_spec(str(item.get("spec") or item))
+                )
+
+    http = request_json_fn or request_json
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    read_input = input_fn or input
+    _ = print_fn  # reserved for future non-auth campaign progress output
+    run_experiment = run_experiment_fn or run_amex_expiration_experiment
+    base_url = _expiration_experiment_base_url(host, port)
+    diagnostics = Path(diagnostics_dir) if diagnostics_dir else DEFAULT_DIAGNOSTICS_DIR
+    campaign_dir = (
+        Path(output_dir).expanduser().resolve()
+        if output_dir is not None
+        else default_expiration_campaign_dir(diagnostics)
+    )
+    campaign_dir.mkdir(parents=True, exist_ok=True)
+    trials_root = campaign_dir / "trials"
+    trials_root.mkdir(parents=True, exist_ok=True)
+
+    started_at = iso_now()
+    campaign_started_mono = monotonic()
+    interrupted = False
+    trial_summaries: list[dict[str, Any]] = []
+    manifest = _load_campaign_manifest(campaign_dir) if skip_completed else {"trials": []}
+    if not isinstance(manifest.get("trials"), list):
+        manifest["trials"] = []
+    manifest.update(
+        {
+            "provider": "amex",
+            "campaign_name": campaign_name,
+            "campaign_dir": str(campaign_dir),
+            "started_at": manifest.get("started_at") or started_at,
+        }
+    )
+
+    # 1) Validate already done above. 2) Health check before the campaign.
+    try:
+        http("GET", f"{base_url}/health")
+    except (URLError, TimeoutError, OSError, ConnectionError) as exc:
+        return {
+            "ok": False,
+            "outcome": "runtime_unavailable",
+            "campaign_name": campaign_name,
+            "campaign_dir": str(campaign_dir),
+            "zip_path": None,
+            "trial_summaries": [],
+            "message": EXPIRATION_EXPERIMENT_SERVE_HINT,
+            "error": f"{type(exc).__name__}: {exc}",
+            "exit_code": 1,
+            "interrupted": False,
+        }
+
+    def _persist_campaign(*, zip_it: bool) -> dict[str, Any]:
+        completed_at = iso_now()
+        zip_path: Path | None = None
+        summary = write_expiration_campaign_summary_files(
+            campaign_dir,
+            campaign_name=campaign_name,
+            started_at=str(manifest.get("started_at") or started_at),
+            completed_at=completed_at,
+            interrupted=interrupted,
+            trial_summaries=trial_summaries,
+            zip_path=None,
+        )
+        manifest["trials"] = list(trial_summaries)
+        manifest["completed_at"] = completed_at
+        manifest["interrupted"] = interrupted
+        _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME, manifest)
+        if zip_it:
+            zip_path = create_expiration_campaign_zip(campaign_dir)
+            summary["zip_path"] = str(zip_path)
+            _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_SUMMARY_JSON, summary)
+            manifest["zip_path"] = str(zip_path)
+            _write_json_file(
+                campaign_dir / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME, manifest
+            )
+        return {
+            "summary": summary,
+            "zip_path": str(zip_path) if zip_path is not None else None,
+            "completed_at": completed_at,
+        }
+
+    try:
+        for index, trial_spec in enumerate(trial_specs, start=1):
+            strategy = str(trial_spec["strategy"])
+            interval_seconds = int(trial_spec["keepalive_interval_seconds"])
+            dirname = expiration_campaign_trial_dirname(
+                index, strategy, interval_seconds
+            )
+            evidence_dir = trials_root / dirname
+
+            if skip_completed and _trial_completed_in_manifest(
+                manifest,
+                strategy=strategy,
+                keepalive_interval_seconds=interval_seconds,
+            ):
+                existing = _completed_trial_summary_from_manifest(
+                    manifest,
+                    strategy=strategy,
+                    keepalive_interval_seconds=interval_seconds,
+                    trial_number=index,
+                )
+                if existing is None:
+                    existing = {
+                        "trial_number": index,
+                        "strategy": strategy,
+                        "keepalive_interval_seconds": interval_seconds,
+                        "started_at": None,
+                        "completed_at": None,
+                        "duration_seconds": None,
+                        "recorder_outcome": None,
+                        "keepalive_outcome": None,
+                        "initial_authentication_state": None,
+                        "final_authentication_state": None,
+                        "idle_warning_detected": False,
+                        "idle_warning_first_observed_at": None,
+                        "logged_out": False,
+                        "logout_observed_at": None,
+                        "warning_to_logout_seconds": None,
+                        "keepalive_wait_seconds": None,
+                        "keepalive_completion_timeout": None,
+                        "error": None,
+                        "evidence_directory": str(evidence_dir),
+                    }
+                existing["trial_number"] = index
+                existing["skipped"] = True
+                existing["status"] = "completed"
+                existing["evidence_directory"] = existing.get(
+                    "evidence_directory"
+                ) or str(evidence_dir)
+                trial_summaries.append(existing)
+                continue
+
+            auth = ensure_expiration_campaign_signed_in(
+                trial_number=index,
+                base_url=base_url,
+                request_json_fn=http,
+                sleep_fn=sleep,
+                monotonic_fn=monotonic,
+                input_fn=read_input,
+                print_fn=print,
+            )
+            if not auth.get("ok"):
+                trial_row = {
+                    "trial_number": index,
+                    "strategy": strategy,
+                    "keepalive_interval_seconds": interval_seconds,
+                    "started_at": iso_now(),
+                    "completed_at": iso_now(),
+                    "duration_seconds": 0.0,
+                    "recorder_outcome": None,
+                    "keepalive_outcome": None,
+                    "initial_authentication_state": auth.get("authentication_state"),
+                    "final_authentication_state": auth.get("authentication_state"),
+                    "idle_warning_detected": False,
+                    "idle_warning_first_observed_at": None,
+                    "logged_out": False,
+                    "logout_observed_at": None,
+                    "warning_to_logout_seconds": None,
+                    "keepalive_wait_seconds": None,
+                    "keepalive_completion_timeout": None,
+                    "error": auth.get("outcome")
+                    or auth.get("message")
+                    or "authentication_required",
+                    "evidence_directory": str(evidence_dir),
+                    "status": "failed",
+                    "skipped": False,
+                }
+                trial_summaries.append(trial_row)
+                if continue_on_error:
+                    continue
+                persisted = _persist_campaign(zip_it=True)
+                return {
+                    "ok": False,
+                    "outcome": "authentication_required",
+                    "campaign_name": campaign_name,
+                    "campaign_dir": str(campaign_dir),
+                    "zip_path": persisted["zip_path"],
+                    "trial_summaries": trial_summaries,
+                    "summary": persisted["summary"],
+                    "message": auth.get("message"),
+                    "exit_code": 1,
+                    "interrupted": False,
+                    "duration_seconds": max(0.0, monotonic() - campaign_started_mono),
+                }
+
+            trial_started_at = iso_now()
+            trial_started_mono = monotonic()
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                experiment_result = run_experiment(
+                    host=host,
+                    port=port,
+                    diagnostics_dir=diagnostics,
+                    output_dir=evidence_dir,
+                    strategy=strategy,
+                    trial_duration_seconds=int(trial_duration_seconds),
+                    keepalive_interval_seconds=interval_seconds,
+                    recording_timeout_seconds=float(recording_timeout_seconds),
+                    evidence_interval_seconds=float(evidence_interval_seconds),
+                    verification_interval_seconds=float(verification_interval_seconds),
+                    rolling_window_seconds=float(rolling_window_seconds),
+                    screenshot_every_seconds=float(screenshot_every_seconds),
+                    request_json_fn=http,
+                    sleep_fn=sleep,
+                    monotonic_fn=monotonic,
+                )
+            except KeyboardInterrupt:
+                interrupted = True
+                experiment_result = {
+                    "ok": False,
+                    "outcome": "interrupted",
+                    "keepalive_outcome": None,
+                    "final_authentication_state": auth.get("authentication_state"),
+                    "experiment_dir": str(evidence_dir),
+                    "zip_path": None,
+                    "summary": {
+                        "outcome": "interrupted",
+                        "interrupted": True,
+                        "keepalive_strategy": strategy,
+                        "keepalive_interval_seconds": interval_seconds,
+                    },
+                    "recorder": None,
+                    "keepalive_status": None,
+                    "exit_code": 130,
+                }
+            except Exception as exc:  # noqa: BLE001 - preserve campaign continuity
+                experiment_result = {
+                    "ok": False,
+                    "outcome": "fatal_error",
+                    "keepalive_outcome": None,
+                    "final_authentication_state": auth.get("authentication_state"),
+                    "experiment_dir": str(evidence_dir),
+                    "zip_path": None,
+                    "summary": {
+                        "outcome": "fatal_error",
+                        "keepalive_strategy": strategy,
+                        "keepalive_interval_seconds": interval_seconds,
+                        "recorder_error": f"{type(exc).__name__}: {exc}",
+                    },
+                    "recorder": None,
+                    "keepalive_status": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "exit_code": 1,
+                }
+
+            trial_completed_at = iso_now()
+            duration_seconds = max(0.0, monotonic() - trial_started_mono)
+            metrics = derive_expiration_campaign_trial_metrics(
+                experiment_result=experiment_result
+                if isinstance(experiment_result, dict)
+                else None,
+                experiment_dir=evidence_dir,
+            )
+            summary = (
+                experiment_result.get("summary")
+                if isinstance(experiment_result, dict)
+                and isinstance(experiment_result.get("summary"), dict)
+                else {}
+            )
+            outcome = (
+                experiment_result.get("outcome")
+                if isinstance(experiment_result, dict)
+                else "fatal_error"
+            )
+            if outcome == "interrupted":
+                interrupted = True
+            error: str | None = None
+            if isinstance(experiment_result, dict):
+                error = experiment_result.get("error") or summary.get("recorder_error")
+            if outcome in {
+                "runtime_unavailable",
+                "keepalive_start_failed",
+                "initial_not_signed_in",
+                "initial_authentication_unknown",
+                "fatal_error",
+                "authentication_reverify_failed",
+            }:
+                error = error or str(
+                    (experiment_result or {}).get("message") or outcome
+                )
+
+            trial_row = {
+                "trial_number": index,
+                "strategy": strategy,
+                "keepalive_interval_seconds": interval_seconds,
+                "started_at": trial_started_at,
+                "completed_at": trial_completed_at,
+                "duration_seconds": duration_seconds,
+                "recorder_outcome": metrics.get("recorder_outcome")
+                or summary.get("recorder_outcome")
+                or outcome,
+                "keepalive_outcome": (
+                    experiment_result.get("keepalive_outcome")
+                    if isinstance(experiment_result, dict)
+                    else None
+                )
+                or summary.get("keepalive_outcome"),
+                "initial_authentication_state": metrics.get(
+                    "initial_authentication_state"
+                )
+                or auth.get("authentication_state"),
+                "final_authentication_state": metrics.get("final_authentication_state")
+                or (
+                    experiment_result.get("final_authentication_state")
+                    if isinstance(experiment_result, dict)
+                    else None
+                ),
+                "idle_warning_detected": metrics.get("idle_warning_detected"),
+                "idle_warning_first_observed_at": metrics.get(
+                    "idle_warning_first_observed_at"
+                ),
+                "logged_out": metrics.get("logged_out"),
+                "logout_observed_at": metrics.get("logout_observed_at"),
+                "warning_to_logout_seconds": metrics.get("warning_to_logout_seconds"),
+                "keepalive_wait_seconds": (
+                    experiment_result.get("keepalive_wait_seconds")
+                    if isinstance(experiment_result, dict)
+                    else None
+                )
+                if isinstance(experiment_result, dict)
+                and experiment_result.get("keepalive_wait_seconds") is not None
+                else summary.get("keepalive_wait_seconds"),
+                "keepalive_completion_timeout": (
+                    experiment_result.get("keepalive_completion_timeout")
+                    if isinstance(experiment_result, dict)
+                    else None
+                )
+                if isinstance(experiment_result, dict)
+                and experiment_result.get("keepalive_completion_timeout") is not None
+                else summary.get("keepalive_completion_timeout"),
+                "error": error,
+                "evidence_directory": str(evidence_dir),
+                "status": (
+                    "partial"
+                    if interrupted or outcome == "interrupted"
+                    else ("failed" if error else "completed")
+                ),
+                "skipped": False,
+            }
+            trial_summaries.append(trial_row)
+
+            if interrupted:
+                break
+
+            if error and not continue_on_error:
+                persisted = _persist_campaign(zip_it=True)
+                return {
+                    "ok": False,
+                    "outcome": "trial_failed",
+                    "campaign_name": campaign_name,
+                    "campaign_dir": str(campaign_dir),
+                    "zip_path": persisted["zip_path"],
+                    "trial_summaries": trial_summaries,
+                    "summary": persisted["summary"],
+                    "exit_code": 1,
+                    "interrupted": False,
+                    "duration_seconds": max(0.0, monotonic() - campaign_started_mono),
+                }
+    except KeyboardInterrupt:
+        interrupted = True
+
+    persisted = _persist_campaign(zip_it=True)
+    exit_code = 130 if interrupted else 0
+    if not interrupted and any(
+        isinstance(row, dict) and row.get("error") for row in trial_summaries
+    ):
+        exit_code = 1
+    outcome = "interrupted" if interrupted else ("completed" if exit_code == 0 else "completed_with_errors")
+    return {
+        "ok": exit_code in {0, 130},
+        "outcome": outcome,
+        "campaign_name": campaign_name,
+        "campaign_dir": str(campaign_dir),
+        "zip_path": persisted["zip_path"],
+        "trial_summaries": trial_summaries,
+        "summary": persisted["summary"],
+        "exit_code": exit_code,
+        "interrupted": interrupted,
+        "duration_seconds": max(0.0, monotonic() - campaign_started_mono),
+        "message": None,
+    }
 
 
 def _explorer_tag_label(node: dict[str, Any] | None) -> str:
@@ -7840,6 +8871,108 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    browser_run_expiration_campaign = subparsers.add_parser(
+        "browser-run-expiration-campaign",
+        help=(
+            "Developer-only: run multiple Amex expiration experiments "
+            "sequentially and package one comparison ZIP"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument("provider", choices=("amex",))
+    browser_run_expiration_campaign.add_argument(
+        "--trial",
+        action="append",
+        dest="trials",
+        required=True,
+        metavar="STRATEGY:INTERVAL",
+        help=(
+            "Repeatable trial specification STRATEGY:KEEPALIVE_INTERVAL_SECONDS "
+            f"(strategies: {', '.join(KEEPALIVE_STRATEGIES)}; example: NONE:30)"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--campaign-name",
+        default=None,
+        help="Optional campaign label stored in campaign-summary artifacts",
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--trial-duration-seconds",
+        type=int,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS,
+        help=(
+            "Keepalive trial duration for each campaign trial "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS})"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--recording-timeout-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS,
+        help=(
+            "Expiration recorder timeout for each trial "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS})"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--evidence-interval-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS,
+        help=(
+            "Recorder browser-evidence poll interval "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS})"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--verification-interval-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS,
+        help=(
+            "Recorder fresh canonical verification cadence "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS})"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--rolling-window-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS,
+        help=(
+            "Recorder trailing observation window "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS})"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--screenshot-every-seconds",
+        type=float,
+        default=DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS,
+        help=(
+            "Recorder screenshot cadence "
+            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS})"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional campaign directory "
+            "(default: ~/.mighty/provider_runtime/diagnostics/"
+            "amex-expiration-campaign-<UTC>/)"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Record a failed trial and continue to the next trial",
+    )
+    browser_run_expiration_campaign.add_argument(
+        "--skip-completed",
+        action="store_true",
+        help=(
+            "Resume an interrupted campaign by skipping trials already marked "
+            "completed in campaign-manifest.json (match strategy + interval)"
+        ),
+    )
+
     browser_open_latest_expiration_experiment = subparsers.add_parser(
         "browser-open-latest-expiration-experiment",
         help="Open the latest Amex expiration experiment folder in Finder (macOS)",
@@ -8046,6 +9179,33 @@ def run_client_command(args: argparse.Namespace) -> int:
             screenshot_every_seconds=float(args.screenshot_every_seconds),
         )
         print_expiration_experiment_result(result)
+        return int(result.get("exit_code") or (0 if result.get("ok") else 1))
+    if args.command == "browser-run-expiration-campaign":
+        try:
+            trial_specs = parse_expiration_campaign_trial_specs(list(args.trials or []))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        output_dir = args.output_dir
+        if output_dir is not None:
+            output_dir = output_dir.expanduser().resolve()
+        result = run_amex_expiration_campaign(
+            host=args.host,
+            port=args.port,
+            diagnostics_dir=args.root / "diagnostics",
+            output_dir=output_dir,
+            trials=trial_specs,
+            campaign_name=args.campaign_name,
+            trial_duration_seconds=int(args.trial_duration_seconds),
+            recording_timeout_seconds=float(args.recording_timeout_seconds),
+            evidence_interval_seconds=float(args.evidence_interval_seconds),
+            verification_interval_seconds=float(args.verification_interval_seconds),
+            rolling_window_seconds=float(args.rolling_window_seconds),
+            screenshot_every_seconds=float(args.screenshot_every_seconds),
+            continue_on_error=bool(args.continue_on_error),
+            skip_completed=bool(args.skip_completed),
+        )
+        print_expiration_campaign_result(result)
         return int(result.get("exit_code") or (0 if result.get("ok") else 1))
     if args.command == "browser-open-latest-expiration-experiment":
         result = open_latest_expiration_experiment(args.root / "diagnostics")

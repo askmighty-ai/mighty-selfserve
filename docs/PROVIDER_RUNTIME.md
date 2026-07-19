@@ -521,6 +521,79 @@ PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
   browser-open-latest-expiration-experiment amex
 ```
 
+#### Developer Amex expiration campaign
+
+`browser-run-expiration-campaign` runs multiple existing expiration experiments
+sequentially and packages one comparison artifact. It reuses
+`browser-run-expiration-experiment` orchestration as the unit of execution and
+does not open Finder between trials.
+
+Recommended comparison campaign:
+
+```bash
+# Terminal 1
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve
+
+# Terminal 2 — one-time login if needed
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py bootstrap amex
+
+# Then run the campaign (no Finder interaction between trials):
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  browser-run-expiration-campaign amex \
+  --campaign-name amex-keepalive-comparison \
+  --trial NONE:30 \
+  --trial SESSION_API:30 \
+  --trial SESSION_API:5 \
+  --trial PAGE_ACTIVITY:30 \
+  --trial OVERVIEW_RELOAD:30
+```
+
+Before each trial the campaign performs a fresh canonical verification:
+
+- `SIGNED_IN` → start the trial automatically;
+- `SIGNED_OUT` or missing managed-browser page target → pause with:
+
+```text
+Authentication required for trial <n>.
+
+Sign in in the managed Amex window and complete MFA.
+Press Enter when the overview page is visible.
+```
+
+If a clean browser restart is required, use the existing safe stop/bootstrap
+workflow (printed in the pause message). After Enter, the campaign verifies
+again and continues only when `SIGNED_IN`.
+
+Output:
+
+```text
+~/.mighty/provider_runtime/diagnostics/
+  amex-expiration-campaign-<UTC timestamp>/
+    campaign-summary.json
+    campaign-summary.csv
+    campaign-report.md
+    campaign-manifest.json
+    trials/
+      001-none-30s/
+      002-session-api-30s/
+      ...
+    amex-expiration-campaign-<UTC timestamp>.zip
+```
+
+Useful flags:
+
+| Option | Behavior |
+| --- | --- |
+| `--continue-on-error` | Record a failed trial and continue (with auth recovery if needed) |
+| `--skip-completed` | Resume an interrupted campaign; skip trials already completed for the same strategy + interval in `campaign-manifest.json` |
+| `--output-dir` | Choose/resume a specific campaign directory |
+
+Ctrl+C finishes writing the current trial’s partial evidence, writes campaign
+summary files for completed/partial trials, creates a partial campaign ZIP, and
+does **not** close managed Chrome or stop `serve`.
+
+The CLI prints only the campaign result and final ZIP path.
+
 ## 5. Inspect runtime status
 
 ```bash
@@ -661,8 +734,8 @@ It currently provides:
 - developer-only Amex keepalive trials (experiment, not production keepalive);
 - localhost status, verification, maintenance-check, browser-inspect,
   browser-find-text, browser-watch-text, browser-record-expiration,
-  browser-run-expiration-experiment, browser-open-latest-expiration-experiment,
-  keepalive, and shutdown commands;
+  browser-run-expiration-experiment, browser-run-expiration-campaign,
+  browser-open-latest-expiration-experiment, keepalive, and shutdown commands;
 - canonical authentication results;
 - sanitized persisted runtime state (including maintenance counters and trial results).
 
