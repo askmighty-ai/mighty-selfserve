@@ -71,6 +71,12 @@ from urllib.request import Request, urlopen
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
+from mighty.provider_runtime_session_timeline import (
+    SESSION_TIMELINE_JSONL,
+    SessionTimelineRecorder,
+    write_session_timeline_analysis,
+)
+
 AMEX_OVERVIEW_URL = "https://global.americanexpress.com/overview"
 AMEX_LOGIN_URL = "https://www.americanexpress.com/en-us/account/login"
 # Lightest read-only Amex session API already observed by Mighty probes/runtime.
@@ -5556,6 +5562,35 @@ def run_amex_expiration_campaign(
             manifest["status"] = "completed"
         manifest.update(_browser_metadata())
         _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME, manifest)
+        try:
+            campaign_timeline = SessionTimelineRecorder(
+                path=campaign_dir / SESSION_TIMELINE_JSONL,
+                session_id=str(uuid.uuid4()),
+                provider="amex",
+                started_at=str(manifest.get("started_at") or started_at),
+            )
+            campaign_timeline.record(
+                "campaign_completed",
+                provider="amex",
+                payload={
+                    "campaign_name": campaign_name,
+                    "campaign_status": manifest.get("status"),
+                    "trial_count": len(trial_summaries),
+                    "interrupted": interrupted,
+                    "logged_out_trial_count": sum(
+                        1
+                        for row in trial_summaries
+                        if isinstance(row, dict) and row.get("logged_out")
+                    ),
+                },
+                timestamp=completed_at,
+            )
+            write_session_timeline_analysis(
+                campaign_dir,
+                timeline_path=campaign_timeline.path,
+            )
+        except Exception:
+            pass
         if zip_it:
             zip_path = create_expiration_campaign_zip(campaign_dir)
             summary["zip_path"] = str(zip_path)
@@ -9861,6 +9896,31 @@ class ProviderRuntime:
         self.diagnostics_dir = self.root / "diagnostics"
         self._latest_browser_inspection: dict[str, Any] | None = None
 
+        self.session_id = str(uuid.uuid4())
+        self.session_timeline = SessionTimelineRecorder(
+            path=self.root / SESSION_TIMELINE_JSONL,
+            session_id=self.session_id,
+            provider="amex",
+            started_at=self.started_at,
+        )
+
+    def _timeline(
+        self,
+        event_type: str,
+        *,
+        provider: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Best-effort session timeline append (never raises into callers)."""
+        try:
+            self.session_timeline.record(
+                event_type,
+                provider=provider or "amex",
+                payload=payload,
+            )
+        except Exception:
+            pass
+
     def matching_chrome_pids(self) -> list[int]:
         """PIDs whose command line uses the exact dedicated Amex profile."""
         return profile_processes(self.profile_dir)
@@ -9983,11 +10043,22 @@ class ProviderRuntime:
 
     def start(self) -> None:
         with self.lock:
+            self._timeline(
+                "runtime_started",
+                payload={
+                    "cdp_port": self.cdp_port,
+                    "profile_dir": str(self.profile_dir),
+                },
+            )
             existing = cdp_endpoint_available(self.cdp_port)
             if existing is not None:
                 # Attach to the authenticated Chrome left running by bootstrap.
                 self.chrome_process = None
                 self.cdp_url = existing
+                self._timeline(
+                    "browser_reused",
+                    payload={"cdp_url": sanitize_url(existing), "mode": "attach"},
+                )
                 self.write_state()
                 return
 
@@ -10001,6 +10072,16 @@ class ProviderRuntime:
                 initial_url="about:blank",
             )
             self.cdp_url = wait_for_cdp(self.cdp_port)
+            self._timeline(
+                "browser_started",
+                payload={
+                    "cdp_url": sanitize_url(self.cdp_url),
+                    "mode": "launch_headless",
+                    "chrome_pid": (
+                        self.chrome_process.pid if self.chrome_process else None
+                    ),
+                },
+            )
             self.write_state()
 
     def start_maintenance_watcher(self) -> None:
@@ -10217,7 +10298,35 @@ class ProviderRuntime:
         with self.lock:
             if not self.cdp_url:
                 raise RuntimeError("Provider runtime is not started")
+            self._timeline(
+                "verification_started",
+                provider=provider,
+                payload={"cdp_url": sanitize_url(self.cdp_url)},
+            )
             self.last_result = verify_amex_over_cdp(self.cdp_url, self.result_path)
+            result = self.last_result
+            self._timeline(
+                "verification_completed",
+                provider=provider,
+                payload={
+                    "authentication_state": result.authentication_state,
+                    "reason": result.reason,
+                    "final_url": sanitize_url(result.final_url),
+                    "login_url_detected": result.login_url_detected,
+                    "session_api_200_count": result.session_api_200_count,
+                    "session_api_denied_count": result.session_api_denied_count,
+                },
+            )
+            try:
+                self.session_timeline.note_auth_transition(
+                    result.authentication_state,
+                    provider=provider,
+                    source=AUTH_STATE_SOURCE_FRESH_VERIFICATION,
+                    reason=result.reason,
+                    extra={"final_url": sanitize_url(result.final_url)},
+                )
+            except Exception:
+                pass
             self.write_state()
             return self.last_result
 
@@ -10732,6 +10841,17 @@ class ProviderRuntime:
                     "login_page_detected": False,
                 }
             )
+            self._timeline(
+                "keepalive_scheduled",
+                provider=provider,
+                payload={
+                    "trial_id": self.keepalive_trial_id,
+                    "strategy": strategy,
+                    "duration_seconds": int(duration_seconds),
+                    "interval_seconds": int(interval_seconds),
+                    "authentication_state": verification.authentication_state,
+                },
+            )
             self._set_keepalive_latest_observation(
                 authentication_state=verification.authentication_state,
                 authentication_state_source=AUTH_STATE_SOURCE_FRESH_VERIFICATION,
@@ -10902,19 +11022,87 @@ class ProviderRuntime:
                             "login_page_detected": before["login_page_detected"],
                         }
                     )
+                    try:
+                        self.session_timeline.note_auth_transition(
+                            before["authentication_state"],
+                            provider="amex",
+                            source=before_auth_source,
+                            reason="keepalive_pre_action_logout",
+                            extra={
+                                "strategy": strategy,
+                                "login_page_detected": before["login_page_detected"],
+                            },
+                        )
+                    except Exception:
+                        pass
                     self.write_state()
                     return True
 
                 action_result: KeepaliveActionResult | None = None
                 if strategy != "NONE":
+                    self._timeline(
+                        "keepalive_started",
+                        payload={
+                            "trial_id": self.keepalive_trial_id,
+                            "strategy": strategy,
+                            "authentication_state": before["authentication_state"],
+                        },
+                    )
                     action_result = perform_keepalive_action(page, strategy)
                     self.keepalive_action_count += 1
                     self.keepalive_last_action_at = iso_now()
                     self.keepalive_last_action_result = action_result.result
                     if action_result.ok:
                         self.keepalive_action_success_count += 1
+                        self._timeline(
+                            "keepalive_completed",
+                            payload={
+                                "trial_id": self.keepalive_trial_id,
+                                "strategy": strategy,
+                                "result": action_result.result,
+                                "response_status": action_result.response_status,
+                                "duration_ms": action_result.duration_ms,
+                                "action": action_result.action,
+                                "target": action_result.target,
+                            },
+                        )
                     else:
                         self.keepalive_action_failure_count += 1
+                        self._timeline(
+                            "keepalive_failed",
+                            payload={
+                                "trial_id": self.keepalive_trial_id,
+                                "strategy": strategy,
+                                "result": action_result.result,
+                                "response_status": action_result.response_status,
+                                "duration_ms": action_result.duration_ms,
+                                "action": action_result.action,
+                                "error_type": (
+                                    (action_result.error or "").split(":", 1)[0][:80]
+                                    if action_result.error
+                                    else None
+                                ),
+                            },
+                        )
+                    if action_result.response_status in {401, 403}:
+                        try:
+                            self.session_timeline.record_http_status(
+                                action_result.response_status,
+                                provider="amex",
+                                url=action_result.target,
+                                source="keepalive_action",
+                            )
+                        except Exception:
+                            pass
+                    if strategy == "OVERVIEW_RELOAD" and action_result.ok:
+                        self._timeline(
+                            "page_reload",
+                            payload={
+                                "strategy": strategy,
+                                "url": action_result.target,
+                                "source": "keepalive_overview_reload",
+                            },
+                        )
                     self._append_keepalive_event(
                         {
                             "timestamp": self.keepalive_last_action_at,
@@ -11013,8 +11201,38 @@ class ProviderRuntime:
                             "login_page_detected": after["login_page_detected"],
                         }
                     )
+                    try:
+                        self.session_timeline.note_auth_transition(
+                            after["authentication_state"],
+                            provider="amex",
+                            source=after_auth_source,
+                            reason="keepalive_post_action_logout",
+                            extra={
+                                "strategy": strategy,
+                                "login_page_detected": after["login_page_detected"],
+                            },
+                        )
+                    except Exception:
+                        pass
                     self.write_state()
                     return True
+
+                after_state = after.get("authentication_state")
+                if (
+                    after_state
+                    and self.session_timeline.last_auth_state
+                    and after_state != self.session_timeline.last_auth_state
+                ):
+                    try:
+                        self.session_timeline.note_auth_transition(
+                            after_state,
+                            provider="amex",
+                            source=after_auth_source,
+                            reason="keepalive_inspection",
+                            extra={"strategy": strategy},
+                        )
+                    except Exception:
+                        pass
 
                 self.write_state()
                 return False
@@ -11064,6 +11282,20 @@ class ProviderRuntime:
                 "login_page_detected": bool(final_state == "SIGNED_OUT"),
             }
         )
+        if final_state is not None:
+            try:
+                self.session_timeline.note_auth_transition(
+                    final_state,
+                    provider="amex",
+                    source=AUTH_STATE_SOURCE_FRESH_VERIFICATION,
+                    reason=f"keepalive_trial_{reason}",
+                    extra={
+                        "trial_id": self.keepalive_trial_id,
+                        "strategy": self.keepalive_strategy,
+                    },
+                )
+            except Exception:
+                pass
         self._persist_keepalive_result()
         self.write_state()
         self._keepalive_thread = None
@@ -11099,6 +11331,13 @@ class ProviderRuntime:
             self.chrome_process = None
             self.cdp_url = None
             self.write_state()
+            try:
+                write_session_timeline_analysis(
+                    self.root,
+                    timeline_path=self.session_timeline.path,
+                )
+            except Exception:
+                pass
 
 
 class RuntimeHTTPServer(ThreadingHTTPServer):
