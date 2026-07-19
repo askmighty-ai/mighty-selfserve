@@ -934,16 +934,24 @@ It currently provides:
   browser-find-text, browser-watch-text, browser-record-expiration,
   browser-run-expiration-experiment, campaign (end-to-end Amex keepalive
   comparison), browser-run-expiration-campaign (internal helper),
-  browser-open-latest-expiration-experiment, keepalive, and shutdown commands;
+  browser-open-latest-expiration-experiment, keepalive, connector-refresh,
+  and shutdown commands;
+- production connector support APIs:
+  `ensure_usable_session`, `ensure_provider_surface`,
+  `execute_readonly_extraction` (Amex overview accounts + rewards);
 - canonical authentication results;
 - sanitized persisted runtime state (including maintenance counters and trial results).
+
+Account-data extraction for production reads lives in the **connector layer**
+(see [CONNECTORS.md](./CONNECTORS.md)). Runtime owns session/surface/extract
+transport; connectors own normalization and the public refresh contract.
 
 It does not yet:
 
 - start automatically at login;
 - authenticate localhost requests;
 - communicate with Railway;
-- perform account-data extraction;
-- recover from MFA or CAPTCHA;
-- manage multiple providers;
-- enable automatic keepalive as production behavior.
+- automate MFA or CAPTCHA (operator interruption only);
+- manage multiple providers in Runtime itself (connectors are multi-provider);
+- enable automatic keepalive as production behavior;
+- extract transactions, offers, statements, or perform account mutations.

@@ -26,6 +26,7 @@ Commands:
     python scripts/provider_runtime.py browser-run-expiration-campaign amex
     python scripts/provider_runtime.py browser-open-latest-expiration-experiment amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
+    python scripts/provider_runtime.py connector-refresh amex
 
 Lifecycle:
     bootstrap opens a visible native Chrome window for login, verifies over CDP,
@@ -9025,6 +9026,504 @@ def _enrich_keepalive_probe_evidence_file(payload: dict[str, Any]) -> str | None
     return None
 
 
+def format_connector_refresh_terminal_summary(
+    result_payload: dict[str, Any],
+    *,
+    evidence_path: str | None = None,
+) -> str:
+    """Concise human-readable connector refresh summary (masked values only)."""
+    telemetry = result_payload.get("telemetry") or {}
+    snapshot = result_payload.get("snapshot") or {}
+    accounts = snapshot.get("accounts") or []
+    rewards = snapshot.get("rewards") or []
+    lines = [
+        "Amex connector refresh",
+        "",
+        f"Status: {result_payload.get('status')}",
+        f"Authentication: {telemetry.get('authentication_final_state') or 'LOGIN_UNKNOWN'}",
+        f"Accounts: {telemetry.get('snapshot_account_count', len(accounts))}",
+        f"Rewards programs: {telemetry.get('rewards_program_count', len(rewards))}",
+        f"Fields succeeded: {telemetry.get('fields_succeeded', 0)}",
+        f"Fields unavailable: {telemetry.get('fields_unavailable', 0)}",
+        f"Fields failed: {telemetry.get('fields_failed', 0)}",
+        f"User interruption: {str(bool(result_payload.get('user_interrupted'))).lower()}",
+        f"Observed at: {snapshot.get('observed_at') or telemetry.get('completed_at') or ''}",
+        f"Evidence: {evidence_path or ''}",
+    ]
+    if accounts:
+        lines.append("")
+        lines.append("Accounts (masked):")
+        for account in accounts[:8]:
+            last_four = account.get("last_four") or "****"
+            name = account.get("display_name") or account.get("product_name") or "Card"
+            balance = (account.get("current_balance") or {}).get("amount")
+            balance_txt = f"${balance}" if balance is not None else "n/a"
+            lines.append(f"  - {name} …{last_four} balance={balance_txt}")
+    if rewards:
+        lines.append("")
+        lines.append("Rewards:")
+        for reward in rewards[:4]:
+            lines.append(
+                f"  - {reward.get('program_name')}: {reward.get('balance')} "
+                f"{reward.get('unit')}"
+            )
+    return "\n".join(lines) + "\n"
+
+
+def run_connector_refresh_with_runtime(
+    *,
+    provider: str = "amex",
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    root: Path | None = None,
+    cdp_port: int = DEFAULT_CDP_PORT,
+    state_path: Path | None = None,
+    result_path: Path | None = None,
+    keepalive_result_path: Path | None = None,
+    browser_cleanup: str = DEFAULT_BROWSER_CLEANUP_POLICY,
+    as_json: bool = False,
+    request_json_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    input_fn: Any = None,
+    print_fn: Any = None,
+    ensure_runtime_fn: Any = None,
+    stop_runtime_fn: Any = None,
+    prepare_session_fn: Any = None,
+    ensure_managed_browser_fn: Any = None,
+    ensure_signed_in_fn: Any = None,
+    close_managed_browser_fn: Any = None,
+    bring_to_foreground_fn: Any = None,
+    restart_managed_browser_fn: Any = None,
+    launch_native_chrome_fn: Any = None,
+    terminate_profile_processes_fn: Any = None,
+    wait_for_profile_release_fn: Any = None,
+    fetch_cdp_json_fn: Any = None,
+    connector_factory_fn: Any = None,
+    write_evidence_fn: Any = None,
+    emit_summary: bool = True,
+) -> dict[str, Any]:
+    """Developer ``connector-refresh``: runtime + usable session + AmexConnector.refresh."""
+    from mighty.amex_connector import AmexConnector
+    from mighty.amex_extractor import amex_observation_from_sanitized
+
+    emit = print_fn or print
+    http = request_json_fn or request_json
+    sleep = sleep_fn or time.sleep
+    runtime_root = Path(root or DEFAULT_ROOT).expanduser().resolve()
+    profile_dir = runtime_root / "amex"
+    state_path = Path(state_path or (runtime_root / "runtime_state.json")).expanduser().resolve()
+    result_path = Path(result_path or (runtime_root / "amex_last_result.json")).expanduser().resolve()
+    keepalive_result_path = Path(
+        keepalive_result_path or (runtime_root / "amex_keepalive_last_trial.json")
+    ).expanduser().resolve()
+    diagnostics_dir = runtime_root / "diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+
+    cleanup_policy = str(browser_cleanup or DEFAULT_BROWSER_CLEANUP_POLICY)
+    if cleanup_policy not in BROWSER_CLEANUP_POLICIES:
+        cleanup_policy = DEFAULT_BROWSER_CLEANUP_POLICY
+
+    runtime_preexisting = False
+    runtime_started_by_command = False
+    runtime_stopped_by_command = False
+    runtime_process = None
+    managed_browser_preexisting = False
+    managed_browser_launched_by_command = False
+    managed_browser_restarted_by_command = False
+    managed_browser_closed_at_completion = False
+    interrupted = False
+    evidence_path: str | None = None
+    result_dict: dict[str, Any] = {}
+    exit_code = 1
+
+    def _ownership_fields() -> dict[str, Any]:
+        return {
+            "runtime_preexisting": runtime_preexisting,
+            "runtime_started_by_command": runtime_started_by_command,
+            "runtime_stopped_by_command": runtime_stopped_by_command,
+            "managed_browser_preexisting": managed_browser_preexisting,
+            "managed_browser_launched_by_command": managed_browser_launched_by_command,
+            "managed_browser_restarted_by_command": managed_browser_restarted_by_command,
+            "browser_cleanup_policy": cleanup_policy,
+            "managed_browser_closed_at_completion": managed_browser_closed_at_completion,
+        }
+
+    def _cleanup_browser() -> None:
+        nonlocal managed_browser_closed_at_completion
+        closer = close_managed_browser_fn or maybe_close_managed_browser_for_campaign
+        result = closer(
+            browser_cleanup=cleanup_policy,
+            managed_browser_preexisting=managed_browser_preexisting,
+            managed_browser_launched_by_campaign=managed_browser_launched_by_command,
+            interrupted=interrupted,
+            profile_dir=profile_dir,
+            terminate_profile_processes_fn=terminate_profile_processes_fn,
+        )
+        managed_browser_closed_at_completion = bool(
+            isinstance(result, dict) and result.get("closed")
+        )
+
+    def _cleanup_runtime() -> None:
+        nonlocal runtime_stopped_by_command
+        if not runtime_started_by_command:
+            return
+        stopper = stop_runtime_fn or stop_provider_runtime_serve
+        try:
+            stopper(
+                host=host,
+                port=int(port),
+                process=runtime_process,
+                request_json_fn=http,
+            )
+            runtime_stopped_by_command = True
+        except Exception:
+            runtime_stopped_by_command = False
+
+    def _write_evidence(payload: dict[str, Any]) -> str:
+        writer = write_evidence_fn
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = diagnostics_dir / f"amex-connector-refresh-{stamp}.json"
+        body = {
+            "provider": provider,
+            "command": "connector-refresh",
+            "result": payload,
+            "ownership": _ownership_fields(),
+            "evidence_written_at": iso_now(),
+        }
+        # Strip anything that looks like secrets if present.
+        banned = ("cookies", "authorization", "password", "token", "set-cookie")
+        stack = [body]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                for key in list(current.keys()):
+                    if str(key).lower() in banned:
+                        current.pop(key, None)
+                    else:
+                        stack.append(current[key])
+            elif isinstance(current, list):
+                stack.extend(current)
+        if writer is not None:
+            return str(writer(path, body))
+        _write_json_file(path, body)
+        return str(path)
+
+    ensure_runtime = ensure_runtime_fn or ensure_provider_runtime_for_campaign
+    runtime_info = ensure_runtime(
+        host=host,
+        port=port,
+        root=runtime_root,
+        cdp_port=int(cdp_port),
+        state_path=state_path,
+        result_path=result_path,
+        keepalive_result_path=keepalive_result_path,
+        request_json_fn=http,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        print_fn=emit,
+    )
+    if not isinstance(runtime_info, dict) or not runtime_info.get("ok"):
+        payload = {
+            "ok": False,
+            "provider": provider,
+            "status": "unavailable",
+            "error": (runtime_info or {}).get("error")
+            or (runtime_info or {}).get("message")
+            or "Failed to ensure Provider Runtime",
+            "exit_code": 1,
+            "interrupted": False,
+            **_ownership_fields(),
+            "runtime_preexisting": bool((runtime_info or {}).get("runtime_preexisting")),
+            "runtime_started_by_command": bool(
+                (runtime_info or {}).get("runtime_started_by_campaign")
+            ),
+        }
+        if emit_summary and not as_json:
+            emit("Amex connector refresh\n\nStatus: unavailable\n")
+        elif as_json:
+            emit(json.dumps(payload, indent=2))
+        return payload
+
+    runtime_preexisting = bool(runtime_info.get("runtime_preexisting"))
+    runtime_started_by_command = bool(runtime_info.get("runtime_started_by_campaign"))
+    runtime_process = runtime_info.get("process")
+    base_url = _expiration_experiment_base_url(host, port)
+
+    try:
+        prepare = prepare_session_fn or prepare_managed_amex_session_for_command
+        try:
+            session = prepare(
+                profile_dir=profile_dir,
+                cdp_port=int(cdp_port),
+                base_url=base_url,
+                request_json_fn=http,
+                trial_number=None,
+                sleep_fn=sleep_fn,
+                monotonic_fn=monotonic_fn,
+                input_fn=input_fn,
+                print_fn=emit,
+                ensure_managed_browser_fn=ensure_managed_browser_fn,
+                ensure_signed_in_fn=ensure_signed_in_fn,
+                bring_to_foreground_fn=bring_to_foreground_fn,
+                restart_managed_browser_fn=restart_managed_browser_fn,
+                launch_native_chrome_fn=launch_native_chrome_fn,
+                terminate_profile_processes_fn=terminate_profile_processes_fn,
+                wait_for_profile_release_fn=wait_for_profile_release_fn,
+                fetch_cdp_json_fn=fetch_cdp_json_fn,
+            )
+        except KeyboardInterrupt:
+            interrupted = True
+            session = {
+                "ok": False,
+                "interrupted": True,
+                "outcome": "interrupted",
+                "error": "interrupted",
+            }
+
+        if not isinstance(session, dict):
+            session = {"ok": False, "outcome": "browser_start_failed"}
+        managed_browser_preexisting = bool(session.get("managed_browser_preexisting"))
+        managed_browser_launched_by_command = bool(session.get("managed_browser_launched"))
+        managed_browser_restarted_by_command = bool(
+            session.get("managed_browser_restarted")
+        )
+        interrupted = interrupted or bool(session.get("interrupted"))
+
+        if interrupted:
+            result_dict = {
+                "provider": provider,
+                "status": "authentication_required",
+                "user_interrupted": True,
+                "interruption_type": "keyboard_interrupt",
+                "error": "authentication_required",
+                "telemetry": {
+                    "authentication_final_state": session.get(
+                        "final_authentication_state"
+                    ),
+                    "fields_succeeded": 0,
+                    "fields_unavailable": 0,
+                    "fields_failed": 0,
+                    "snapshot_account_count": 0,
+                    "rewards_program_count": 0,
+                },
+                "snapshot": None,
+                "field_observations": [],
+                "warnings": ["authentication_required"],
+            }
+            try:
+                evidence_path = _write_evidence(result_dict)
+            except Exception:
+                evidence_path = None
+            exit_code = 130
+        elif not session.get("ok"):
+            result_dict = {
+                "provider": provider,
+                "status": "authentication_required",
+                "user_interrupted": False,
+                "error": session.get("error")
+                or session.get("message")
+                or "authentication_required",
+                "telemetry": {
+                    "authentication_final_state": session.get(
+                        "final_authentication_state"
+                    ),
+                    "fields_succeeded": 0,
+                    "fields_unavailable": 0,
+                    "fields_failed": 0,
+                    "snapshot_account_count": 0,
+                    "rewards_program_count": 0,
+                },
+                "snapshot": None,
+                "field_observations": [],
+                "warnings": ["authentication_required"],
+            }
+            try:
+                evidence_path = _write_evidence(result_dict)
+            except Exception:
+                evidence_path = None
+            exit_code = 1
+        else:
+            def _ensure_usable_session(prov: str) -> dict[str, Any]:
+                payload = http("POST", f"{base_url}/providers/{prov}/session/ensure")
+                if isinstance(payload, dict) and payload.get("ok"):
+                    return payload
+                # Invoke existing runtime recovery/user interruption path.
+                recovery = prepare(
+                    profile_dir=profile_dir,
+                    cdp_port=int(cdp_port),
+                    base_url=base_url,
+                    request_json_fn=http,
+                    trial_number=None,
+                    sleep_fn=sleep_fn,
+                    monotonic_fn=monotonic_fn,
+                    input_fn=input_fn,
+                    print_fn=emit,
+                    ensure_managed_browser_fn=ensure_managed_browser_fn,
+                    ensure_signed_in_fn=ensure_signed_in_fn,
+                    bring_to_foreground_fn=bring_to_foreground_fn,
+                    restart_managed_browser_fn=restart_managed_browser_fn,
+                    launch_native_chrome_fn=launch_native_chrome_fn,
+                    terminate_profile_processes_fn=terminate_profile_processes_fn,
+                    wait_for_profile_release_fn=wait_for_profile_release_fn,
+                    fetch_cdp_json_fn=fetch_cdp_json_fn,
+                )
+                if bool(recovery.get("interrupted")):
+                    return {
+                        "ok": False,
+                        "authentication_state": recovery.get(
+                            "final_authentication_state"
+                        )
+                        or "LOGIN_UNKNOWN",
+                        "user_interrupted": True,
+                        "interruption_type": "mfa_or_login",
+                        "recovery_attempts": 1,
+                        "error": "authentication_required",
+                    }
+                if not recovery.get("ok"):
+                    return {
+                        "ok": False,
+                        "authentication_state": recovery.get(
+                            "final_authentication_state"
+                        )
+                        or "LOGIN_UNKNOWN",
+                        "user_interrupted": False,
+                        "recovery_attempts": 1,
+                        "error": "authentication_required",
+                        "reason": recovery.get("message") or recovery.get("error"),
+                    }
+                retry = http("POST", f"{base_url}/providers/{prov}/session/ensure")
+                if isinstance(retry, dict):
+                    retry = dict(retry)
+                    retry["recovery_attempts"] = 1
+                    return retry
+                return {
+                    "ok": False,
+                    "authentication_state": "LOGIN_UNKNOWN",
+                    "error": "runtime_unavailable",
+                    "recovery_attempts": 1,
+                }
+
+            def _ensure_surface(prov: str, surface: str) -> dict[str, Any]:
+                return http(
+                    "POST",
+                    f"{base_url}/providers/{prov}/surface/ensure",
+                    {"surface": surface},
+                )
+
+            def _extract(prov: str, extraction: str) -> dict[str, Any]:
+                payload = http(
+                    "POST",
+                    f"{base_url}/providers/{prov}/extract",
+                    {"extraction": extraction},
+                )
+                if not isinstance(payload, dict):
+                    return {"ok": False, "error": "extraction_failed"}
+                result = dict(payload)
+                raw_obs = result.get("observation") or result.get(
+                    "observation_sanitized"
+                )
+                rebuilt = amex_observation_from_sanitized(
+                    raw_obs if isinstance(raw_obs, dict) else None
+                )
+                if rebuilt is not None:
+                    result["observation"] = rebuilt
+                return result
+
+            def _verify(prov: str) -> dict[str, Any]:
+                payload = http("POST", f"{base_url}/providers/{prov}/verify")
+                if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+                    return payload["result"]
+                return payload if isinstance(payload, dict) else {}
+
+            factory = connector_factory_fn or (
+                lambda: AmexConnector(
+                    ensure_usable_session_fn=_ensure_usable_session,
+                    ensure_provider_surface_fn=_ensure_surface,
+                    execute_readonly_extraction_fn=_extract,
+                    verify_fn=_verify,
+                )
+            )
+            try:
+                connector = factory()
+                refresh_result = connector.refresh()
+                result_dict = refresh_result.to_sanitized_dict()
+            except KeyboardInterrupt:
+                interrupted = True
+                result_dict = {
+                    "provider": provider,
+                    "status": "authentication_required",
+                    "user_interrupted": True,
+                    "interruption_type": "keyboard_interrupt",
+                    "error": "authentication_required",
+                    "telemetry": {
+                        "fields_succeeded": 0,
+                        "fields_unavailable": 0,
+                        "fields_failed": 0,
+                        "snapshot_account_count": 0,
+                        "rewards_program_count": 0,
+                    },
+                    "snapshot": None,
+                    "field_observations": [],
+                    "warnings": ["authentication_required"],
+                }
+            except Exception as exc:  # noqa: BLE001
+                result_dict = {
+                    "provider": provider,
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}",
+                    "telemetry": {
+                        "fields_succeeded": 0,
+                        "fields_unavailable": 0,
+                        "fields_failed": 0,
+                        "snapshot_account_count": 0,
+                        "rewards_program_count": 0,
+                    },
+                    "snapshot": None,
+                    "field_observations": [],
+                    "warnings": [],
+                }
+
+            try:
+                evidence_path = _write_evidence(result_dict)
+            except Exception:
+                evidence_path = None
+
+            status = str(result_dict.get("status") or "failed")
+            if interrupted or result_dict.get("user_interrupted"):
+                exit_code = 130
+            elif status in {"success", "partial_success"}:
+                exit_code = 0
+            else:
+                exit_code = 1
+
+    finally:
+        # Always preserve evidence on interrupt; clean up only owned resources.
+        try:
+            _cleanup_browser()
+        finally:
+            _cleanup_runtime()
+
+    envelope = {
+        "ok": exit_code == 0,
+        "exit_code": exit_code,
+        "evidence_path": evidence_path,
+        "result": result_dict,
+        "interrupted": interrupted,
+        **_ownership_fields(),
+    }
+    if as_json:
+        emit(json.dumps(result_dict, indent=2))
+    elif emit_summary:
+        emit(
+            format_connector_refresh_terminal_summary(
+                result_dict,
+                evidence_path=evidence_path,
+            ).rstrip("\n")
+        )
+    return envelope
+
+
 def run_keepalive_probe_with_runtime(
     *,
     provider: str = "amex",
@@ -10330,6 +10829,328 @@ class ProviderRuntime:
             self.write_state()
             return self.last_result
 
+    def ensure_usable_session(
+        self,
+        provider: str,
+        *,
+        recovery_fn: Any = None,
+    ) -> dict[str, Any]:
+        """Verify auth; optionally invoke runtime recovery (never a new login loop).
+
+        Connectors call this instead of launching Chrome or implementing MFA.
+        ``recovery_fn`` may prompt the operator (CLI) or return interruption.
+        """
+        if provider != "amex":
+            return {
+                "ok": False,
+                "authentication_state": "LOGIN_UNKNOWN",
+                "error": "unsupported",
+                "reason": f"Unsupported provider: {provider}",
+                "recovery_attempts": 0,
+                "user_interrupted": False,
+            }
+        recovery_attempts = 0
+        try:
+            verification = self.verify(provider)
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "authentication_state": "LOGIN_UNKNOWN",
+                "error": "runtime_unavailable",
+                "reason": f"{type(exc).__name__}",
+                "recovery_attempts": 0,
+                "user_interrupted": False,
+            }
+        state = verification.authentication_state
+        if state == "SIGNED_IN":
+            self._timeline(
+                "connector_session_usable",
+                provider=provider,
+                payload={"authentication_state": state},
+            )
+            return {
+                "ok": True,
+                "authentication_state": state,
+                "reason": verification.reason,
+                "observed_at": verification.observed_at,
+                "recovery_attempts": 0,
+                "user_interrupted": False,
+            }
+
+        if recovery_fn is None:
+            self._timeline(
+                "connector_session_auth_required",
+                provider=provider,
+                payload={"authentication_state": state},
+            )
+            return {
+                "ok": False,
+                "authentication_state": state,
+                "error": "authentication_required",
+                "reason": verification.reason,
+                "observed_at": verification.observed_at,
+                "recovery_attempts": 0,
+                "user_interrupted": False,
+            }
+
+        recovery_attempts = 1
+        try:
+            recovered = recovery_fn(
+                authentication_state=state,
+                reason=verification.reason,
+            )
+        except KeyboardInterrupt:
+            return {
+                "ok": False,
+                "authentication_state": state,
+                "error": "authentication_required",
+                "reason": "user_interrupted",
+                "recovery_attempts": recovery_attempts,
+                "user_interrupted": True,
+                "interruption_type": "keyboard_interrupt",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "authentication_state": state,
+                "error": "authentication_required",
+                "reason": f"{type(exc).__name__}",
+                "recovery_attempts": recovery_attempts,
+                "user_interrupted": False,
+            }
+
+        if not isinstance(recovered, dict):
+            recovered = {}
+        if recovered.get("user_interrupted") or recovered.get("interrupted"):
+            return {
+                "ok": False,
+                "authentication_state": recovered.get("authentication_state") or state,
+                "error": "authentication_required",
+                "reason": recovered.get("reason") or "user_interrupted",
+                "recovery_attempts": recovery_attempts,
+                "user_interrupted": True,
+                "interruption_type": recovered.get("interruption_type")
+                or recovered.get("outcome")
+                or "mfa_or_login",
+            }
+
+        try:
+            reverified = self.verify(provider)
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "authentication_state": "LOGIN_UNKNOWN",
+                "error": "runtime_unavailable",
+                "reason": f"{type(exc).__name__}",
+                "recovery_attempts": recovery_attempts,
+                "user_interrupted": False,
+            }
+        final_state = reverified.authentication_state
+        ok = final_state == "SIGNED_IN"
+        self._timeline(
+            "connector_session_recovery_completed",
+            provider=provider,
+            payload={
+                "authentication_state": final_state,
+                "ok": ok,
+                "recovery_attempts": recovery_attempts,
+            },
+        )
+        return {
+            "ok": ok,
+            "authentication_state": final_state,
+            "reason": reverified.reason,
+            "observed_at": reverified.observed_at,
+            "recovery_attempts": recovery_attempts,
+            "user_interrupted": False,
+            "error": None if ok else "authentication_required",
+        }
+
+    def ensure_provider_surface(
+        self,
+        provider: str,
+        surface: str,
+    ) -> dict[str, Any]:
+        """Navigate the managed session to a named provider surface (e.g. overview)."""
+        if provider != "amex":
+            return {
+                "ok": False,
+                "error": "unsupported",
+                "reason": f"Unsupported provider: {provider}",
+            }
+        surface_name = str(surface or "").strip().lower()
+        if surface_name not in {"overview", "amex_overview"}:
+            return {
+                "ok": False,
+                "error": "unsupported",
+                "reason": f"Unsupported surface: {surface}",
+            }
+        with self.lock:
+            if not self.cdp_url:
+                return {
+                    "ok": False,
+                    "error": "runtime_unavailable",
+                    "reason": "Provider runtime is not started",
+                }
+            cdp_url = self.cdp_url
+            try:
+                with sync_playwright() as playwright:
+                    browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
+                    if not browser.contexts:
+                        return {
+                            "ok": False,
+                            "error": "surface_unavailable",
+                            "reason": "Chrome exposed no persistent browser context",
+                        }
+                    context = browser.contexts[0]
+                    page = select_amex_page(context, create_if_missing=True)
+                    if page is None:
+                        return {
+                            "ok": False,
+                            "error": "surface_unavailable",
+                            "reason": "No Amex page available",
+                        }
+                    page.goto(
+                        AMEX_OVERVIEW_URL,
+                        wait_until="domcontentloaded",
+                        timeout=30_000,
+                    )
+                    # Brief settle for SPA hydration without inventing auth.
+                    try:
+                        page.wait_for_timeout(1_500)
+                    except Exception:
+                        time.sleep(1.5)
+                    final_url = sanitize_url(getattr(page, "url", None))
+                    self._timeline(
+                        "connector_surface_ready",
+                        provider=provider,
+                        payload={
+                            "surface": "overview",
+                            "final_url": final_url,
+                        },
+                    )
+                    return {
+                        "ok": True,
+                        "provider": provider,
+                        "surface": "overview",
+                        "final_url": final_url,
+                    }
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "ok": False,
+                    "error": "surface_unavailable",
+                    "reason": f"{type(exc).__name__}",
+                }
+
+    def execute_readonly_extraction(
+        self,
+        provider: str,
+        extraction: str,
+        *,
+        captured_network: list[Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run a named read-only extraction without exposing Playwright Page objects."""
+        if provider != "amex":
+            return {
+                "ok": False,
+                "error": "unsupported",
+                "reason": f"Unsupported provider: {provider}",
+            }
+        extraction_name = str(extraction or "").strip().lower()
+        if extraction_name not in {
+            "overview_accounts",
+            "amex_overview_accounts",
+            "overview",
+        }:
+            return {
+                "ok": False,
+                "error": "unsupported",
+                "reason": f"Unsupported extraction: {extraction}",
+            }
+        from mighty.amex_extractor import extract_amex_overview
+
+        with self.lock:
+            if not self.cdp_url:
+                return {
+                    "ok": False,
+                    "error": "runtime_unavailable",
+                    "reason": "Provider runtime is not started",
+                }
+            cdp_url = self.cdp_url
+            verified_at = (
+                self.last_result.observed_at if self.last_result is not None else None
+            )
+            try:
+                with sync_playwright() as playwright:
+                    browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
+                    if not browser.contexts:
+                        return {
+                            "ok": False,
+                            "error": "extraction_failed",
+                            "reason": "Chrome exposed no persistent browser context",
+                        }
+                    context = browser.contexts[0]
+                    page = select_amex_page(context, create_if_missing=False)
+                    if page is None:
+                        return {
+                            "ok": False,
+                            "error": "extraction_failed",
+                            "reason": "No Amex page available",
+                        }
+                    # Ensure overview if we are not already there.
+                    current = sanitize_url(getattr(page, "url", None)) or ""
+                    if "/overview" not in current:
+                        page.goto(
+                            AMEX_OVERVIEW_URL,
+                            wait_until="domcontentloaded",
+                            timeout=30_000,
+                        )
+                        try:
+                            page.wait_for_timeout(1_500)
+                        except Exception:
+                            time.sleep(1.5)
+                    observation = extract_amex_overview(
+                        page,
+                        captured_network=captured_network,
+                    )
+                    # Never call page.evaluate — extract_amex_overview forbids it.
+                    sanitized = observation.to_sanitized_dict()
+                    self._timeline(
+                        "connector_extraction_completed",
+                        provider=provider,
+                        payload={
+                            "extraction": "overview_accounts",
+                            "extraction_method": observation.extraction_method,
+                            "useful": observation.useful,
+                            "card_count": len(observation.cards),
+                            "rewards_present": bool(
+                                observation.rewards and observation.rewards.balance
+                            ),
+                            "method_counts": dict(observation.method_counts),
+                        },
+                    )
+                    return {
+                        "ok": True,
+                        "provider": provider,
+                        "extraction": "overview_accounts",
+                        "verified_at": verified_at,
+                        "observation": observation,
+                        "observation_sanitized": sanitized,
+                        "method_counts": dict(observation.method_counts),
+                        "useful": observation.useful,
+                    }
+            except Exception as exc:  # noqa: BLE001
+                self._timeline(
+                    "connector_extraction_failed",
+                    provider=provider,
+                    payload={"error": type(exc).__name__},
+                )
+                return {
+                    "ok": False,
+                    "error": "extraction_failed",
+                    "reason": f"{type(exc).__name__}",
+                }
+
     def inspect_browser(
         self,
         provider: str = "amex",
@@ -11404,6 +12225,66 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                     {"ok": False, "error": str(exc)},
                 )
             return
+        if self.path == "/providers/amex/session/ensure":
+            try:
+                # HTTP path never blocks on MFA stdin; CLI owns recovery prompts.
+                payload = self.server.runtime.ensure_usable_session("amex")
+                status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.OK
+                self._send_json(status, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error": "runtime_unavailable",
+                        "reason": str(exc),
+                        "authentication_state": "LOGIN_UNKNOWN",
+                    },
+                )
+            return
+        if self.path == "/providers/amex/surface/ensure":
+            try:
+                body = self._read_json_body()
+                surface = str(body.get("surface") or "overview")
+                payload = self.server.runtime.ensure_provider_surface("amex", surface)
+                self._send_json(HTTPStatus.OK, payload)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error": "surface_unavailable",
+                        "reason": str(exc),
+                    },
+                )
+            return
+        if self.path == "/providers/amex/extract":
+            try:
+                body = self._read_json_body()
+                extraction = str(body.get("extraction") or "overview_accounts")
+                payload = self.server.runtime.execute_readonly_extraction(
+                    "amex",
+                    extraction,
+                )
+                # Never serialize live observation object / Page handles over HTTP.
+                response = {
+                    key: value
+                    for key, value in payload.items()
+                    if key != "observation"
+                }
+                if payload.get("observation") is not None and "observation_sanitized" in payload:
+                    response["observation"] = payload["observation_sanitized"]
+                self._send_json(HTTPStatus.OK, response)
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error": "extraction_failed",
+                        "reason": str(exc),
+                    },
+                )
+            return
         if self.path == "/providers/amex/maintenance/check":
             try:
                 payload = self.server.runtime.run_maintenance_once(force=True)
@@ -11850,6 +12731,30 @@ def parse_args() -> argparse.Namespace:
 
     keepalive_stop = subparsers.add_parser("keepalive-stop")
     keepalive_stop.add_argument("provider", choices=("amex",))
+
+    connector_refresh = subparsers.add_parser(
+        "connector-refresh",
+        help=(
+            "Run the production Amex connector refresh (read-only overview "
+            "accounts + rewards via Provider Runtime)"
+        ),
+    )
+    connector_refresh.add_argument("provider", choices=("amex",))
+    connector_refresh.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the sanitized canonical ConnectorRefreshResult as JSON",
+    )
+    connector_refresh.add_argument(
+        "--browser-cleanup",
+        choices=BROWSER_CLEANUP_POLICIES,
+        default=DEFAULT_BROWSER_CLEANUP_POLICY,
+        help=(
+            "Whether to close a command-launched managed browser at the end "
+            f"(default: {DEFAULT_BROWSER_CLEANUP_POLICY}; "
+            "never closes a preexisting managed browser or ordinary Chrome)"
+        ),
+    )
 
     browser_inspect = subparsers.add_parser(
         "browser-inspect",
@@ -12418,6 +13323,23 @@ def run_client_command(args: argparse.Namespace) -> int:
         )
         print(json.dumps(payload, indent=2))
         return 0 if payload.get("ok") else 1
+    if args.command == "connector-refresh":
+        payload = run_connector_refresh_with_runtime(
+            provider=str(args.provider),
+            host=args.host,
+            port=int(args.port),
+            root=args.root,
+            cdp_port=int(args.cdp_port),
+            state_path=args.state_path,
+            result_path=args.result_path,
+            keepalive_result_path=args.keepalive_result_path,
+            browser_cleanup=str(
+                getattr(args, "browser_cleanup", DEFAULT_BROWSER_CLEANUP_POLICY)
+            ),
+            as_json=bool(getattr(args, "json", False)),
+            emit_summary=True,
+        )
+        return int(payload.get("exit_code") or (0 if payload.get("ok") else 1))
     if args.command == "browser-inspect":
         payload = request_json(
             "POST",
