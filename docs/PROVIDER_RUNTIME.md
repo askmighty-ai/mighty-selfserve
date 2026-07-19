@@ -6,9 +6,56 @@ windows or profiles.
 
 The first implementation supports American Express.
 
+## Recommended operational interface
+
+For day-to-day development, use the **Mighty Access Control Center**. It is the
+long-running console that proves Mighty can continuously maintain authenticated
+access — not a campaign UI, and not a one-shot probe.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py control-center amex
+```
+
+On start it:
+
+1. ensures Provider Runtime (`serve`) is healthy (starts it when needed);
+2. ensures the managed Amex browser is available;
+3. prompts for login/MFA once if the session is not already `SIGNED_IN`;
+4. starts the Access Supervisor loop;
+5. redraws a live console from a provider-independent `AccessState`.
+
+Authenticate once, leave it running, and return hours later to see whether
+access stayed healthy. Keyboard shortcuts while the console is up:
+
+| Key | Action |
+| --- | --- |
+| `v` | Verify authentication now |
+| `k` | Run keepalive now |
+| `r` | Run connector refresh |
+| `l` | Login / recover now |
+| `q` | Quit Control Center |
+
+Default browser cleanup is `leave-open` so an authenticated managed Chrome
+session survives quitting the console. Runtime started by Control Center is
+stopped on quit; a preexisting runtime is left alone.
+
+See [Access Control Center](#access-control-center) below for architecture.
+
 ## Lifecycle
 
 ```text
+control-center amex          (recommended)
+      |
+      | ensure serve + managed Chrome
+      v
+user signs in once (MFA as needed)
+      |
+      | Access Supervisor maintains access
+      v
+live console shows AccessState for hours
+
+— or the lower-level path —
+
 bootstrap amex
       |
       | opens dedicated native Chrome + CDP
@@ -916,12 +963,77 @@ Stopping ends any active keepalive trial, stops the maintenance watcher, then
 terminates only Chrome processes whose command line contains the exact dedicated
 Mighty Amex profile path. Normal Chrome windows and profiles are never affected.
 
+## Access Control Center
+
+The Control Center is the recommended long-running operational interface for
+Provider Runtime development. It answers: “Has Mighty continuously maintained
+authenticated access?”
+
+### Architecture
+
+```text
+control-center CLI
+        |
+        | ownership (serve + managed browser + initial auth)
+        v
+Access Supervisor  ----updates---->  AccessState
+        |                                |
+        | verify / overview /            | read-only
+        | keepalive / repair             v
+        |                          live console
+        v
+   EventHistory (last 100)
+```
+
+- **AccessState** — provider-independent snapshot. All verification and repair
+  paths update this object. The console renders only `AccessState`.
+- **Access Supervisor** — every `--interval-seconds` (default 60): verify auth,
+  verify browser, ensure overview surface, run keepalive when due, repair when
+  degraded, append events. It does **not** wait for connector refreshes to
+  trigger maintenance.
+- **EventHistory** — in-memory rolling buffer (default last 100 events):
+  verification success/failure, keepalive success/failure, recovery
+  started/completed, browser restart, user interruption, connector refresh.
+- **Recovery Planner status** — Control Center surface for repair state
+  (`idle` / `recovering` / `awaiting_user` / `failed`). Browser restarts run
+  automatically; authentication loss sets `awaiting_user` until `l` (login).
+
+### Console fields
+
+| Section | Fields |
+| --- | --- |
+| SYSTEM | Runtime, Browser, Recovery Planner, Scheduler |
+| PROVIDER | Authentication, Access health, Session age, Last verification, Last keepalive, Current strategy, Recoveries, User interruptions, Ready for extraction, Ready for connector |
+| RECENT EVENTS | Rolling sanitized history |
+
+### CLI
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py control-center amex
+
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py control-center amex \
+  --interval-seconds 60 \
+  --keepalive-interval-seconds 300 \
+  --strategy SESSION_API \
+  --browser-cleanup leave-open
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--interval-seconds` | `60` | Supervisor tick interval |
+| `--keepalive-interval-seconds` | `300` | Minimum gap between automatic keepalive probes |
+| `--strategy` | `SESSION_API` | Keepalive strategy for supervisor probes |
+| `--browser-cleanup` | `leave-open` | Close only a browser this command launched |
+
+Implementation: `mighty/provider_runtime_control_center.py`.
+
 ## Current scope
 
 This is the first functional runtime boundary, not the final production service.
 
 It currently provides:
 
+- **Access Control Center** (`control-center`) as the recommended ops console;
 - isolated persistent Amex profile;
 - native visible login bootstrap that leaves Chrome alive;
 - CDP attach from `serve` to the authenticated process;
@@ -930,12 +1042,13 @@ It currently provides:
 - reusable Browser Inspector (pages/frames/shadow/modal candidates);
 - automatic Amex inactivity-dialog session extension via inspector + classifier;
 - developer-only Amex keepalive trials (experiment, not production keepalive);
+- Access Supervisor continuous maintenance (verify / overview / keepalive / repair);
 - localhost status, verification, maintenance-check, browser-inspect,
   browser-find-text, browser-watch-text, browser-record-expiration,
   browser-run-expiration-experiment, campaign (end-to-end Amex keepalive
   comparison), browser-run-expiration-campaign (internal helper),
   browser-open-latest-expiration-experiment, keepalive, connector-refresh,
-  and shutdown commands;
+  control-center, and shutdown commands;
 - production connector support APIs:
   `ensure_usable_session`, `ensure_provider_surface`,
   `execute_readonly_extraction` (Amex overview accounts + rewards);
@@ -953,5 +1066,5 @@ It does not yet:
 - communicate with Railway;
 - automate MFA or CAPTCHA (operator interruption only);
 - manage multiple providers in Runtime itself (connectors are multi-provider);
-- enable automatic keepalive as production behavior;
+- enable automatic keepalive as always-on production behavior outside Control Center;
 - extract transactions, offers, statements, or perform account mutations.

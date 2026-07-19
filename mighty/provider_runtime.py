@@ -28,6 +28,7 @@ Commands:
     python scripts/provider_runtime.py inspect-expiration-dialog amex
     python scripts/provider_runtime.py connector-refresh amex
     python scripts/provider_runtime.py connector-refresh amex --persist
+    python scripts/provider_runtime.py control-center amex
 
 Lifecycle:
     bootstrap opens a visible native Chrome window for login, verifies over CDP,
@@ -13333,6 +13334,44 @@ def parse_args() -> argparse.Namespace:
         help="Deprecated alias for browser-inspect + Amex expiration classification",
     )
     inspect_expiration.add_argument("provider", choices=("amex",))
+
+    control_center = subparsers.add_parser(
+        "control-center",
+        help=(
+            "Mighty Access Control Center: long-running operational console that "
+            "owns Provider Runtime + managed browser and continuously maintains "
+            "authenticated access (recommended development ops interface)"
+        ),
+    )
+    control_center.add_argument("provider", choices=("amex",))
+    control_center.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=60.0,
+        help="Access Supervisor tick interval (default: 60)",
+    )
+    control_center.add_argument(
+        "--keepalive-interval-seconds",
+        type=float,
+        default=300.0,
+        help="Minimum seconds between automatic keepalive probes (default: 300)",
+    )
+    control_center.add_argument(
+        "--strategy",
+        default="SESSION_API",
+        choices=KEEPALIVE_STRATEGIES,
+        help="Keepalive strategy used by the Access Supervisor (default: SESSION_API)",
+    )
+    control_center.add_argument(
+        "--browser-cleanup",
+        choices=BROWSER_CLEANUP_POLICIES,
+        default="leave-open",
+        help=(
+            "Whether to close a Control Center-launched managed browser on quit "
+            "(default: leave-open; never closes a preexisting managed browser "
+            "or ordinary Chrome)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -13679,6 +13718,26 @@ def run_client_command(args: argparse.Namespace) -> int:
         )
         print(json.dumps(payload, indent=2))
         return 0 if payload.get("ok") else 1
+    if args.command == "control-center":
+        from mighty.provider_runtime_control_center import run_control_center
+
+        payload = run_control_center(
+            provider=str(args.provider),
+            host=args.host,
+            port=int(args.port),
+            root=args.root,
+            cdp_port=int(args.cdp_port),
+            state_path=args.state_path,
+            result_path=args.result_path,
+            keepalive_result_path=args.keepalive_result_path,
+            interval_seconds=float(getattr(args, "interval_seconds", 60.0)),
+            keepalive_interval_seconds=float(
+                getattr(args, "keepalive_interval_seconds", 300.0)
+            ),
+            keepalive_strategy=str(getattr(args, "strategy", "SESSION_API")),
+            browser_cleanup=str(getattr(args, "browser_cleanup", "leave-open")),
+        )
+        return int(payload.get("exit_code") or (0 if payload.get("ok") else 1))
     return 2
 
 
