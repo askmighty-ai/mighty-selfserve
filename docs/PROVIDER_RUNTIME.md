@@ -523,39 +523,35 @@ PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
 
 #### Developer Amex expiration campaign
 
-`browser-run-expiration-campaign` runs multiple existing expiration experiments
-sequentially and packages one comparison artifact. It reuses
-`browser-run-expiration-experiment` orchestration as the unit of execution.
-The campaign also ensures a dedicated managed Amex Chrome window exists by
-reusing `launch_native_chrome` with the Mighty profile + CDP port (never the
-user’s normal Chrome profile).
+`campaign amex` is the first-class end-to-end keepalive comparison command.
+It ensures Provider Runtime is running, manages the dedicated Amex browser,
+runs the default trial matrix, packages one ZIP, and stops `serve` only when
+this command started it.
 
 Recommended workflow:
 
 ```bash
-# Terminal 1 — keep serve running as the safety boundary
-PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve
-
-# Terminal 2 — campaign launches/reuses managed Chrome and prompts for login
-PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
-  browser-run-expiration-campaign amex \
-  --campaign-name amex-keepalive-comparison \
-  --trial NONE:30 \
-  --trial SESSION_API:30 \
-  --trial SESSION_API:5 \
-  --trial PAGE_ACTIVITY:30 \
-  --trial OVERVIEW_RELOAD:30
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py campaign amex
 ```
 
-You do **not** need to run `bootstrap amex` first. At startup the campaign:
+That single command:
 
-1. checks runtime health (`serve` must already be running);
-2. classifies managed CDP health via `/json/version` + `/json/list`;
-3. reuses a healthy managed browser, launches one when absent, or restarts only
-   the Mighty Amex profile Chrome when unhealthy (zero page targets);
-4. performs canonical verification;
-5. if `SIGNED_OUT` / `LOGIN_UNKNOWN`, brings the managed window forward (macOS)
-   and prompts:
+1. checks runtime health and auto-starts `serve` when needed;
+2. launches or reuses the dedicated managed Amex Chrome window
+   (`launch_native_chrome` + Mighty profile + CDP port `9223`);
+3. prompts for login/MFA when required;
+4. runs the default campaign:
+
+   - `NONE:30`
+   - `SESSION_API:30`
+   - `SESSION_API:5`
+   - `PAGE_ACTIVITY:30`
+   - `OVERVIEW_RELOAD:30`
+
+5. packages `campaign-summary.json` / `.csv` / `.md` plus trial evidence into one ZIP;
+6. stops `serve` only if this command started it (preexisting serve is left running).
+
+Authentication prompt when needed:
 
 ```text
 Authentication required.
@@ -565,16 +561,14 @@ Sign in and complete MFA.
 Press Enter here when the account overview page is visible.
 ```
 
-After Enter, it verifies again and continues only when `SIGNED_IN`. Between
-trials, logout or a zero-target browser state triggers recovery +
-reauthentication automatically.
-
 Example console:
 
 ```text
+Provider Runtime not running.
+Starting Provider Runtime serve...
+Provider Runtime ready.
 Checking managed Amex browser...
 No managed browser found.
-
 Launching dedicated Mighty Amex Chrome...
 Browser ready.
 
@@ -584,6 +578,10 @@ A dedicated Mighty Amex Chrome window has been opened.
 Sign in and complete MFA.
 Press Enter here when the account overview page is visible.
 ```
+
+Advanced users may override the default matrix with repeatable `--trial` options
+and/or call the internal helper `browser-run-expiration-campaign` against an
+already-running `serve`.
 
 Output:
 
@@ -611,6 +609,7 @@ Useful flags:
 
 | Option | Behavior |
 | --- | --- |
+| `--trial STRATEGY:INTERVAL` | Override the default trial matrix (repeatable) |
 | `--browser-cleanup close-on-completion` | Default. Closes only a browser this campaign launched; never closes a preexisting managed browser or ordinary Chrome |
 | `--browser-cleanup leave-open` | Leave the managed browser running after the campaign |
 | `--continue-on-error` | Record a failed trial and continue (with auth recovery if needed) |
@@ -619,8 +618,8 @@ Useful flags:
 
 Ctrl+C finishes writing the current trial’s partial evidence, writes campaign
 summary files for completed/partial trials, creates a partial campaign ZIP,
-leaves the managed browser open by default, and does **not** stop `serve` or
-touch ordinary Chrome.
+leaves the managed browser open by default, stops `serve` only when this
+command started it, and never touches ordinary Chrome.
 
 The CLI prints only the campaign result and final ZIP path.
 
@@ -764,7 +763,8 @@ It currently provides:
 - developer-only Amex keepalive trials (experiment, not production keepalive);
 - localhost status, verification, maintenance-check, browser-inspect,
   browser-find-text, browser-watch-text, browser-record-expiration,
-  browser-run-expiration-experiment, browser-run-expiration-campaign,
+  browser-run-expiration-experiment, campaign (end-to-end Amex keepalive
+  comparison), browser-run-expiration-campaign (internal helper),
   browser-open-latest-expiration-experiment, keepalive, and shutdown commands;
 - canonical authentication results;
 - sanitized persisted runtime state (including maintenance counters and trial results).

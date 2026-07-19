@@ -19,6 +19,7 @@ Commands:
     python scripts/provider_runtime.py browser-watch-text amex
     python scripts/provider_runtime.py browser-record-expiration amex
     python scripts/provider_runtime.py browser-run-expiration-experiment amex
+    python scripts/provider_runtime.py campaign amex
     python scripts/provider_runtime.py browser-run-expiration-campaign amex
     python scripts/provider_runtime.py browser-open-latest-expiration-experiment amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
@@ -2761,6 +2762,15 @@ BROWSER_CLEANUP_POLICIES = (
 )
 DEFAULT_BROWSER_CLEANUP_POLICY = BROWSER_CLEANUP_CLOSE_ON_COMPLETION
 DEFAULT_MANAGED_BROWSER_STARTUP_TIMEOUT_SECONDS = 30.0
+DEFAULT_PROVIDER_RUNTIME_HEALTH_TIMEOUT_SECONDS = 30.0
+DEFAULT_AMEX_CAMPAIGN_NAME = "amex-keepalive-comparison"
+DEFAULT_AMEX_CAMPAIGN_TRIALS = (
+    "NONE:30",
+    "SESSION_API:30",
+    "SESSION_API:5",
+    "PAGE_ACTIVITY:30",
+    "OVERVIEW_RELOAD:30",
+)
 
 
 def expiration_experiment_keepalive_convergence_timeout_seconds(
@@ -5272,6 +5282,453 @@ def run_amex_expiration_campaign(
         "message": None,
         **_browser_metadata(),
     }
+
+
+def default_amex_campaign_trials() -> list[str]:
+    """Default keepalive comparison matrix for ``campaign amex``."""
+    return list(DEFAULT_AMEX_CAMPAIGN_TRIALS)
+
+
+def resolve_amex_campaign_trials(
+    trials: list[str] | tuple[str, ...] | None,
+) -> list[str]:
+    """Use explicit ``--trial`` values when provided; otherwise expand defaults."""
+    if trials:
+        return [str(item) for item in trials]
+    return default_amex_campaign_trials()
+
+
+def check_provider_runtime_health(
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    request_json_fn: Any = None,
+) -> dict[str, Any]:
+    """Return ``{ok: True}`` when ``serve`` answers ``GET /health``."""
+    http = request_json_fn or request_json
+    base_url = _expiration_experiment_base_url(host, port)
+    try:
+        payload = http("GET", f"{base_url}/health")
+    except (URLError, TimeoutError, OSError, ConnectionError, ProviderRuntimeHTTPError) as exc:
+        return {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "base_url": base_url,
+        }
+    return {"ok": True, "payload": payload, "base_url": base_url}
+
+
+def wait_for_provider_runtime_health(
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    timeout_seconds: float = DEFAULT_PROVIDER_RUNTIME_HEALTH_TIMEOUT_SECONDS,
+    request_json_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+) -> dict[str, Any]:
+    """Poll runtime health until ready or timeout."""
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    deadline = monotonic() + max(0.0, float(timeout_seconds))
+    last: dict[str, Any] = {"ok": False, "error": "not_ready"}
+    while True:
+        last = check_provider_runtime_health(
+            host=host,
+            port=port,
+            request_json_fn=request_json_fn,
+        )
+        if last.get("ok"):
+            return last
+        now = monotonic()
+        if now >= deadline:
+            raise RuntimeError(
+                "Provider Runtime did not become healthy within "
+                f"{float(timeout_seconds):g}s "
+                f"(last_error={last.get('error')})"
+            )
+        sleep(min(0.25, max(0.0, deadline - now)))
+
+
+def default_provider_runtime_script_path() -> Path:
+    """Locate ``scripts/provider_runtime.py`` relative to this module when present."""
+    candidate = Path(__file__).resolve().parents[1] / "scripts" / "provider_runtime.py"
+    return candidate
+
+
+def start_provider_runtime_serve_subprocess(
+    *,
+    root: Path,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    cdp_port: int = DEFAULT_CDP_PORT,
+    state_path: Path | None = None,
+    result_path: Path | None = None,
+    keepalive_result_path: Path | None = None,
+    python_executable: str | None = None,
+    script_path: Path | None = None,
+    popen_fn: Any = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen[Any]:
+    """Launch ``provider_runtime.py serve`` as a detached child process."""
+    root = Path(root).expanduser().resolve()
+    script = Path(script_path) if script_path is not None else default_provider_runtime_script_path()
+    if not script.is_file():
+        raise FileNotFoundError(f"Provider Runtime script not found: {script}")
+    command = [
+        str(python_executable or sys.executable),
+        str(script),
+        "--root",
+        str(root),
+        "--host",
+        str(host),
+        "--port",
+        str(int(port)),
+        "--cdp-port",
+        str(int(cdp_port)),
+    ]
+    if state_path is not None:
+        command.extend(["--state-path", str(Path(state_path).expanduser().resolve())])
+    if result_path is not None:
+        command.extend(["--result-path", str(Path(result_path).expanduser().resolve())])
+    if keepalive_result_path is not None:
+        command.extend(
+            [
+                "--keepalive-result-path",
+                str(Path(keepalive_result_path).expanduser().resolve()),
+            ]
+        )
+    command.append("serve")
+
+    child_env = dict(env or os.environ)
+    repo_root = Path(__file__).resolve().parents[1]
+    existing = child_env.get("PYTHONPATH", "")
+    prefix = str(repo_root)
+    if existing:
+        if prefix not in existing.split(os.pathsep):
+            child_env["PYTHONPATH"] = prefix + os.pathsep + existing
+    else:
+        child_env["PYTHONPATH"] = prefix
+
+    launcher = popen_fn or subprocess.Popen
+    return launcher(
+        command,
+        env=child_env,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def stop_provider_runtime_serve(
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    process: Any = None,
+    request_json_fn: Any = None,
+    wait_timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Stop a campaign-owned runtime via ``POST /shutdown`` (and process wait)."""
+    http = request_json_fn or request_json
+    base_url = _expiration_experiment_base_url(host, port)
+    shutdown_error: str | None = None
+    try:
+        http("POST", f"{base_url}/shutdown")
+    except Exception as exc:  # noqa: BLE001
+        shutdown_error = f"{type(exc).__name__}: {exc}"
+
+    process_exited = None
+    if process is not None and hasattr(process, "wait"):
+        try:
+            process.wait(timeout=float(wait_timeout_seconds))
+            process_exited = True
+        except Exception:
+            process_exited = False
+            try:
+                if hasattr(process, "kill"):
+                    process.kill()
+            except Exception:
+                pass
+    return {
+        "ok": shutdown_error is None or bool(process_exited),
+        "shutdown_error": shutdown_error,
+        "process_exited": process_exited,
+    }
+
+
+def ensure_provider_runtime_for_campaign(
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    root: Path | None = None,
+    cdp_port: int = DEFAULT_CDP_PORT,
+    state_path: Path | None = None,
+    result_path: Path | None = None,
+    keepalive_result_path: Path | None = None,
+    health_timeout_seconds: float = DEFAULT_PROVIDER_RUNTIME_HEALTH_TIMEOUT_SECONDS,
+    request_json_fn: Any = None,
+    start_runtime_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    print_fn: Any = None,
+) -> dict[str, Any]:
+    """Reuse a healthy runtime or launch ``serve`` and remember ownership."""
+    emit = print_fn or print
+    health = check_provider_runtime_health(
+        host=host,
+        port=port,
+        request_json_fn=request_json_fn,
+    )
+    if health.get("ok"):
+        emit("Provider Runtime already running.")
+        return {
+            "ok": True,
+            "runtime_preexisting": True,
+            "runtime_started_by_campaign": False,
+            "process": None,
+            "base_url": health.get("base_url"),
+        }
+
+    emit("Provider Runtime not running.")
+    emit("Starting Provider Runtime serve...")
+    starter = start_runtime_fn or (
+        lambda: start_provider_runtime_serve_subprocess(
+            root=Path(root) if root is not None else DEFAULT_ROOT,
+            host=host,
+            port=port,
+            cdp_port=int(cdp_port),
+            state_path=state_path,
+            result_path=result_path,
+            keepalive_result_path=keepalive_result_path,
+        )
+    )
+    try:
+        process = starter()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "runtime_preexisting": False,
+            "runtime_started_by_campaign": False,
+            "process": None,
+            "error": f"{type(exc).__name__}: {exc}",
+            "outcome": "runtime_start_failed",
+            "message": f"Failed to start Provider Runtime serve: {exc}",
+        }
+
+    try:
+        ready = wait_for_provider_runtime_health(
+            host=host,
+            port=port,
+            timeout_seconds=float(health_timeout_seconds),
+            request_json_fn=request_json_fn,
+            sleep_fn=sleep_fn,
+            monotonic_fn=monotonic_fn,
+        )
+    except Exception as exc:
+        # Best-effort cleanup of a process we started but could not health-check.
+        try:
+            stop_provider_runtime_serve(
+                host=host,
+                port=port,
+                process=process,
+                request_json_fn=request_json_fn,
+            )
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "runtime_preexisting": False,
+            "runtime_started_by_campaign": True,
+            "process": process,
+            "error": f"{type(exc).__name__}: {exc}",
+            "outcome": "runtime_start_failed",
+            "message": f"Provider Runtime serve started but never became healthy: {exc}",
+        }
+
+    emit("Provider Runtime ready.")
+    return {
+        "ok": True,
+        "runtime_preexisting": False,
+        "runtime_started_by_campaign": True,
+        "process": process,
+        "base_url": ready.get("base_url"),
+    }
+
+
+def run_amex_provider_campaign(
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    root: Path | None = None,
+    cdp_port: int = DEFAULT_CDP_PORT,
+    state_path: Path | None = None,
+    result_path: Path | None = None,
+    keepalive_result_path: Path | None = None,
+    diagnostics_dir: Path | None = None,
+    output_dir: Path | None = None,
+    trials: list[str] | tuple[str, ...] | None = None,
+    campaign_name: str | None = None,
+    trial_duration_seconds: int = DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS,
+    recording_timeout_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS
+    ),
+    evidence_interval_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS
+    ),
+    verification_interval_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS
+    ),
+    rolling_window_seconds: float = DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS,
+    screenshot_every_seconds: float = (
+        DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS
+    ),
+    browser_cleanup: str = DEFAULT_BROWSER_CLEANUP_POLICY,
+    continue_on_error: bool = False,
+    skip_completed: bool = False,
+    request_json_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    input_fn: Any = None,
+    print_fn: Any = None,
+    ensure_runtime_fn: Any = None,
+    stop_runtime_fn: Any = None,
+    run_campaign_fn: Any = None,
+    **campaign_kwargs: Any,
+) -> dict[str, Any]:
+    """First-class ``campaign amex`` entry: manage runtime, then run the campaign.
+
+    Reuses ``run_amex_expiration_campaign`` for browser + trial orchestration.
+    Starts ``serve`` only when needed and stops it only when this command owns it.
+    """
+    emit = print_fn or print
+    resolved_trials = resolve_amex_campaign_trials(trials)
+    resolved_name = campaign_name or DEFAULT_AMEX_CAMPAIGN_NAME
+    runtime_root = Path(root).expanduser().resolve() if root is not None else DEFAULT_ROOT
+
+    ensure_runtime = ensure_runtime_fn or ensure_provider_runtime_for_campaign
+    runtime_info = ensure_runtime(
+        host=host,
+        port=port,
+        root=runtime_root,
+        cdp_port=int(cdp_port),
+        state_path=state_path,
+        result_path=result_path,
+        keepalive_result_path=keepalive_result_path,
+        request_json_fn=request_json_fn,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        print_fn=emit,
+    )
+    if not isinstance(runtime_info, dict) or not runtime_info.get("ok"):
+        return {
+            "ok": False,
+            "outcome": (runtime_info or {}).get("outcome") or "runtime_start_failed",
+            "campaign_name": resolved_name,
+            "zip_path": None,
+            "trial_summaries": [],
+            "message": (runtime_info or {}).get("message")
+            or (runtime_info or {}).get("error")
+            or "Failed to ensure Provider Runtime",
+            "error": (runtime_info or {}).get("error"),
+            "exit_code": 1,
+            "interrupted": False,
+            "runtime_preexisting": bool((runtime_info or {}).get("runtime_preexisting")),
+            "runtime_started_by_campaign": bool(
+                (runtime_info or {}).get("runtime_started_by_campaign")
+            ),
+            "runtime_stopped_by_campaign": False,
+            "trials": resolved_trials,
+        }
+
+    runtime_preexisting = bool(runtime_info.get("runtime_preexisting"))
+    runtime_started_by_campaign = bool(runtime_info.get("runtime_started_by_campaign"))
+    runtime_process = runtime_info.get("process")
+    runtime_stopped_by_campaign = False
+
+    run_campaign = run_campaign_fn or run_amex_expiration_campaign
+    result: dict[str, Any]
+    try:
+        result = run_campaign(
+            host=host,
+            port=port,
+            root=runtime_root,
+            cdp_port=int(cdp_port),
+            diagnostics_dir=diagnostics_dir
+            if diagnostics_dir is not None
+            else runtime_root / "diagnostics",
+            output_dir=output_dir,
+            trials=resolved_trials,
+            campaign_name=resolved_name,
+            trial_duration_seconds=int(trial_duration_seconds),
+            recording_timeout_seconds=float(recording_timeout_seconds),
+            evidence_interval_seconds=float(evidence_interval_seconds),
+            verification_interval_seconds=float(verification_interval_seconds),
+            rolling_window_seconds=float(rolling_window_seconds),
+            screenshot_every_seconds=float(screenshot_every_seconds),
+            browser_cleanup=browser_cleanup,
+            continue_on_error=continue_on_error,
+            skip_completed=skip_completed,
+            request_json_fn=request_json_fn,
+            sleep_fn=sleep_fn,
+            monotonic_fn=monotonic_fn,
+            input_fn=input_fn,
+            print_fn=emit,
+            **campaign_kwargs,
+        )
+        if not isinstance(result, dict):
+            result = {
+                "ok": False,
+                "outcome": "fatal_error",
+                "campaign_name": resolved_name,
+                "zip_path": None,
+                "trial_summaries": [],
+                "exit_code": 1,
+                "interrupted": False,
+            }
+    except KeyboardInterrupt:
+        result = {
+            "ok": False,
+            "outcome": "interrupted",
+            "campaign_name": resolved_name,
+            "zip_path": None,
+            "trial_summaries": [],
+            "exit_code": 130,
+            "interrupted": True,
+            "message": None,
+        }
+    except Exception as exc:  # noqa: BLE001 - always clean up owned runtime
+        result = {
+            "ok": False,
+            "outcome": "fatal_error",
+            "campaign_name": resolved_name,
+            "zip_path": None,
+            "trial_summaries": [],
+            "exit_code": 1,
+            "interrupted": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "message": f"{type(exc).__name__}: {exc}",
+        }
+    finally:
+        if runtime_started_by_campaign:
+            emit("Stopping Provider Runtime started by this campaign...")
+            stopper = stop_runtime_fn or stop_provider_runtime_serve
+            stopper(
+                host=host,
+                port=port,
+                process=runtime_process,
+                request_json_fn=request_json_fn,
+            )
+            runtime_stopped_by_campaign = True
+        elif runtime_preexisting:
+            emit("Leaving preexisting Provider Runtime running.")
+
+    result = dict(result)
+    result["runtime_preexisting"] = runtime_preexisting
+    result["runtime_started_by_campaign"] = runtime_started_by_campaign
+    result["runtime_stopped_by_campaign"] = runtime_stopped_by_campaign
+    result["trials"] = resolved_trials
+    result["campaign_name"] = result.get("campaign_name") or resolved_name
+    return result
 
 
 def _explorer_tag_label(node: dict[str, Any] | None) -> str:
@@ -9495,116 +9952,159 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    def _add_campaign_run_arguments(
+        parser: argparse.ArgumentParser,
+        *,
+        trials_required: bool,
+        include_runtime_lifecycle_help: bool,
+    ) -> None:
+        parser.add_argument("provider", choices=("amex",))
+        parser.add_argument(
+            "--trial",
+            action="append",
+            dest="trials",
+            required=trials_required,
+            metavar="STRATEGY:INTERVAL",
+            help=(
+                "Repeatable trial specification STRATEGY:KEEPALIVE_INTERVAL_SECONDS "
+                f"(strategies: {', '.join(KEEPALIVE_STRATEGIES)}; example: NONE:30)"
+                + (
+                    ""
+                    if trials_required
+                    else (
+                        "; default campaign: "
+                        + ", ".join(DEFAULT_AMEX_CAMPAIGN_TRIALS)
+                    )
+                )
+            ),
+        )
+        parser.add_argument(
+            "--campaign-name",
+            default=None,
+            help=(
+                "Optional campaign label stored in campaign-summary artifacts "
+                f"(default for campaign: {DEFAULT_AMEX_CAMPAIGN_NAME})"
+            ),
+        )
+        parser.add_argument(
+            "--trial-duration-seconds",
+            type=int,
+            default=DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS,
+            help=(
+                "Keepalive trial duration for each campaign trial "
+                f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS})"
+            ),
+        )
+        parser.add_argument(
+            "--recording-timeout-seconds",
+            type=float,
+            default=DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS,
+            help=(
+                "Expiration recorder timeout for each trial "
+                f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS})"
+            ),
+        )
+        parser.add_argument(
+            "--evidence-interval-seconds",
+            type=float,
+            default=DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS,
+            help=(
+                "Recorder browser-evidence poll interval "
+                f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS})"
+            ),
+        )
+        parser.add_argument(
+            "--verification-interval-seconds",
+            type=float,
+            default=DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS,
+            help=(
+                "Recorder fresh canonical verification cadence "
+                f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS})"
+            ),
+        )
+        parser.add_argument(
+            "--rolling-window-seconds",
+            type=float,
+            default=DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS,
+            help=(
+                "Recorder trailing observation window "
+                f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS})"
+            ),
+        )
+        parser.add_argument(
+            "--screenshot-every-seconds",
+            type=float,
+            default=DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS,
+            help=(
+                "Recorder screenshot cadence "
+                f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS})"
+            ),
+        )
+        parser.add_argument(
+            "--output-dir",
+            type=Path,
+            default=None,
+            help=(
+                "Optional campaign directory "
+                "(default: ~/.mighty/provider_runtime/diagnostics/"
+                "amex-expiration-campaign-<UTC>/)"
+            ),
+        )
+        parser.add_argument(
+            "--browser-cleanup",
+            choices=BROWSER_CLEANUP_POLICIES,
+            default=DEFAULT_BROWSER_CLEANUP_POLICY,
+            help=(
+                "Whether to close a campaign-launched managed browser at the end "
+                f"(default: {DEFAULT_BROWSER_CLEANUP_POLICY}; "
+                "never closes a preexisting managed browser or ordinary Chrome)"
+            ),
+        )
+        parser.add_argument(
+            "--continue-on-error",
+            action="store_true",
+            help="Record a failed trial and continue to the next trial",
+        )
+        parser.add_argument(
+            "--skip-completed",
+            action="store_true",
+            help=(
+                "Resume an interrupted campaign by skipping trials already marked "
+                "completed in campaign-manifest.json (match strategy + interval)"
+            ),
+        )
+        if include_runtime_lifecycle_help:
+            parser.epilog = (
+                "Ensures Provider Runtime serve is running (starts it when needed), "
+                "manages the dedicated Amex browser, runs the keepalive comparison "
+                "campaign, and stops serve only when this command started it."
+            )
+
+    campaign = subparsers.add_parser(
+        "campaign",
+        help=(
+            "Run the Amex keepalive comparison campaign end-to-end "
+            "(auto-starts serve when needed)"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_campaign_run_arguments(
+        campaign,
+        trials_required=False,
+        include_runtime_lifecycle_help=True,
+    )
+
     browser_run_expiration_campaign = subparsers.add_parser(
         "browser-run-expiration-campaign",
         help=(
-            "Developer-only: run multiple Amex expiration experiments "
-            "sequentially and package one comparison ZIP"
+            "Internal/advanced: run expiration experiments against an already "
+            "running serve (prefer: campaign amex)"
         ),
     )
-    browser_run_expiration_campaign.add_argument("provider", choices=("amex",))
-    browser_run_expiration_campaign.add_argument(
-        "--trial",
-        action="append",
-        dest="trials",
-        required=True,
-        metavar="STRATEGY:INTERVAL",
-        help=(
-            "Repeatable trial specification STRATEGY:KEEPALIVE_INTERVAL_SECONDS "
-            f"(strategies: {', '.join(KEEPALIVE_STRATEGIES)}; example: NONE:30)"
-        ),
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--campaign-name",
-        default=None,
-        help="Optional campaign label stored in campaign-summary artifacts",
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--trial-duration-seconds",
-        type=int,
-        default=DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS,
-        help=(
-            "Keepalive trial duration for each campaign trial "
-            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_TRIAL_DURATION_SECONDS})"
-        ),
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--recording-timeout-seconds",
-        type=float,
-        default=DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS,
-        help=(
-            "Expiration recorder timeout for each trial "
-            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_RECORDING_TIMEOUT_SECONDS})"
-        ),
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--evidence-interval-seconds",
-        type=float,
-        default=DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS,
-        help=(
-            "Recorder browser-evidence poll interval "
-            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_EVIDENCE_INTERVAL_SECONDS})"
-        ),
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--verification-interval-seconds",
-        type=float,
-        default=DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS,
-        help=(
-            "Recorder fresh canonical verification cadence "
-            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_VERIFICATION_INTERVAL_SECONDS})"
-        ),
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--rolling-window-seconds",
-        type=float,
-        default=DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS,
-        help=(
-            "Recorder trailing observation window "
-            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_ROLLING_WINDOW_SECONDS})"
-        ),
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--screenshot-every-seconds",
-        type=float,
-        default=DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS,
-        help=(
-            "Recorder screenshot cadence "
-            f"(default: {DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS})"
-        ),
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--output-dir",
-        type=Path,
-        default=None,
-        help=(
-            "Optional campaign directory "
-            "(default: ~/.mighty/provider_runtime/diagnostics/"
-            "amex-expiration-campaign-<UTC>/)"
-        ),
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--browser-cleanup",
-        choices=BROWSER_CLEANUP_POLICIES,
-        default=DEFAULT_BROWSER_CLEANUP_POLICY,
-        help=(
-            "Whether to close a campaign-launched managed browser at the end "
-            f"(default: {DEFAULT_BROWSER_CLEANUP_POLICY}; "
-            "never closes a preexisting managed browser or ordinary Chrome)"
-        ),
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--continue-on-error",
-        action="store_true",
-        help="Record a failed trial and continue to the next trial",
-    )
-    browser_run_expiration_campaign.add_argument(
-        "--skip-completed",
-        action="store_true",
-        help=(
-            "Resume an interrupted campaign by skipping trials already marked "
-            "completed in campaign-manifest.json (match strategy + interval)"
-        ),
+    _add_campaign_run_arguments(
+        browser_run_expiration_campaign,
+        trials_required=True,
+        include_runtime_lifecycle_help=False,
     )
 
     browser_open_latest_expiration_experiment = subparsers.add_parser(
@@ -9813,6 +10313,40 @@ def run_client_command(args: argparse.Namespace) -> int:
             screenshot_every_seconds=float(args.screenshot_every_seconds),
         )
         print_expiration_experiment_result(result)
+        return int(result.get("exit_code") or (0 if result.get("ok") else 1))
+    if args.command == "campaign":
+        output_dir = args.output_dir
+        if output_dir is not None:
+            output_dir = output_dir.expanduser().resolve()
+        try:
+            trial_specs = resolve_amex_campaign_trials(list(args.trials or []))
+            parse_expiration_campaign_trial_specs(trial_specs)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        result = run_amex_provider_campaign(
+            host=args.host,
+            port=args.port,
+            root=args.root,
+            cdp_port=int(args.cdp_port),
+            state_path=args.state_path,
+            result_path=args.result_path,
+            keepalive_result_path=args.keepalive_result_path,
+            diagnostics_dir=args.root / "diagnostics",
+            output_dir=output_dir,
+            trials=trial_specs,
+            campaign_name=args.campaign_name,
+            trial_duration_seconds=int(args.trial_duration_seconds),
+            recording_timeout_seconds=float(args.recording_timeout_seconds),
+            evidence_interval_seconds=float(args.evidence_interval_seconds),
+            verification_interval_seconds=float(args.verification_interval_seconds),
+            rolling_window_seconds=float(args.rolling_window_seconds),
+            screenshot_every_seconds=float(args.screenshot_every_seconds),
+            browser_cleanup=str(args.browser_cleanup),
+            continue_on_error=bool(args.continue_on_error),
+            skip_completed=bool(args.skip_completed),
+        )
+        print_expiration_campaign_result(result)
         return int(result.get("exit_code") or (0 if result.get("ok") else 1))
     if args.command == "browser-run-expiration-campaign":
         try:
