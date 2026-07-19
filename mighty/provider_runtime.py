@@ -8152,7 +8152,176 @@ def format_keepalive_probe_terminal_summary(payload: dict[str, Any]) -> str:
         lines.append(f"Evidence: {evidence}")
     if not ok and payload.get("error") and payload.get("error") != reason:
         lines.append(f"Error: {payload.get('error')}")
+    if payload.get("runtime_started_by_probe"):
+        if payload.get("runtime_stopped_by_probe"):
+            lines.append("Runtime: started by probe and stopped afterward.")
+        else:
+            lines.append("Runtime: started by probe.")
+    elif payload.get("runtime_preexisting"):
+        lines.append("Runtime: reused preexisting serve (left running).")
     return "\n".join(lines) + "\n"
+
+
+def run_keepalive_probe_with_runtime(
+    *,
+    provider: str = "amex",
+    strategy: str,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    root: Path | None = None,
+    cdp_port: int = DEFAULT_CDP_PORT,
+    state_path: Path | None = None,
+    result_path: Path | None = None,
+    keepalive_result_path: Path | None = None,
+    request_json_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    print_fn: Any = None,
+    ensure_runtime_fn: Any = None,
+    stop_runtime_fn: Any = None,
+    probe_request_fn: Any = None,
+) -> dict[str, Any]:
+    """First-class ``keepalive-probe`` entry: manage runtime, then probe once.
+
+    Mirrors ``campaign amex`` ownership: starts ``serve`` only when needed and
+    stops it only when this command owns it. Does not change managed-browser
+    ownership semantics.
+    """
+    emit = print_fn or print
+    http = request_json_fn or request_json
+    strategy = str(strategy or "").upper()
+    runtime_root = Path(root).expanduser().resolve() if root is not None else DEFAULT_ROOT
+
+    ensure_runtime = ensure_runtime_fn or ensure_provider_runtime_for_campaign
+    runtime_info = ensure_runtime(
+        host=host,
+        port=port,
+        root=runtime_root,
+        cdp_port=int(cdp_port),
+        state_path=state_path,
+        result_path=result_path,
+        keepalive_result_path=keepalive_result_path,
+        request_json_fn=http,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        print_fn=emit,
+    )
+    if not isinstance(runtime_info, dict) or not runtime_info.get("ok"):
+        return {
+            "ok": False,
+            "success": False,
+            "strategy": strategy,
+            "provider": provider,
+            "outcome": (runtime_info or {}).get("outcome") or "runtime_start_failed",
+            "error": (runtime_info or {}).get("error")
+            or (runtime_info or {}).get("message")
+            or "Failed to ensure Provider Runtime",
+            "reason": (runtime_info or {}).get("message")
+            or (runtime_info or {}).get("error")
+            or "Failed to ensure Provider Runtime",
+            "exit_code": 1,
+            "interrupted": False,
+            "runtime_preexisting": bool((runtime_info or {}).get("runtime_preexisting")),
+            "runtime_started_by_probe": bool(
+                (runtime_info or {}).get("runtime_started_by_campaign")
+            ),
+            "runtime_stopped_by_probe": False,
+        }
+
+    runtime_preexisting = bool(runtime_info.get("runtime_preexisting"))
+    runtime_started_by_probe = bool(runtime_info.get("runtime_started_by_campaign"))
+    runtime_process = runtime_info.get("process")
+    runtime_stopped_by_probe = False
+    payload: dict[str, Any]
+
+    def _probe() -> dict[str, Any]:
+        if probe_request_fn is not None:
+            return probe_request_fn(
+                host=host,
+                port=port,
+                provider=provider,
+                strategy=strategy,
+                request_json_fn=http,
+            )
+        base_url = _expiration_experiment_base_url(host, port)
+        return http(
+            "POST",
+            f"{base_url}/providers/{provider}/keepalive/probe",
+            {"strategy": strategy},
+            timeout=30.0,
+        )
+
+    try:
+        try:
+            raw = _probe()
+        except KeyboardInterrupt:
+            payload = {
+                "ok": False,
+                "success": False,
+                "strategy": strategy,
+                "provider": provider,
+                "outcome": "interrupted",
+                "error": "interrupted",
+                "reason": "interrupted",
+                "exit_code": 130,
+                "interrupted": True,
+            }
+        except Exception as exc:  # noqa: BLE001 - always clean up owned runtime
+            payload = {
+                "ok": False,
+                "success": False,
+                "strategy": strategy,
+                "provider": provider,
+                "outcome": "probe_request_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+                "reason": f"{type(exc).__name__}: {exc}",
+                "exit_code": 1,
+                "interrupted": False,
+            }
+        else:
+            if not isinstance(raw, dict):
+                payload = {
+                    "ok": False,
+                    "success": False,
+                    "strategy": strategy,
+                    "provider": provider,
+                    "outcome": "invalid_probe_payload",
+                    "error": "invalid_probe_payload",
+                    "reason": "invalid_probe_payload",
+                    "exit_code": 1,
+                    "interrupted": False,
+                }
+            else:
+                payload = dict(raw)
+                payload.setdefault("strategy", strategy)
+                payload.setdefault("provider", provider)
+                success = bool(payload.get("ok")) and bool(payload.get("success"))
+                payload["exit_code"] = 0 if success else 1
+                payload["interrupted"] = bool(payload.get("interrupted"))
+                payload["outcome"] = (
+                    "success"
+                    if success
+                    else (payload.get("outcome") or payload.get("error") or "probe_failed")
+                )
+    finally:
+        if runtime_started_by_probe:
+            emit("Stopping Provider Runtime started by this probe...")
+            stopper = stop_runtime_fn or stop_provider_runtime_serve
+            stopper(
+                host=host,
+                port=port,
+                process=runtime_process,
+                request_json_fn=http,
+            )
+            runtime_stopped_by_probe = True
+        elif runtime_preexisting:
+            emit("Leaving preexisting Provider Runtime running.")
+
+    payload = dict(payload)
+    payload["runtime_preexisting"] = runtime_preexisting
+    payload["runtime_started_by_probe"] = runtime_started_by_probe
+    payload["runtime_stopped_by_probe"] = runtime_stopped_by_probe
+    return payload
 
 
 def run_keepalive_preflight_for_campaign_trial(
@@ -10397,7 +10566,7 @@ def parse_args() -> argparse.Namespace:
         "keepalive-probe",
         help=(
             "Run one keepalive strategy attempt against the signed-in managed "
-            "session (developer preflight; does not wait for expiration)"
+            "session (auto-starts serve when needed; does not wait for expiration)"
         ),
     )
     keepalive_probe.add_argument("provider", choices=("amex",))
@@ -10912,16 +11081,19 @@ def run_client_command(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
         return 0 if payload.get("ok") else 1
     if args.command == "keepalive-probe":
-        payload = request_json(
-            "POST",
-            f"http://{args.host}:{args.port}/providers/{args.provider}/keepalive/probe",
-            {"strategy": args.strategy},
-            timeout=30.0,
+        payload = run_keepalive_probe_with_runtime(
+            provider=str(args.provider),
+            strategy=str(args.strategy),
+            host=args.host,
+            port=int(args.port),
+            root=args.root,
+            cdp_port=int(args.cdp_port),
+            state_path=args.state_path,
+            result_path=args.result_path,
+            keepalive_result_path=args.keepalive_result_path,
         )
         print(format_keepalive_probe_terminal_summary(payload), end="")
-        if payload.get("ok") and payload.get("success"):
-            return 0
-        return 1
+        return int(payload.get("exit_code") or (0 if payload.get("success") else 1))
     if args.command == "keepalive-status":
         payload = request_json(
             "GET",

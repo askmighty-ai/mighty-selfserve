@@ -18,6 +18,7 @@ from mighty.provider_runtime import (
     run_amex_expiration_campaign,
     run_client_command,
     run_keepalive_preflight_for_campaign_trial,
+    run_keepalive_probe_with_runtime,
     sanitize_keepalive_attempt,
 )
 from mighty.provider_runtime_campaign_analysis import (
@@ -318,7 +319,193 @@ def test_operational_failure_distinct_from_ineffective():
     assert operational != ineffective
 
 
-def test_probe_cli_does_not_start_or_stop_serve():
+def _successful_probe_payload(strategy: str = "SESSION_API") -> dict:
+    return {
+        "ok": True,
+        "success": True,
+        "strategy": strategy,
+        "reason": "success",
+        "attempt": {
+            "duration_ms": 12,
+            "target": "https://functions.americanexpress.com/ReadUserSession.v1",
+            "success": True,
+            "result": "success",
+        },
+        "evidence_path": "/tmp/probe.json",
+    }
+
+
+def test_probe_with_existing_serve_leaves_runtime_running(tmp_path: Path):
+    stop = MagicMock()
+    probe = MagicMock(return_value=_successful_probe_payload())
+    result = run_keepalive_probe_with_runtime(
+        strategy="SESSION_API",
+        root=tmp_path,
+        ensure_runtime_fn=lambda **_k: {
+            "ok": True,
+            "runtime_preexisting": True,
+            "runtime_started_by_campaign": False,
+            "process": None,
+        },
+        stop_runtime_fn=stop,
+        probe_request_fn=probe,
+        print_fn=lambda *_a, **_k: None,
+    )
+    assert result["success"] is True
+    assert result["runtime_preexisting"] is True
+    assert result["runtime_started_by_probe"] is False
+    assert result["runtime_stopped_by_probe"] is False
+    stop.assert_not_called()
+    probe.assert_called_once()
+
+
+def test_probe_without_serve_auto_starts_and_stops(tmp_path: Path):
+    process = MagicMock()
+    stop = MagicMock(return_value={"ok": True})
+    probe = MagicMock(return_value=_successful_probe_payload("PAGE_ACTIVITY"))
+    result = run_keepalive_probe_with_runtime(
+        strategy="PAGE_ACTIVITY",
+        root=tmp_path,
+        ensure_runtime_fn=lambda **_k: {
+            "ok": True,
+            "runtime_preexisting": False,
+            "runtime_started_by_campaign": True,
+            "process": process,
+        },
+        stop_runtime_fn=stop,
+        probe_request_fn=probe,
+        print_fn=lambda *_a, **_k: None,
+    )
+    assert result["success"] is True
+    assert result["runtime_started_by_probe"] is True
+    assert result["runtime_stopped_by_probe"] is True
+    stop.assert_called_once()
+    assert stop.call_args.kwargs["process"] is process
+
+
+def test_probe_successful_auto_start_messages(tmp_path: Path, capsys):
+    result = run_keepalive_probe_with_runtime(
+        strategy="SESSION_API",
+        root=tmp_path,
+        ensure_runtime_fn=lambda **_k: {
+            "ok": True,
+            "runtime_preexisting": False,
+            "runtime_started_by_campaign": True,
+            "process": MagicMock(),
+        },
+        stop_runtime_fn=MagicMock(return_value={"ok": True}),
+        probe_request_fn=lambda **_k: _successful_probe_payload(),
+        print_fn=print,
+    )
+    out = capsys.readouterr().out
+    assert result["runtime_started_by_probe"] is True
+    assert "Stopping Provider Runtime started by this probe..." in out
+
+
+def test_probe_successful_auto_stop_only_when_owned(tmp_path: Path, capsys):
+    stop = MagicMock(return_value={"ok": True})
+    result = run_keepalive_probe_with_runtime(
+        strategy="SESSION_API",
+        root=tmp_path,
+        ensure_runtime_fn=lambda **_k: {
+            "ok": True,
+            "runtime_preexisting": True,
+            "runtime_started_by_campaign": False,
+            "process": None,
+        },
+        stop_runtime_fn=stop,
+        probe_request_fn=lambda **_k: _successful_probe_payload(),
+        print_fn=print,
+    )
+    out = capsys.readouterr().out
+    assert result["runtime_stopped_by_probe"] is False
+    assert "Leaving preexisting Provider Runtime running." in out
+    stop.assert_not_called()
+
+
+def test_probe_failure_still_cleans_up_owned_serve(tmp_path: Path):
+    process = MagicMock()
+    stop = MagicMock(return_value={"ok": True})
+    result = run_keepalive_probe_with_runtime(
+        strategy="SESSION_API",
+        root=tmp_path,
+        ensure_runtime_fn=lambda **_k: {
+            "ok": True,
+            "runtime_preexisting": False,
+            "runtime_started_by_campaign": True,
+            "process": process,
+        },
+        stop_runtime_fn=stop,
+        probe_request_fn=lambda **_k: {
+            "ok": True,
+            "success": False,
+            "strategy": "SESSION_API",
+            "reason": "Error: boom",
+            "error": "Error: boom",
+        },
+        print_fn=lambda *_a, **_k: None,
+    )
+    assert result["success"] is False
+    assert result["runtime_started_by_probe"] is True
+    assert result["runtime_stopped_by_probe"] is True
+    stop.assert_called_once()
+    assert stop.call_args.kwargs["process"] is process
+
+
+def test_probe_ctrl_c_cleans_up_owned_serve(tmp_path: Path):
+    process = MagicMock()
+    stop = MagicMock(return_value={"ok": True})
+
+    def _interrupt(**_k):
+        raise KeyboardInterrupt
+
+    result = run_keepalive_probe_with_runtime(
+        strategy="SESSION_API",
+        root=tmp_path,
+        ensure_runtime_fn=lambda **_k: {
+            "ok": True,
+            "runtime_preexisting": False,
+            "runtime_started_by_campaign": True,
+            "process": process,
+        },
+        stop_runtime_fn=stop,
+        probe_request_fn=_interrupt,
+        print_fn=lambda *_a, **_k: None,
+    )
+    assert result["interrupted"] is True
+    assert result["exit_code"] == 130
+    assert result["runtime_stopped_by_probe"] is True
+    stop.assert_called_once()
+
+
+def test_probe_runtime_startup_failure(tmp_path: Path):
+    stop = MagicMock()
+    probe = MagicMock()
+    result = run_keepalive_probe_with_runtime(
+        strategy="SESSION_API",
+        root=tmp_path,
+        ensure_runtime_fn=lambda **_k: {
+            "ok": False,
+            "outcome": "runtime_start_failed",
+            "message": "boom",
+            "error": "boom",
+            "runtime_preexisting": False,
+            "runtime_started_by_campaign": False,
+        },
+        stop_runtime_fn=stop,
+        probe_request_fn=probe,
+        print_fn=lambda *_a, **_k: None,
+    )
+    assert result["ok"] is False
+    assert result["success"] is False
+    assert result["outcome"] == "runtime_start_failed"
+    assert result["exit_code"] == 1
+    assert result["runtime_stopped_by_probe"] is False
+    stop.assert_not_called()
+    probe.assert_not_called()
+
+
+def test_probe_cli_uses_runtime_lifecycle_helper(tmp_path: Path):
     with patch(
         "sys.argv",
         [
@@ -333,28 +520,21 @@ def test_probe_cli_does_not_start_or_stop_serve():
     assert args.command == "keepalive-probe"
 
     with patch(
-        "mighty.provider_runtime.request_json",
+        "mighty.provider_runtime.run_keepalive_probe_with_runtime",
         return_value={
-            "ok": True,
-            "success": True,
-            "strategy": "SESSION_API",
-            "reason": "success",
-            "attempt": {"duration_ms": 12, "target": "https://functions.americanexpress.com/ReadUserSession.v1"},
-            "evidence_path": "/tmp/probe.json",
+            **_successful_probe_payload(),
+            "exit_code": 0,
+            "runtime_preexisting": True,
+            "runtime_started_by_probe": False,
+            "runtime_stopped_by_probe": False,
         },
-    ) as request_json, patch(
-        "mighty.provider_runtime.run_server"
-    ) as run_server, patch(
-        "mighty.provider_runtime.ensure_provider_runtime_for_campaign"
-    ) as ensure_runtime:
+    ) as runner, patch("mighty.provider_runtime.run_server") as run_server:
         code = run_client_command(args)
 
     assert code == 0
     run_server.assert_not_called()
-    ensure_runtime.assert_not_called()
-    request_json.assert_called_once()
-    assert request_json.call_args.args[0] == "POST"
-    assert request_json.call_args.args[1].endswith("/providers/amex/keepalive/probe")
+    runner.assert_called_once()
+    assert runner.call_args.kwargs["strategy"] == "SESSION_API"
 
 
 def test_probe_does_not_alter_ordinary_chrome():

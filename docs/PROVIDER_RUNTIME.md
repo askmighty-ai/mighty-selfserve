@@ -753,10 +753,19 @@ PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
   keepalive-probe amex --strategy OVERVIEW_RELOAD
 ```
 
-The probe requires an existing signed-in managed Amex session and a running
-`serve`. It performs exactly one attempt, prints success/failure + reason,
-writes a sanitized evidence record under diagnostics, finishes in under 30
-seconds, never waits for expiration, and never touches ordinary Chrome.
+The probe requires an existing signed-in managed Amex session. Like
+`campaign amex`, it manages Provider Runtime serve ownership:
+
+1. checks runtime health;
+2. auto-starts `serve` when absent and remembers ownership;
+3. runs exactly one strategy attempt;
+4. stops `serve` only when this command started it;
+5. leaves a preexisting `serve` running.
+
+It prints success/failure + reason, writes a sanitized evidence record under
+diagnostics, finishes in under 30 seconds, never waits for expiration, never
+mutates account data, and never touches ordinary Chrome. Browser ownership is
+unchanged (probe does not launch/close the managed Amex window).
 
 `campaign amex` runs this probe before each active-strategy trial. A failed
 preflight records `OPERATIONALLY_FAILED` / `preflight_failed` and skips the
