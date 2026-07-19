@@ -123,6 +123,7 @@ Connectors must not:
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py connector-refresh amex
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py connector-refresh amex --json
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py connector-refresh amex --persist
 ```
 
 Behavior:
@@ -131,10 +132,13 @@ Behavior:
 2. Ensure a usable managed Amex session (existing production preflight)
 3. Run `AmexConnector.refresh()`
 4. Print a concise masked summary (or `--json` canonical result)
-5. Write sanitized JSON evidence under
+5. With `--persist`, append the snapshot to the local SnapshotStore, diff against
+   the previous snapshot, generate facts, and print a factual change summary
+   (see [SNAPSHOTS.md](SNAPSHOTS.md))
+6. Write sanitized JSON evidence under
    `~/.mighty/provider_runtime/diagnostics/amex-connector-refresh-<UTC>.json`
-6. Clean up only resources owned by the command; preexisting runtime/browser stay up
-7. Ctrl+C preserves evidence
+7. Clean up only resources owned by the command; preexisting runtime/browser stay up
+8. Ctrl+C preserves evidence
 
 ## Privacy rules
 

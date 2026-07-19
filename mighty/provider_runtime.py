@@ -27,6 +27,7 @@ Commands:
     python scripts/provider_runtime.py browser-open-latest-expiration-experiment amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
     python scripts/provider_runtime.py connector-refresh amex
+    python scripts/provider_runtime.py connector-refresh amex --persist
 
 Lifecycle:
     bootstrap opens a visible native Chrome window for login, verifies over CDP,
@@ -9070,6 +9071,48 @@ def format_connector_refresh_terminal_summary(
     return "\n".join(lines) + "\n"
 
 
+def _persist_connector_refresh_snapshot(
+    *,
+    provider: str,
+    result_dict: dict[str, Any],
+    refresh_result: Any,
+    runtime_root: Path,
+    snapshot_store: Any = None,
+) -> Any | None:
+    """Persist a successful connector snapshot and compute provider-independent facts."""
+    from mighty.snapshot_store import (
+        LocalFileSnapshotStore,
+        build_extraction_summary,
+        persist_refresh_snapshot,
+    )
+
+    status = str(result_dict.get("status") or "")
+    if status not in {"success", "partial_success"}:
+        return None
+    snapshot = getattr(refresh_result, "snapshot", None)
+    if snapshot is None:
+        return None
+
+    store = snapshot_store or LocalFileSnapshotStore(runtime_root)
+    telemetry = result_dict.get("telemetry") or {}
+    field_counts = {
+        "fields_succeeded": int(telemetry.get("fields_succeeded") or 0),
+        "fields_unavailable": int(telemetry.get("fields_unavailable") or 0),
+        "fields_failed": int(telemetry.get("fields_failed") or 0),
+    }
+    connector_version = f"{provider}-connector/1"
+    return persist_refresh_snapshot(
+        snapshot,
+        store=store,
+        connector_version=connector_version,
+        extraction_summary=build_extraction_summary(
+            snapshot,
+            refresh_status=status,
+            field_counts=field_counts,
+        ),
+    )
+
+
 def run_connector_refresh_with_runtime(
     *,
     provider: str = "amex",
@@ -9082,6 +9125,7 @@ def run_connector_refresh_with_runtime(
     keepalive_result_path: Path | None = None,
     browser_cleanup: str = DEFAULT_BROWSER_CLEANUP_POLICY,
     as_json: bool = False,
+    persist: bool = False,
     request_json_fn: Any = None,
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
@@ -9101,11 +9145,13 @@ def run_connector_refresh_with_runtime(
     fetch_cdp_json_fn: Any = None,
     connector_factory_fn: Any = None,
     write_evidence_fn: Any = None,
+    snapshot_store: Any = None,
     emit_summary: bool = True,
 ) -> dict[str, Any]:
     """Developer ``connector-refresh``: runtime + usable session + AmexConnector.refresh."""
     from mighty.amex_connector import AmexConnector
     from mighty.amex_extractor import amex_observation_from_sanitized
+    from mighty.fact_generator import format_persisted_refresh_summary
 
     emit = print_fn or print
     http = request_json_fn or request_json
@@ -9135,6 +9181,7 @@ def run_connector_refresh_with_runtime(
     interrupted = False
     evidence_path: str | None = None
     result_dict: dict[str, Any] = {}
+    persist_result: Any | None = None
     exit_code = 1
 
     def _ownership_fields() -> dict[str, Any]:
@@ -9444,6 +9491,7 @@ def run_connector_refresh_with_runtime(
                     verify_fn=_verify,
                 )
             )
+            refresh_result = None
             try:
                 connector = factory()
                 refresh_result = connector.refresh()
@@ -9484,6 +9532,25 @@ def run_connector_refresh_with_runtime(
                     "warnings": [],
                 }
 
+            if persist and refresh_result is not None:
+                try:
+                    persist_result = _persist_connector_refresh_snapshot(
+                        provider=provider,
+                        result_dict=result_dict,
+                        refresh_result=refresh_result,
+                        runtime_root=runtime_root,
+                        snapshot_store=snapshot_store,
+                    )
+                    if persist_result is not None:
+                        result_dict = dict(result_dict)
+                        result_dict["snapshot_persist"] = persist_result.to_dict()
+                        telemetry = dict(result_dict.get("telemetry") or {})
+                        telemetry.update(persist_result.telemetry.to_dict())
+                        result_dict["telemetry"] = telemetry
+                except Exception as exc:  # noqa: BLE001
+                    result_dict = dict(result_dict)
+                    result_dict["snapshot_persist_error"] = type(exc).__name__
+
             try:
                 evidence_path = _write_evidence(result_dict)
             except Exception:
@@ -9510,17 +9577,33 @@ def run_connector_refresh_with_runtime(
         "evidence_path": evidence_path,
         "result": result_dict,
         "interrupted": interrupted,
+        "persist": bool(persist),
+        "snapshot_persist": persist_result.to_dict() if persist_result is not None else None,
         **_ownership_fields(),
     }
     if as_json:
         emit(json.dumps(result_dict, indent=2))
     elif emit_summary:
-        emit(
-            format_connector_refresh_terminal_summary(
-                result_dict,
-                evidence_path=evidence_path,
-            ).rstrip("\n")
-        )
+        if persist:
+            provider_label = (
+                "Amex connector refresh"
+                if str(provider) == "amex"
+                else f"{str(provider).title()} connector refresh"
+            )
+            emit(
+                format_persisted_refresh_summary(
+                    provider_label=provider_label,
+                    status=str(result_dict.get("status") or "unknown"),
+                    persist_result=persist_result,
+                ).rstrip("\n")
+            )
+        else:
+            emit(
+                format_connector_refresh_terminal_summary(
+                    result_dict,
+                    evidence_path=evidence_path,
+                ).rstrip("\n")
+            )
     return envelope
 
 
@@ -12746,6 +12829,14 @@ def parse_args() -> argparse.Namespace:
         help="Print the sanitized canonical ConnectorRefreshResult as JSON",
     )
     connector_refresh.add_argument(
+        "--persist",
+        action="store_true",
+        help=(
+            "Append the canonical AccountSnapshot to the local SnapshotStore, "
+            "diff against the previous snapshot, and print factual changes"
+        ),
+    )
+    connector_refresh.add_argument(
         "--browser-cleanup",
         choices=BROWSER_CLEANUP_POLICIES,
         default=DEFAULT_BROWSER_CLEANUP_POLICY,
@@ -13337,6 +13428,7 @@ def run_client_command(args: argparse.Namespace) -> int:
                 getattr(args, "browser_cleanup", DEFAULT_BROWSER_CLEANUP_POLICY)
             ),
             as_json=bool(getattr(args, "json", False)),
+            persist=bool(getattr(args, "persist", False)),
             emit_summary=True,
         )
         return int(payload.get("exit_code") or (0 if payload.get("ok") else 1))
