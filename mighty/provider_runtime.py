@@ -11,6 +11,7 @@ Commands:
     python scripts/provider_runtime.py status
     python scripts/provider_runtime.py stop
     python scripts/provider_runtime.py keepalive-start amex --strategy SESSION_API
+    python scripts/provider_runtime.py keepalive-probe amex --strategy SESSION_API
     python scripts/provider_runtime.py keepalive-status amex
     python scripts/provider_runtime.py keepalive-stop amex
     python scripts/provider_runtime.py browser-inspect amex
@@ -233,38 +234,15 @@ BROWSER_INSPECTOR_JS = (
 INSPECT_EXPIRATION_DIALOG_IN_DOCUMENT_JS = BROWSER_INSPECTOR_JS
 FIND_AMEX_EXPIRATION_DIALOG_JS = BROWSER_INSPECTOR_JS
 
-# TODO: SESSION_API and PAGE_ACTIVITY keepalive strategies still use
-# page.evaluate and are incompatible with Amex's eval monkey-patch. Do not
-# migrate them in the Browser Inspector CDP change; trials remain observation
-# experiments until a non-evaluate keepalive path exists.
-
-PAGE_ACTIVITY_JS = """
-() => {
-  try {
-    if (typeof window.focus === "function") {
-      window.focus();
-    }
-    const before = window.scrollY || 0;
-    window.scrollBy(0, 24);
-    window.scrollTo(0, before);
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: String(err && err.name ? err.name : "page_activity_error") };
-  }
-}
-"""
-
-SESSION_API_FETCH_JS = f"""
-async () => {{
-  const response = await fetch({AMEX_READ_USER_SESSION_URL!r}, {{
-    method: "GET",
-    credentials: "include",
-    headers: {{ Accept: "application/json" }},
-    redirect: "manual",
-  }});
-  return {{ status: response.status, ok: response.ok }};
-}}
-"""
+# Retired: Amex monkey-patches eval, so page.evaluate/fetch-in-page fails with
+# "eval is disabled". SESSION_API and PAGE_ACTIVITY now use non-evaluate paths
+# (context.request + Playwright mouse wheel). Kept as documentation only.
+PAGE_ACTIVITY_JS = (
+    "/* retired: PAGE_ACTIVITY uses Playwright mouse.wheel, not evaluate */"
+)
+SESSION_API_FETCH_JS = (
+    "/* retired: SESSION_API uses page.context.request.get, not evaluate */"
+)
 
 
 def iso_now() -> str:
@@ -2752,6 +2730,8 @@ EXPIRATION_CAMPAIGN_TRIAL_SUMMARY_FIELDS = (
     "warning_to_logout_seconds",
     "keepalive_wait_seconds",
     "keepalive_completion_timeout",
+    "preflight_ok",
+    "result_classification",
     "error",
     "evidence_directory",
 )
@@ -5192,6 +5172,74 @@ def run_amex_expiration_campaign(
             trial_started_at = iso_now()
             trial_started_mono = monotonic()
             evidence_dir.mkdir(parents=True, exist_ok=True)
+
+            preflight = run_keepalive_preflight_for_campaign_trial(
+                strategy=strategy,
+                host=host,
+                port=port,
+                evidence_dir=evidence_dir,
+                request_json_fn=http,
+            )
+            if strategy != "NONE" and not preflight.get("success"):
+                trial_completed_at = iso_now()
+                duration_seconds = max(0.0, monotonic() - trial_started_mono)
+                failure_reason = (
+                    preflight.get("error")
+                    or preflight.get("reason")
+                    or "keepalive_preflight_failed"
+                )
+                emit(
+                    f"Trial {index} preflight failed for {strategy}: {failure_reason}"
+                )
+                emit("Skipping long observation (OPERATIONALLY_FAILED).")
+                trial_row = {
+                    "trial_number": index,
+                    "strategy": strategy,
+                    "keepalive_interval_seconds": interval_seconds,
+                    "started_at": trial_started_at,
+                    "completed_at": trial_completed_at,
+                    "duration_seconds": duration_seconds,
+                    "recorder_outcome": "skipped_preflight_failed",
+                    "keepalive_outcome": "preflight_failed",
+                    "initial_authentication_state": auth.get("authentication_state"),
+                    "final_authentication_state": auth.get("authentication_state"),
+                    "idle_warning_detected": False,
+                    "idle_warning_first_observed_at": None,
+                    "logged_out": False,
+                    "logout_observed_at": None,
+                    "warning_to_logout_seconds": None,
+                    "keepalive_wait_seconds": None,
+                    "keepalive_completion_timeout": None,
+                    "preflight_ok": False,
+                    "result_classification": "OPERATIONALLY_FAILED",
+                    "error": f"preflight_failed: {failure_reason}",
+                    "evidence_directory": str(evidence_dir),
+                    "status": "failed",
+                    "skipped": False,
+                }
+                trial_summaries.append(trial_row)
+                if continue_on_error:
+                    continue
+                _cleanup_browser()
+                persisted = _persist_campaign(zip_it=True)
+                return {
+                    "ok": False,
+                    "outcome": "preflight_failed",
+                    "campaign_name": campaign_name,
+                    "campaign_dir": str(campaign_dir),
+                    "zip_path": persisted["zip_path"],
+                    "trial_summaries": trial_summaries,
+                    "summary": persisted["summary"],
+                    "message": failure_reason,
+                    "exit_code": 1,
+                    "interrupted": False,
+                    "duration_seconds": max(0.0, monotonic() - campaign_started_mono),
+                    **_browser_metadata(),
+                }
+
+            if strategy != "NONE":
+                emit(f"Preflight OK for {strategy}; starting timed trial...")
+
             try:
                 experiment_result = run_experiment(
                     host=host,
@@ -8039,6 +8087,158 @@ def write_keepalive_attempts_jsonl(
     return path
 
 
+def keepalive_attempt_record_from_action(
+    *,
+    strategy: str,
+    action_result: KeepaliveActionResult,
+    attempted_at: str | None = None,
+    authentication_state_after_attempt: str | None = None,
+) -> dict[str, Any]:
+    """Build one sanitized attempt record from a KeepaliveActionResult."""
+    error_text = action_result.error
+    error_type = None
+    error_message = None
+    if error_text:
+        if ":" in error_text:
+            error_type, error_message = error_text.split(":", 1)
+            error_type = error_type.strip()[:80]
+            error_message = error_message.strip()[:240]
+        else:
+            error_type = "action_error"
+            error_message = error_text[:240]
+    action_name, default_target = keepalive_strategy_action_metadata(strategy)
+    return sanitize_keepalive_attempt(
+        {
+            "attempted_at": attempted_at or iso_now(),
+            "strategy": strategy,
+            "action": action_result.action or action_name,
+            "target": action_result.target or default_target,
+            "success": bool(action_result.ok),
+            "result": action_result.result,
+            "reason": action_result.result
+            if action_result.ok
+            else (action_result.error or action_result.result),
+            "duration_ms": action_result.duration_ms,
+            "authentication_state_after_attempt": authentication_state_after_attempt,
+            "error_type": error_type,
+            "error_message": error_message,
+            "response_status": action_result.response_status,
+        }
+    )
+
+
+def format_keepalive_probe_terminal_summary(payload: dict[str, Any]) -> str:
+    """Human-readable keepalive probe CLI summary."""
+    strategy = payload.get("strategy") or "UNKNOWN"
+    success = bool(payload.get("success"))
+    ok = bool(payload.get("ok"))
+    lines = [
+        f"Keepalive probe: {strategy}",
+        f"Result: {'SUCCESS' if success else 'FAILURE'}",
+    ]
+    reason = payload.get("reason") or payload.get("error")
+    if reason:
+        lines.append(f"Reason: {reason}")
+    attempt = payload.get("attempt")
+    if isinstance(attempt, dict):
+        if attempt.get("duration_ms") is not None:
+            lines.append(f"Duration: {attempt.get('duration_ms')}ms")
+        if attempt.get("target"):
+            lines.append(f"Target: {attempt.get('target')}")
+        if attempt.get("response_status") is not None:
+            lines.append(f"HTTP status: {attempt.get('response_status')}")
+    evidence = payload.get("evidence_path")
+    if evidence:
+        lines.append(f"Evidence: {evidence}")
+    if not ok and payload.get("error") and payload.get("error") != reason:
+        lines.append(f"Error: {payload.get('error')}")
+    return "\n".join(lines) + "\n"
+
+
+def run_keepalive_preflight_for_campaign_trial(
+    *,
+    strategy: str,
+    host: str,
+    port: int,
+    evidence_dir: Path,
+    request_json_fn: Any = None,
+) -> dict[str, Any]:
+    """Probe one active strategy before a long campaign trial.
+
+    NONE skips preflight. Active strategies perform exactly one keepalive attempt
+    via the running serve probe endpoint.
+    """
+    strategy = str(strategy or "NONE").upper()
+    evidence_dir = Path(evidence_dir)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    if strategy == "NONE":
+        payload = {
+            "ok": True,
+            "skipped": True,
+            "success": True,
+            "strategy": "NONE",
+            "reason": "NONE strategy does not require a preflight probe",
+            "preflight_ok": True,
+            "result_classification": "BASELINE",
+        }
+        _write_json_file(evidence_dir / "preflight-result.json", payload)
+        return payload
+
+    http = request_json_fn or request_json
+    base_url = _expiration_experiment_base_url(host, port)
+    try:
+        payload = http(
+            "POST",
+            f"{base_url}/providers/amex/keepalive/probe",
+            {"strategy": strategy},
+            timeout=30.0,
+        )
+    except Exception as exc:  # noqa: BLE001 - preflight must not crash campaign
+        payload = {
+            "ok": False,
+            "skipped": False,
+            "success": False,
+            "strategy": strategy,
+            "reason": f"{type(exc).__name__}: {exc}",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    if not isinstance(payload, dict):
+        payload = {
+            "ok": False,
+            "success": False,
+            "strategy": strategy,
+            "reason": "invalid_probe_payload",
+            "error": "invalid_probe_payload",
+        }
+
+    attempt = payload.get("attempt")
+    attempts: list[dict[str, Any]] = []
+    if isinstance(attempt, dict):
+        attempts.append(sanitize_keepalive_attempt(attempt))
+        write_keepalive_attempts_jsonl(
+            evidence_dir / KEEPALIVE_ATTEMPTS_FILENAME,
+            attempts,
+        )
+
+    success = bool(payload.get("success"))
+    preflight = {
+        "ok": bool(payload.get("ok")) and success,
+        "skipped": False,
+        "success": success,
+        "strategy": strategy,
+        "reason": payload.get("reason") or payload.get("error"),
+        "error": None if success else (payload.get("error") or payload.get("reason")),
+        "attempt": attempt if isinstance(attempt, dict) else None,
+        "evidence_path": payload.get("evidence_path"),
+        "preflight_ok": success,
+        "result_classification": None if success else "OPERATIONALLY_FAILED",
+        "authentication_state": payload.get("authentication_state"),
+    }
+    _write_json_file(evidence_dir / "preflight-result.json", preflight)
+    return preflight
+
+
 def inspect_amex_page_signals(
     page: Page,
     *,
@@ -8088,9 +8288,12 @@ def inspect_amex_page_signals(
 def perform_keepalive_action(page: Page, strategy: str) -> KeepaliveActionResult:
     """Dispatch one strategy action on the existing Amex page.
 
-    TODO: SESSION_API and PAGE_ACTIVITY still use page.evaluate and are
-    incompatible with Amex's eval monkey-patch. Keepalive trials remain
-    observation experiments; do not silently alter these strategies here.
+    Avoids ``page.evaluate`` / ``frame.evaluate``. Amex monkey-patches eval, so
+    in-page fetch/scroll helpers fail with ``Error: eval is disabled``.
+
+    SESSION_API uses the browser context request API (same credentialed
+    ReadUserSession.v1 path as canonical verification). PAGE_ACTIVITY uses
+    Playwright input APIs for a tiny scroll nudge without navigation.
     """
     action_name, default_target = keepalive_strategy_action_metadata(strategy)
     started = time.monotonic()
@@ -8108,32 +8311,57 @@ def perform_keepalive_action(page: Page, strategy: str) -> KeepaliveActionResult
         return _with_timing(ok=True, result="skipped")
     if strategy == "SESSION_API":
         try:
-            payload = page.evaluate(SESSION_API_FETCH_JS)
+            context = getattr(page, "context", None)
+            request_api = getattr(context, "request", None) if context is not None else None
+            if request_api is None or not hasattr(request_api, "get"):
+                return _with_timing(
+                    ok=False,
+                    result="failure",
+                    error="RuntimeError: browser context request API unavailable",
+                )
+            response = request_api.get(
+                AMEX_READ_USER_SESSION_URL,
+                headers={"Accept": "application/json"},
+                max_redirects=0,
+                timeout=15_000,
+            )
+            status_int = int(getattr(response, "status", 0) or 0)
+            ok = status_int == 200
+            return _with_timing(
+                ok=ok,
+                result="success" if ok else "failure",
+                response_status=status_int,
+                error=None if ok else f"session_api_http_{status_int}",
+            )
         except Exception as exc:
             return _with_timing(
                 ok=False,
                 result="failure",
                 error=f"{type(exc).__name__}: {exc}",
             )
-        if not isinstance(payload, dict):
-            return _with_timing(
-                ok=False,
-                result="failure",
-                error="invalid_session_api_payload",
-            )
-        status = payload.get("status")
-        status_int = int(status) if isinstance(status, int) else None
-        ok = bool(payload.get("ok")) or status_int == 200
-        return _with_timing(
-            ok=ok,
-            result="success" if ok else "failure",
-            response_status=status_int,
-            error=None if ok else "session_api_non_ok",
-        )
     if strategy == "PAGE_ACTIVITY":
         page_url = sanitize_url_for_keepalive_evidence(getattr(page, "url", None))
         try:
-            payload = page.evaluate(PAGE_ACTIVITY_JS)
+            # Prefer bringing the Amex tab forward when Playwright exposes it.
+            bring_to_front = getattr(page, "bring_to_front", None)
+            if callable(bring_to_front):
+                try:
+                    bring_to_front()
+                except Exception:
+                    pass
+            mouse = getattr(page, "mouse", None)
+            if mouse is None or not hasattr(mouse, "wheel"):
+                return _with_timing(
+                    ok=False,
+                    result="failure",
+                    error="RuntimeError: page.mouse.wheel unavailable",
+                    target=page_url,
+                )
+            # Harmless activity: tiny scroll down then restore. No clicks, forms,
+            # navigation, or credential interaction.
+            mouse.wheel(0, 24)
+            mouse.wheel(0, -24)
+            return _with_timing(ok=True, result="success", target=page_url)
         except Exception as exc:
             return _with_timing(
                 ok=False,
@@ -8141,13 +8369,6 @@ def perform_keepalive_action(page: Page, strategy: str) -> KeepaliveActionResult
                 error=f"{type(exc).__name__}: {exc}",
                 target=page_url,
             )
-        ok = bool(isinstance(payload, dict) and payload.get("ok"))
-        return _with_timing(
-            ok=ok,
-            result="success" if ok else "failure",
-            error=None if ok else "page_activity_failed",
-            target=page_url,
-        )
     if strategy == "OVERVIEW_RELOAD":
         try:
             page.goto(AMEX_OVERVIEW_URL, wait_until="domcontentloaded", timeout=30_000)
@@ -9093,6 +9314,157 @@ class ProviderRuntime:
                 **self._keepalive_fields(),
             }
 
+    def probe_keepalive_strategy(
+        self,
+        provider: str,
+        *,
+        strategy: str,
+    ) -> dict[str, Any]:
+        """Perform exactly one keepalive strategy attempt for developer preflight.
+
+        Requires an existing signed-in managed Amex session. Does not start a
+        trial, wait for expiration, mutate account data, or touch ordinary Chrome.
+        """
+        if provider != "amex":
+            raise ValueError("Only amex is supported in this implementation")
+        strategy = str(strategy or "").upper()
+        if strategy not in KEEPALIVE_STRATEGIES:
+            raise ValueError(
+                f"Unsupported keepalive strategy {strategy!r}. "
+                f"Expected one of {', '.join(KEEPALIVE_STRATEGIES)}"
+            )
+
+        with self.lock:
+            if self.keepalive_trial_running:
+                return {
+                    "ok": False,
+                    "success": False,
+                    "strategy": strategy,
+                    "error": "keepalive_trial_already_running",
+                    "reason": "A keepalive trial is already running",
+                }
+            if not self.cdp_url:
+                return {
+                    "ok": False,
+                    "success": False,
+                    "strategy": strategy,
+                    "error": "runtime_not_started",
+                    "reason": "Provider runtime is not started",
+                }
+            cdp_url = self.cdp_url
+
+        if strategy == "NONE":
+            attempt = keepalive_attempt_record_from_action(
+                strategy="NONE",
+                action_result=KeepaliveActionResult(
+                    ok=True,
+                    result="skipped",
+                    action="none",
+                    duration_ms=0,
+                ),
+            )
+            return {
+                "ok": True,
+                "success": True,
+                "strategy": "NONE",
+                "reason": "NONE strategy performs no keepalive action",
+                "attempt": attempt,
+                "authentication_state": None,
+                "evidence_path": None,
+            }
+
+        action_result: KeepaliveActionResult
+        auth_after: str | None = None
+        page_url: str | None = None
+        try:
+            with sync_playwright() as playwright:
+                browser: Browser = connect_chromium_over_cdp(playwright, cdp_url)
+                if not browser.contexts:
+                    raise RuntimeError("Chrome exposed no persistent browser context")
+                context = browser.contexts[0]
+                page = select_amex_page(context, create_if_missing=False)
+                if page is None:
+                    raise RuntimeError(
+                        "No existing americanexpress.com page for keepalive probe"
+                    )
+                page_url = sanitize_url_for_keepalive_evidence(getattr(page, "url", None))
+                # Light signed-in check (no overview navigation / 5s wait).
+                verification = verify_amex_canonical_on_page(
+                    page,
+                    result_path=self.result_path,
+                )
+                if verification.authentication_state != "SIGNED_IN":
+                    return {
+                        "ok": False,
+                        "success": False,
+                        "strategy": strategy,
+                        "error": "not_signed_in",
+                        "reason": (
+                            "Keepalive probe requires SIGNED_IN; "
+                            f"observed {verification.authentication_state}"
+                        ),
+                        "authentication_state": verification.authentication_state,
+                        "selected_page_url": page_url,
+                    }
+                action_result = perform_keepalive_action(page, strategy)
+                try:
+                    after = inspect_amex_page_signals(
+                        page,
+                        latest_canonical_state=verification.authentication_state,
+                    )
+                    auth_after = after.get("authentication_state")
+                except Exception:
+                    auth_after = verification.authentication_state
+        except Exception as exc:
+            action_result = KeepaliveActionResult(
+                ok=False,
+                result="failure",
+                error=f"{type(exc).__name__}: {exc}",
+                action=keepalive_strategy_action_metadata(strategy)[0],
+                target=keepalive_strategy_action_metadata(strategy)[1] or page_url,
+            )
+
+        attempt = keepalive_attempt_record_from_action(
+            strategy=strategy,
+            action_result=action_result,
+            authentication_state_after_attempt=auth_after,
+        )
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        evidence_path = (
+            self.diagnostics_dir / f"amex-keepalive-probe-{strategy.lower()}-{stamp}.json"
+        )
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence = {
+            "ok": bool(action_result.ok),
+            "success": bool(action_result.ok),
+            "strategy": strategy,
+            "reason": (
+                action_result.result
+                if action_result.ok
+                else (action_result.error or action_result.result)
+            ),
+            "attempt": attempt,
+            "authentication_state": auth_after,
+            "selected_page_url": page_url,
+            "observed_at": iso_now(),
+        }
+        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+        write_keepalive_attempts_jsonl(
+            evidence_path.with_suffix(".jsonl"),
+            [attempt],
+        )
+        return {
+            "ok": True,
+            "success": bool(action_result.ok),
+            "strategy": strategy,
+            "reason": evidence["reason"],
+            "error": None if action_result.ok else evidence["reason"],
+            "attempt": attempt,
+            "authentication_state": auth_after,
+            "evidence_path": str(evidence_path),
+            "selected_page_url": page_url,
+        }
+
     def start_keepalive_trial(
         self,
         provider: str,
@@ -9649,6 +10021,32 @@ class RuntimeHandler(BaseHTTPRequestHandler):
                     {"ok": False, "error": str(exc)},
                 )
             return
+        if self.path == "/providers/amex/keepalive/probe":
+            try:
+                body = self._read_json_body()
+                strategy = str(body.get("strategy") or "")
+                payload = self.server.runtime.probe_keepalive_strategy(
+                    "amex",
+                    strategy=strategy,
+                )
+                # Always 200 with structured ok/success so the CLI can summarize
+                # action failures without treating them as transport errors.
+                self._send_json(HTTPStatus.OK, payload)
+            except ValueError as exc:
+                self._send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"ok": False, "success": False, "error": str(exc)},
+                )
+            except Exception as exc:
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "success": False,
+                        "error": str(exc),
+                    },
+                )
+            return
         if self.path == "/providers/amex/keepalive/stop":
             try:
                 payload = self.server.runtime.stop_keepalive_trial(reason="manually_stopped")
@@ -9993,6 +10391,21 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=KEEPALIVE_DEFAULT_INTERVAL_SECONDS,
         help=f"Action interval (default: {KEEPALIVE_DEFAULT_INTERVAL_SECONDS})",
+    )
+
+    keepalive_probe = subparsers.add_parser(
+        "keepalive-probe",
+        help=(
+            "Run one keepalive strategy attempt against the signed-in managed "
+            "session (developer preflight; does not wait for expiration)"
+        ),
+    )
+    keepalive_probe.add_argument("provider", choices=("amex",))
+    keepalive_probe.add_argument(
+        "--strategy",
+        required=True,
+        choices=KEEPALIVE_STRATEGIES,
+        help="Keepalive strategy to probe",
     )
 
     keepalive_status = subparsers.add_parser("keepalive-status")
@@ -10498,6 +10911,17 @@ def run_client_command(args: argparse.Namespace) -> int:
         )
         print(json.dumps(payload, indent=2))
         return 0 if payload.get("ok") else 1
+    if args.command == "keepalive-probe":
+        payload = request_json(
+            "POST",
+            f"http://{args.host}:{args.port}/providers/{args.provider}/keepalive/probe",
+            {"strategy": args.strategy},
+            timeout=30.0,
+        )
+        print(format_keepalive_probe_terminal_summary(payload), end="")
+        if payload.get("ok") and payload.get("success"):
+            return 0
+        return 1
     if args.command == "keepalive-status":
         payload = request_json(
             "GET",

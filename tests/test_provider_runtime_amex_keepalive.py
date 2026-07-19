@@ -144,26 +144,44 @@ def test_none_performs_no_actions(tmp_path: Path):
 
 def test_each_strategy_dispatches_correct_action():
     page = MagicMock()
-    page.evaluate.side_effect = [
-        {"status": 200, "ok": True},
-        {"ok": True},
-    ]
+    page.url = "https://global.americanexpress.com/overview"
+    page.context.request.get.return_value = MagicMock(status=200)
     page.goto.return_value = None
     page.wait_for_timeout.return_value = None
 
     session = perform_keepalive_action(page, "SESSION_API")
     assert session.ok is True
     assert session.response_status == 200
-    assert page.evaluate.call_count == 1
+    assert session.action == "session_api_fetch"
+    page.context.request.get.assert_called_once()
+    page.evaluate.assert_not_called()
 
     activity = perform_keepalive_action(page, "PAGE_ACTIVITY")
     assert activity.ok is True
-    assert page.evaluate.call_count == 2
+    assert activity.action == "page_activity_scroll"
+    assert page.mouse.wheel.call_count == 2
+    page.evaluate.assert_not_called()
 
     reload_result = perform_keepalive_action(page, "OVERVIEW_RELOAD")
     assert reload_result.ok is True
     page.goto.assert_called_once()
     assert "overview" in page.goto.call_args.args[0]
+    page.evaluate.assert_not_called()
+
+
+def test_session_api_and_page_activity_avoid_evaluate_on_failure():
+    page = MagicMock()
+    page.url = "https://global.americanexpress.com/overview"
+    page.context.request.get.side_effect = RuntimeError("eval is disabled")
+    failed_session = perform_keepalive_action(page, "SESSION_API")
+    assert failed_session.ok is False
+    assert "eval is disabled" in (failed_session.error or "")
+    page.evaluate.assert_not_called()
+
+    page.mouse.wheel.side_effect = RuntimeError("wheel blocked")
+    failed_activity = perform_keepalive_action(page, "PAGE_ACTIVITY")
+    assert failed_activity.ok is False
+    page.evaluate.assert_not_called()
 
 
 def test_action_failures_do_not_fabricate_signed_out(tmp_path: Path):

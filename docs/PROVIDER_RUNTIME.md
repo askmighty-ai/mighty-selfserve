@@ -725,19 +725,42 @@ Keepalive trials:
 | Strategy | Behavior |
 | --- | --- |
 | `NONE` | No maintenance action; baseline expiration timing |
-| `SESSION_API` | Periodic read-only `ReadUserSession.v1` fetch from the Amex page context |
-| `PAGE_ACTIVITY` | Harmless focus + small scroll/return (no clicks/forms) |
+| `SESSION_API` | Periodic read-only `ReadUserSession.v1` via browser `context.request` (no `page.evaluate`) |
+| `PAGE_ACTIVITY` | Harmless bring-to-front + tiny mouse-wheel scroll/restore (no clicks/forms/navigation) |
 | `OVERVIEW_RELOAD` | Reload/navigate to the Amex overview page (experimental) |
 
-**Current limitation:** `SESSION_API` and `PAGE_ACTIVITY` still use
-`page.evaluate` and are incompatible with Amex’s eval monkey-patch. They were
-not migrated in the CDP Browser Inspector change. Prefer `NONE` /
-`OVERVIEW_RELOAD` for Amex trials until a non-evaluate keepalive path exists.
-Keepalive trials remain observation experiments and must not silently change
-behavior.
+Amex monkey-patches `eval`, so keepalive strategies must not use
+`page.evaluate` / `frame.evaluate`. `SESSION_API` uses the same credentialed
+`context.request.get(ReadUserSession.v1)` path as canonical verification.
+`PAGE_ACTIVITY` uses Playwright input APIs. Keepalive trials remain developer
+observation experiments.
 
 Defaults: `duration_seconds=1800` (30 minutes), `interval_seconds=60`.
 Developer trials may use shorter values such as 8 minutes / 30 seconds.
+
+### Keepalive probe (preflight)
+
+Before a long trial, prove one strategy attempt executes:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  keepalive-probe amex --strategy SESSION_API
+
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  keepalive-probe amex --strategy PAGE_ACTIVITY
+
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  keepalive-probe amex --strategy OVERVIEW_RELOAD
+```
+
+The probe requires an existing signed-in managed Amex session and a running
+`serve`. It performs exactly one attempt, prints success/failure + reason,
+writes a sanitized evidence record under diagnostics, finishes in under 30
+seconds, never waits for expiration, and never touches ordinary Chrome.
+
+`campaign amex` runs this probe before each active-strategy trial. A failed
+preflight records `OPERATIONALLY_FAILED` / `preflight_failed` and skips the
+long observation window (`NONE` has no probe).
 
 ### CLI
 
@@ -746,6 +769,9 @@ Developer trials may use shorter values such as 8 minutes / 30 seconds.
   --strategy SESSION_API \
   --duration-seconds 1800 \
   --interval-seconds 60
+
+.venv/bin/python scripts/provider_runtime.py keepalive-probe amex \
+  --strategy SESSION_API
 
 .venv/bin/python scripts/provider_runtime.py keepalive-status amex
 

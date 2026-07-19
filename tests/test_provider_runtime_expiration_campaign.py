@@ -83,6 +83,21 @@ class _CampaignHttp:
             ]
             self._verify_index += 1
             return _verify_payload(state)
+        if path == "/providers/amex/keepalive/probe":
+            strategy = str((payload or {}).get("strategy") or "NONE")
+            return {
+                "ok": True,
+                "success": True,
+                "strategy": strategy,
+                "reason": "success",
+                "attempt": {
+                    "attempted_at": "2026-01-01T00:00:00+00:00",
+                    "strategy": strategy,
+                    "action": "probe",
+                    "success": True,
+                    "result": "success",
+                },
+            }
         raise AssertionError(f"unexpected request {method} {path}")
 
 

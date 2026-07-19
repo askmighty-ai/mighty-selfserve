@@ -526,6 +526,17 @@ def classify_trial_result(
             "Inspect keepalive evidence and re-run with attempt-level instrumentation.",
         )
 
+    if keepalive_outcome == "preflight_failed":
+        return (
+            RESULT_OPERATIONALLY_FAILED,
+            (
+                "Preflight probe failed before the timed trial; strategy execution "
+                "is operationally broken and was not evaluated for idle-delay effect."
+            ),
+            "high",
+            "Repeat this strategy only after correcting the implementation failure.",
+        )
+
     if keepalive_attempt_count > 0 and keepalive_success_count == 0 and keepalive_failure_count > 0:
         return (
             RESULT_OPERATIONALLY_FAILED,
