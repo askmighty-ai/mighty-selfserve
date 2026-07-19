@@ -525,19 +525,18 @@ PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
 
 `browser-run-expiration-campaign` runs multiple existing expiration experiments
 sequentially and packages one comparison artifact. It reuses
-`browser-run-expiration-experiment` orchestration as the unit of execution and
-does not open Finder between trials.
+`browser-run-expiration-experiment` orchestration as the unit of execution.
+The campaign also ensures a dedicated managed Amex Chrome window exists by
+reusing `launch_native_chrome` with the Mighty profile + CDP port (never the
+user’s normal Chrome profile).
 
-Recommended comparison campaign:
+Recommended workflow:
 
 ```bash
-# Terminal 1
+# Terminal 1 — keep serve running as the safety boundary
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve
 
-# Terminal 2 — one-time login if needed
-PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py bootstrap amex
-
-# Then run the campaign (no Finder interaction between trials):
+# Terminal 2 — campaign launches/reuses managed Chrome and prompts for login
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
   browser-run-expiration-campaign amex \
   --campaign-name amex-keepalive-comparison \
@@ -548,21 +547,43 @@ PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
   --trial OVERVIEW_RELOAD:30
 ```
 
-Before each trial the campaign performs a fresh canonical verification:
+You do **not** need to run `bootstrap amex` first. At startup the campaign:
 
-- `SIGNED_IN` → start the trial automatically;
-- `SIGNED_OUT` or missing managed-browser page target → pause with:
+1. checks runtime health (`serve` must already be running);
+2. classifies managed CDP health via `/json/version` + `/json/list`;
+3. reuses a healthy managed browser, launches one when absent, or restarts only
+   the Mighty Amex profile Chrome when unhealthy (zero page targets);
+4. performs canonical verification;
+5. if `SIGNED_OUT` / `LOGIN_UNKNOWN`, brings the managed window forward (macOS)
+   and prompts:
 
 ```text
-Authentication required for trial <n>.
+Authentication required.
 
-Sign in in the managed Amex window and complete MFA.
-Press Enter when the overview page is visible.
+A dedicated Mighty Amex Chrome window has been opened.
+Sign in and complete MFA.
+Press Enter here when the account overview page is visible.
 ```
 
-If a clean browser restart is required, use the existing safe stop/bootstrap
-workflow (printed in the pause message). After Enter, the campaign verifies
-again and continues only when `SIGNED_IN`.
+After Enter, it verifies again and continues only when `SIGNED_IN`. Between
+trials, logout or a zero-target browser state triggers recovery +
+reauthentication automatically.
+
+Example console:
+
+```text
+Checking managed Amex browser...
+No managed browser found.
+
+Launching dedicated Mighty Amex Chrome...
+Browser ready.
+
+Authentication required.
+
+A dedicated Mighty Amex Chrome window has been opened.
+Sign in and complete MFA.
+Press Enter here when the account overview page is visible.
+```
 
 Output:
 
@@ -580,17 +601,26 @@ Output:
     amex-expiration-campaign-<UTC timestamp>.zip
 ```
 
+`campaign-summary.json` also records managed-browser ownership fields:
+`managed_browser_preexisting`, `managed_browser_launched_by_campaign`,
+`managed_browser_restarted_by_campaign`, `browser_cleanup_policy`,
+`managed_browser_closed_at_completion`, `managed_cdp_port`, and
+`managed_profile_path`.
+
 Useful flags:
 
 | Option | Behavior |
 | --- | --- |
+| `--browser-cleanup close-on-completion` | Default. Closes only a browser this campaign launched; never closes a preexisting managed browser or ordinary Chrome |
+| `--browser-cleanup leave-open` | Leave the managed browser running after the campaign |
 | `--continue-on-error` | Record a failed trial and continue (with auth recovery if needed) |
 | `--skip-completed` | Resume an interrupted campaign; skip trials already completed for the same strategy + interval in `campaign-manifest.json` |
 | `--output-dir` | Choose/resume a specific campaign directory |
 
 Ctrl+C finishes writing the current trial’s partial evidence, writes campaign
-summary files for completed/partial trials, creates a partial campaign ZIP, and
-does **not** close managed Chrome or stop `serve`.
+summary files for completed/partial trials, creates a partial campaign ZIP,
+leaves the managed browser open by default, and does **not** stop `serve` or
+touch ordinary Chrome.
 
 The CLI prints only the campaign result and final ZIP path.
 

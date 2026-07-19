@@ -2750,6 +2750,17 @@ EXPIRATION_CAMPAIGN_TRIAL_SUMMARY_FIELDS = (
     "error",
     "evidence_directory",
 )
+MANAGED_BROWSER_HEALTHY = "HEALTHY"
+MANAGED_BROWSER_ABSENT = "ABSENT"
+MANAGED_BROWSER_UNHEALTHY = "UNHEALTHY"
+BROWSER_CLEANUP_LEAVE_OPEN = "leave-open"
+BROWSER_CLEANUP_CLOSE_ON_COMPLETION = "close-on-completion"
+BROWSER_CLEANUP_POLICIES = (
+    BROWSER_CLEANUP_LEAVE_OPEN,
+    BROWSER_CLEANUP_CLOSE_ON_COMPLETION,
+)
+DEFAULT_BROWSER_CLEANUP_POLICY = BROWSER_CLEANUP_CLOSE_ON_COMPLETION
+DEFAULT_MANAGED_BROWSER_STARTUP_TIMEOUT_SECONDS = 30.0
 
 
 def expiration_experiment_keepalive_convergence_timeout_seconds(
@@ -3725,17 +3736,420 @@ def create_expiration_campaign_zip(campaign_dir: Path) -> Path:
     return zip_path.resolve()
 
 
-def _expiration_campaign_auth_pause_message(trial_number: int) -> str:
+def _usable_cdp_page_targets(targets_payload: Any) -> list[dict[str, Any]]:
+    """Return CDP targets that are usable page contexts for Amex work."""
+    if not isinstance(targets_payload, list):
+        return []
+    usable: list[dict[str, Any]] = []
+    for item in targets_payload:
+        if not isinstance(item, dict):
+            continue
+        target_type = str(item.get("type") or "page").lower()
+        if target_type in {"page", "webview"}:
+            usable.append(item)
+    return usable
+
+
+def classify_managed_amex_browser(
+    cdp_port: int,
+    *,
+    fetch_cdp_json_fn: Any = None,
+) -> dict[str, Any]:
+    """Classify the managed Amex CDP endpoint as HEALTHY / ABSENT / UNHEALTHY."""
+    fetch = fetch_cdp_json_fn or fetch_cdp_json
+    base = f"http://127.0.0.1:{int(cdp_port)}"
+    try:
+        version_payload = fetch(f"{base}/json/version")
+        targets_payload = fetch(f"{base}/json/list")
+    except Exception as exc:
+        return {
+            "state": MANAGED_BROWSER_ABSENT,
+            "cdp_url": None,
+            "websocket_url": None,
+            "page_target_count": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    websocket_url = None
+    if isinstance(version_payload, dict):
+        websocket_url = version_payload.get("webSocketDebuggerUrl")
+    if not websocket_url:
+        return {
+            "state": MANAGED_BROWSER_ABSENT,
+            "cdp_url": None,
+            "websocket_url": None,
+            "page_target_count": 0,
+            "error": "cdp_version_missing_websocket",
+        }
+
+    usable = _usable_cdp_page_targets(targets_payload)
+    if not usable:
+        return {
+            "state": MANAGED_BROWSER_UNHEALTHY,
+            "cdp_url": base,
+            "websocket_url": str(websocket_url),
+            "page_target_count": 0,
+            "error": "zero_page_targets",
+        }
+    return {
+        "state": MANAGED_BROWSER_HEALTHY,
+        "cdp_url": base,
+        "websocket_url": str(websocket_url),
+        "page_target_count": len(usable),
+        "error": None,
+    }
+
+
+def wait_for_managed_browser_ready(
+    cdp_port: int,
+    *,
+    timeout_seconds: float = DEFAULT_MANAGED_BROWSER_STARTUP_TIMEOUT_SECONDS,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    fetch_cdp_json_fn: Any = None,
+) -> dict[str, Any]:
+    """Wait until managed CDP has a websocket and at least one page target."""
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    deadline = monotonic() + max(0.0, float(timeout_seconds))
+    last: dict[str, Any] = {
+        "state": MANAGED_BROWSER_ABSENT,
+        "cdp_url": None,
+        "page_target_count": 0,
+        "error": "not_ready",
+    }
+    while True:
+        last = classify_managed_amex_browser(
+            cdp_port,
+            fetch_cdp_json_fn=fetch_cdp_json_fn,
+        )
+        if last.get("state") == MANAGED_BROWSER_HEALTHY:
+            return last
+        now = monotonic()
+        if now >= deadline:
+            raise RuntimeError(
+                "Managed Amex Chrome did not become ready within "
+                f"{float(timeout_seconds):g}s "
+                f"(last_state={last.get('state')}, error={last.get('error')})"
+            )
+        sleep(min(0.25, max(0.0, deadline - now)))
+
+
+def managed_chrome_appears_headless(
+    profile_dir: Path,
+    *,
+    profile_processes_fn: Any = None,
+    process_command_lines_fn: Any = None,
+) -> bool:
+    """True when a managed profile Chrome process command line includes --headless."""
+    profile_dir = Path(profile_dir).expanduser().resolve()
+    if process_command_lines_fn is not None:
+        lines = list(process_command_lines_fn(profile_dir) or [])
+        return any("--headless" in str(line) for line in lines)
+
+    finder = profile_processes_fn or profile_processes
+    pids = list(finder(profile_dir) or [])
+    if not pids:
+        return False
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return False
+    needle = f"--user-data-dir={profile_dir}"
+    for line in result.stdout.splitlines():
+        if needle not in line:
+            continue
+        if "--headless" in line:
+            return True
+    return False
+
+
+def launch_managed_amex_browser(
+    *,
+    profile_dir: Path,
+    cdp_port: int,
+    initial_url: str = AMEX_LOGIN_URL,
+    startup_timeout_seconds: float = DEFAULT_MANAGED_BROWSER_STARTUP_TIMEOUT_SECONDS,
+    launch_native_chrome_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    fetch_cdp_json_fn: Any = None,
+) -> dict[str, Any]:
+    """Launch headed managed Amex Chrome via ``launch_native_chrome`` and wait."""
+    profile_dir = Path(profile_dir).expanduser().resolve()
+    launcher = launch_native_chrome_fn or launch_native_chrome
+    process = launcher(
+        profile_dir=profile_dir,
+        cdp_port=int(cdp_port),
+        headless=False,
+        initial_url=str(initial_url or AMEX_LOGIN_URL),
+    )
+    ready = wait_for_managed_browser_ready(
+        int(cdp_port),
+        timeout_seconds=float(startup_timeout_seconds),
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        fetch_cdp_json_fn=fetch_cdp_json_fn,
+    )
+    return {
+        "ok": True,
+        "cdp_url": ready.get("cdp_url"),
+        "page_target_count": ready.get("page_target_count"),
+        "chrome_pid": getattr(process, "pid", None),
+        "profile_dir": str(profile_dir),
+        "cdp_port": int(cdp_port),
+        "initial_url": str(initial_url or AMEX_LOGIN_URL),
+    }
+
+
+def restart_managed_amex_browser(
+    *,
+    profile_dir: Path,
+    cdp_port: int,
+    initial_url: str = AMEX_LOGIN_URL,
+    startup_timeout_seconds: float = DEFAULT_MANAGED_BROWSER_STARTUP_TIMEOUT_SECONDS,
+    terminate_profile_processes_fn: Any = None,
+    wait_for_profile_release_fn: Any = None,
+    launch_native_chrome_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    fetch_cdp_json_fn: Any = None,
+) -> dict[str, Any]:
+    """Stop only the Mighty Amex profile Chrome, then relaunch headed."""
+    profile_dir = Path(profile_dir).expanduser().resolve()
+    terminator = terminate_profile_processes_fn or terminate_profile_processes
+    waiter = wait_for_profile_release_fn or wait_for_profile_release
+    terminator(profile_dir)
+    if not waiter(profile_dir):
+        raise RuntimeError(
+            f"Managed Amex profile lock was not released for {profile_dir}"
+        )
+    launched = launch_managed_amex_browser(
+        profile_dir=profile_dir,
+        cdp_port=int(cdp_port),
+        initial_url=initial_url,
+        startup_timeout_seconds=startup_timeout_seconds,
+        launch_native_chrome_fn=launch_native_chrome_fn,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        fetch_cdp_json_fn=fetch_cdp_json_fn,
+    )
+    launched["restarted"] = True
+    return launched
+
+
+def bring_managed_amex_browser_to_foreground(
+    profile_dir: Path,
+    *,
+    profile_processes_fn: Any = None,
+    subprocess_run_fn: Any = None,
+) -> dict[str, Any]:
+    """Best-effort macOS foreground of the managed Mighty Chrome process only."""
+    profile_dir = Path(profile_dir).expanduser().resolve()
+    finder = profile_processes_fn or profile_processes
+    runner = subprocess_run_fn or subprocess.run
+    pids = list(finder(profile_dir) or [])
+    if not pids:
+        return {"ok": False, "error": "no_managed_chrome_process"}
+    if sys.platform != "darwin":
+        return {"ok": False, "error": "foreground_unsupported_platform", "pids": pids}
+    pid = int(pids[0])
+    script = (
+        f'tell application "System Events" to set frontmost of '
+        f"(first process whose unix id is {pid}) to true"
+    )
+    try:
+        completed = runner(
+            ["osascript", "-e", script],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "pids": pids}
+    return {
+        "ok": int(getattr(completed, "returncode", 1) or 0) == 0,
+        "pid": pid,
+        "pids": pids,
+        "error": None
+        if int(getattr(completed, "returncode", 1) or 0) == 0
+        else (getattr(completed, "stderr", None) or "osascript_failed"),
+    }
+
+
+def ensure_managed_amex_browser_for_campaign(
+    *,
+    profile_dir: Path,
+    cdp_port: int,
+    startup_timeout_seconds: float = DEFAULT_MANAGED_BROWSER_STARTUP_TIMEOUT_SECONDS,
+    prefer_headed_for_authentication: bool = True,
+    classify_fn: Any = None,
+    launch_fn: Any = None,
+    restart_fn: Any = None,
+    headless_fn: Any = None,
+    print_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    fetch_cdp_json_fn: Any = None,
+    launch_native_chrome_fn: Any = None,
+    terminate_profile_processes_fn: Any = None,
+    wait_for_profile_release_fn: Any = None,
+) -> dict[str, Any]:
+    """Ensure a dedicated managed Amex Chrome window exists for the campaign."""
+    emit = print_fn or print
+    profile_dir = Path(profile_dir).expanduser().resolve()
+    classify = classify_fn or (
+        lambda: classify_managed_amex_browser(
+            int(cdp_port),
+            fetch_cdp_json_fn=fetch_cdp_json_fn,
+        )
+    )
+    launch = launch_fn or (
+        lambda: launch_managed_amex_browser(
+            profile_dir=profile_dir,
+            cdp_port=int(cdp_port),
+            startup_timeout_seconds=startup_timeout_seconds,
+            launch_native_chrome_fn=launch_native_chrome_fn,
+            sleep_fn=sleep_fn,
+            monotonic_fn=monotonic_fn,
+            fetch_cdp_json_fn=fetch_cdp_json_fn,
+        )
+    )
+    restart = restart_fn or (
+        lambda: restart_managed_amex_browser(
+            profile_dir=profile_dir,
+            cdp_port=int(cdp_port),
+            startup_timeout_seconds=startup_timeout_seconds,
+            terminate_profile_processes_fn=terminate_profile_processes_fn,
+            wait_for_profile_release_fn=wait_for_profile_release_fn,
+            launch_native_chrome_fn=launch_native_chrome_fn,
+            sleep_fn=sleep_fn,
+            monotonic_fn=monotonic_fn,
+            fetch_cdp_json_fn=fetch_cdp_json_fn,
+        )
+    )
+    headless_check = headless_fn or (
+        lambda: managed_chrome_appears_headless(profile_dir)
+    )
+
+    emit("Checking managed Amex browser...")
+    classified = classify()
+    state = str(classified.get("state") or MANAGED_BROWSER_ABSENT)
+    preexisting = state in {MANAGED_BROWSER_HEALTHY, MANAGED_BROWSER_UNHEALTHY}
+    launched = False
+    restarted = False
+    cdp_url = classified.get("cdp_url")
+
+    if state == MANAGED_BROWSER_HEALTHY:
+        if prefer_headed_for_authentication and headless_check():
+            emit("Managed browser is headless; relaunching a visible window...")
+            launched_info = restart()
+            launched = True
+            restarted = True
+            cdp_url = launched_info.get("cdp_url")
+            emit("Browser ready.")
+        else:
+            emit("Reusing existing managed Amex browser.")
+            emit("Browser ready.")
+    elif state == MANAGED_BROWSER_ABSENT:
+        emit("No managed browser found.")
+        emit("Launching dedicated Mighty Amex Chrome...")
+        launched_info = launch()
+        launched = True
+        cdp_url = launched_info.get("cdp_url")
+        emit("Browser ready.")
+    else:
+        emit("Managed browser is unhealthy (no usable page targets).")
+        emit("Restarting dedicated Mighty Amex Chrome...")
+        launched_info = restart()
+        launched = True
+        restarted = True
+        cdp_url = launched_info.get("cdp_url")
+        emit("Browser ready.")
+
+    return {
+        "ok": True,
+        "state": state,
+        "cdp_url": cdp_url,
+        "managed_browser_preexisting": preexisting,
+        "managed_browser_launched_by_campaign": launched,
+        "managed_browser_restarted_by_campaign": restarted,
+        "managed_cdp_port": int(cdp_port),
+        "managed_profile_path": str(profile_dir),
+    }
+
+
+def maybe_close_managed_browser_for_campaign(
+    *,
+    browser_cleanup: str,
+    managed_browser_preexisting: bool,
+    managed_browser_launched_by_campaign: bool,
+    interrupted: bool,
+    profile_dir: Path,
+    terminate_profile_processes_fn: Any = None,
+) -> dict[str, Any]:
+    """Close only a campaign-launched managed browser when policy allows."""
+    policy = str(browser_cleanup or DEFAULT_BROWSER_CLEANUP_POLICY)
+    if policy not in BROWSER_CLEANUP_POLICIES:
+        policy = DEFAULT_BROWSER_CLEANUP_POLICY
+    if policy != BROWSER_CLEANUP_CLOSE_ON_COMPLETION:
+        return {
+            "closed": False,
+            "reason": "leave_open",
+            "browser_cleanup_policy": policy,
+        }
+    if interrupted:
+        return {
+            "closed": False,
+            "reason": "interrupted_leave_open",
+            "browser_cleanup_policy": policy,
+        }
+    if managed_browser_preexisting:
+        return {
+            "closed": False,
+            "reason": "preexisting_never_closed",
+            "browser_cleanup_policy": policy,
+        }
+    if not managed_browser_launched_by_campaign:
+        return {
+            "closed": False,
+            "reason": "not_launched_by_campaign",
+            "browser_cleanup_policy": policy,
+        }
+    terminator = terminate_profile_processes_fn or terminate_profile_processes
+    terminator(Path(profile_dir))
+    return {
+        "closed": True,
+        "reason": "closed_campaign_launched_browser",
+        "browser_cleanup_policy": policy,
+        "closed_at": iso_now(),
+    }
+
+
+def _expiration_campaign_auth_pause_message(
+    *,
+    trial_number: int | None = None,
+    browser_launched: bool = False,
+) -> str:
+    if trial_number is None:
+        header = "Authentication required."
+    else:
+        header = f"Authentication required for trial {int(trial_number)}."
+    if browser_launched:
+        window_line = "A dedicated Mighty Amex Chrome window has been opened."
+    else:
+        window_line = "Use the dedicated Mighty Amex Chrome window."
     return (
-        f"Authentication required for trial {int(trial_number)}.\n"
+        f"{header}\n"
         "\n"
-        "Sign in in the managed Amex window and complete MFA.\n"
-        "Press Enter when the overview page is visible.\n"
-        "\n"
-        "If a clean browser restart is required:\n"
-        "PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py stop\n"
-        "PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py bootstrap amex\n"
-        "PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py serve\n"
+        f"{window_line}\n"
+        "Sign in and complete MFA.\n"
+        "Press Enter here when the account overview page is visible.\n"
     )
 
 
@@ -3997,6 +4411,13 @@ def write_expiration_campaign_summary_files(
     interrupted: bool,
     trial_summaries: list[dict[str, Any]],
     zip_path: str | None = None,
+    managed_browser_preexisting: bool | None = None,
+    managed_browser_launched_by_campaign: bool | None = None,
+    managed_browser_restarted_by_campaign: bool | None = None,
+    browser_cleanup_policy: str | None = None,
+    managed_browser_closed_at_completion: bool | None = None,
+    managed_cdp_port: int | None = None,
+    managed_profile_path: str | None = None,
 ) -> dict[str, Any]:
     """Write campaign JSON/CSV/Markdown summary artifacts."""
     campaign_dir = Path(campaign_dir)
@@ -4011,6 +4432,13 @@ def write_expiration_campaign_summary_files(
         "trials": trial_summaries,
         "campaign_dir": str(campaign_dir),
         "zip_path": zip_path,
+        "managed_browser_preexisting": managed_browser_preexisting,
+        "managed_browser_launched_by_campaign": managed_browser_launched_by_campaign,
+        "managed_browser_restarted_by_campaign": managed_browser_restarted_by_campaign,
+        "browser_cleanup_policy": browser_cleanup_policy,
+        "managed_browser_closed_at_completion": managed_browser_closed_at_completion,
+        "managed_cdp_port": managed_cdp_port,
+        "managed_profile_path": managed_profile_path,
     }
     _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_SUMMARY_JSON, summary)
 
@@ -4101,13 +4529,16 @@ def print_expiration_campaign_result(result: dict[str, Any]) -> None:
 
 def ensure_expiration_campaign_signed_in(
     *,
-    trial_number: int,
+    trial_number: int | None,
     base_url: str,
     request_json_fn: Any,
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
     input_fn: Any = None,
     print_fn: Any = None,
+    browser_launched: bool = False,
+    bring_to_foreground_fn: Any = None,
+    recover_unhealthy_browser_fn: Any = None,
 ) -> dict[str, Any]:
     """Fresh canonical verify; pause for operator login when required."""
     sleep = sleep_fn or time.sleep
@@ -4153,11 +4584,13 @@ def ensure_expiration_campaign_signed_in(
             "authentication_state": verified.get("authentication_state"),
             "paused": False,
             "verify_payload": verified.get("verify_payload"),
+            "browser_recovered": False,
         }
 
-    needs_pause = verified.get("authentication_state") == "SIGNED_OUT" or verified.get(
-        "outcome"
-    ) in {
+    needs_pause = verified.get("authentication_state") in {
+        "SIGNED_OUT",
+        "LOGIN_UNKNOWN",
+    } or verified.get("outcome") in {
         "initial_not_signed_in",
         "managed_browser_unavailable",
         "initial_authentication_unknown",
@@ -4170,9 +4603,30 @@ def ensure_expiration_campaign_signed_in(
             "outcome": verified.get("outcome") or "initial_not_signed_in",
             "message": verified.get("message"),
             "verify_payload": verified.get("verify_payload"),
+            "browser_recovered": False,
         }
 
-    emit(_expiration_campaign_auth_pause_message(trial_number))
+    browser_recovered = False
+    if (
+        verified.get("outcome") == "managed_browser_unavailable"
+        and recover_unhealthy_browser_fn is not None
+    ):
+        recover_unhealthy_browser_fn()
+        browser_recovered = True
+        browser_launched = True
+
+    if bring_to_foreground_fn is not None:
+        try:
+            bring_to_foreground_fn()
+        except Exception:
+            pass
+
+    emit(
+        _expiration_campaign_auth_pause_message(
+            trial_number=trial_number,
+            browser_launched=browser_launched or browser_recovered,
+        )
+    )
     read_input()
     reverified = _verify()
     if reverified.get("ok"):
@@ -4181,6 +4635,7 @@ def ensure_expiration_campaign_signed_in(
             "authentication_state": reverified.get("authentication_state"),
             "paused": True,
             "verify_payload": reverified.get("verify_payload"),
+            "browser_recovered": browser_recovered,
         }
     return {
         "ok": False,
@@ -4192,6 +4647,7 @@ def ensure_expiration_campaign_signed_in(
             or "Amex was not SIGNED_IN after authentication confirmation."
         ),
         "verify_payload": reverified.get("verify_payload"),
+        "browser_recovered": browser_recovered,
     }
 
 
@@ -4199,6 +4655,8 @@ def run_amex_expiration_campaign(
     *,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
+    root: Path | None = None,
+    cdp_port: int = DEFAULT_CDP_PORT,
     diagnostics_dir: Path | None = None,
     output_dir: Path | None = None,
     trials: list[dict[str, Any]] | list[str] | tuple[str, ...] | None = None,
@@ -4217,6 +4675,7 @@ def run_amex_expiration_campaign(
     screenshot_every_seconds: float = (
         DEFAULT_EXPIRATION_EXPERIMENT_SCREENSHOT_EVERY_SECONDS
     ),
+    browser_cleanup: str = DEFAULT_BROWSER_CLEANUP_POLICY,
     continue_on_error: bool = False,
     skip_completed: bool = False,
     request_json_fn: Any = None,
@@ -4225,15 +4684,30 @@ def run_amex_expiration_campaign(
     input_fn: Any = None,
     print_fn: Any = None,
     run_experiment_fn: Any = None,
+    ensure_managed_browser_fn: Any = None,
+    classify_managed_browser_fn: Any = None,
+    restart_managed_browser_fn: Any = None,
+    bring_to_foreground_fn: Any = None,
+    close_managed_browser_fn: Any = None,
+    launch_native_chrome_fn: Any = None,
+    terminate_profile_processes_fn: Any = None,
+    wait_for_profile_release_fn: Any = None,
+    fetch_cdp_json_fn: Any = None,
 ) -> dict[str, Any]:
     """Run multiple Amex expiration experiments sequentially into one campaign ZIP.
 
-    Reuses ``run_amex_expiration_experiment`` as the unit of execution. Does not
-    reveal folders via ``open``, mutate the Amex page, acquire the runtime lock,
-    or stop serve / Chrome on interrupt.
+    Reuses ``run_amex_expiration_experiment`` as the unit of execution. Ensures a
+    dedicated managed Amex Chrome window exists (via ``launch_native_chrome``),
+    never targets ordinary Chrome profiles, and does not start/stop ``serve``.
     """
     if trials is None:
         raise ValueError("At least one --trial STRATEGY:INTERVAL is required")
+    cleanup_policy = str(browser_cleanup or DEFAULT_BROWSER_CLEANUP_POLICY)
+    if cleanup_policy not in BROWSER_CLEANUP_POLICIES:
+        raise ValueError(
+            f"Unsupported browser cleanup policy {browser_cleanup!r}. "
+            f"Expected one of {', '.join(BROWSER_CLEANUP_POLICIES)}"
+        )
     if trials and isinstance(trials[0], str):
         trial_specs = parse_expiration_campaign_trial_specs(
             [str(item) for item in trials]  # type: ignore[arg-type]
@@ -4272,10 +4746,12 @@ def run_amex_expiration_campaign(
     sleep = sleep_fn or time.sleep
     monotonic = monotonic_fn or time.monotonic
     read_input = input_fn or input
-    _ = print_fn  # reserved for future non-auth campaign progress output
+    emit = print_fn or print
     run_experiment = run_experiment_fn or run_amex_expiration_experiment
     base_url = _expiration_experiment_base_url(host, port)
-    diagnostics = Path(diagnostics_dir) if diagnostics_dir else DEFAULT_DIAGNOSTICS_DIR
+    runtime_root = Path(root).expanduser().resolve() if root is not None else DEFAULT_ROOT
+    profile_dir = (runtime_root / "amex").resolve()
+    diagnostics = Path(diagnostics_dir) if diagnostics_dir else runtime_root / "diagnostics"
     campaign_dir = (
         Path(output_dir).expanduser().resolve()
         if output_dir is not None
@@ -4289,6 +4765,11 @@ def run_amex_expiration_campaign(
     campaign_started_mono = monotonic()
     interrupted = False
     trial_summaries: list[dict[str, Any]] = []
+    managed_browser_preexisting = False
+    managed_browser_launched_by_campaign = False
+    managed_browser_restarted_by_campaign = False
+    managed_browser_closed_at_completion = False
+    browser_just_launched = False
     manifest = _load_campaign_manifest(campaign_dir) if skip_completed else {"trials": []}
     if not isinstance(manifest.get("trials"), list):
         manifest["trials"] = []
@@ -4298,8 +4779,113 @@ def run_amex_expiration_campaign(
             "campaign_name": campaign_name,
             "campaign_dir": str(campaign_dir),
             "started_at": manifest.get("started_at") or started_at,
+            "browser_cleanup_policy": cleanup_policy,
+            "managed_cdp_port": int(cdp_port),
+            "managed_profile_path": str(profile_dir),
         }
     )
+
+    def _browser_metadata() -> dict[str, Any]:
+        return {
+            "managed_browser_preexisting": managed_browser_preexisting,
+            "managed_browser_launched_by_campaign": managed_browser_launched_by_campaign,
+            "managed_browser_restarted_by_campaign": managed_browser_restarted_by_campaign,
+            "browser_cleanup_policy": cleanup_policy,
+            "managed_browser_closed_at_completion": managed_browser_closed_at_completion,
+            "managed_cdp_port": int(cdp_port),
+            "managed_profile_path": str(profile_dir),
+        }
+
+    def _persist_campaign(*, zip_it: bool) -> dict[str, Any]:
+        completed_at = iso_now()
+        zip_path: Path | None = None
+        summary = write_expiration_campaign_summary_files(
+            campaign_dir,
+            campaign_name=campaign_name,
+            started_at=str(manifest.get("started_at") or started_at),
+            completed_at=completed_at,
+            interrupted=interrupted,
+            trial_summaries=trial_summaries,
+            zip_path=None,
+            **_browser_metadata(),
+        )
+        manifest["trials"] = list(trial_summaries)
+        manifest["completed_at"] = completed_at
+        manifest["interrupted"] = interrupted
+        manifest.update(_browser_metadata())
+        _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME, manifest)
+        if zip_it:
+            zip_path = create_expiration_campaign_zip(campaign_dir)
+            summary["zip_path"] = str(zip_path)
+            _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_SUMMARY_JSON, summary)
+            manifest["zip_path"] = str(zip_path)
+            _write_json_file(
+                campaign_dir / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME, manifest
+            )
+        return {
+            "summary": summary,
+            "zip_path": str(zip_path) if zip_path is not None else None,
+            "completed_at": completed_at,
+        }
+
+    def _cleanup_browser() -> None:
+        nonlocal managed_browser_closed_at_completion
+        closer = close_managed_browser_fn or maybe_close_managed_browser_for_campaign
+        result = closer(
+            browser_cleanup=cleanup_policy,
+            managed_browser_preexisting=managed_browser_preexisting,
+            managed_browser_launched_by_campaign=managed_browser_launched_by_campaign,
+            interrupted=interrupted,
+            profile_dir=profile_dir,
+            terminate_profile_processes_fn=terminate_profile_processes_fn,
+        )
+        managed_browser_closed_at_completion = bool(
+            isinstance(result, dict) and result.get("closed")
+        )
+
+    def _restart_managed() -> dict[str, Any]:
+        nonlocal managed_browser_launched_by_campaign
+        nonlocal managed_browser_restarted_by_campaign
+        nonlocal browser_just_launched
+        restarter = restart_managed_browser_fn or (
+            lambda: restart_managed_amex_browser(
+                profile_dir=profile_dir,
+                cdp_port=int(cdp_port),
+                launch_native_chrome_fn=launch_native_chrome_fn,
+                terminate_profile_processes_fn=terminate_profile_processes_fn,
+                wait_for_profile_release_fn=wait_for_profile_release_fn,
+                sleep_fn=sleep,
+                monotonic_fn=monotonic,
+                fetch_cdp_json_fn=fetch_cdp_json_fn,
+            )
+        )
+        restarted = restarter()
+        managed_browser_launched_by_campaign = True
+        managed_browser_restarted_by_campaign = True
+        browser_just_launched = True
+        return restarted if isinstance(restarted, dict) else {"ok": True}
+
+    def _ensure_browser_healthy_between_trials() -> None:
+        nonlocal managed_browser_restarted_by_campaign
+        nonlocal browser_just_launched
+        classifier = classify_managed_browser_fn or (
+            lambda: classify_managed_amex_browser(
+                int(cdp_port),
+                fetch_cdp_json_fn=fetch_cdp_json_fn,
+            )
+        )
+        classified = classifier()
+        state = str(
+            (classified or {}).get("state")
+            if isinstance(classified, dict)
+            else MANAGED_BROWSER_ABSENT
+        )
+        if state == MANAGED_BROWSER_HEALTHY:
+            return
+        emit("Managed browser needs recovery before the next trial...")
+        _restart_managed()
+        managed_browser_restarted_by_campaign = True
+        browser_just_launched = True
 
     # 1) Validate already done above. 2) Health check before the campaign.
     try:
@@ -4316,37 +4902,59 @@ def run_amex_expiration_campaign(
             "error": f"{type(exc).__name__}: {exc}",
             "exit_code": 1,
             "interrupted": False,
+            **_browser_metadata(),
         }
 
-    def _persist_campaign(*, zip_it: bool) -> dict[str, Any]:
-        completed_at = iso_now()
-        zip_path: Path | None = None
-        summary = write_expiration_campaign_summary_files(
-            campaign_dir,
-            campaign_name=campaign_name,
-            started_at=str(manifest.get("started_at") or started_at),
-            completed_at=completed_at,
-            interrupted=interrupted,
-            trial_summaries=trial_summaries,
-            zip_path=None,
+    # 3) Ensure dedicated managed Amex browser exists (never touches ordinary Chrome).
+    try:
+        ensure_browser = ensure_managed_browser_fn or ensure_managed_amex_browser_for_campaign
+        browser_info = ensure_browser(
+            profile_dir=profile_dir,
+            cdp_port=int(cdp_port),
+            print_fn=emit,
+            sleep_fn=sleep,
+            monotonic_fn=monotonic,
+            fetch_cdp_json_fn=fetch_cdp_json_fn,
+            launch_native_chrome_fn=launch_native_chrome_fn,
+            terminate_profile_processes_fn=terminate_profile_processes_fn,
+            wait_for_profile_release_fn=wait_for_profile_release_fn,
         )
-        manifest["trials"] = list(trial_summaries)
-        manifest["completed_at"] = completed_at
-        manifest["interrupted"] = interrupted
-        _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME, manifest)
-        if zip_it:
-            zip_path = create_expiration_campaign_zip(campaign_dir)
-            summary["zip_path"] = str(zip_path)
-            _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_SUMMARY_JSON, summary)
-            manifest["zip_path"] = str(zip_path)
-            _write_json_file(
-                campaign_dir / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME, manifest
-            )
+    except Exception as exc:  # noqa: BLE001
         return {
-            "summary": summary,
-            "zip_path": str(zip_path) if zip_path is not None else None,
-            "completed_at": completed_at,
+            "ok": False,
+            "outcome": "managed_browser_launch_failed",
+            "campaign_name": campaign_name,
+            "campaign_dir": str(campaign_dir),
+            "zip_path": None,
+            "trial_summaries": [],
+            "message": f"Failed to ensure managed Amex Chrome: {exc}",
+            "error": f"{type(exc).__name__}: {exc}",
+            "exit_code": 1,
+            "interrupted": False,
+            **_browser_metadata(),
         }
+
+    if isinstance(browser_info, dict):
+        managed_browser_preexisting = bool(
+            browser_info.get("managed_browser_preexisting")
+        )
+        managed_browser_launched_by_campaign = bool(
+            browser_info.get("managed_browser_launched_by_campaign")
+        )
+        managed_browser_restarted_by_campaign = bool(
+            browser_info.get("managed_browser_restarted_by_campaign")
+        )
+        browser_just_launched = bool(
+            managed_browser_launched_by_campaign
+            or managed_browser_restarted_by_campaign
+        )
+
+    foreground = bring_to_foreground_fn or (
+        lambda: bring_managed_amex_browser_to_foreground(
+            profile_dir,
+            profile_processes_fn=None,
+        )
+    )
 
     try:
         for index, trial_spec in enumerate(trial_specs, start=1):
@@ -4399,15 +5007,25 @@ def run_amex_expiration_campaign(
                 trial_summaries.append(existing)
                 continue
 
+            if index > 1:
+                _ensure_browser_healthy_between_trials()
+
             auth = ensure_expiration_campaign_signed_in(
-                trial_number=index,
+                trial_number=None if index == 1 else index,
                 base_url=base_url,
                 request_json_fn=http,
                 sleep_fn=sleep,
                 monotonic_fn=monotonic,
                 input_fn=read_input,
-                print_fn=print,
+                print_fn=emit,
+                browser_launched=browser_just_launched,
+                bring_to_foreground_fn=foreground,
+                recover_unhealthy_browser_fn=_restart_managed,
             )
+            browser_just_launched = False
+            if auth.get("browser_recovered"):
+                managed_browser_restarted_by_campaign = True
+                managed_browser_launched_by_campaign = True
             if not auth.get("ok"):
                 trial_row = {
                     "trial_number": index,
@@ -4437,6 +5055,7 @@ def run_amex_expiration_campaign(
                 trial_summaries.append(trial_row)
                 if continue_on_error:
                     continue
+                _cleanup_browser()
                 persisted = _persist_campaign(zip_it=True)
                 return {
                     "ok": False,
@@ -4450,6 +5069,7 @@ def run_amex_expiration_campaign(
                     "exit_code": 1,
                     "interrupted": False,
                     "duration_seconds": max(0.0, monotonic() - campaign_started_mono),
+                    **_browser_metadata(),
                 }
 
             trial_started_at = iso_now()
@@ -4612,6 +5232,7 @@ def run_amex_expiration_campaign(
                 break
 
             if error and not continue_on_error:
+                _cleanup_browser()
                 persisted = _persist_campaign(zip_it=True)
                 return {
                     "ok": False,
@@ -4624,10 +5245,12 @@ def run_amex_expiration_campaign(
                     "exit_code": 1,
                     "interrupted": False,
                     "duration_seconds": max(0.0, monotonic() - campaign_started_mono),
+                    **_browser_metadata(),
                 }
     except KeyboardInterrupt:
         interrupted = True
 
+    _cleanup_browser()
     persisted = _persist_campaign(zip_it=True)
     exit_code = 130 if interrupted else 0
     if not interrupted and any(
@@ -4647,6 +5270,7 @@ def run_amex_expiration_campaign(
         "interrupted": interrupted,
         "duration_seconds": max(0.0, monotonic() - campaign_started_mono),
         "message": None,
+        **_browser_metadata(),
     }
 
 
@@ -8960,6 +9584,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     browser_run_expiration_campaign.add_argument(
+        "--browser-cleanup",
+        choices=BROWSER_CLEANUP_POLICIES,
+        default=DEFAULT_BROWSER_CLEANUP_POLICY,
+        help=(
+            "Whether to close a campaign-launched managed browser at the end "
+            f"(default: {DEFAULT_BROWSER_CLEANUP_POLICY}; "
+            "never closes a preexisting managed browser or ordinary Chrome)"
+        ),
+    )
+    browser_run_expiration_campaign.add_argument(
         "--continue-on-error",
         action="store_true",
         help="Record a failed trial and continue to the next trial",
@@ -9192,6 +9826,8 @@ def run_client_command(args: argparse.Namespace) -> int:
         result = run_amex_expiration_campaign(
             host=args.host,
             port=args.port,
+            root=args.root,
+            cdp_port=int(args.cdp_port),
             diagnostics_dir=args.root / "diagnostics",
             output_dir=output_dir,
             trials=trial_specs,
@@ -9202,6 +9838,7 @@ def run_client_command(args: argparse.Namespace) -> int:
             verification_interval_seconds=float(args.verification_interval_seconds),
             rolling_window_seconds=float(args.rolling_window_seconds),
             screenshot_every_seconds=float(args.screenshot_every_seconds),
+            browser_cleanup=str(args.browser_cleanup),
             continue_on_error=bool(args.continue_on_error),
             skip_completed=bool(args.skip_completed),
         )
