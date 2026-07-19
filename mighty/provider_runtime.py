@@ -4634,10 +4634,13 @@ def ensure_expiration_campaign_signed_in(
         }
 
     verified = _verify()
+    initial_authentication_state = verified.get("authentication_state")
     if verified.get("ok"):
         return {
             "ok": True,
             "authentication_state": verified.get("authentication_state"),
+            "initial_authentication_state": initial_authentication_state,
+            "final_authentication_state": verified.get("authentication_state"),
             "paused": False,
             "verify_payload": verified.get("verify_payload"),
             "browser_recovered": False,
@@ -4648,6 +4651,8 @@ def ensure_expiration_campaign_signed_in(
         return {
             "ok": False,
             "authentication_state": verified.get("authentication_state"),
+            "initial_authentication_state": initial_authentication_state,
+            "final_authentication_state": verified.get("authentication_state"),
             "paused": False,
             "outcome": verified.get("outcome") or "initial_not_signed_in",
             "message": verified.get("message"),
@@ -4687,6 +4692,8 @@ def ensure_expiration_campaign_signed_in(
             return {
                 "ok": False,
                 "authentication_state": verified.get("authentication_state"),
+                "initial_authentication_state": initial_authentication_state,
+                "final_authentication_state": verified.get("authentication_state"),
                 "paused": True,
                 "interrupted": True,
                 "outcome": "interrupted",
@@ -4709,6 +4716,8 @@ def ensure_expiration_campaign_signed_in(
             return {
                 "ok": True,
                 "authentication_state": reverified.get("authentication_state"),
+                "initial_authentication_state": initial_authentication_state,
+                "final_authentication_state": reverified.get("authentication_state"),
                 "paused": True,
                 "verify_payload": reverified.get("verify_payload"),
                 "browser_recovered": browser_recovered,
@@ -4735,6 +4744,157 @@ def ensure_expiration_campaign_signed_in(
         # Recoverable: loop and wait for another Enter. Never fail the trial here.
 
 
+def prepare_managed_amex_session_for_command(
+    *,
+    profile_dir: Path,
+    cdp_port: int,
+    base_url: str,
+    request_json_fn: Any,
+    trial_number: int | None = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    input_fn: Any = None,
+    print_fn: Any = None,
+    ensure_managed_browser_fn: Any = None,
+    ensure_signed_in_fn: Any = None,
+    bring_to_foreground_fn: Any = None,
+    recover_unhealthy_browser_fn: Any = None,
+    restart_managed_browser_fn: Any = None,
+    launch_native_chrome_fn: Any = None,
+    terminate_profile_processes_fn: Any = None,
+    wait_for_profile_release_fn: Any = None,
+    fetch_cdp_json_fn: Any = None,
+) -> dict[str, Any]:
+    """Shared preflight: managed Amex browser + canonical SIGNED_IN auth.
+
+    Used by ``campaign amex`` and ``keepalive-probe`` so both top-level commands
+    share the same Chrome launch, health classification, authentication prompt
+    loop, and ownership metadata — without duplicating that logic.
+    """
+    emit = print_fn or print
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    profile_dir = Path(profile_dir).expanduser().resolve()
+
+    ensure_browser = ensure_managed_browser_fn or ensure_managed_amex_browser_for_campaign
+    try:
+        browser_info = ensure_browser(
+            profile_dir=profile_dir,
+            cdp_port=int(cdp_port),
+            print_fn=emit,
+            sleep_fn=sleep,
+            monotonic_fn=monotonic,
+            fetch_cdp_json_fn=fetch_cdp_json_fn,
+            launch_native_chrome_fn=launch_native_chrome_fn,
+            terminate_profile_processes_fn=terminate_profile_processes_fn,
+            wait_for_profile_release_fn=wait_for_profile_release_fn,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface as browser_start_failed
+        return {
+            "ok": False,
+            "outcome": "browser_start_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "message": f"Failed to ensure managed Amex Chrome: {exc}",
+            "interrupted": False,
+            "managed_browser_preexisting": False,
+            "managed_browser_launched": False,
+            "managed_browser_restarted": False,
+            "initial_authentication_state": None,
+            "final_authentication_state": None,
+            "authentication_attempt_count": 0,
+            "browser_info": None,
+            "auth_info": None,
+        }
+
+    if not isinstance(browser_info, dict):
+        browser_info = {}
+    managed_browser_preexisting = bool(browser_info.get("managed_browser_preexisting"))
+    managed_browser_launched = bool(
+        browser_info.get("managed_browser_launched_by_campaign")
+        or browser_info.get("managed_browser_launched")
+    )
+    managed_browser_restarted = bool(
+        browser_info.get("managed_browser_restarted_by_campaign")
+        or browser_info.get("managed_browser_restarted")
+    )
+    browser_just_launched = bool(managed_browser_launched or managed_browser_restarted)
+
+    def _restart_managed() -> dict[str, Any]:
+        nonlocal managed_browser_launched
+        nonlocal managed_browser_restarted
+        nonlocal browser_just_launched
+        restarter = restart_managed_browser_fn or (
+            lambda: restart_managed_amex_browser(
+                profile_dir=profile_dir,
+                cdp_port=int(cdp_port),
+                launch_native_chrome_fn=launch_native_chrome_fn,
+                terminate_profile_processes_fn=terminate_profile_processes_fn,
+                wait_for_profile_release_fn=wait_for_profile_release_fn,
+                sleep_fn=sleep,
+                monotonic_fn=monotonic,
+                fetch_cdp_json_fn=fetch_cdp_json_fn,
+            )
+        )
+        restarted = restarter()
+        managed_browser_launched = True
+        managed_browser_restarted = True
+        browser_just_launched = True
+        return restarted if isinstance(restarted, dict) else {"ok": True}
+
+    foreground = bring_to_foreground_fn or (
+        lambda: bring_managed_amex_browser_to_foreground(
+            profile_dir,
+            profile_processes_fn=None,
+        )
+    )
+    ensure_auth = ensure_signed_in_fn or ensure_expiration_campaign_signed_in
+    auth_info = ensure_auth(
+        trial_number=trial_number,
+        base_url=base_url,
+        request_json_fn=request_json_fn,
+        sleep_fn=sleep,
+        monotonic_fn=monotonic,
+        input_fn=input_fn,
+        print_fn=emit,
+        browser_launched=browser_just_launched,
+        bring_to_foreground_fn=foreground,
+        recover_unhealthy_browser_fn=recover_unhealthy_browser_fn or _restart_managed,
+    )
+    if not isinstance(auth_info, dict):
+        auth_info = {"ok": False, "outcome": "authentication_failed"}
+
+    if auth_info.get("browser_recovered"):
+        managed_browser_launched = True
+        managed_browser_restarted = True
+
+    interrupted = bool(
+        auth_info.get("interrupted") or auth_info.get("outcome") == "interrupted"
+    )
+    ok = bool(auth_info.get("ok")) and not interrupted
+    return {
+        "ok": ok,
+        "outcome": None
+        if ok
+        else (
+            auth_info.get("outcome")
+            or ("interrupted" if interrupted else "authentication_required")
+        ),
+        "error": None if ok else (auth_info.get("message") or auth_info.get("outcome")),
+        "message": auth_info.get("message"),
+        "interrupted": interrupted,
+        "managed_browser_preexisting": managed_browser_preexisting,
+        "managed_browser_launched": managed_browser_launched,
+        "managed_browser_restarted": managed_browser_restarted,
+        "initial_authentication_state": auth_info.get("initial_authentication_state")
+        or auth_info.get("authentication_state"),
+        "final_authentication_state": auth_info.get("final_authentication_state")
+        or auth_info.get("authentication_state"),
+        "authentication_attempt_count": int(auth_info.get("prompt_count") or 0),
+        "browser_info": browser_info,
+        "auth_info": auth_info,
+        "managed_cdp_port": int(cdp_port),
+        "managed_profile_path": str(profile_dir),
+    }
 
 
 def run_amex_expiration_campaign(
@@ -4992,6 +5152,8 @@ def run_amex_expiration_campaign(
         }
 
     # 3) Ensure dedicated managed Amex browser exists (never touches ordinary Chrome).
+    # Shares ensure_managed_amex_browser_for_campaign with keepalive-probe via
+    # prepare_managed_amex_session_for_command (probe) / direct call (campaign).
     try:
         ensure_browser = ensure_managed_browser_fn or ensure_managed_amex_browser_for_campaign
         browser_info = ensure_browser(
@@ -8152,14 +8314,65 @@ def format_keepalive_probe_terminal_summary(payload: dict[str, Any]) -> str:
         lines.append(f"Evidence: {evidence}")
     if not ok and payload.get("error") and payload.get("error") != reason:
         lines.append(f"Error: {payload.get('error')}")
-    if payload.get("runtime_started_by_probe"):
-        if payload.get("runtime_stopped_by_probe"):
-            lines.append("Runtime: started by probe and stopped afterward.")
-        else:
-            lines.append("Runtime: started by probe.")
-    elif payload.get("runtime_preexisting"):
-        lines.append("Runtime: reused preexisting serve (left running).")
     return "\n".join(lines) + "\n"
+
+
+def _keepalive_probe_ownership_evidence_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Sanitized ownership/auth fields recorded alongside probe evidence."""
+    attempt = payload.get("attempt") if isinstance(payload.get("attempt"), dict) else {}
+    return {
+        "runtime_preexisting": bool(payload.get("runtime_preexisting")),
+        "runtime_started_by_probe": bool(payload.get("runtime_started_by_probe")),
+        "managed_browser_preexisting": bool(payload.get("managed_browser_preexisting")),
+        "managed_browser_launched_by_probe": bool(
+            payload.get("managed_browser_launched_by_probe")
+        ),
+        "managed_browser_restarted_by_probe": bool(
+            payload.get("managed_browser_restarted_by_probe")
+        ),
+        "browser_cleanup_policy": payload.get("browser_cleanup_policy"),
+        "managed_browser_closed_at_completion": bool(
+            payload.get("managed_browser_closed_at_completion")
+        ),
+        "initial_authentication_state": payload.get("initial_authentication_state"),
+        "final_authentication_state": payload.get("final_authentication_state"),
+        "authentication_attempt_count": int(
+            payload.get("authentication_attempt_count") or 0
+        ),
+        "strategy": payload.get("strategy"),
+        "result": (
+            "SUCCESS"
+            if payload.get("success")
+            else ("INTERRUPTED" if payload.get("interrupted") else "FAILURE")
+        ),
+        "reason": payload.get("reason") or payload.get("error"),
+        "duration_ms": attempt.get("duration_ms"),
+        "target": attempt.get("target") or payload.get("selected_page_url"),
+        "response_status": attempt.get("response_status"),
+    }
+
+
+def _enrich_keepalive_probe_evidence_file(payload: dict[str, Any]) -> str | None:
+    """Merge ownership/auth fields into the probe evidence JSON when present."""
+    evidence_path = payload.get("evidence_path")
+    ownership = _keepalive_probe_ownership_evidence_fields(payload)
+    if evidence_path:
+        path = Path(str(evidence_path))
+        existing: dict[str, Any] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    existing = loaded
+            except Exception:
+                existing = {}
+        existing.update(ownership)
+        # Never persist secrets if a buggy writer included them.
+        for banned in ("cookies", "authorization", "body", "token", "password"):
+            existing.pop(banned, None)
+        _write_json_file(path, existing)
+        return str(path)
+    return None
 
 
 def run_keepalive_probe_with_runtime(
@@ -8173,66 +8386,89 @@ def run_keepalive_probe_with_runtime(
     state_path: Path | None = None,
     result_path: Path | None = None,
     keepalive_result_path: Path | None = None,
+    browser_cleanup: str = DEFAULT_BROWSER_CLEANUP_POLICY,
     request_json_fn: Any = None,
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
+    input_fn: Any = None,
     print_fn: Any = None,
     ensure_runtime_fn: Any = None,
     stop_runtime_fn: Any = None,
+    prepare_session_fn: Any = None,
+    ensure_managed_browser_fn: Any = None,
+    ensure_signed_in_fn: Any = None,
+    close_managed_browser_fn: Any = None,
+    bring_to_foreground_fn: Any = None,
+    restart_managed_browser_fn: Any = None,
+    launch_native_chrome_fn: Any = None,
+    terminate_profile_processes_fn: Any = None,
+    wait_for_profile_release_fn: Any = None,
+    fetch_cdp_json_fn: Any = None,
     probe_request_fn: Any = None,
+    emit_summary: bool = True,
 ) -> dict[str, Any]:
-    """First-class ``keepalive-probe`` entry: manage runtime, then probe once.
+    """First-class ``keepalive-probe`` entry: runtime + browser + auth, then probe.
 
-    Mirrors ``campaign amex`` ownership: starts ``serve`` only when needed and
-    stops it only when this command owns it. Does not change managed-browser
-    ownership semantics.
+    Reuses the same managed-browser and authentication preflight helpers as
+    ``campaign amex``. Starts ``serve`` only when needed, launches/reuses the
+    dedicated Mighty Amex Chrome window, prompts until SIGNED_IN, runs exactly
+    one keepalive action, then cleans up only resources this command owns.
     """
     emit = print_fn or print
     http = request_json_fn or request_json
     strategy = str(strategy or "").upper()
     runtime_root = Path(root).expanduser().resolve() if root is not None else DEFAULT_ROOT
+    profile_dir = (runtime_root / "amex").resolve()
+    cleanup_policy = str(browser_cleanup or DEFAULT_BROWSER_CLEANUP_POLICY)
+    if cleanup_policy not in BROWSER_CLEANUP_POLICIES:
+        cleanup_policy = DEFAULT_BROWSER_CLEANUP_POLICY
 
-    ensure_runtime = ensure_runtime_fn or ensure_provider_runtime_for_campaign
-    runtime_info = ensure_runtime(
-        host=host,
-        port=port,
-        root=runtime_root,
-        cdp_port=int(cdp_port),
-        state_path=state_path,
-        result_path=result_path,
-        keepalive_result_path=keepalive_result_path,
-        request_json_fn=http,
-        sleep_fn=sleep_fn,
-        monotonic_fn=monotonic_fn,
-        print_fn=emit,
-    )
-    if not isinstance(runtime_info, dict) or not runtime_info.get("ok"):
+    runtime_preexisting = False
+    runtime_started_by_probe = False
+    runtime_process: Any = None
+    runtime_stopped_by_probe = False
+    managed_browser_preexisting = False
+    managed_browser_launched_by_probe = False
+    managed_browser_restarted_by_probe = False
+    managed_browser_closed_at_completion = False
+    initial_authentication_state: str | None = None
+    final_authentication_state: str | None = None
+    authentication_attempt_count = 0
+    interrupted = False
+    summary_emitted = False
+    payload: dict[str, Any] = {
+        "ok": False,
+        "success": False,
+        "strategy": strategy,
+        "provider": provider,
+        "outcome": "not_started",
+        "error": "not_started",
+        "reason": "not_started",
+        "exit_code": 1,
+        "interrupted": False,
+    }
+
+    def _ownership_fields() -> dict[str, Any]:
         return {
-            "ok": False,
-            "success": False,
-            "strategy": strategy,
-            "provider": provider,
-            "outcome": (runtime_info or {}).get("outcome") or "runtime_start_failed",
-            "error": (runtime_info or {}).get("error")
-            or (runtime_info or {}).get("message")
-            or "Failed to ensure Provider Runtime",
-            "reason": (runtime_info or {}).get("message")
-            or (runtime_info or {}).get("error")
-            or "Failed to ensure Provider Runtime",
-            "exit_code": 1,
-            "interrupted": False,
-            "runtime_preexisting": bool((runtime_info or {}).get("runtime_preexisting")),
-            "runtime_started_by_probe": bool(
-                (runtime_info or {}).get("runtime_started_by_campaign")
-            ),
-            "runtime_stopped_by_probe": False,
+            "runtime_preexisting": runtime_preexisting,
+            "runtime_started_by_probe": runtime_started_by_probe,
+            "runtime_stopped_by_probe": runtime_stopped_by_probe,
+            "managed_browser_preexisting": managed_browser_preexisting,
+            "managed_browser_launched_by_probe": managed_browser_launched_by_probe,
+            "managed_browser_restarted_by_probe": managed_browser_restarted_by_probe,
+            "browser_cleanup_policy": cleanup_policy,
+            "managed_browser_closed_at_completion": managed_browser_closed_at_completion,
+            "initial_authentication_state": initial_authentication_state,
+            "final_authentication_state": final_authentication_state,
+            "authentication_attempt_count": authentication_attempt_count,
         }
 
-    runtime_preexisting = bool(runtime_info.get("runtime_preexisting"))
-    runtime_started_by_probe = bool(runtime_info.get("runtime_started_by_campaign"))
-    runtime_process = runtime_info.get("process")
-    runtime_stopped_by_probe = False
-    payload: dict[str, Any]
+    def _emit_summary_once(current: dict[str, Any]) -> None:
+        nonlocal summary_emitted
+        if not emit_summary or summary_emitted:
+            return
+        emit(format_keepalive_probe_terminal_summary(current).rstrip("\n"))
+        summary_emitted = True
 
     def _probe() -> dict[str, Any]:
         if probe_request_fn is not None:
@@ -8251,10 +8487,88 @@ def run_keepalive_probe_with_runtime(
             timeout=30.0,
         )
 
+    def _cleanup_browser() -> None:
+        nonlocal managed_browser_closed_at_completion
+        closer = close_managed_browser_fn or maybe_close_managed_browser_for_campaign
+        result = closer(
+            browser_cleanup=cleanup_policy,
+            managed_browser_preexisting=managed_browser_preexisting,
+            managed_browser_launched_by_campaign=managed_browser_launched_by_probe,
+            interrupted=interrupted,
+            profile_dir=profile_dir,
+            terminate_profile_processes_fn=terminate_profile_processes_fn,
+        )
+        managed_browser_closed_at_completion = bool(
+            isinstance(result, dict) and result.get("closed")
+        )
+
+    ensure_runtime = ensure_runtime_fn or ensure_provider_runtime_for_campaign
+    runtime_info = ensure_runtime(
+        host=host,
+        port=port,
+        root=runtime_root,
+        cdp_port=int(cdp_port),
+        state_path=state_path,
+        result_path=result_path,
+        keepalive_result_path=keepalive_result_path,
+        request_json_fn=http,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+        print_fn=emit,
+    )
+    if not isinstance(runtime_info, dict) or not runtime_info.get("ok"):
+        payload = {
+            "ok": False,
+            "success": False,
+            "strategy": strategy,
+            "provider": provider,
+            "outcome": (runtime_info or {}).get("outcome") or "runtime_start_failed",
+            "error": (runtime_info or {}).get("error")
+            or (runtime_info or {}).get("message")
+            or "Failed to ensure Provider Runtime",
+            "reason": (runtime_info or {}).get("message")
+            or (runtime_info or {}).get("error")
+            or "Failed to ensure Provider Runtime",
+            "exit_code": 1,
+            "interrupted": False,
+            **_ownership_fields(),
+            "runtime_preexisting": bool((runtime_info or {}).get("runtime_preexisting")),
+            "runtime_started_by_probe": bool(
+                (runtime_info or {}).get("runtime_started_by_campaign")
+            ),
+            "runtime_stopped_by_probe": False,
+        }
+        _emit_summary_once(payload)
+        return payload
+
+    runtime_preexisting = bool(runtime_info.get("runtime_preexisting"))
+    runtime_started_by_probe = bool(runtime_info.get("runtime_started_by_campaign"))
+    runtime_process = runtime_info.get("process")
+
     try:
+        prepare = prepare_session_fn or prepare_managed_amex_session_for_command
         try:
-            raw = _probe()
+            session = prepare(
+                profile_dir=profile_dir,
+                cdp_port=int(cdp_port),
+                base_url=_expiration_experiment_base_url(host, port),
+                request_json_fn=http,
+                trial_number=None,
+                sleep_fn=sleep_fn,
+                monotonic_fn=monotonic_fn,
+                input_fn=input_fn,
+                print_fn=emit,
+                ensure_managed_browser_fn=ensure_managed_browser_fn,
+                ensure_signed_in_fn=ensure_signed_in_fn,
+                bring_to_foreground_fn=bring_to_foreground_fn,
+                restart_managed_browser_fn=restart_managed_browser_fn,
+                launch_native_chrome_fn=launch_native_chrome_fn,
+                terminate_profile_processes_fn=terminate_profile_processes_fn,
+                wait_for_profile_release_fn=wait_for_profile_release_fn,
+                fetch_cdp_json_fn=fetch_cdp_json_fn,
+            )
         except KeyboardInterrupt:
+            interrupted = True
             payload = {
                 "ok": False,
                 "success": False,
@@ -8266,44 +8580,136 @@ def run_keepalive_probe_with_runtime(
                 "exit_code": 130,
                 "interrupted": True,
             }
-        except Exception as exc:  # noqa: BLE001 - always clean up owned runtime
-            payload = {
-                "ok": False,
-                "success": False,
-                "strategy": strategy,
-                "provider": provider,
-                "outcome": "probe_request_failed",
-                "error": f"{type(exc).__name__}: {exc}",
-                "reason": f"{type(exc).__name__}: {exc}",
-                "exit_code": 1,
-                "interrupted": False,
-            }
         else:
-            if not isinstance(raw, dict):
+            if not isinstance(session, dict):
+                session = {"ok": False, "outcome": "browser_start_failed"}
+            managed_browser_preexisting = bool(
+                session.get("managed_browser_preexisting")
+            )
+            managed_browser_launched_by_probe = bool(
+                session.get("managed_browser_launched")
+            )
+            managed_browser_restarted_by_probe = bool(
+                session.get("managed_browser_restarted")
+            )
+            initial_authentication_state = session.get("initial_authentication_state")
+            final_authentication_state = session.get("final_authentication_state")
+            authentication_attempt_count = int(
+                session.get("authentication_attempt_count") or 0
+            )
+            interrupted = bool(session.get("interrupted"))
+
+            if interrupted:
                 payload = {
                     "ok": False,
                     "success": False,
                     "strategy": strategy,
                     "provider": provider,
-                    "outcome": "invalid_probe_payload",
-                    "error": "invalid_probe_payload",
-                    "reason": "invalid_probe_payload",
+                    "outcome": "interrupted",
+                    "error": session.get("error") or "interrupted",
+                    "reason": session.get("message") or "interrupted",
+                    "exit_code": 130,
+                    "interrupted": True,
+                }
+            elif not session.get("ok"):
+                outcome = str(session.get("outcome") or "browser_start_failed")
+                payload = {
+                    "ok": False,
+                    "success": False,
+                    "strategy": strategy,
+                    "provider": provider,
+                    "outcome": outcome,
+                    "error": session.get("error")
+                    or session.get("message")
+                    or outcome,
+                    "reason": session.get("message")
+                    or session.get("error")
+                    or outcome,
                     "exit_code": 1,
                     "interrupted": False,
                 }
             else:
-                payload = dict(raw)
-                payload.setdefault("strategy", strategy)
-                payload.setdefault("provider", provider)
-                success = bool(payload.get("ok")) and bool(payload.get("success"))
-                payload["exit_code"] = 0 if success else 1
-                payload["interrupted"] = bool(payload.get("interrupted"))
-                payload["outcome"] = (
-                    "success"
-                    if success
-                    else (payload.get("outcome") or payload.get("error") or "probe_failed")
-                )
+                emit(f"Running keepalive probe: {strategy}...")
+                try:
+                    raw = _probe()
+                except KeyboardInterrupt:
+                    interrupted = True
+                    payload = {
+                        "ok": False,
+                        "success": False,
+                        "strategy": strategy,
+                        "provider": provider,
+                        "outcome": "interrupted",
+                        "error": "interrupted",
+                        "reason": "interrupted",
+                        "exit_code": 130,
+                        "interrupted": True,
+                    }
+                except Exception as exc:  # noqa: BLE001 - always clean up owned resources
+                    payload = {
+                        "ok": False,
+                        "success": False,
+                        "strategy": strategy,
+                        "provider": provider,
+                        "outcome": "probe_request_failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                        "exit_code": 1,
+                        "interrupted": False,
+                    }
+                else:
+                    if not isinstance(raw, dict):
+                        payload = {
+                            "ok": False,
+                            "success": False,
+                            "strategy": strategy,
+                            "provider": provider,
+                            "outcome": "invalid_probe_payload",
+                            "error": "invalid_probe_payload",
+                            "reason": "invalid_probe_payload",
+                            "exit_code": 1,
+                            "interrupted": False,
+                        }
+                    else:
+                        payload = dict(raw)
+                        payload.setdefault("strategy", strategy)
+                        payload.setdefault("provider", provider)
+                        if payload.get("authentication_state") is not None:
+                            final_authentication_state = payload.get(
+                                "authentication_state"
+                            )
+                        success = bool(payload.get("ok")) and bool(
+                            payload.get("success")
+                        )
+                        payload["exit_code"] = 0 if success else 1
+                        payload["interrupted"] = bool(payload.get("interrupted"))
+                        payload["outcome"] = (
+                            "success"
+                            if success
+                            else (
+                                payload.get("outcome")
+                                or payload.get("error")
+                                or "probe_failed"
+                            )
+                        )
     finally:
+        # Print probe result before cleanup messages.
+        payload = dict(payload)
+        payload.update(_ownership_fields())
+        evidence_path = _enrich_keepalive_probe_evidence_file(payload)
+        if evidence_path:
+            payload["evidence_path"] = evidence_path
+        _emit_summary_once(payload)
+
+        _cleanup_browser()
+        payload["managed_browser_closed_at_completion"] = (
+            managed_browser_closed_at_completion
+        )
+        # Re-enrich after browser cleanup so closed_at_completion is accurate.
+        evidence_path = _enrich_keepalive_probe_evidence_file(payload)
+        if evidence_path:
+            payload["evidence_path"] = evidence_path
+
         if runtime_started_by_probe:
             emit("Stopping Provider Runtime started by this probe...")
             stopper = stop_runtime_fn or stop_provider_runtime_serve
@@ -8318,9 +8724,7 @@ def run_keepalive_probe_with_runtime(
             emit("Leaving preexisting Provider Runtime running.")
 
     payload = dict(payload)
-    payload["runtime_preexisting"] = runtime_preexisting
-    payload["runtime_started_by_probe"] = runtime_started_by_probe
-    payload["runtime_stopped_by_probe"] = runtime_stopped_by_probe
+    payload.update(_ownership_fields())
     return payload
 
 
@@ -10565,8 +10969,8 @@ def parse_args() -> argparse.Namespace:
     keepalive_probe = subparsers.add_parser(
         "keepalive-probe",
         help=(
-            "Run one keepalive strategy attempt against the signed-in managed "
-            "session (auto-starts serve when needed; does not wait for expiration)"
+            "Run one keepalive strategy attempt (auto-starts serve + managed Amex "
+            "Chrome + auth when needed; does not wait for expiration)"
         ),
     )
     keepalive_probe.add_argument("provider", choices=("amex",))
@@ -10575,6 +10979,16 @@ def parse_args() -> argparse.Namespace:
         required=True,
         choices=KEEPALIVE_STRATEGIES,
         help="Keepalive strategy to probe",
+    )
+    keepalive_probe.add_argument(
+        "--browser-cleanup",
+        choices=BROWSER_CLEANUP_POLICIES,
+        default=DEFAULT_BROWSER_CLEANUP_POLICY,
+        help=(
+            "Whether to close a probe-launched managed browser at the end "
+            f"(default: {DEFAULT_BROWSER_CLEANUP_POLICY}; "
+            "never closes a preexisting managed browser or ordinary Chrome)"
+        ),
     )
 
     keepalive_status = subparsers.add_parser("keepalive-status")
@@ -11091,8 +11505,12 @@ def run_client_command(args: argparse.Namespace) -> int:
             state_path=args.state_path,
             result_path=args.result_path,
             keepalive_result_path=args.keepalive_result_path,
+            browser_cleanup=str(
+                getattr(args, "browser_cleanup", DEFAULT_BROWSER_CLEANUP_POLICY)
+            ),
+            emit_summary=True,
         )
-        print(format_keepalive_probe_terminal_summary(payload), end="")
+        # Summary is emitted inside the runner before cleanup messages.
         return int(payload.get("exit_code") or (0 if payload.get("success") else 1))
     if args.command == "keepalive-status":
         payload = request_json(

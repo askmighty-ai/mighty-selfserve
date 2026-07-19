@@ -740,7 +740,8 @@ Developer trials may use shorter values such as 8 minutes / 30 seconds.
 
 ### Keepalive probe (preflight)
 
-Before a long trial, prove one strategy attempt executes:
+Before a long trial, prove one strategy attempt executes. No manual `serve`,
+`bootstrap`, or browser setup is required:
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
@@ -753,19 +754,65 @@ PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
   keepalive-probe amex --strategy OVERVIEW_RELOAD
 ```
 
-The probe requires an existing signed-in managed Amex session. Like
-`campaign amex`, it manages Provider Runtime serve ownership:
+Like `campaign amex`, the probe reuses the shared managed-session preflight
+(`prepare_managed_amex_session_for_command`):
 
-1. checks runtime health;
-2. auto-starts `serve` when absent and remembers ownership;
-3. runs exactly one strategy attempt;
-4. stops `serve` only when this command started it;
-5. leaves a preexisting `serve` running.
+1. checks runtime health and auto-starts `serve` when needed;
+2. launches or reuses the dedicated Mighty Amex Chrome window
+   (`launch_native_chrome` + Mighty profile + configured CDP port);
+3. prompts for login/MFA until canonical verification is `SIGNED_IN`;
+4. runs exactly one keepalive strategy attempt;
+5. writes sanitized evidence under diagnostics;
+6. stops `serve` only when this command started it;
+7. closes only a browser this probe launched when
+   `--browser-cleanup close-on-completion` (default); never closes a preexisting
+   managed browser or ordinary Chrome.
 
-It prints success/failure + reason, writes a sanitized evidence record under
-diagnostics, finishes in under 30 seconds, never waits for expiration, never
-mutates account data, and never touches ordinary Chrome. Browser ownership is
-unchanged (probe does not launch/close the managed Amex window).
+Example fresh-machine console:
+
+```text
+Provider Runtime not running.
+Starting Provider Runtime serve...
+Provider Runtime ready.
+
+Checking managed Amex browser...
+No managed browser found.
+Launching dedicated Mighty Amex Chrome...
+Browser ready.
+
+Authentication required.
+
+A dedicated Mighty Amex Chrome window has been opened.
+Sign in and complete MFA.
+Wait until the account overview is fully loaded.
+Press Enter here when ready.
+
+Input received.
+Verifying authentication...
+Authentication verified.
+Running keepalive probe: SESSION_API...
+
+Keepalive probe: SESSION_API
+Result: SUCCESS
+Reason: success
+Duration: 120ms
+Target: https://functions.americanexpress.com/ReadUserSession.v1
+HTTP status: 200
+Evidence: <path>
+
+Stopping Provider Runtime started by this probe...
+```
+
+Failed post-Enter verification re-prompts without failing the probe. Ctrl+C
+preserves evidence, leaves the managed browser open by default, stops `serve`
+only when this command started it, and never touches ordinary Chrome.
+
+Useful flags:
+
+| Option | Behavior |
+| --- | --- |
+| `--browser-cleanup close-on-completion` | Default. Closes only a browser this probe launched |
+| `--browser-cleanup leave-open` | Leave the managed browser running after the probe |
 
 `campaign amex` runs this probe before each active-strategy trial. A failed
 preflight records `OPERATIONALLY_FAILED` / `preflight_failed` and skips the
