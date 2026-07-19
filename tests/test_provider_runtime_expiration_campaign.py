@@ -446,10 +446,14 @@ def test_authentication_prompt_after_automatic_launch(tmp_path: Path, capsys):
         print_fn=print,
     )
     out = capsys.readouterr().out
-    assert "Authentication required." in out
+    assert "Authentication required for trial 1." in out
     assert "A dedicated Mighty Amex Chrome window has been opened." in out
     assert "Sign in and complete MFA." in out
-    assert "Press Enter here when the account overview page is visible." in out
+    assert "Wait until the account overview is fully loaded." in out
+    assert "Press Enter here when ready." in out
+    assert "Input received." in out
+    assert "Verifying authentication..." in out
+    assert "Authentication verified." in out
     assert "bootstrap amex" not in out
     assert result["outcome"] == "completed"
     assert result["managed_browser_launched_by_campaign"] is True
@@ -478,9 +482,11 @@ def test_successful_verification_continues_campaign(tmp_path: Path):
     assert result["outcome"] == "completed"
 
 
-def test_failed_verification_does_not_start_trial(tmp_path: Path):
-    http = _CampaignHttp(verify_states=["SIGNED_OUT", "SIGNED_OUT"])
+def test_failed_verification_does_not_start_trial_until_signed_in(tmp_path: Path):
+    # Stay SIGNED_OUT until the second Enter, then SIGNED_IN.
+    http = _CampaignHttp(verify_states=["SIGNED_OUT", "SIGNED_OUT", "SIGNED_IN"])
     ran = []
+    prompts: list[str] = []
 
     def run_experiment(**kwargs):
         ran.append("ran")
@@ -493,13 +499,15 @@ def test_failed_verification_does_not_start_trial(tmp_path: Path):
     result = _run_campaign(
         tmp_path,
         output_dir=tmp_path / "fail-auth",
-        trials=["NONE:30", "SESSION_API:30"],
+        trials=["NONE:30"],
         request_json_fn=http,
         run_experiment_fn=run_experiment,
+        input_fn=lambda: prompts.append("enter") or "",
     )
-    assert ran == []
-    assert result["outcome"] == "authentication_required"
-    assert result["trial_summaries"][0]["error"]
+    assert prompts == ["enter", "enter"]
+    assert ran == ["ran"]
+    assert result["outcome"] == "completed"
+    assert result["trial_summaries"][0]["error"] is None
 
 
 def test_logout_between_trials_prompts_reauthentication(tmp_path: Path, capsys):
@@ -725,18 +733,30 @@ def test_successful_reverification_after_user_confirmation():
     assert auth["paused"] is True
 
 
-def test_failed_reverification_after_user_confirmation():
-    http = _CampaignHttp(verify_states=["SIGNED_OUT", "SIGNED_OUT"])
+def test_failed_reverification_prompts_again_until_signed_in():
+    http = _CampaignHttp(verify_states=["SIGNED_OUT", "SIGNED_OUT", "SIGNED_IN"])
+    prompts: list[str] = []
+    lines: list[str] = []
+
+    def input_fn() -> str:
+        prompts.append("enter")
+        return ""
+
     auth = ensure_expiration_campaign_signed_in(
         trial_number=3,
         base_url="http://127.0.0.1:8765",
         request_json_fn=http,
         sleep_fn=lambda _s: None,
-        input_fn=lambda: "",
-        print_fn=lambda *_a, **_k: None,
+        input_fn=input_fn,
+        print_fn=lambda msg="", **_k: lines.append(str(msg)),
     )
-    assert auth["ok"] is False
-    assert auth["outcome"] == "authentication_reverify_failed"
+    assert auth["ok"] is True
+    assert auth["paused"] is True
+    assert len(prompts) == 2
+    joined = "\n".join(lines)
+    assert "Authentication was not verified:" in joined
+    assert "Please finish signing in and press Enter to try again." in joined
+    assert "Authentication verified." in joined
 
 
 def test_continue_on_error(tmp_path: Path):

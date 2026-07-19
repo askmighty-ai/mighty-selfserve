@@ -551,14 +551,27 @@ That single command:
 5. packages `campaign-summary.json` / `.csv` / `.md` plus trial evidence into one ZIP;
 6. stops `serve` only if this command started it (preexisting serve is left running).
 
-Authentication prompt when needed:
+Authentication prompt when needed (repeatable for every trial that logs out):
 
 ```text
-Authentication required.
+Authentication required for trial 3.
 
-A dedicated Mighty Amex Chrome window has been opened.
+Use the dedicated Mighty Amex Chrome window.
 Sign in and complete MFA.
-Press Enter here when the account overview page is visible.
+Wait until the account overview is fully loaded.
+Press Enter here when ready.
+```
+
+After Enter the campaign prints `Input received.` / `Verifying authentication...`
+and continues only when canonical verification is `SIGNED_IN`. Failed
+verification re-prompts without failing the pending trial or stopping `serve`.
+
+Resume an interrupted campaign (skips completed trials via the campaign
+manifest):
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py campaign amex \
+  --resume ~/.mighty/provider_runtime/diagnostics/amex-expiration-campaign-<UTC>/
 ```
 
 Example console:

@@ -4159,7 +4159,8 @@ def _expiration_campaign_auth_pause_message(
         "\n"
         f"{window_line}\n"
         "Sign in and complete MFA.\n"
-        "Press Enter here when the account overview page is visible.\n"
+        "Wait until the account overview is fully loaded.\n"
+        "Press Enter here when ready.\n"
     )
 
 
@@ -4550,7 +4551,11 @@ def ensure_expiration_campaign_signed_in(
     bring_to_foreground_fn: Any = None,
     recover_unhealthy_browser_fn: Any = None,
 ) -> dict[str, Any]:
-    """Fresh canonical verify; pause for operator login when required."""
+    """Fresh canonical verify; loop operator login until SIGNED_IN.
+
+    Authentication is recoverable: failed post-Enter verification re-prompts
+    instead of failing the pending trial. Ctrl+C returns ``interrupted``.
+    """
     sleep = sleep_fn or time.sleep
     monotonic = monotonic_fn or time.monotonic
     read_input = input_fn or input
@@ -4587,6 +4592,17 @@ def ensure_expiration_campaign_signed_in(
                 }
             raise
 
+    def _needs_auth_pause(payload: dict[str, Any]) -> bool:
+        return payload.get("authentication_state") in {
+            "SIGNED_OUT",
+            "LOGIN_UNKNOWN",
+        } or payload.get("outcome") in {
+            "initial_not_signed_in",
+            "managed_browser_unavailable",
+            "initial_authentication_unknown",
+            "authentication_reverify_failed",
+        }
+
     verified = _verify()
     if verified.get("ok"):
         return {
@@ -4595,17 +4611,10 @@ def ensure_expiration_campaign_signed_in(
             "paused": False,
             "verify_payload": verified.get("verify_payload"),
             "browser_recovered": False,
+            "prompt_count": 0,
         }
 
-    needs_pause = verified.get("authentication_state") in {
-        "SIGNED_OUT",
-        "LOGIN_UNKNOWN",
-    } or verified.get("outcome") in {
-        "initial_not_signed_in",
-        "managed_browser_unavailable",
-        "initial_authentication_unknown",
-    }
-    if not needs_pause:
+    if not _needs_auth_pause(verified):
         return {
             "ok": False,
             "authentication_state": verified.get("authentication_state"),
@@ -4614,6 +4623,7 @@ def ensure_expiration_campaign_signed_in(
             "message": verified.get("message"),
             "verify_payload": verified.get("verify_payload"),
             "browser_recovered": False,
+            "prompt_count": 0,
         }
 
     browser_recovered = False
@@ -4625,40 +4635,76 @@ def ensure_expiration_campaign_signed_in(
         browser_recovered = True
         browser_launched = True
 
-    if bring_to_foreground_fn is not None:
-        try:
-            bring_to_foreground_fn()
-        except Exception:
-            pass
+    prompt_count = 0
+    while True:
+        if bring_to_foreground_fn is not None:
+            try:
+                bring_to_foreground_fn()
+            except Exception:
+                pass
 
-    emit(
-        _expiration_campaign_auth_pause_message(
-            trial_number=trial_number,
-            browser_launched=browser_launched or browser_recovered,
+        emit(
+            _expiration_campaign_auth_pause_message(
+                trial_number=trial_number,
+                browser_launched=browser_launched or browser_recovered,
+            )
         )
-    )
-    read_input()
-    reverified = _verify()
-    if reverified.get("ok"):
-        return {
-            "ok": True,
-            "authentication_state": reverified.get("authentication_state"),
-            "paused": True,
-            "verify_payload": reverified.get("verify_payload"),
-            "browser_recovered": browser_recovered,
-        }
-    return {
-        "ok": False,
-        "authentication_state": reverified.get("authentication_state"),
-        "paused": True,
-        "outcome": "authentication_reverify_failed",
-        "message": (
-            reverified.get("message")
-            or "Amex was not SIGNED_IN after authentication confirmation."
-        ),
-        "verify_payload": reverified.get("verify_payload"),
-        "browser_recovered": browser_recovered,
-    }
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            read_input()
+        except KeyboardInterrupt:
+            return {
+                "ok": False,
+                "authentication_state": verified.get("authentication_state"),
+                "paused": True,
+                "interrupted": True,
+                "outcome": "interrupted",
+                "message": "Authentication interrupted by user",
+                "verify_payload": verified.get("verify_payload"),
+                "browser_recovered": browser_recovered,
+                "prompt_count": prompt_count,
+            }
+        except EOFError:
+            emit("No input received.")
+            emit("Please finish signing in and press Enter to try again.")
+            continue
+
+        prompt_count += 1
+        emit("Input received.")
+        emit("Verifying authentication...")
+        reverified = _verify()
+        if reverified.get("ok"):
+            emit("Authentication verified.")
+            return {
+                "ok": True,
+                "authentication_state": reverified.get("authentication_state"),
+                "paused": True,
+                "verify_payload": reverified.get("verify_payload"),
+                "browser_recovered": browser_recovered,
+                "prompt_count": prompt_count,
+            }
+
+        if (
+            reverified.get("outcome") == "managed_browser_unavailable"
+            and recover_unhealthy_browser_fn is not None
+        ):
+            recover_unhealthy_browser_fn()
+            browser_recovered = True
+            browser_launched = True
+
+        state = (
+            reverified.get("authentication_state")
+            or reverified.get("outcome")
+            or "LOGIN_UNKNOWN"
+        )
+        reason = reverified.get("message") or state
+        emit(f"Authentication was not verified: {reason}.")
+        emit("Please finish signing in and press Enter to try again.")
+        verified = reverified
+        # Recoverable: loop and wait for another Enter. Never fail the trial here.
+
+
 
 
 def run_amex_expiration_campaign(
@@ -5021,7 +5067,7 @@ def run_amex_expiration_campaign(
                 _ensure_browser_healthy_between_trials()
 
             auth = ensure_expiration_campaign_signed_in(
-                trial_number=None if index == 1 else index,
+                trial_number=index,
                 base_url=base_url,
                 request_json_fn=http,
                 sleep_fn=sleep,
@@ -5036,7 +5082,12 @@ def run_amex_expiration_campaign(
             if auth.get("browser_recovered"):
                 managed_browser_restarted_by_campaign = True
                 managed_browser_launched_by_campaign = True
+            if auth.get("interrupted") or auth.get("outcome") == "interrupted":
+                # Pending trial stays not-started; do not record a failed trial.
+                interrupted = True
+                break
             if not auth.get("ok"):
+                # Unrecoverable auth/runtime error only (not a reverify retry).
                 trial_row = {
                     "trial_number": index,
                     "strategy": strategy,
@@ -5070,6 +5121,8 @@ def run_amex_expiration_campaign(
                 return {
                     "ok": False,
                     "outcome": "authentication_required",
+                    "recoverable": False,
+                    "pending_trial_number": index,
                     "campaign_name": campaign_name,
                     "campaign_dir": str(campaign_dir),
                     "zip_path": persisted["zip_path"],
@@ -5082,6 +5135,10 @@ def run_amex_expiration_campaign(
                     **_browser_metadata(),
                 }
 
+            emit(
+                f"Starting trial {index} of {len(trial_specs)}: "
+                f"{strategy} at {interval_seconds} seconds..."
+            )
             trial_started_at = iso_now()
             trial_started_mono = monotonic()
             evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -5237,6 +5294,10 @@ def run_amex_expiration_campaign(
                 "skipped": False,
             }
             trial_summaries.append(trial_row)
+            emit(
+                f"Trial {index} completed: "
+                f"{trial_row.get('recorder_outcome') or outcome}"
+            )
 
             if interrupted:
                 break
@@ -5585,6 +5646,7 @@ def run_amex_provider_campaign(
     browser_cleanup: str = DEFAULT_BROWSER_CLEANUP_POLICY,
     continue_on_error: bool = False,
     skip_completed: bool = False,
+    resume_dir: Path | None = None,
     request_json_fn: Any = None,
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
@@ -5599,11 +5661,19 @@ def run_amex_provider_campaign(
 
     Reuses ``run_amex_expiration_campaign`` for browser + trial orchestration.
     Starts ``serve`` only when needed and stops it only when this command owns it.
+    Authentication pauses are handled inside the campaign runner as a recoverable
+    loop and never enter this function's runtime cleanup path mid-pause.
     """
     emit = print_fn or print
     resolved_trials = resolve_amex_campaign_trials(trials)
     resolved_name = campaign_name or DEFAULT_AMEX_CAMPAIGN_NAME
     runtime_root = Path(root).expanduser().resolve() if root is not None else DEFAULT_ROOT
+    effective_output_dir = output_dir
+    effective_skip_completed = bool(skip_completed)
+    if resume_dir is not None:
+        effective_output_dir = Path(resume_dir).expanduser().resolve()
+        effective_skip_completed = True
+        emit(f"Resuming campaign from {effective_output_dir}")
 
     ensure_runtime = ensure_runtime_fn or ensure_provider_runtime_for_campaign
     runtime_info = ensure_runtime(
@@ -5648,6 +5718,10 @@ def run_amex_provider_campaign(
     run_campaign = run_campaign_fn or run_amex_expiration_campaign
     result: dict[str, Any]
     try:
+        # Authentication is a recoverable in-campaign loop
+        # (ensure_expiration_campaign_signed_in). Owned serve stays up for every
+        # auth pause because cleanup runs only in this finally after the campaign
+        # returns a terminal outcome.
         result = run_campaign(
             host=host,
             port=port,
@@ -5656,7 +5730,7 @@ def run_amex_provider_campaign(
             diagnostics_dir=diagnostics_dir
             if diagnostics_dir is not None
             else runtime_root / "diagnostics",
-            output_dir=output_dir,
+            output_dir=effective_output_dir,
             trials=resolved_trials,
             campaign_name=resolved_name,
             trial_duration_seconds=int(trial_duration_seconds),
@@ -5667,7 +5741,7 @@ def run_amex_provider_campaign(
             screenshot_every_seconds=float(screenshot_every_seconds),
             browser_cleanup=browser_cleanup,
             continue_on_error=continue_on_error,
-            skip_completed=skip_completed,
+            skip_completed=effective_skip_completed,
             request_json_fn=request_json_fn,
             sleep_fn=sleep_fn,
             monotonic_fn=monotonic_fn,
@@ -5695,6 +5769,7 @@ def run_amex_provider_campaign(
             "exit_code": 130,
             "interrupted": True,
             "message": None,
+            "campaign_dir": str(effective_output_dir) if effective_output_dir else None,
         }
     except Exception as exc:  # noqa: BLE001 - always clean up owned runtime
         result = {
@@ -10093,6 +10168,17 @@ def parse_args() -> argparse.Namespace:
         trials_required=False,
         include_runtime_lifecycle_help=True,
     )
+    campaign.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        metavar="CAMPAIGN_DIR",
+        help=(
+            "Resume an existing campaign directory "
+            "(implies --skip-completed; skips trials already completed in "
+            "campaign-manifest.json)"
+        ),
+    )
 
     browser_run_expiration_campaign = subparsers.add_parser(
         "browser-run-expiration-campaign",
@@ -10318,6 +10404,9 @@ def run_client_command(args: argparse.Namespace) -> int:
         output_dir = args.output_dir
         if output_dir is not None:
             output_dir = output_dir.expanduser().resolve()
+        resume_dir = getattr(args, "resume", None)
+        if resume_dir is not None:
+            resume_dir = Path(resume_dir).expanduser().resolve()
         try:
             trial_specs = resolve_amex_campaign_trials(list(args.trials or []))
             parse_expiration_campaign_trial_specs(trial_specs)
@@ -10345,6 +10434,7 @@ def run_client_command(args: argparse.Namespace) -> int:
             browser_cleanup=str(args.browser_cleanup),
             continue_on_error=bool(args.continue_on_error),
             skip_completed=bool(args.skip_completed),
+            resume_dir=resume_dir,
         )
         print_expiration_campaign_result(result)
         return int(result.get("exit_code") or (0 if result.get("ok") else 1))
