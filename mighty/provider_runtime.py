@@ -20,6 +20,8 @@ Commands:
     python scripts/provider_runtime.py browser-record-expiration amex
     python scripts/provider_runtime.py browser-run-expiration-experiment amex
     python scripts/provider_runtime.py campaign amex
+    python scripts/provider_runtime.py campaign amex --analyze
+    python scripts/provider_runtime.py analyze-campaign <campaign-directory-or-zip>
     python scripts/provider_runtime.py browser-run-expiration-campaign amex
     python scripts/provider_runtime.py browser-open-latest-expiration-experiment amex
     python scripts/provider_runtime.py inspect-expiration-dialog amex
@@ -147,6 +149,8 @@ KEEPALIVE_STRATEGIES = ("NONE", "SESSION_API", "PAGE_ACTIVITY", "OVERVIEW_RELOAD
 KEEPALIVE_DEFAULT_DURATION_SECONDS = 1800
 KEEPALIVE_DEFAULT_INTERVAL_SECONDS = 60
 KEEPALIVE_MAX_EVENTS = 200
+KEEPALIVE_MAX_ATTEMPTS = 500
+KEEPALIVE_ATTEMPTS_FILENAME = "keepalive-attempts.jsonl"
 KEEPALIVE_SENSITIVE_KEYS = (
     "cookie",
     "cookies",
@@ -3494,12 +3498,20 @@ def run_amex_expiration_experiment(
             pass
 
     keepalive_status_path = experiment_dir / "keepalive-status.json"
-    _write_json_file(
-        keepalive_status_path,
-        keepalive_status_payload
-        if isinstance(keepalive_status_payload, dict)
-        else {"ok": False, "error": "keepalive_status_unavailable"},
-    )
+    if isinstance(keepalive_status_payload, dict):
+        status_for_file = dict(keepalive_status_payload)
+        attempts_payload = status_for_file.pop("keepalive_attempts", None)
+        _write_json_file(keepalive_status_path, status_for_file)
+        if isinstance(attempts_payload, list):
+            write_keepalive_attempts_jsonl(
+                experiment_dir / KEEPALIVE_ATTEMPTS_FILENAME,
+                attempts_payload,
+            )
+    else:
+        _write_json_file(
+            keepalive_status_path,
+            {"ok": False, "error": "keepalive_status_unavailable"},
+        )
     diagnostics_path = experiment_dir / "runtime-status.json"
     _write_json_file(
         diagnostics_path,
@@ -4503,6 +4515,44 @@ def write_expiration_campaign_summary_files(
         encoding="utf-8",
     )
     return summary
+
+
+def _maybe_analyze_campaign_after_run(result: dict[str, Any]) -> int:
+    """Run offline analysis after campaign packaging without mutating evidence.
+
+    Returns 0 on success. On failure prints a clear error and returns nonzero,
+    but callers must not treat that as a campaign packaging failure.
+    """
+    from mighty.provider_runtime_campaign_analysis import run_analyze_campaign_command
+
+    campaign_dir = result.get("campaign_dir")
+    zip_path = result.get("zip_path")
+    target: Path | None = None
+    if campaign_dir:
+        candidate = Path(str(campaign_dir)).expanduser()
+        if candidate.is_dir():
+            target = candidate
+    if target is None and zip_path:
+        candidate = Path(str(zip_path)).expanduser()
+        if candidate.is_file():
+            target = candidate
+    if target is None:
+        print(
+            "Campaign analysis skipped: no campaign directory or ZIP was available.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        print("")
+        run_analyze_campaign_command(target)
+        return 0
+    except Exception as exc:  # noqa: BLE001 - analysis must not destroy campaign evidence
+        print(
+            f"Campaign analysis failed (campaign evidence preserved): "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
 
 
 def print_expiration_campaign_result(result: dict[str, Any]) -> None:
@@ -7902,6 +7952,91 @@ class KeepaliveActionResult:
     result: str
     response_status: int | None = None
     error: str | None = None
+    action: str | None = None
+    target: str | None = None
+    duration_ms: int | None = None
+
+
+def sanitize_url_for_keepalive_evidence(url: str | None) -> str | None:
+    """Return a URL safe for keepalive evidence (no query/fragment secrets)."""
+    if url is None:
+        return None
+    text = str(url).strip()
+    if not text:
+        return None
+    try:
+        parts = urlsplit(text)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except Exception:
+        return text.split("?", 1)[0].split("#", 1)[0][:240]
+
+
+def keepalive_strategy_action_metadata(strategy: str) -> tuple[str, str | None]:
+    """Return (action, sanitized target) describing the intended strategy action."""
+    strategy = str(strategy or "NONE").upper()
+    if strategy == "SESSION_API":
+        return "session_api_fetch", sanitize_url_for_keepalive_evidence(
+            AMEX_READ_USER_SESSION_URL
+        )
+    if strategy == "PAGE_ACTIVITY":
+        return "page_activity_scroll", None
+    if strategy == "OVERVIEW_RELOAD":
+        return "overview_reload", sanitize_url_for_keepalive_evidence(AMEX_OVERVIEW_URL)
+    if strategy == "NONE":
+        return "none", None
+    return "unknown", None
+
+
+def sanitize_keepalive_attempt(attempt: dict[str, Any]) -> dict[str, Any]:
+    """Return a bounded, sanitized keepalive attempt record (no secrets/bodies)."""
+    allowed = {
+        "attempted_at",
+        "strategy",
+        "action",
+        "target",
+        "success",
+        "result",
+        "reason",
+        "duration_ms",
+        "authentication_state_after_attempt",
+        "error_type",
+        "error_message",
+        "response_status",
+    }
+    cleaned: dict[str, Any] = {}
+    for key, value in attempt.items():
+        lowered = key.lower()
+        if key not in allowed:
+            continue
+        if any(token in lowered for token in KEEPALIVE_SENSITIVE_KEYS):
+            continue
+        if key == "target":
+            value = sanitize_url_for_keepalive_evidence(
+                None if value is None else str(value)
+            )
+        if isinstance(value, str) and len(value) > 240:
+            value = value[:240]
+        cleaned[key] = value
+    return cleaned
+
+
+def write_keepalive_attempts_jsonl(
+    path: Path, attempts: list[dict[str, Any]] | None
+) -> Path | None:
+    """Persist attempt history as JSONL for trial evidence."""
+    if not attempts:
+        return None
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for item in attempts:
+        if not isinstance(item, dict):
+            continue
+        lines.append(json.dumps(sanitize_keepalive_attempt(item), sort_keys=True))
+    if not lines:
+        return None
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
 
 
 def inspect_amex_page_signals(
@@ -7957,54 +8092,84 @@ def perform_keepalive_action(page: Page, strategy: str) -> KeepaliveActionResult
     incompatible with Amex's eval monkey-patch. Keepalive trials remain
     observation experiments; do not silently alter these strategies here.
     """
+    action_name, default_target = keepalive_strategy_action_metadata(strategy)
+    started = time.monotonic()
+
+    def _with_timing(**kwargs: Any) -> KeepaliveActionResult:
+        duration_ms = int(max(0.0, (time.monotonic() - started) * 1000.0))
+        return KeepaliveActionResult(
+            action=action_name,
+            target=kwargs.pop("target", default_target),
+            duration_ms=duration_ms,
+            **kwargs,
+        )
+
     if strategy == "NONE":
-        return KeepaliveActionResult(ok=True, result="skipped")
+        return _with_timing(ok=True, result="skipped")
     if strategy == "SESSION_API":
         try:
             payload = page.evaluate(SESSION_API_FETCH_JS)
         except Exception as exc:
-            return KeepaliveActionResult(
+            return _with_timing(
                 ok=False,
                 result="failure",
                 error=f"{type(exc).__name__}: {exc}",
             )
         if not isinstance(payload, dict):
-            return KeepaliveActionResult(ok=False, result="failure", error="invalid_session_api_payload")
+            return _with_timing(
+                ok=False,
+                result="failure",
+                error="invalid_session_api_payload",
+            )
         status = payload.get("status")
         status_int = int(status) if isinstance(status, int) else None
         ok = bool(payload.get("ok")) or status_int == 200
-        return KeepaliveActionResult(
+        return _with_timing(
             ok=ok,
             result="success" if ok else "failure",
             response_status=status_int,
+            error=None if ok else "session_api_non_ok",
         )
     if strategy == "PAGE_ACTIVITY":
+        page_url = sanitize_url_for_keepalive_evidence(getattr(page, "url", None))
         try:
             payload = page.evaluate(PAGE_ACTIVITY_JS)
         except Exception as exc:
-            return KeepaliveActionResult(
+            return _with_timing(
                 ok=False,
                 result="failure",
                 error=f"{type(exc).__name__}: {exc}",
+                target=page_url,
             )
         ok = bool(isinstance(payload, dict) and payload.get("ok"))
-        return KeepaliveActionResult(
+        return _with_timing(
             ok=ok,
             result="success" if ok else "failure",
             error=None if ok else "page_activity_failed",
+            target=page_url,
         )
     if strategy == "OVERVIEW_RELOAD":
         try:
             page.goto(AMEX_OVERVIEW_URL, wait_until="domcontentloaded", timeout=30_000)
             page.wait_for_timeout(1_000)
-            return KeepaliveActionResult(ok=True, result="success")
+            return _with_timing(
+                ok=True,
+                result="success",
+                target=sanitize_url_for_keepalive_evidence(
+                    getattr(page, "url", None) or AMEX_OVERVIEW_URL
+                ),
+            )
         except Exception as exc:
-            return KeepaliveActionResult(
+            return _with_timing(
                 ok=False,
                 result="failure",
                 error=f"{type(exc).__name__}: {exc}",
             )
-    return KeepaliveActionResult(ok=False, result="failure", error=f"unknown_strategy:{strategy}")
+    return _with_timing(
+        ok=False,
+        result="failure",
+        error=f"unknown_strategy:{strategy}",
+    )
 
 
 def sanitize_keepalive_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -8278,6 +8443,7 @@ class ProviderRuntime:
         self.keepalive_final_authentication_state: str | None = None
         self.keepalive_final_reason: str | None = None
         self.keepalive_events: list[dict[str, Any]] = []
+        self.keepalive_attempts: list[dict[str, Any]] = []
         self._keepalive_stop = threading.Event()
         self._keepalive_thread: threading.Thread | None = None
         self._keepalive_deadline_mono: float | None = None
@@ -8374,6 +8540,8 @@ class ProviderRuntime:
             "authentication_state": self._keepalive_compatibility_authentication_state(),
             "keepalive_kept_signed_in": kept_signed_in if self.keepalive_completed_at else None,
             "keepalive_events": list(self.keepalive_events),
+            # Attempt history for evidence packaging; stripped from keepalive-status.json.
+            "keepalive_attempts": list(self.keepalive_attempts),
         }
 
     def write_state(self) -> None:
@@ -8893,6 +9061,13 @@ class ProviderRuntime:
         if len(self.keepalive_events) > KEEPALIVE_MAX_EVENTS:
             self.keepalive_events = self.keepalive_events[-KEEPALIVE_MAX_EVENTS:]
 
+    def _append_keepalive_attempt(self, attempt: dict[str, Any]) -> None:
+        """Record one sanitized strategy attempt for trial evidence."""
+        cleaned = sanitize_keepalive_attempt(attempt)
+        self.keepalive_attempts.append(cleaned)
+        if len(self.keepalive_attempts) > KEEPALIVE_MAX_ATTEMPTS:
+            self.keepalive_attempts = self.keepalive_attempts[-KEEPALIVE_MAX_ATTEMPTS:]
+
     def _note_keepalive_expiration_dialog(self, *, source: str) -> None:
         if self.keepalive_expiration_dialog_seen:
             return
@@ -8983,6 +9158,7 @@ class ProviderRuntime:
             self.keepalive_final_authentication_state = None
             self.keepalive_final_reason = None
             self.keepalive_events = []
+            self.keepalive_attempts = []
             self._keepalive_deadline_mono = time.monotonic() + float(duration_seconds)
             self._append_keepalive_event(
                 {
@@ -9215,6 +9391,38 @@ class ProviderRuntime:
                     ),
                     observed_at=after_observed_at,
                 )
+                if action_result is not None:
+                    error_text = action_result.error
+                    error_type = None
+                    error_message = None
+                    if error_text:
+                        if ":" in error_text:
+                            error_type, error_message = error_text.split(":", 1)
+                            error_type = error_type.strip()[:80]
+                            error_message = error_message.strip()[:240]
+                        else:
+                            error_type = "action_error"
+                            error_message = error_text[:240]
+                    self._append_keepalive_attempt(
+                        {
+                            "attempted_at": self.keepalive_last_action_at,
+                            "strategy": strategy,
+                            "action": action_result.action
+                            or keepalive_strategy_action_metadata(strategy)[0],
+                            "target": action_result.target
+                            or keepalive_strategy_action_metadata(strategy)[1],
+                            "success": bool(action_result.ok),
+                            "result": action_result.result,
+                            "reason": action_result.result,
+                            "duration_ms": action_result.duration_ms,
+                            "authentication_state_after_attempt": after.get(
+                                "authentication_state"
+                            ),
+                            "error_type": error_type,
+                            "error_message": error_message,
+                            "response_status": action_result.response_status,
+                        }
+                    )
                 if after["expiration_dialog_detected"]:
                     self._note_keepalive_expiration_dialog(source="post_action")
                 self._append_keepalive_event(
@@ -10179,6 +10387,40 @@ def parse_args() -> argparse.Namespace:
             "campaign-manifest.json)"
         ),
     )
+    campaign.add_argument(
+        "--analyze",
+        action="store_true",
+        help=(
+            "After campaign packaging, run offline campaign analysis and write "
+            "campaign-analysis.json/.csv/.md (analysis failure does not fail a "
+            "successful campaign)"
+        ),
+    )
+
+    analyze_campaign = subparsers.add_parser(
+        "analyze-campaign",
+        help=(
+            "Analyze a saved Amex expiration campaign directory or ZIP "
+            "(offline; does not start serve or Chrome)"
+        ),
+    )
+    analyze_campaign.add_argument(
+        "campaign_path",
+        type=Path,
+        help="Campaign directory or campaign ZIP path",
+    )
+    analyze_campaign.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory for analysis outputs (default: campaign dir or ZIP parent)",
+    )
+    analyze_campaign.add_argument(
+        "--tolerance-seconds",
+        type=float,
+        default=15.0,
+        help="Baseline comparison tolerance in seconds (default: 15)",
+    )
 
     browser_run_expiration_campaign = subparsers.add_parser(
         "browser-run-expiration-campaign",
@@ -10400,6 +10642,28 @@ def run_client_command(args: argparse.Namespace) -> int:
         )
         print_expiration_experiment_result(result)
         return int(result.get("exit_code") or (0 if result.get("ok") else 1))
+    if args.command == "analyze-campaign":
+        from mighty.provider_runtime_campaign_analysis import (
+            run_analyze_campaign_command,
+        )
+
+        campaign_path = Path(args.campaign_path).expanduser().resolve()
+        output_dir = getattr(args, "output_dir", None)
+        if output_dir is not None:
+            output_dir = Path(output_dir).expanduser().resolve()
+        try:
+            run_analyze_campaign_command(
+                campaign_path,
+                output_dir=output_dir,
+                tolerance_seconds=float(getattr(args, "tolerance_seconds", 15.0)),
+            )
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        except Exception as exc:  # noqa: BLE001 - offline analysis errors
+            print(f"Campaign analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "campaign":
         output_dir = args.output_dir
         if output_dir is not None:
@@ -10437,7 +10701,13 @@ def run_client_command(args: argparse.Namespace) -> int:
             resume_dir=resume_dir,
         )
         print_expiration_campaign_result(result)
-        return int(result.get("exit_code") or (0 if result.get("ok") else 1))
+        exit_code = int(result.get("exit_code") or (0 if result.get("ok") else 1))
+        if bool(getattr(args, "analyze", False)):
+            analysis_exit = _maybe_analyze_campaign_after_run(result)
+            # Analysis failure must not convert a successful campaign into failure.
+            if exit_code == 0 and analysis_exit != 0:
+                return analysis_exit
+        return exit_code
     if args.command == "browser-run-expiration-campaign":
         try:
             trial_specs = parse_expiration_campaign_trial_specs(list(args.trials or []))

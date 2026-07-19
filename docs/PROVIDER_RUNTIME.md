@@ -628,6 +628,7 @@ Useful flags:
 | `--continue-on-error` | Record a failed trial and continue (with auth recovery if needed) |
 | `--skip-completed` | Resume an interrupted campaign; skip trials already completed for the same strategy + interval in `campaign-manifest.json` |
 | `--output-dir` | Choose/resume a specific campaign directory |
+| `--analyze` | After packaging, run offline campaign analysis into `campaign-analysis.json` / `.csv` / `.md` |
 
 Ctrl+C finishes writing the current trial’s partial evidence, writes campaign
 summary files for completed/partial trials, creates a partial campaign ZIP,
@@ -635,6 +636,48 @@ leaves the managed browser open by default, stops `serve` only when this
 command started it, and never touches ordinary Chrome.
 
 The CLI prints only the campaign result and final ZIP path.
+
+#### Analyze an existing campaign
+
+Offline analysis reads saved trial evidence only. It does not start `serve` or
+Chrome and never mutates the managed browser, runtime state, authentication
+profile, or original trial artifacts.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  analyze-campaign <campaign-directory-or-zip>
+```
+
+Examples:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  analyze-campaign \
+  ~/.mighty/provider_runtime/diagnostics/amex-expiration-campaign-<UTC>/
+
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  analyze-campaign \
+  ~/.mighty/provider_runtime/diagnostics/amex-expiration-campaign-<UTC>/amex-expiration-campaign-<UTC>.zip
+```
+
+Outputs written beside the campaign directory (or beside a ZIP):
+
+```text
+campaign-analysis.json
+campaign-analysis.csv
+campaign-analysis.md
+```
+
+#### Run and analyze in one step
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py \
+  campaign amex --analyze
+```
+
+If analysis fails after a successful campaign, the campaign ZIP and trial
+evidence are preserved; analysis prints a clear error and returns a distinct
+nonzero status without rewriting campaign success as packaging failure.
 
 ## 5. Inspect runtime status
 
