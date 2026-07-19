@@ -528,19 +528,38 @@ It ensures Provider Runtime is running, manages the dedicated Amex browser,
 runs the default trial matrix, packages one ZIP, and stops `serve` only when
 this command started it.
 
-Recommended workflow:
+Recommended low-interaction workflow (walk away; return only for Amex MFA):
 
 ```bash
-PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py campaign amex
+PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py campaign amex \
+  --trial SESSION_API:30 \
+  --trial PAGE_ACTIVITY:30 \
+  --trial OVERVIEW_RELOAD:30 \
+  --analyze \
+  --unattended \
+  --notify \
+  --prevent-sleep
 ```
 
-That single command:
+Amex MFA cannot be automated. With `--unattended` and `--notify`, the campaign
+pauses safely with no auth timeout, brings the dedicated Mighty Amex Chrome
+window forward, sends a macOS desktop notification, and waits indefinitely for
+Enter after you finish signing in. Reminder notifications repeat every 15
+minutes by default (`--auth-reminder-minutes`; minimum 5).
+
+That command:
 
 1. checks runtime health and auto-starts `serve` when needed;
 2. launches or reuses the dedicated managed Amex Chrome window
    (`launch_native_chrome` + Mighty profile + CDP port `9223`);
-3. prompts for login/MFA when required;
-4. runs the default campaign:
+3. prompts for login/MFA when required (with optional desktop notifications);
+4. runs the selected trials without per-trial confirmation;
+5. prints minute heartbeats while each trial runs;
+6. packages `campaign-summary.json` / `.csv` / `.md` plus trial evidence into one ZIP;
+7. runs offline analysis when `--analyze` is set;
+8. stops owned `caffeinate` / `serve` only when this command started them.
+
+Default full matrix (when no `--trial` is passed):
 
    - `NONE:30`
    - `SESSION_API:30`
@@ -548,23 +567,29 @@ That single command:
    - `PAGE_ACTIVITY:30`
    - `OVERVIEW_RELOAD:30`
 
-5. packages `campaign-summary.json` / `.csv` / `.md` plus trial evidence into one ZIP;
-6. stops `serve` only if this command started it (preexisting serve is left running).
-
 Authentication prompt when needed (repeatable for every trial that logs out):
 
 ```text
-Authentication required for trial 3.
+Authentication required for trial 2 of 3.
 
-Use the dedicated Mighty Amex Chrome window.
-Sign in and complete MFA.
+The campaign is paused safely and will wait indefinitely.
+Sign in and complete MFA in the dedicated Mighty Amex window.
 Wait until the account overview is fully loaded.
-Press Enter here when ready.
+Return here and press Enter when ready.
+```
+
+macOS notification example:
+
+```text
+Title: Mighty Amex authentication required
+Body:  Trial 2 of 3 is waiting. Sign in to Amex and return to Terminal.
 ```
 
 After Enter the campaign prints `Input received.` / `Verifying authentication...`
 and continues only when canonical verification is `SIGNED_IN`. Failed
 verification re-prompts without failing the pending trial or stopping `serve`.
+While paused, the manifest records `waiting_for_authentication` plus pending
+trial metadata so `--resume` can continue without rerunning completed trials.
 
 Resume an interrupted campaign (skips completed trials via the campaign
 manifest):
@@ -580,16 +605,18 @@ Example console:
 Provider Runtime not running.
 Starting Provider Runtime serve...
 Provider Runtime ready.
+Preventing sleep with owned caffeinate process...
 Checking managed Amex browser...
 No managed browser found.
 Launching dedicated Mighty Amex Chrome...
 Browser ready.
 
-Authentication required.
+Authentication required for trial 1 of 3.
 
-A dedicated Mighty Amex Chrome window has been opened.
-Sign in and complete MFA.
-Press Enter here when the account overview page is visible.
+The campaign is paused safely and will wait indefinitely.
+Sign in and complete MFA in the dedicated Mighty Amex window.
+Wait until the account overview is fully loaded.
+Return here and press Enter when ready.
 ```
 
 Advanced users may override the default matrix with repeatable `--trial` options
@@ -623,6 +650,10 @@ Useful flags:
 | Option | Behavior |
 | --- | --- |
 | `--trial STRATEGY:INTERVAL` | Override the default trial matrix (repeatable) |
+| `--unattended` | Low-interaction mode: no trial confirmations, indefinite auth waits, progress heartbeats |
+| `--notify` | macOS desktop notifications for auth pauses, trial completion, and campaign end (nonfatal on failure) |
+| `--prevent-sleep` | Start an owned `caffeinate` process for the campaign duration (macOS) |
+| `--auth-reminder-minutes N` | In `--unattended`, repeat auth notifications every N minutes (default 15, minimum 5) |
 | `--browser-cleanup close-on-completion` | Default. Closes only a browser this campaign launched; never closes a preexisting managed browser or ordinary Chrome |
 | `--browser-cleanup leave-open` | Leave the managed browser running after the campaign |
 | `--continue-on-error` | Record a failed trial and continue (with auth recovery if needed) |
@@ -632,8 +663,8 @@ Useful flags:
 
 Ctrl+C finishes writing the current trial’s partial evidence, writes campaign
 summary files for completed/partial trials, creates a partial campaign ZIP,
-leaves the managed browser open by default, stops `serve` only when this
-command started it, and never touches ordinary Chrome.
+leaves the managed browser open by default, stops owned `caffeinate` and
+`serve` only when this command started them, and never touches ordinary Chrome.
 
 The CLI prints only the campaign result and final ZIP path.
 

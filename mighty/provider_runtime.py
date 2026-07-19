@@ -48,6 +48,7 @@ import inspect
 import json
 import os
 import re
+import select
 import signal
 import socket
 import subprocess
@@ -2747,6 +2748,10 @@ BROWSER_CLEANUP_POLICIES = (
 DEFAULT_BROWSER_CLEANUP_POLICY = BROWSER_CLEANUP_CLOSE_ON_COMPLETION
 DEFAULT_MANAGED_BROWSER_STARTUP_TIMEOUT_SECONDS = 30.0
 DEFAULT_PROVIDER_RUNTIME_HEALTH_TIMEOUT_SECONDS = 30.0
+DEFAULT_UNATTENDED_AUTH_REMINDER_MINUTES = 15.0
+MIN_AUTH_REMINDER_MINUTES = 5.0
+DEFAULT_TRIAL_HEARTBEAT_SECONDS = 60.0
+CAMPAIGN_STATUS_WAITING_FOR_AUTHENTICATION = "waiting_for_authentication"
 DEFAULT_AMEX_CAMPAIGN_NAME = "amex-keepalive-comparison"
 DEFAULT_AMEX_CAMPAIGN_TRIALS = (
     "NONE:30",
@@ -3984,6 +3989,263 @@ def bring_managed_amex_browser_to_foreground(
     }
 
 
+def sanitize_campaign_notification_reason(reason: Any) -> str:
+    """Short sanitized reason safe for local desktop notifications."""
+    text = " ".join(str(reason or "an unexpected error").split())
+    lowered = text.lower()
+    if any(
+        marker in lowered
+        for marker in ("bearer ", "cookie", "password", "token=", "authorization")
+    ):
+        return "a runtime error"
+    if len(text) > 180:
+        text = text[:177] + "..."
+    return text or "an unexpected error"
+
+
+def emit_terminal_bell(*, print_fn: Any = None) -> None:
+    """Best-effort terminal bell; never raises."""
+    emit = print_fn or print
+    try:
+        emit("\a", end="", flush=True)
+    except TypeError:
+        try:
+            emit("\a")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def notify_macos_desktop(
+    title: str,
+    body: str,
+    *,
+    subprocess_run_fn: Any = None,
+) -> dict[str, Any]:
+    """Issue a local macOS notification via osascript. Never raises to callers."""
+    runner = subprocess_run_fn or subprocess.run
+    safe_title = str(title or "Mighty")
+    safe_body = str(body or "")
+    if sys.platform != "darwin":
+        return {"ok": False, "error": "notify_unsupported_platform"}
+    # AppleScript string literals: escape backslash and double quotes.
+    def _escape(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    script = (
+        f'display notification "{_escape(safe_body)}" '
+        f'with title "{_escape(safe_title)}"'
+    )
+    try:
+        completed = runner(
+            ["osascript", "-e", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    ok = int(getattr(completed, "returncode", 1) or 0) == 0
+    return {
+        "ok": ok,
+        "error": None
+        if ok
+        else (getattr(completed, "stderr", None) or "osascript_failed"),
+    }
+
+
+def resolve_auth_reminder_seconds(
+    *,
+    unattended: bool,
+    auth_reminder_minutes: float | int | None,
+) -> float | None:
+    """Return reminder interval seconds, or None when reminders are disabled."""
+    if not unattended:
+        return None
+    minutes = (
+        DEFAULT_UNATTENDED_AUTH_REMINDER_MINUTES
+        if auth_reminder_minutes is None
+        else float(auth_reminder_minutes)
+    )
+    if minutes <= 0:
+        return None
+    minutes = max(float(MIN_AUTH_REMINDER_MINUTES), minutes)
+    return minutes * 60.0
+
+
+def format_elapsed_duration(seconds: float) -> str:
+    """Format seconds as ``Xm Ys`` for trial heartbeats."""
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    return f"{minutes}m {secs}s"
+
+
+def wait_for_enter_with_reminders(
+    *,
+    input_fn: Any = None,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    reminder_seconds: float | None = None,
+    on_reminder_fn: Any = None,
+    stdin_wait_fn: Any = None,
+) -> None:
+    """Block until Enter; optionally invoke ``on_reminder_fn`` on an interval.
+
+    Raises KeyboardInterrupt when interrupted. When reminders are disabled,
+    delegates to ``input_fn`` (default: ``input``).
+    """
+    read_input = input_fn or input
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    interactive_stdin = False
+    try:
+        interactive_stdin = bool(getattr(sys.stdin, "isatty", lambda: False)())
+    except Exception:
+        interactive_stdin = False
+    if (
+        reminder_seconds is None
+        or float(reminder_seconds) <= 0
+        or on_reminder_fn is None
+        or (stdin_wait_fn is None and not interactive_stdin)
+    ):
+        # Non-interactive contexts (tests/pipes) fall back to input_fn so callers
+        # can still interrupt; reminder polling requires a TTY or stdin_wait_fn.
+        read_input()
+        return
+
+    interval = float(reminder_seconds)
+    last_reminder_at = monotonic()
+
+    def _default_stdin_wait(timeout: float) -> bool:
+        try:
+            if not hasattr(sys.stdin, "fileno"):
+                sleep(min(max(0.0, float(timeout)), 0.05))
+                return False
+            ready, _, _ = select.select(
+                [sys.stdin], [], [], max(0.0, float(timeout))
+            )
+            return bool(ready)
+        except (ValueError, OSError):
+            sleep(min(max(0.0, float(timeout)), 0.05))
+            return False
+
+    wait = stdin_wait_fn or _default_stdin_wait
+    while True:
+        now = monotonic()
+        until_reminder = interval - (now - last_reminder_at)
+        if until_reminder <= 0:
+            try:
+                on_reminder_fn()
+            except Exception:
+                pass
+            last_reminder_at = monotonic()
+            continue
+        poll = min(60.0, max(0.05, until_reminder))
+        try:
+            ready = bool(wait(poll))
+        except KeyboardInterrupt:
+            raise
+        if ready:
+            read_input()
+            return
+
+
+def start_owned_caffeinate(
+    *,
+    popen_fn: Any = None,
+) -> Any | None:
+    """Start an owned ``caffeinate`` child for the campaign. macOS only."""
+    if sys.platform != "darwin":
+        return None
+    launcher = popen_fn or subprocess.Popen
+    try:
+        return launcher(
+            ["caffeinate", "-dims"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return None
+
+
+def stop_owned_caffeinate(process: Any) -> dict[str, Any]:
+    """Stop only the owned caffeinate child. Never targets unrelated processes."""
+    if process is None:
+        return {"ok": True, "stopped": False, "reason": "no_process"}
+    try:
+        if hasattr(process, "poll") and process.poll() is not None:
+            return {"ok": True, "stopped": False, "reason": "already_exited"}
+    except Exception:
+        pass
+    try:
+        if hasattr(process, "terminate"):
+            process.terminate()
+    except Exception as exc:
+        return {"ok": False, "stopped": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        if hasattr(process, "wait"):
+            process.wait(timeout=5)
+    except Exception:
+        try:
+            if hasattr(process, "kill"):
+                process.kill()
+        except Exception:
+            pass
+    return {"ok": True, "stopped": True, "reason": "terminated_owned_process"}
+
+
+def start_trial_progress_heartbeat(
+    *,
+    trial_number: int,
+    started_mono: float,
+    interval_seconds: float,
+    print_fn: Any,
+    monotonic_fn: Any,
+    stop_event: threading.Event,
+    sleep_fn: Any = None,
+) -> threading.Thread:
+    """Daemon thread that prints trial elapsed time until ``stop_event`` is set."""
+    emit = print_fn or print
+    monotonic = monotonic_fn or time.monotonic
+    sleep = sleep_fn or time.sleep
+    interval = max(1.0, float(interval_seconds))
+
+    def _loop() -> None:
+        while not stop_event.is_set():
+            # Wait in small slices so Ctrl+C / stop is responsive in tests.
+            deadline = monotonic() + interval
+            while monotonic() < deadline:
+                if stop_event.wait(0.05):
+                    return
+                remaining = deadline - monotonic()
+                if remaining > 0.05:
+                    sleep(min(0.25, remaining))
+            if stop_event.is_set():
+                return
+            elapsed = max(0.0, monotonic() - float(started_mono))
+            try:
+                emit(
+                    f"Trial {int(trial_number)} running — "
+                    f"elapsed {format_elapsed_duration(elapsed)}."
+                )
+            except Exception:
+                pass
+
+    thread = threading.Thread(
+        target=_loop,
+        name=f"amex-campaign-trial-heartbeat-{int(trial_number)}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
 def ensure_managed_amex_browser_for_campaign(
     *,
     profile_dir: Path,
@@ -4136,12 +4398,28 @@ def maybe_close_managed_browser_for_campaign(
 def _expiration_campaign_auth_pause_message(
     *,
     trial_number: int | None = None,
+    trial_total: int | None = None,
     browser_launched: bool = False,
+    unattended: bool = False,
 ) -> str:
     if trial_number is None:
         header = "Authentication required."
+    elif unattended and trial_total is not None:
+        header = (
+            f"Authentication required for trial {int(trial_number)} "
+            f"of {int(trial_total)}."
+        )
     else:
         header = f"Authentication required for trial {int(trial_number)}."
+    if unattended:
+        return (
+            f"{header}\n"
+            "\n"
+            "The campaign is paused safely and will wait indefinitely.\n"
+            "Sign in and complete MFA in the dedicated Mighty Amex window.\n"
+            "Wait until the account overview is fully loaded.\n"
+            "Return here and press Enter when ready.\n"
+        )
     if browser_launched:
         window_line = "A dedicated Mighty Amex Chrome window has been opened."
     else:
@@ -4524,7 +4802,30 @@ def _maybe_analyze_campaign_after_run(result: dict[str, Any]) -> int:
         return 1
     try:
         print("")
-        run_analyze_campaign_command(target)
+        analysis = run_analyze_campaign_command(target)
+        analysis_paths = []
+        if isinstance(analysis, dict):
+            for key in (
+                "analysis_json_path",
+                "analysis_csv_path",
+                "analysis_md_path",
+                "output_dir",
+            ):
+                value = analysis.get(key)
+                if value:
+                    analysis_paths.append(str(value))
+            outputs = analysis.get("output_paths")
+            if isinstance(outputs, dict):
+                analysis_paths.extend(str(v) for v in outputs.values() if v)
+            written = analysis.get("written_paths")
+            if isinstance(written, (list, tuple)):
+                analysis_paths.extend(str(v) for v in written if v)
+        if result.get("zip_path"):
+            print(f"Evidence ZIP: {result.get('zip_path')}")
+        if analysis_paths:
+            print("Analysis outputs:")
+            for path in dict.fromkeys(analysis_paths):
+                print(path)
         return 0
     except Exception as exc:  # noqa: BLE001 - analysis must not destroy campaign evidence
         print(
@@ -4580,16 +4881,30 @@ def ensure_expiration_campaign_signed_in(
     browser_launched: bool = False,
     bring_to_foreground_fn: Any = None,
     recover_unhealthy_browser_fn: Any = None,
+    unattended: bool = False,
+    trial_total: int | None = None,
+    notify: bool = False,
+    notify_fn: Any = None,
+    auth_reminder_seconds: float | None = None,
+    on_waiting_state_fn: Any = None,
+    stdin_wait_fn: Any = None,
 ) -> dict[str, Any]:
     """Fresh canonical verify; loop operator login until SIGNED_IN.
 
     Authentication is recoverable: failed post-Enter verification re-prompts
-    instead of failing the pending trial. Ctrl+C returns ``interrupted``.
+    instead of failing the pending trial. There is no hidden timeout or attempt
+    limit. Ctrl+C returns ``interrupted``.
     """
     sleep = sleep_fn or time.sleep
     monotonic = monotonic_fn or time.monotonic
     read_input = input_fn or input
     emit = print_fn or print
+    notifier = notify_fn or notify_macos_desktop
+    reminder_seconds = (
+        float(auth_reminder_seconds)
+        if auth_reminder_seconds is not None and float(auth_reminder_seconds) > 0
+        else None
+    )
 
     def _verify() -> dict[str, Any]:
         try:
@@ -4671,6 +4986,78 @@ def ensure_expiration_campaign_signed_in(
         browser_launched = True
 
     prompt_count = 0
+    waiting_since = iso_now()
+    last_notification_at: str | None = None
+    reminders_stopped = False
+
+    def _persist_waiting(*, notification: bool = False) -> None:
+        nonlocal last_notification_at
+        if notification:
+            last_notification_at = iso_now()
+        if on_waiting_state_fn is None:
+            return
+        try:
+            on_waiting_state_fn(
+                {
+                    "status": CAMPAIGN_STATUS_WAITING_FOR_AUTHENTICATION,
+                    "waiting_for_authentication": True,
+                    "pending_trial_number": trial_number,
+                    "waiting_since": waiting_since,
+                    "last_notification_at": last_notification_at,
+                    "authentication_attempt_count": prompt_count,
+                }
+            )
+        except Exception:
+            pass
+
+    def _notify_auth_required(*, force: bool = False) -> None:
+        nonlocal last_notification_at
+        if not notify:
+            return
+        if (
+            not force
+            and reminder_seconds is not None
+            and last_notification_at is not None
+        ):
+            try:
+                previous = _parse_iso_timestamp(last_notification_at)
+                if previous is not None:
+                    age = (
+                        datetime.now(timezone.utc) - previous.astimezone(timezone.utc)
+                    ).total_seconds()
+                    if age < float(reminder_seconds):
+                        return
+            except Exception:
+                pass
+        trial_label = (
+            f"Trial {int(trial_number)} of {int(trial_total)}"
+            if trial_number is not None and trial_total is not None
+            else (
+                f"Trial {int(trial_number)}"
+                if trial_number is not None
+                else "The campaign"
+            )
+        )
+        try:
+            notifier(
+                "Mighty Amex authentication required",
+                f"{trial_label} is waiting. Sign in to Amex and return to Terminal.",
+            )
+        except Exception:
+            pass
+        try:
+            emit_terminal_bell(print_fn=emit)
+        except Exception:
+            pass
+        last_notification_at = iso_now()
+        _persist_waiting(notification=False)
+
+    def _on_reminder() -> None:
+        if reminders_stopped:
+            return
+        _notify_auth_required(force=True)
+        _persist_waiting(notification=True)
+
     while True:
         if bring_to_foreground_fn is not None:
             try:
@@ -4678,17 +5065,30 @@ def ensure_expiration_campaign_signed_in(
             except Exception:
                 pass
 
+        _persist_waiting(notification=False)
+        _notify_auth_required(force=(prompt_count == 0 and last_notification_at is None))
         emit(
             _expiration_campaign_auth_pause_message(
                 trial_number=trial_number,
+                trial_total=trial_total,
                 browser_launched=browser_launched or browser_recovered,
+                unattended=bool(unattended),
             )
         )
         try:
             sys.stdout.flush()
             sys.stderr.flush()
-            read_input()
+            wait_for_enter_with_reminders(
+                input_fn=read_input,
+                sleep_fn=sleep,
+                monotonic_fn=monotonic,
+                reminder_seconds=reminder_seconds if unattended else None,
+                on_reminder_fn=_on_reminder if (notify and unattended) else None,
+                stdin_wait_fn=stdin_wait_fn,
+            )
         except KeyboardInterrupt:
+            reminders_stopped = True
+            _persist_waiting(notification=False)
             return {
                 "ok": False,
                 "authentication_state": verified.get("authentication_state"),
@@ -4701,6 +5101,8 @@ def ensure_expiration_campaign_signed_in(
                 "verify_payload": verified.get("verify_payload"),
                 "browser_recovered": browser_recovered,
                 "prompt_count": prompt_count,
+                "waiting_since": waiting_since,
+                "last_notification_at": last_notification_at,
             }
         except EOFError:
             emit("No input received.")
@@ -4708,10 +5110,12 @@ def ensure_expiration_campaign_signed_in(
             continue
 
         prompt_count += 1
+        _persist_waiting(notification=False)
         emit("Input received.")
         emit("Verifying authentication...")
         reverified = _verify()
         if reverified.get("ok"):
+            reminders_stopped = True
             emit("Authentication verified.")
             return {
                 "ok": True,
@@ -4722,6 +5126,8 @@ def ensure_expiration_campaign_signed_in(
                 "verify_payload": reverified.get("verify_payload"),
                 "browser_recovered": browser_recovered,
                 "prompt_count": prompt_count,
+                "waiting_since": waiting_since,
+                "last_notification_at": last_notification_at,
             }
 
         if (
@@ -4740,6 +5146,8 @@ def ensure_expiration_campaign_signed_in(
         reason = reverified.get("message") or state
         emit(f"Authentication was not verified: {reason}.")
         emit("Please finish signing in and press Enter to try again.")
+        # Re-notify only after cooldown; continue waiting indefinitely.
+        _notify_auth_required(force=False)
         verified = reverified
         # Recoverable: loop and wait for another Enter. Never fail the trial here.
 
@@ -4924,6 +5332,10 @@ def run_amex_expiration_campaign(
     browser_cleanup: str = DEFAULT_BROWSER_CLEANUP_POLICY,
     continue_on_error: bool = False,
     skip_completed: bool = False,
+    unattended: bool = False,
+    notify: bool = False,
+    auth_reminder_minutes: float | int | None = None,
+    trial_heartbeat_seconds: float = DEFAULT_TRIAL_HEARTBEAT_SECONDS,
     request_json_fn: Any = None,
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
@@ -4939,6 +5351,9 @@ def run_amex_expiration_campaign(
     terminate_profile_processes_fn: Any = None,
     wait_for_profile_release_fn: Any = None,
     fetch_cdp_json_fn: Any = None,
+    notify_fn: Any = None,
+    stdin_wait_fn: Any = None,
+    start_heartbeat_fn: Any = None,
 ) -> dict[str, Any]:
     """Run multiple Amex expiration experiments sequentially into one campaign ZIP.
 
@@ -4994,6 +5409,7 @@ def run_amex_expiration_campaign(
     read_input = input_fn or input
     emit = print_fn or print
     run_experiment = run_experiment_fn or run_amex_expiration_experiment
+    notifier = notify_fn or notify_macos_desktop
     base_url = _expiration_experiment_base_url(host, port)
     runtime_root = Path(root).expanduser().resolve() if root is not None else DEFAULT_ROOT
     profile_dir = (runtime_root / "amex").resolve()
@@ -5006,6 +5422,13 @@ def run_amex_expiration_campaign(
     campaign_dir.mkdir(parents=True, exist_ok=True)
     trials_root = campaign_dir / "trials"
     trials_root.mkdir(parents=True, exist_ok=True)
+    unattended_mode = bool(unattended)
+    notify_enabled = bool(notify)
+    auth_reminder_seconds = resolve_auth_reminder_seconds(
+        unattended=unattended_mode,
+        auth_reminder_minutes=auth_reminder_minutes,
+    )
+    heartbeat_seconds = max(1.0, float(trial_heartbeat_seconds))
 
     started_at = iso_now()
     campaign_started_mono = monotonic()
@@ -5019,6 +5442,11 @@ def run_amex_expiration_campaign(
     manifest = _load_campaign_manifest(campaign_dir) if skip_completed else {"trials": []}
     if not isinstance(manifest.get("trials"), list):
         manifest["trials"] = []
+    if skip_completed and manifest.get("waiting_for_authentication"):
+        emit(
+            "Resuming from waiting_for_authentication "
+            f"(pending trial {manifest.get('pending_trial_number')})."
+        )
     manifest.update(
         {
             "provider": "amex",
@@ -5028,6 +5456,8 @@ def run_amex_expiration_campaign(
             "browser_cleanup_policy": cleanup_policy,
             "managed_cdp_port": int(cdp_port),
             "managed_profile_path": str(profile_dir),
+            "unattended": unattended_mode,
+            "notify": notify_enabled,
         }
     )
 
@@ -5042,9 +5472,65 @@ def run_amex_expiration_campaign(
             "managed_profile_path": str(profile_dir),
         }
 
+    def _safe_notify(title: str, body: str) -> None:
+        if not notify_enabled:
+            return
+        try:
+            notifier(title, body)
+        except Exception:
+            pass
+
+    def _clear_auth_wait_state() -> None:
+        for key in (
+            "status",
+            "waiting_for_authentication",
+            "pending_trial_number",
+            "pending_strategy",
+            "waiting_since",
+            "last_notification_at",
+            "authentication_attempt_count",
+        ):
+            manifest.pop(key, None)
+
+    def _persist_auth_wait_state(state: dict[str, Any], *, strategy: str | None) -> None:
+        manifest["status"] = CAMPAIGN_STATUS_WAITING_FOR_AUTHENTICATION
+        manifest["waiting_for_authentication"] = True
+        if state.get("pending_trial_number") is not None:
+            manifest["pending_trial_number"] = state.get("pending_trial_number")
+        if strategy is not None:
+            manifest["pending_strategy"] = strategy
+        if state.get("waiting_since") is not None:
+            manifest["waiting_since"] = state.get("waiting_since")
+        if state.get("last_notification_at") is not None:
+            manifest["last_notification_at"] = state.get("last_notification_at")
+        manifest["authentication_attempt_count"] = int(
+            state.get("authentication_attempt_count") or 0
+        )
+        manifest["trials"] = list(trial_summaries)
+        manifest.update(_browser_metadata())
+        _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME, manifest)
+
     def _persist_campaign(*, zip_it: bool) -> dict[str, Any]:
         completed_at = iso_now()
         zip_path: Path | None = None
+        keep_auth_wait = bool(
+            interrupted and manifest.get("waiting_for_authentication")
+        )
+        saved_auth_wait = None
+        if keep_auth_wait:
+            saved_auth_wait = {
+                key: manifest.get(key)
+                for key in (
+                    "waiting_for_authentication",
+                    "pending_trial_number",
+                    "pending_strategy",
+                    "waiting_since",
+                    "last_notification_at",
+                    "authentication_attempt_count",
+                )
+            }
+        else:
+            _clear_auth_wait_state()
         summary = write_expiration_campaign_summary_files(
             campaign_dir,
             campaign_name=campaign_name,
@@ -5058,6 +5544,16 @@ def run_amex_expiration_campaign(
         manifest["trials"] = list(trial_summaries)
         manifest["completed_at"] = completed_at
         manifest["interrupted"] = interrupted
+        if keep_auth_wait and saved_auth_wait is not None:
+            manifest.update(
+                {key: value for key, value in saved_auth_wait.items() if value is not None}
+            )
+            manifest["waiting_for_authentication"] = True
+            manifest["status"] = CAMPAIGN_STATUS_WAITING_FOR_AUTHENTICATION
+        elif interrupted:
+            manifest["status"] = "interrupted"
+        else:
+            manifest["status"] = "completed"
         manifest.update(_browser_metadata())
         _write_json_file(campaign_dir / EXPIRATION_CAMPAIGN_MANIFEST_FILENAME, manifest)
         if zip_it:
@@ -5258,6 +5754,9 @@ def run_amex_expiration_campaign(
             if index > 1:
                 _ensure_browser_healthy_between_trials()
 
+            def _on_auth_waiting(state: dict[str, Any]) -> None:
+                _persist_auth_wait_state(state, strategy=strategy)
+
             auth = ensure_expiration_campaign_signed_in(
                 trial_number=index,
                 base_url=base_url,
@@ -5269,6 +5768,13 @@ def run_amex_expiration_campaign(
                 browser_launched=browser_just_launched,
                 bring_to_foreground_fn=foreground,
                 recover_unhealthy_browser_fn=_restart_managed,
+                unattended=unattended_mode,
+                trial_total=len(trial_specs),
+                notify=notify_enabled,
+                notify_fn=notifier,
+                auth_reminder_seconds=auth_reminder_seconds,
+                on_waiting_state_fn=_on_auth_waiting,
+                stdin_wait_fn=stdin_wait_fn,
             )
             browser_just_launched = False
             if auth.get("browser_recovered"):
@@ -5277,6 +5783,16 @@ def run_amex_expiration_campaign(
             if auth.get("interrupted") or auth.get("outcome") == "interrupted":
                 # Pending trial stays not-started; do not record a failed trial.
                 interrupted = True
+                manifest["waiting_for_authentication"] = True
+                manifest["pending_trial_number"] = index
+                manifest["pending_strategy"] = strategy
+                if auth.get("waiting_since"):
+                    manifest["waiting_since"] = auth.get("waiting_since")
+                if auth.get("last_notification_at"):
+                    manifest["last_notification_at"] = auth.get("last_notification_at")
+                manifest["authentication_attempt_count"] = int(
+                    auth.get("prompt_count") or 0
+                )
                 break
             if not auth.get("ok"):
                 # Unrecoverable auth/runtime error only (not a reverify retry).
@@ -5308,6 +5824,11 @@ def run_amex_expiration_campaign(
                 trial_summaries.append(trial_row)
                 if continue_on_error:
                     continue
+                _safe_notify(
+                    "Mighty Amex campaign needs attention",
+                    "The campaign stopped because of "
+                    f"{sanitize_campaign_notification_reason(auth.get('message') or auth.get('outcome'))}.",
+                )
                 _cleanup_browser()
                 persisted = _persist_campaign(zip_it=True)
                 return {
@@ -5327,10 +5848,13 @@ def run_amex_expiration_campaign(
                     **_browser_metadata(),
                 }
 
+            _clear_auth_wait_state()
             emit(
                 f"Starting trial {index} of {len(trial_specs)}: "
                 f"{strategy} at {interval_seconds} seconds..."
             )
+            if unattended_mode:
+                emit(f"Trial {index} running. No interaction is required.")
             trial_started_at = iso_now()
             trial_started_mono = monotonic()
             evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -5402,6 +5926,21 @@ def run_amex_expiration_campaign(
             if strategy != "NONE":
                 emit(f"Preflight OK for {strategy}; starting timed trial...")
 
+            heartbeat_stop = threading.Event()
+            heartbeat_starter = start_heartbeat_fn or start_trial_progress_heartbeat
+            if unattended_mode or notify_enabled:
+                try:
+                    heartbeat_starter(
+                        trial_number=index,
+                        started_mono=trial_started_mono,
+                        interval_seconds=heartbeat_seconds,
+                        print_fn=emit,
+                        monotonic_fn=monotonic,
+                        stop_event=heartbeat_stop,
+                        sleep_fn=sleep,
+                    )
+                except Exception:
+                    pass
             try:
                 experiment_result = run_experiment(
                     host=host,
@@ -5458,6 +5997,8 @@ def run_amex_expiration_campaign(
                     "error": f"{type(exc).__name__}: {exc}",
                     "exit_code": 1,
                 }
+            finally:
+                heartbeat_stop.set()
 
             trial_completed_at = iso_now()
             duration_seconds = max(0.0, monotonic() - trial_started_mono)
@@ -5554,15 +6095,24 @@ def run_amex_expiration_campaign(
                 "skipped": False,
             }
             trial_summaries.append(trial_row)
-            emit(
-                f"Trial {index} completed: "
-                f"{trial_row.get('recorder_outcome') or outcome}"
-            )
+            trial_outcome_label = trial_row.get("recorder_outcome") or outcome
+            emit(f"Trial {index} completed: {trial_outcome_label}")
+            if not interrupted and index < len(trial_specs):
+                _safe_notify(
+                    "Mighty Amex trial completed",
+                    f"{strategy} completed: {trial_outcome_label}. "
+                    "Starting the next trial.",
+                )
 
             if interrupted:
                 break
 
             if error and not continue_on_error:
+                _safe_notify(
+                    "Mighty Amex campaign needs attention",
+                    "The campaign stopped because of "
+                    f"{sanitize_campaign_notification_reason(error)}.",
+                )
                 _cleanup_browser()
                 persisted = _persist_campaign(zip_it=True)
                 return {
@@ -5589,6 +6139,16 @@ def run_amex_expiration_campaign(
     ):
         exit_code = 1
     outcome = "interrupted" if interrupted else ("completed" if exit_code == 0 else "completed_with_errors")
+    if outcome == "completed":
+        _safe_notify(
+            "Mighty Amex campaign completed",
+            "All trials are finished. Analysis and evidence are ready.",
+        )
+    elif outcome == "completed_with_errors":
+        _safe_notify(
+            "Mighty Amex campaign needs attention",
+            "The campaign stopped because of trial errors. Evidence was preserved.",
+        )
     return {
         "ok": exit_code in {0, 130},
         "outcome": outcome,
@@ -5907,6 +6467,10 @@ def run_amex_provider_campaign(
     continue_on_error: bool = False,
     skip_completed: bool = False,
     resume_dir: Path | None = None,
+    unattended: bool = False,
+    notify: bool = False,
+    prevent_sleep: bool = False,
+    auth_reminder_minutes: float | int | None = None,
     request_json_fn: Any = None,
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
@@ -5915,6 +6479,9 @@ def run_amex_provider_campaign(
     ensure_runtime_fn: Any = None,
     stop_runtime_fn: Any = None,
     run_campaign_fn: Any = None,
+    notify_fn: Any = None,
+    start_caffeinate_fn: Any = None,
+    stop_caffeinate_fn: Any = None,
     **campaign_kwargs: Any,
 ) -> dict[str, Any]:
     """First-class ``campaign amex`` entry: manage runtime, then run the campaign.
@@ -5925,6 +6492,7 @@ def run_amex_provider_campaign(
     loop and never enter this function's runtime cleanup path mid-pause.
     """
     emit = print_fn or print
+    notifier = notify_fn or notify_macos_desktop
     resolved_trials = resolve_amex_campaign_trials(trials)
     resolved_name = campaign_name or DEFAULT_AMEX_CAMPAIGN_NAME
     runtime_root = Path(root).expanduser().resolve() if root is not None else DEFAULT_ROOT
@@ -5950,7 +6518,7 @@ def run_amex_provider_campaign(
         print_fn=emit,
     )
     if not isinstance(runtime_info, dict) or not runtime_info.get("ok"):
-        return {
+        failure = {
             "ok": False,
             "outcome": (runtime_info or {}).get("outcome") or "runtime_start_failed",
             "campaign_name": resolved_name,
@@ -5969,11 +6537,34 @@ def run_amex_provider_campaign(
             "runtime_stopped_by_campaign": False,
             "trials": resolved_trials,
         }
+        if notify:
+            try:
+                notifier(
+                    "Mighty Amex campaign needs attention",
+                    "The campaign stopped because of "
+                    f"{sanitize_campaign_notification_reason(failure.get('message'))}.",
+                )
+            except Exception:
+                pass
+        return failure
 
     runtime_preexisting = bool(runtime_info.get("runtime_preexisting"))
     runtime_started_by_campaign = bool(runtime_info.get("runtime_started_by_campaign"))
     runtime_process = runtime_info.get("process")
     runtime_stopped_by_campaign = False
+    caffeinate_process: Any = None
+    caffeinate_started_by_campaign = False
+
+    if prevent_sleep:
+        starter = start_caffeinate_fn or start_owned_caffeinate
+        try:
+            caffeinate_process = starter()
+            caffeinate_started_by_campaign = caffeinate_process is not None
+            if caffeinate_started_by_campaign:
+                emit("Preventing sleep with owned caffeinate process...")
+        except Exception:
+            caffeinate_process = None
+            caffeinate_started_by_campaign = False
 
     run_campaign = run_campaign_fn or run_amex_expiration_campaign
     result: dict[str, Any]
@@ -6002,11 +6593,15 @@ def run_amex_provider_campaign(
             browser_cleanup=browser_cleanup,
             continue_on_error=continue_on_error,
             skip_completed=effective_skip_completed,
+            unattended=bool(unattended),
+            notify=bool(notify),
+            auth_reminder_minutes=auth_reminder_minutes,
             request_json_fn=request_json_fn,
             sleep_fn=sleep_fn,
             monotonic_fn=monotonic_fn,
             input_fn=input_fn,
             print_fn=emit,
+            notify_fn=notifier,
             **campaign_kwargs,
         )
         if not isinstance(result, dict):
@@ -6043,7 +6638,23 @@ def run_amex_provider_campaign(
             "error": f"{type(exc).__name__}: {exc}",
             "message": f"{type(exc).__name__}: {exc}",
         }
+        if notify:
+            try:
+                notifier(
+                    "Mighty Amex campaign needs attention",
+                    "The campaign stopped because of "
+                    f"{sanitize_campaign_notification_reason(result.get('message'))}.",
+                )
+            except Exception:
+                pass
     finally:
+        if caffeinate_started_by_campaign:
+            emit("Stopping owned caffeinate process...")
+            stopper_caffeine = stop_caffeinate_fn or stop_owned_caffeinate
+            try:
+                stopper_caffeine(caffeinate_process)
+            except Exception:
+                pass
         if runtime_started_by_campaign:
             emit("Stopping Provider Runtime started by this campaign...")
             stopper = stop_runtime_fn or stop_provider_runtime_serve
@@ -6061,8 +6672,12 @@ def run_amex_provider_campaign(
     result["runtime_preexisting"] = runtime_preexisting
     result["runtime_started_by_campaign"] = runtime_started_by_campaign
     result["runtime_stopped_by_campaign"] = runtime_stopped_by_campaign
+    result["caffeinate_started_by_campaign"] = caffeinate_started_by_campaign
     result["trials"] = resolved_trials
     result["campaign_name"] = result.get("campaign_name") or resolved_name
+    result["unattended"] = bool(unattended)
+    result["notify"] = bool(notify)
+    result["prevent_sleep"] = bool(prevent_sleep)
     return result
 
 
@@ -11392,6 +12007,44 @@ def parse_args() -> argparse.Namespace:
             "successful campaign)"
         ),
     )
+    campaign.add_argument(
+        "--unattended",
+        action="store_true",
+        help=(
+            "Low-interaction mode: no trial confirmations, indefinite auth waits, "
+            "progress heartbeats, and optional auth reminder notifications"
+        ),
+    )
+    campaign.add_argument(
+        "--notify",
+        action="store_true",
+        help=(
+            "Emit macOS desktop notifications for authentication pauses, trial "
+            "progress, and campaign completion/failure (notification failure is "
+            "nonfatal)"
+        ),
+    )
+    campaign.add_argument(
+        "--prevent-sleep",
+        action="store_true",
+        help=(
+            "On macOS, start an owned caffeinate process for the campaign duration "
+            "(stopped on completion, failure, or Ctrl+C; never kills unrelated "
+            "caffeinate processes)"
+        ),
+    )
+    campaign.add_argument(
+        "--auth-reminder-minutes",
+        type=float,
+        default=None,
+        metavar="N",
+        help=(
+            "While waiting for authentication in --unattended mode, repeat the "
+            f"local notification every N minutes (default: "
+            f"{DEFAULT_UNATTENDED_AUTH_REMINDER_MINUTES:g}; minimum "
+            f"{MIN_AUTH_REMINDER_MINUTES:g})"
+        ),
+    )
 
     analyze_campaign = subparsers.add_parser(
         "analyze-campaign",
@@ -11713,6 +12366,10 @@ def run_client_command(args: argparse.Namespace) -> int:
             continue_on_error=bool(args.continue_on_error),
             skip_completed=bool(args.skip_completed),
             resume_dir=resume_dir,
+            unattended=bool(getattr(args, "unattended", False)),
+            notify=bool(getattr(args, "notify", False)),
+            prevent_sleep=bool(getattr(args, "prevent_sleep", False)),
+            auth_reminder_minutes=getattr(args, "auth_reminder_minutes", None),
         )
         print_expiration_campaign_result(result)
         exit_code = int(result.get("exit_code") or (0 if result.get("ok") else 1))
