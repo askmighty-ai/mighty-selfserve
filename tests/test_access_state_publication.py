@@ -75,6 +75,8 @@ def test_serialize_access_state_includes_required_fields():
     assert payload["last_recovery_result"] == "succeeded"
     assert payload["last_verified_at"] == "2026-07-20T11:00:00+00:00"
     assert payload["last_keepalive_at"] == "2026-07-20T11:05:00+00:00"
+    assert "last_verification_result" in payload
+    assert "last_keepalive_result" in payload
     assert payload["ready_for_extraction"] is True
     assert payload["ready_for_connector"] is True
     assert payload["initial_authentication_prompt_count"] == 1

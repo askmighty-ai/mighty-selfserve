@@ -232,6 +232,8 @@ def test_render_runtime_access_card_distinguishes_statuses():
         assert f'data-access-status="{status}"' in html
         assert "American Express access" in html
         assert presentation.status_label in html
+        assert "View details" in html
+        assert 'data-access-details="1"' in html
 
 
 def test_api_ingest_requires_auth(client):
@@ -271,6 +273,9 @@ def test_api_ingest_and_read_with_api_key(client):
     assert data["ok"] is True
     assert data["access"]["status"] == STATUS_HEALTHY
     assert data["access"]["provider"] == "amex"
+    assert "operations" in data
+    assert "timeline" in data["operations"]
+    assert data["operations"]["provider"] == "amex"
 
     with mighty.app.app_context():
         presentation = load_runtime_access_presentation(mighty.get_db(), uid, "amex")
@@ -297,7 +302,9 @@ def test_dashboard_includes_access_card(client):
     html = page.get_data(as_text=True)
     assert 'data-runtime-access="1"' in html
     assert "American Express access" in html
+    assert "View details" in html
     assert "_pollRuntimeAccessState" in html
+    assert "_applyRuntimeAccessOperations" in html
 
 
 def test_never_reported_on_fresh_user(client):

@@ -16,6 +16,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from mighty.access_state_publication import SCHEMA_VERSION, assert_no_sensitive_fields
+from mighty.access_timeline import (
+    build_provider_operations_details,
+    ensure_access_timeline_tables,
+    list_access_timeline_events,
+    record_timeline_from_transition,
+    render_provider_operations_details_html,
+)
 from mighty.provider_runtime_control_center import (
     ACCESS_HEALTH_HEALTHY,
     RECOVERY_STATUS_AWAITING_USER,
@@ -64,6 +71,8 @@ def ensure_runtime_access_state_tables(db: Any, *, commit: bool = True) -> bool:
         "CREATE INDEX IF NOT EXISTS idx_runtime_access_user "
         "ON runtime_access_state(user_id)"
     )
+    timeline_mutated = ensure_access_timeline_tables(db, commit=False)
+    mutated = mutated or timeline_mutated
     if commit and mutated:
         db.commit()
     return mutated
@@ -123,7 +132,9 @@ def validate_ingest_payload(data: dict[str, Any]) -> tuple[dict[str, Any] | None
         "escalation_reason": data.get("escalation_reason"),
         "session_started_at": data.get("session_started_at"),
         "last_verified_at": data.get("last_verified_at"),
+        "last_verification_result": data.get("last_verification_result"),
         "last_keepalive_at": data.get("last_keepalive_at"),
+        "last_keepalive_result": data.get("last_keepalive_result"),
         "ready_for_extraction": bool(data.get("ready_for_extraction")),
         "ready_for_connector": bool(data.get("ready_for_connector")),
         "initial_authentication_prompt_count": int(
@@ -200,6 +211,7 @@ def upsert_runtime_access_state(
                 "stored_updated_at": existing.get("updated_at"),
             }
 
+    previous_payload = dict(existing.get("payload") or {}) if existing else None
     db.execute(
         """
         INSERT INTO runtime_access_state (
@@ -223,6 +235,13 @@ def upsert_runtime_access_state(
             received,
         ),
     )
+    timeline_events = record_timeline_from_transition(
+        db,
+        user_id,
+        previous_payload=previous_payload,
+        current_payload=payload,
+        commit=False,
+    )
     if commit:
         db.commit()
     return {
@@ -232,6 +251,7 @@ def upsert_runtime_access_state(
         "provider": provider,
         "updated_at": updated_at,
         "runtime_instance_id": payload["runtime_instance_id"],
+        "timeline_events_recorded": len(timeline_events),
     }
 
 
@@ -442,12 +462,42 @@ def build_runtime_access_presentation(
     )
 
 
+def load_provider_operations_details(
+    db: Any,
+    user_id: str,
+    provider: str = "amex",
+    *,
+    now: datetime | None = None,
+    timeline_limit: int = 20,
+) -> Any:
+    """Load expanded Provider Operations details for the Amex card."""
+    row = get_runtime_access_state(db, user_id, provider)
+    payload = dict(row.get("payload") or {}) if row else None
+    timeline = list_access_timeline_events(
+        db,
+        user_id,
+        provider,
+        limit=timeline_limit,
+        newest_first=True,
+    )
+    return build_provider_operations_details(
+        payload,
+        timeline,
+        provider=provider,
+        now=now,
+    )
+
+
 def render_runtime_access_card(
     presentation: RuntimeAccessPresentation,
     *,
     escape: Callable[[Any], str],
+    operations: Any | None = None,
 ) -> str:
-    """Render Amex Access card using Truth Dashboard visual language."""
+    """Render Amex Access card using Truth Dashboard visual language.
+
+    Compact by default; Provider Operations details expand via View details.
+    """
     p = presentation
     yes_no = lambda v: "yes" if v else "no"
     rows = [
@@ -477,6 +527,19 @@ def render_runtime_access_card(
         f"</div>"
         for label, value in rows
     )
+    if operations is None:
+        operations = build_provider_operations_details(
+            None,
+            [],
+            provider=p.provider,
+        )
+    ops_html = render_provider_operations_details_html(operations, escape=escape)
+    details = (
+        f'<details class="dash-access-details" data-access-details="1">'
+        f'<summary class="dash-access-details-summary">View details</summary>'
+        f"{ops_html}"
+        f"</details>"
+    )
     return (
         f'<section class="dash-access-card" '
         f'data-runtime-access="1" '
@@ -488,6 +551,7 @@ def render_runtime_access_card(
         f'<p class="dash-access-headline" data-access-headline="1">{escape(p.headline)}</p>'
         f'<p class="dash-access-badge" data-access-badge="1">{escape(p.status_label)}</p>'
         f'<dl class="dash-access-grid">{dl}</dl>'
+        f"{details}"
         f"</section>"
     )
 
@@ -507,3 +571,28 @@ def load_runtime_access_presentation(
         now=now,
         stale_after_seconds=stale_after_seconds,
     )
+
+
+def load_runtime_access_card_model(
+    db: Any,
+    user_id: str,
+    provider: str = "amex",
+    *,
+    now: datetime | None = None,
+    stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
+) -> tuple[RuntimeAccessPresentation, Any]:
+    """Load compact presentation + expanded operations details together."""
+    presentation = load_runtime_access_presentation(
+        db,
+        user_id,
+        provider,
+        now=now,
+        stale_after_seconds=stale_after_seconds,
+    )
+    operations = load_provider_operations_details(
+        db,
+        user_id,
+        provider,
+        now=now,
+    )
+    return presentation, operations

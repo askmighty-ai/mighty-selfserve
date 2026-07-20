@@ -6322,6 +6322,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-access-row{display:contents}
 .dash-access-row dt{font-size:13px;color:#78716c}
 .dash-access-row dd{margin:0;font-size:13px;font-weight:600;color:#1c1917}
+.dash-access-details{margin-top:14px;border-top:0.5px solid rgba(0,0,0,0.06);padding-top:10px}
+.dash-access-details-summary{cursor:pointer;font-size:13px;font-weight:600;color:#57534e;list-style:none}
+.dash-access-details-summary::-webkit-details-marker{display:none}
+.dash-access-details[open] .dash-access-details-summary{margin-bottom:10px}
+.dash-access-ops{margin-top:4px}
+.dash-access-ops-grid{margin:0 0 14px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:6px 16px}
+.dash-access-ops-row{display:contents}
+.dash-access-ops-row dt{font-size:13px;color:#78716c}
+.dash-access-ops-row dd{margin:0;font-size:13px;font-weight:600;color:#1c1917}
+.dash-access-ops-empty{margin:0;font-size:13px;color:#a8a29e}
+.dash-access-timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto}
+.dash-access-timeline-item{display:grid;grid-template-columns:minmax(140px,auto) minmax(120px,auto) minmax(0,1fr);gap:8px;align-items:baseline;font-size:12px;line-height:1.4;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.04)}
+.dash-access-timeline-time{color:#a8a29e;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dash-access-timeline-type{font-weight:700;color:#57534e}
+.dash-access-timeline-item[data-ok="fail"] .dash-access-timeline-type{color:#b91c1c}
+.dash-access-timeline-item[data-ok="ok"] .dash-access-timeline-type{color:#15803d}
+.dash-access-timeline-msg{color:#1c1917}
 .dash-truth-panel{margin-top:8px;padding:16px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
 .dash-truth-provider{margin:0 0 10px;font-size:20px;font-weight:650;color:#1c1917;letter-spacing:-0.02em}
 .dash-truth-headline{margin:0 0 12px;font-size:16px;font-weight:600;color:#1c1917;line-height:1.4}
@@ -7058,6 +7075,11 @@ _pollAccountStatus();
 setInterval(_pollAccountStatus, 10000);
 
 function _yesNo(v) { return v ? 'yes' : 'no'; }
+function _escText(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 function _applyRuntimeAccessCard(access) {
   var card = document.querySelector('[data-runtime-access="1"]');
   if (!card || !access) return;
@@ -7088,10 +7110,63 @@ function _applyRuntimeAccessCard(access) {
     }
   });
 }
+function _applyRuntimeAccessOperations(ops) {
+  var card = document.querySelector('[data-runtime-access="1"]');
+  if (!card || !ops) return;
+  var root = card.querySelector('[data-access-ops="1"]');
+  if (!root) return;
+  var map = {
+    'Autonomous uptime': ops.autonomous_uptime_label,
+    'Last user intervention': ops.last_user_intervention_label,
+    'Snapshot freshness': ops.snapshot_freshness_label,
+    'Last verification': (ops.verification_last_label || 'never')
+      + (ops.verification_last_result ? (' (' + ops.verification_last_result + ')') : ''),
+    'Last keepalive': (ops.keepalive_last_label || 'never')
+      + (ops.keepalive_last_result ? (' (' + ops.keepalive_last_result + ')') : ''),
+    'Recovery state': ops.recovery_state,
+    'Recovery metrics': (ops.recovery_attempts + ' attempts · '
+      + ops.recovery_successes + ' ok · ' + ops.recovery_failures + ' fail'),
+  };
+  if (ops.last_recovery_action) {
+    map['Last recovery'] = ops.last_recovery_action
+      + (ops.last_recovery_result ? (' — ' + ops.last_recovery_result) : '');
+  }
+  root.querySelectorAll('.dash-access-ops-row').forEach(function(row) {
+    var dt = row.querySelector('dt');
+    var dd = row.querySelector('dd');
+    if (!dt || !dd) return;
+    var key = dt.textContent;
+    if (Object.prototype.hasOwnProperty.call(map, key) && map[key] != null) {
+      dd.textContent = map[key];
+    }
+  });
+  var list = root.querySelector('[data-access-timeline="1"]');
+  var empty = root.querySelector('.dash-access-ops-empty');
+  var events = ops.timeline || [];
+  if (!events.length) {
+    if (list) list.outerHTML = '<p class="dash-access-ops-empty">No timeline events yet.</p>';
+    return;
+  }
+  var html = events.map(function(ev) {
+    var okClass = ev.ok ? 'ok' : 'fail';
+    return '<li class="dash-access-timeline-item" data-ok="' + okClass
+      + '" data-event-type="' + _escText(ev.event_type) + '">'
+      + '<span class="dash-access-timeline-time">' + _escText(ev.observed_at) + '</span>'
+      + '<span class="dash-access-timeline-type">' + _escText(ev.event_type) + '</span>'
+      + '<span class="dash-access-timeline-msg">' + _escText(ev.message) + '</span>'
+      + '</li>';
+  }).join('');
+  if (list) {
+    list.innerHTML = html;
+  } else if (empty) {
+    empty.outerHTML = '<ol class="dash-access-timeline" data-access-timeline="1">' + html + '</ol>';
+  }
+}
 function _pollRuntimeAccessState() {
   fetch('/api/runtime/access-state?provider=amex').then(function(r){return r.json();}).then(function(d){
     if (!d || !d.ok || !d.access) return;
     _applyRuntimeAccessCard(d.access);
+    if (d.operations) _applyRuntimeAccessOperations(d.operations);
   }).catch(function(){});
 }
 _pollRuntimeAccessState();
@@ -10181,14 +10256,14 @@ def dashboard():
         _runtime_access_html = ""
         try:
             from mighty.runtime_access_state import (
-                load_runtime_access_presentation,
+                load_runtime_access_card_model,
                 render_runtime_access_card,
             )
-            _runtime_access = load_runtime_access_presentation(
+            _runtime_access, _runtime_ops = load_runtime_access_card_model(
                 get_db(), session["user_id"], "amex"
             )
             _runtime_access_html = render_runtime_access_card(
-                _runtime_access, escape=he
+                _runtime_access, escape=he, operations=_runtime_ops
             )
         except Exception:
             _runtime_access_html = ""
@@ -18749,14 +18824,20 @@ def api_runtime_access_state_ingest():
 @require_login_or_key
 def api_runtime_access_state_read():
     """Return presented local AccessState for the dashboard (Amex vertical slice)."""
-    from mighty.runtime_access_state import load_runtime_access_presentation
+    from mighty.runtime_access_state import load_runtime_access_card_model
 
     uid = get_current_user_id()
     provider = (request.args.get("provider") or "amex").strip().lower()
     if provider != "amex":
         return jsonify({"ok": False, "error": "only amex is supported in this slice"}), 400
-    presentation = load_runtime_access_presentation(get_db(), uid, provider)
-    return jsonify({"ok": True, "access": presentation.to_dict()})
+    presentation, operations = load_runtime_access_card_model(get_db(), uid, provider)
+    return jsonify(
+        {
+            "ok": True,
+            "access": presentation.to_dict(),
+            "operations": operations.to_dict(),
+        }
+    )
 
 
 @app.route("/api/account-status")
