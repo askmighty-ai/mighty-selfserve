@@ -10,9 +10,15 @@ contracts. Those remain provider-independent and unchanged.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any, Iterable
+
+from mighty.provider_policy import (
+    ProviderPolicy,
+    amex_provider_policy,
+    default_provider_policy,
+)
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,7 @@ class ManagedProvider:
     capabilities: ProviderPlatformCapabilities
     open_url: str | None = None
     sort_order: int = 100
+    policy: ProviderPolicy = field(default_factory=default_provider_policy)
 
     def __post_init__(self) -> None:
         pid = str(self.provider_id or "").strip().lower()
@@ -70,6 +77,8 @@ class ManagedProvider:
         if not str(self.display_name or "").strip():
             raise ValueError("display_name is required")
         object.__setattr__(self, "provider_id", pid)
+        if not isinstance(self.policy, ProviderPolicy):
+            raise TypeError("policy must be a ProviderPolicy")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +87,7 @@ class ManagedProvider:
             "capabilities": self.capabilities.to_dict(),
             "open_url": self.open_url,
             "sort_order": self.sort_order,
+            "policy": self.policy.to_dict(),
         }
 
 
@@ -144,6 +154,12 @@ class ProviderRegistry:
             return provider.capabilities
         return ProviderPlatformCapabilities()
 
+    def policy_for(self, provider_id: str) -> ProviderPolicy:
+        provider = self.get(provider_id)
+        if provider is not None:
+            return provider.policy
+        return default_provider_policy()
+
     def replace_all(self, providers: Iterable[ManagedProvider]) -> None:
         """Atomically replace registry contents (test helper)."""
         mapped = {p.provider_id: p for p in providers}
@@ -170,6 +186,7 @@ def build_amex_provider() -> ManagedProvider:
         capabilities=AMEX_PLATFORM_CAPABILITIES,
         open_url=AMEX_OPEN_URL,
         sort_order=10,
+        policy=amex_provider_policy(),
     )
 
 

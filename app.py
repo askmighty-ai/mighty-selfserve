@@ -6333,10 +6333,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-access-ops-row dd{margin:0;font-size:13px;font-weight:600;color:#1c1917}
 .dash-access-ops-empty{margin:0;font-size:13px;color:#a8a29e}
 .dash-access-work-queue{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:6px}
-.dash-access-work-item{display:grid;grid-template-columns:minmax(40px,auto) minmax(90px,auto) minmax(0,1fr);gap:8px;align-items:baseline;font-size:12px;line-height:1.4;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.04)}
+.dash-access-work-item{display:grid;grid-template-columns:minmax(40px,auto) minmax(90px,auto) minmax(0,1.4fr) minmax(120px,1fr);gap:8px;align-items:baseline;font-size:12px;line-height:1.4;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.04)}
 .dash-access-work-priority{color:#a8a29e;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .dash-access-work-action{font-weight:700;color:#57534e;text-transform:lowercase}
 .dash-access-work-reason{color:#1c1917}
+.dash-access-work-policy{color:#78716c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
 .dash-access-timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto}
 .dash-access-timeline-item{display:grid;grid-template-columns:minmax(140px,auto) minmax(120px,auto) minmax(0,1fr);gap:8px;align-items:baseline;font-size:12px;line-height:1.4;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.04)}
 .dash-access-timeline-time{color:#a8a29e;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -7133,11 +7134,15 @@ function _applyRuntimeAccessWorkQueue(ops, root) {
   var html = queue.map(function(item) {
     var action = item.action || '';
     var reason = item.reason || '';
+    var policy = item.policy_trigger || item.policy_key || '';
     var priority = (item.priority != null) ? String(item.priority) : '—';
-    return '<li class="dash-access-work-item" data-work-action="' + _escText(action) + '">'
+    var workId = item.work_item_id || '';
+    return '<li class="dash-access-work-item" data-work-action="' + _escText(action) + '"'
+      + (workId ? (' data-work-item-id="' + _escText(workId) + '"') : '') + '>'
       + '<span class="dash-access-work-priority">P' + _escText(priority) + '</span>'
       + '<span class="dash-access-work-action">' + _escText(action) + '</span>'
       + '<span class="dash-access-work-reason">' + _escText(reason) + '</span>'
+      + '<span class="dash-access-work-policy">' + _escText(policy) + '</span>'
       + '</li>';
   }).join('');
   if (list) {

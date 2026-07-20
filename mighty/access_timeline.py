@@ -793,13 +793,21 @@ def render_work_queue_html(
             data = dict(entry)
         action = str(data.get("action") or "")
         reason = str(data.get("reason") or "")
+        policy_trigger = str(
+            data.get("policy_trigger")
+            or data.get("policy_key")
+            or ""
+        )
         priority = data.get("priority")
         priority_label = str(priority) if priority is not None else "—"
+        work_id = str(data.get("work_item_id") or "")
         items.append(
-            f'<li class="dash-access-work-item" data-work-action="{escape(action)}">'
+            f'<li class="dash-access-work-item" data-work-action="{escape(action)}"'
+            f'{f" data-work-item-id=\"{escape(work_id)}\"" if work_id else ""}>'
             f'<span class="dash-access-work-priority">P{escape(priority_label)}</span>'
             f'<span class="dash-access-work-action">{escape(action)}</span>'
             f'<span class="dash-access-work-reason">{escape(reason)}</span>'
+            f'<span class="dash-access-work-policy">{escape(policy_trigger)}</span>'
             f"</li>"
         )
     return (

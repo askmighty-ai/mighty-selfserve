@@ -140,6 +140,8 @@ def test_goal_pending_user_action_enqueues_recovery():
     recovery_items = [i for i in evaluation.work_items if i.action == ACTION_RECOVERY]
     assert recovery_items
     assert recovery_items[0].details.get("escalation_reason") == "safe_recovery_exhausted"
+    assert recovery_items[0].reason
+    assert recovery_items[0].policy_id == "amex"
 
 
 def test_goal_connector_readiness_gap_enqueues_verify():
@@ -346,16 +348,22 @@ def test_operations_details_includes_work_queue():
     assert "not_authenticated" in details.orchestration_gaps
     ops = details.to_dict()
     assert ops["work_queue"]
-    assert ops["work_queue"][0]["action"] in {
+    first = ops["work_queue"][0]
+    assert first["action"] in {
         ACTION_RECOVERY,
         ACTION_VERIFY,
         ACTION_KEEPALIVE,
         ACTION_SNAPSHOT,
     }
+    assert first["work_item_id"]
+    assert first["reason"]
+    assert first.get("policy_key") or first.get("policy_trigger")
 
     html = render_provider_operations_details_html(details, escape=html_escape)
     assert "Intended work" in html
     assert 'data-work-queue="1"' in html
+    assert "dash-access-work-reason" in html
+    assert "dash-access-work-policy" in html
     assert "recovery" in html or "verify" in html
 
 
