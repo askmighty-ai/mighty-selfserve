@@ -13543,6 +13543,22 @@ def parse_args() -> argparse.Namespace:
             "or ordinary Chrome)"
         ),
     )
+    control_center.add_argument(
+        "--mighty-api-key",
+        default=None,
+        help=(
+            "Mighty API key for publishing AccessState to Railway "
+            "(default: MIGHTY_API_KEY env or ~/.mighty/provider_runtime/railway_publish.json)"
+        ),
+    )
+    control_center.add_argument(
+        "--mighty-base-url",
+        default=None,
+        help=(
+            "Mighty Railway base URL for AccessState publication "
+            "(default: MIGHTY_BASE_URL env or production URL)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -13907,6 +13923,8 @@ def run_client_command(args: argparse.Namespace) -> int:
             ),
             keepalive_strategy=str(getattr(args, "strategy", "SESSION_API")),
             browser_cleanup=str(getattr(args, "browser_cleanup", "leave-open")),
+            mighty_api_key=getattr(args, "mighty_api_key", None),
+            mighty_base_url=getattr(args, "mighty_base_url", None),
         )
         return int(payload.get("exit_code") or (0 if payload.get("ok") else 1))
     return 2

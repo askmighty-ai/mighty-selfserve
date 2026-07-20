@@ -557,6 +557,7 @@ def render_home_page(
     last_checked: str = "",
     escape: Callable[[Any], str],
     extension_info: dict[str, Any] | None = None,
+    runtime_access_html: str = "",
 ) -> str:
     """Render the Truth Dashboard — Amex capability instrument only."""
     del first_name, today_label  # Greeting removed; diagnostic instrument only.
@@ -596,6 +597,8 @@ def render_home_page(
             f"</footer>"
         )
 
+    access_block = runtime_access_html or ""
+
     return (
         f'<div class="dash-hero">'
         f'<div class="dash-brief-card dash-brief-card--exec dash-truth-card">'
@@ -607,6 +610,7 @@ def render_home_page(
         f'<section class="dash-brief-primary" aria-label="Capability status">'
         f"{render_capability_panel(capability, escape=escape, extension_info=extension_info)}"
         f"</section>"
+        f"{access_block}"
         f"{footer}"
         f"</div>"
         f"</div>"

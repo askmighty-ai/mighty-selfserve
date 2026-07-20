@@ -237,6 +237,7 @@ class AccessState:
     recovery_episode_state: str = RECOVERY_EPISODE_IDLE
     escalation_reason: str | None = None
     user_interruption_count: int = 0
+    initial_authentication_prompt_count: int = 0
     ready_for_extraction: bool = False
     ready_for_connector: bool = False
     overview_ok: bool = False
@@ -285,6 +286,7 @@ class AccessState:
             "recovery_episode_state": self.recovery_episode_state,
             "escalation_reason": self.escalation_reason,
             "user_interruption_count": self.user_interruption_count,
+            "initial_authentication_prompt_count": self.initial_authentication_prompt_count,
             "ready_for_extraction": self.ready_for_extraction,
             "ready_for_connector": self.ready_for_connector,
             "overview_ok": self.overview_ok,
@@ -1739,6 +1741,9 @@ def run_control_center(
     render_fn: Callable[[AccessState], str] | None = None,
     should_continue: Callable[[], bool] | None = None,
     max_loops: int | None = None,
+    mighty_api_key: str | None = None,
+    mighty_base_url: str | None = None,
+    access_state_publisher: Any = None,
 ) -> dict[str, Any]:
     """Start Control Center with runtime ownership and live console."""
     from mighty.provider_runtime import (
@@ -2036,14 +2041,16 @@ def run_control_center(
     history.append(EVENT_CONTROL_CENTER_STARTED, "Access Control Center started", details={"provider": provider})
     history.append(EVENT_VERIFICATION_SUCCESS, auth, details={"source": "initial_auth"})
     if session.get("authentication_attempt_count"):
+        initial_prompts = int(session.get("authentication_attempt_count") or 0)
         history.append(
             EVENT_USER_INTERRUPTION,
             "initial authentication",
-            details={"attempts": session.get("authentication_attempt_count")},
+            details={"attempts": initial_prompts},
         )
         access_state = replace(
             access_state,
-            user_interruption_count=int(session.get("authentication_attempt_count") or 0),
+            user_interruption_count=initial_prompts,
+            initial_authentication_prompt_count=initial_prompts,
         )
 
     classify = classify_browser_fn or (
@@ -2143,10 +2150,36 @@ def run_control_center(
     state_lock = threading.Lock()
     latest_state = access_state.snapshot(history)
 
+    publisher = access_state_publisher
+    publisher_started_here = False
+    if publisher is None:
+        try:
+            from mighty.access_state_publication import build_publisher_from_env
+
+            publisher = build_publisher_from_env(
+                root=runtime_root,
+                api_key=mighty_api_key,
+                base_url=mighty_base_url,
+            )
+        except Exception:
+            publisher = None
+    if publisher is not None:
+        try:
+            publisher.start()
+            publisher_started_here = True
+        except Exception:
+            publisher = None
+
     def _on_change(state: AccessState) -> None:
         nonlocal latest_state
         with state_lock:
             latest_state = state
+        if publisher is not None:
+            try:
+                publisher.notify(state)
+            except Exception:
+                # Publication must never affect access health or supervisor loop.
+                pass
 
     supervisor = AccessSupervisor(
         provider=provider,
@@ -2218,6 +2251,12 @@ def run_control_center(
         kb.disable()
         supervisor.stop()
         history.append(EVENT_CONTROL_CENTER_STOPPED, "Access Control Center stopped")
+        if publisher is not None and publisher_started_here:
+            try:
+                publisher.notify(supervisor.get_state())
+                publisher.stop(join_timeout=2.0)
+            except Exception:
+                pass
         if runtime_started_by_command:
             stopper = stop_runtime_fn or stop_provider_runtime_serve
             try:
@@ -2240,6 +2279,12 @@ def run_control_center(
         )
 
     final_state = supervisor.get_state()
+    publication = {
+        "enabled": publisher is not None and bool(getattr(publisher, "enabled", False)),
+        "publish_count": int(getattr(publisher, "publish_count", 0) or 0) if publisher else 0,
+        "failure_count": int(getattr(publisher, "failure_count", 0) or 0) if publisher else 0,
+        "last_error": getattr(publisher, "last_error", None) if publisher else None,
+    }
     return {
         "ok": exit_code == 0,
         "provider": provider,
@@ -2248,5 +2293,6 @@ def run_control_center(
         "interrupted": interrupted,
         "access_state": final_state.to_dict(),
         "event_count": len(history),
+        "access_state_publication": publication,
         **_ownership(),
     }

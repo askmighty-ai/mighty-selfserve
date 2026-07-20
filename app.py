@@ -863,6 +863,11 @@ def init_db():
             ensure_customer_capability_presentation_tables(db)
         except Exception:
             pass
+        try:
+            from mighty.runtime_access_state import ensure_runtime_access_state_tables
+            ensure_runtime_access_state_tables(db)
+        except Exception:
+            pass
 
 init_db()
 
@@ -6302,6 +6307,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 /* Truth Dashboard (single-provider capability instrument) */
 .dash-truth-card .dash-brief-header{margin-bottom:8px}
 .dash-truth-subhead{margin:6px 0 0;font-size:14px;color:#57534e;line-height:1.45;max-width:40rem}
+/* Local Provider Runtime AccessState card */
+.dash-access-card{margin-top:14px;padding:16px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
+.dash-access-title{margin:0 0 6px;font-size:18px;font-weight:650;color:#1c1917;letter-spacing:-0.02em}
+.dash-access-headline{margin:0 0 10px;font-size:14px;color:#57534e;line-height:1.45}
+.dash-access-badge{display:inline-block;margin:0 0 12px;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:#f5f5f4;color:#57534e}
+.dash-access-card[data-access-status="healthy"] .dash-access-badge{background:#dcfce7;color:#15803d}
+.dash-access-card[data-access-status="recovering"] .dash-access-badge{background:#ffedd5;color:#c2410c}
+.dash-access-card[data-access-status="awaiting_user"] .dash-access-badge{background:#fee2e2;color:#b91c1c}
+.dash-access-card[data-access-status="stale"] .dash-access-badge,
+.dash-access-card[data-access-status="runtime_offline"] .dash-access-badge,
+.dash-access-card[data-access-status="never_reported"] .dash-access-badge{background:#f5f5f4;color:#78716c}
+.dash-access-grid{margin:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:6px 16px}
+.dash-access-row{display:contents}
+.dash-access-row dt{font-size:13px;color:#78716c}
+.dash-access-row dd{margin:0;font-size:13px;font-weight:600;color:#1c1917}
 .dash-truth-panel{margin-top:8px;padding:16px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
 .dash-truth-provider{margin:0 0 10px;font-size:20px;font-weight:650;color:#1c1917;letter-spacing:-0.02em}
 .dash-truth-headline{margin:0 0 12px;font-size:16px;font-weight:600;color:#1c1917;line-height:1.4}
@@ -7036,6 +7056,46 @@ function _pollAccountStatus() {
 }
 _pollAccountStatus();
 setInterval(_pollAccountStatus, 10000);
+
+function _yesNo(v) { return v ? 'yes' : 'no'; }
+function _applyRuntimeAccessCard(access) {
+  var card = document.querySelector('[data-runtime-access="1"]');
+  if (!card || !access) return;
+  card.setAttribute('data-access-status', access.status || 'never_reported');
+  var badge = card.querySelector('[data-access-badge="1"]');
+  if (badge) badge.textContent = access.status_label || '';
+  var headline = card.querySelector('[data-access-headline="1"]');
+  if (headline) headline.textContent = access.headline || '';
+  var map = {
+    'Access status': access.status_label,
+    'Authentication': access.authentication_state,
+    'Recovery state': access.recovery_state,
+    'Recovery counts': (access.recovery_attempts + ' attempts · '
+      + access.recovery_successes + ' ok · ' + access.recovery_failures + ' fail'),
+    'Ready for extraction': _yesNo(!!access.ready_for_extraction),
+    'Ready for connector': _yesNo(!!access.ready_for_connector),
+    'User action required': _yesNo(!!access.user_action_required),
+    'Session age': access.session_age_label,
+    'Last update': access.last_update_label,
+  };
+  card.querySelectorAll('.dash-access-row').forEach(function(row) {
+    var dt = row.querySelector('dt');
+    var dd = row.querySelector('dd');
+    if (!dt || !dd) return;
+    var key = dt.textContent;
+    if (Object.prototype.hasOwnProperty.call(map, key) && map[key] != null) {
+      dd.textContent = map[key];
+    }
+  });
+}
+function _pollRuntimeAccessState() {
+  fetch('/api/runtime/access-state?provider=amex').then(function(r){return r.json();}).then(function(d){
+    if (!d || !d.ok || !d.access) return;
+    _applyRuntimeAccessCard(d.access);
+  }).catch(function(){});
+}
+_pollRuntimeAccessState();
+setInterval(_pollRuntimeAccessState, 10000);
 
 function _formatCheckStartedLocal(iso) {
   if (!iso) return '';
@@ -10118,6 +10178,20 @@ def dashboard():
             and _home_result.capability.last_verified
         ):
             _truth_last_checked = _home_result.capability.last_verified
+        _runtime_access_html = ""
+        try:
+            from mighty.runtime_access_state import (
+                load_runtime_access_presentation,
+                render_runtime_access_card,
+            )
+            _runtime_access = load_runtime_access_presentation(
+                get_db(), session["user_id"], "amex"
+            )
+            _runtime_access_html = render_runtime_access_card(
+                _runtime_access, escape=he
+            )
+        except Exception:
+            _runtime_access_html = ""
         return render_home_page(
             _home_result,
             first_name=_first_name,
@@ -10125,6 +10199,7 @@ def dashboard():
             last_checked=_truth_last_checked,
             escape=he,
             extension_info=_extension_info,
+            runtime_access_html=_runtime_access_html,
         )
 
     hero_section_html = _render_home_hero()
@@ -18645,6 +18720,43 @@ def api_sync_progress():
     )
     get_db().commit()
     return jsonify({"ok": True, "source": source})
+
+
+@app.route("/api/runtime/access-state", methods=["POST"])
+@require_login_or_key
+def api_runtime_access_state_ingest():
+    """Ingest versioned AccessState published by the local Access Supervisor.
+
+    Authenticated via X-Mighty-Key (or session). Replaces latest state per
+    (user, provider). Out-of-order updates are acknowledged but not applied.
+    """
+    from mighty.runtime_access_state import (
+        upsert_runtime_access_state,
+        validate_ingest_payload,
+    )
+
+    uid = get_current_user_id()
+    data = request.get_json(force=True, silent=True) or {}
+    payload, error = validate_ingest_payload(data)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    result = upsert_runtime_access_state(get_db(), uid, payload)
+    status = 200
+    return jsonify(result), status
+
+
+@app.route("/api/runtime/access-state", methods=["GET"])
+@require_login_or_key
+def api_runtime_access_state_read():
+    """Return presented local AccessState for the dashboard (Amex vertical slice)."""
+    from mighty.runtime_access_state import load_runtime_access_presentation
+
+    uid = get_current_user_id()
+    provider = (request.args.get("provider") or "amex").strip().lower()
+    if provider != "amex":
+        return jsonify({"ok": False, "error": "only amex is supported in this slice"}), 400
+    presentation = load_runtime_access_presentation(get_db(), uid, provider)
+    return jsonify({"ok": True, "access": presentation.to_dict()})
 
 
 @app.route("/api/account-status")

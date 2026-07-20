@@ -976,13 +976,17 @@ control-center CLI
         |
         | ownership (serve + managed browser + initial auth)
         v
-Access Supervisor  ----updates---->  AccessState
-        |                                |
-        | verify / overview /            | read-only
-        | keepalive / repair             v
-        |                          live console
+Access Supervisor ----updates----> AccessState ----read-only----> live console
+        |                               |
+        | verify / overview /           +----> EventHistory (last 100)
+        | keepalive / repair
+        |
+        | material-change + heartbeat (nonblocking)
         v
-   EventHistory (last 100)
+AccessStatePublisher --X-Mighty-Key--> Railway POST /api/runtime/access-state
+                                              |
+                                              v
+                                       dashboard Amex access card
 ```
 
 - **AccessState** — provider-independent snapshot. All verification and repair
@@ -991,6 +995,10 @@ Access Supervisor  ----updates---->  AccessState
   verify browser, ensure overview surface, run keepalive when due, repair when
   degraded, append events. It does **not** wait for connector refreshes to
   trigger maintenance.
+- **AccessStatePublisher** — optional authenticated push of a versioned
+  AccessState payload to Railway (`MIGHTY_API_KEY` / `--mighty-api-key`).
+  Ownership of access health stays in the supervisor; publication failures
+  never change provider access health. See `mighty/access_state_publication.py`.
 - **EventHistory** — in-memory rolling buffer (default last 100 events):
   verification success/failure, keepalive success/failure, recovery
   started/completed, browser restart, user interruption, connector refresh.
@@ -1015,7 +1023,9 @@ PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py control-center amex \
   --interval-seconds 60 \
   --keepalive-interval-seconds 300 \
   --strategy SESSION_API \
-  --browser-cleanup leave-open
+  --browser-cleanup leave-open \
+  --mighty-api-key mk_... \
+  --mighty-base-url https://mighty-selfserve-production.up.railway.app
 ```
 
 | Option | Default | Meaning |
@@ -1024,8 +1034,11 @@ PYTHONPATH=. .venv/bin/python scripts/provider_runtime.py control-center amex \
 | `--keepalive-interval-seconds` | `300` | Minimum gap between automatic keepalive probes |
 | `--strategy` | `SESSION_API` | Keepalive strategy for supervisor probes |
 | `--browser-cleanup` | `leave-open` | Close only a browser this command launched |
+| `--mighty-api-key` | `MIGHTY_API_KEY` / `~/.mighty/provider_runtime/railway_publish.json` | Publish AccessState to Railway |
+| `--mighty-base-url` | `MIGHTY_BASE_URL` or production URL | Railway base URL for publication |
 
-Implementation: `mighty/provider_runtime_control_center.py`.
+Implementation: `mighty/provider_runtime_control_center.py`,
+`mighty/access_state_publication.py`, `mighty/runtime_access_state.py`.
 
 ## Current scope
 
@@ -1063,8 +1076,11 @@ It does not yet:
 
 - start automatically at login;
 - authenticate localhost requests;
-- communicate with Railway;
 - automate MFA or CAPTCHA (operator interruption only);
 - manage multiple providers in Runtime itself (connectors are multi-provider);
 - enable automatic keepalive as always-on production behavior outside Control Center;
 - extract transactions, offers, statements, or perform account mutations.
+
+AccessState publication to Railway is available when a Mighty API key is
+configured (Control Center → `POST /api/runtime/access-state`). Railway never
+calls into the local runtime; the local publisher pushes latest state.
