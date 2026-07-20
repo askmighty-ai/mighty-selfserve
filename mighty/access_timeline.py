@@ -561,8 +561,18 @@ class ProviderOperationsDetails:
     last_recovery_action: str | None
     last_recovery_result: str | None
     timeline: tuple[AccessTimelineEvent, ...] = ()
+    work_queue: tuple[Any, ...] = ()
+    work_queue_evaluated_at: str | None = None
+    orchestration_gaps: tuple[str, ...] = ()
+    meets_goal: bool = True
 
     def to_dict(self) -> dict[str, Any]:
+        queue_items = []
+        for item in self.work_queue:
+            if hasattr(item, "to_dict"):
+                queue_items.append(item.to_dict())
+            else:
+                queue_items.append(dict(item))
         return {
             "provider": self.provider,
             "autonomous_uptime_label": self.autonomous_uptime_label,
@@ -583,6 +593,10 @@ class ProviderOperationsDetails:
             "last_recovery_action": self.last_recovery_action,
             "last_recovery_result": self.last_recovery_result,
             "timeline": [event.to_dict() for event in self.timeline],
+            "work_queue": queue_items,
+            "work_queue_evaluated_at": self.work_queue_evaluated_at,
+            "orchestration_gaps": list(self.orchestration_gaps),
+            "meets_goal": self.meets_goal,
         }
 
 
@@ -611,6 +625,25 @@ def _age_label(ts: str | None, *, now: datetime) -> str:
     return f"{_format_age_seconds(age)} ago"
 
 
+def _orchestration_for_payload(
+    payload: dict[str, Any] | None,
+    *,
+    provider: str,
+    now: datetime,
+) -> tuple[tuple[Any, ...], str | None, tuple[str, ...], bool]:
+    """Observational WorkQueue for the ops panel (does not execute actions)."""
+    from mighty.provider_orchestrator import ProviderOrchestrator
+    from mighty.provider_runtime_control_center import iso_now
+
+    evaluation = ProviderOrchestrator().evaluate_provider(provider, payload, now=now)
+    return (
+        evaluation.work_items,
+        iso_now(),
+        evaluation.gaps,
+        evaluation.meets_goal,
+    )
+
+
 def build_provider_operations_details(
     payload: dict[str, Any] | None,
     timeline: list[AccessTimelineEvent] | None = None,
@@ -621,6 +654,9 @@ def build_provider_operations_details(
     """Build expanded ops metrics from latest AccessState + timeline history."""
     current = now or datetime.now(timezone.utc)
     events = tuple(timeline or ())
+    work_items, evaluated_at, gaps, meets_goal = _orchestration_for_payload(
+        payload, provider=provider, now=current
+    )
     if payload is None:
         return ProviderOperationsDetails(
             provider=provider,
@@ -642,6 +678,10 @@ def build_provider_operations_details(
             last_recovery_action=None,
             last_recovery_result=None,
             timeline=events,
+            work_queue=work_items,
+            work_queue_evaluated_at=evaluated_at,
+            orchestration_gaps=gaps,
+            meets_goal=meets_goal,
         )
 
     auth = str(payload.get("authentication_state") or "")
@@ -699,6 +739,10 @@ def build_provider_operations_details(
         last_recovery_action=payload.get("last_recovery_action"),
         last_recovery_result=payload.get("last_recovery_result"),
         timeline=events,
+        work_queue=work_items,
+        work_queue_evaluated_at=evaluated_at,
+        orchestration_gaps=gaps,
+        meets_goal=meets_goal,
     )
 
 
@@ -722,6 +766,44 @@ def render_timeline_events_html(
         )
     return (
         f'<ol class="dash-access-timeline" data-access-timeline="1">'
+        f'{"".join(items)}'
+        f"</ol>"
+    )
+
+
+def render_work_queue_html(
+    work_queue: list[Any] | tuple[Any, ...],
+    *,
+    escape: Any,
+    meets_goal: bool = True,
+) -> str:
+    """Render the observational WorkQueue (intended next actions)."""
+    if not work_queue:
+        label = (
+            "Goal met — no intended work."
+            if meets_goal
+            else "No intended work."
+        )
+        return f'<p class="dash-access-ops-empty" data-work-queue-empty="1">{escape(label)}</p>'
+    items = []
+    for entry in work_queue:
+        if hasattr(entry, "to_dict"):
+            data = entry.to_dict()
+        else:
+            data = dict(entry)
+        action = str(data.get("action") or "")
+        reason = str(data.get("reason") or "")
+        priority = data.get("priority")
+        priority_label = str(priority) if priority is not None else "—"
+        items.append(
+            f'<li class="dash-access-work-item" data-work-action="{escape(action)}">'
+            f'<span class="dash-access-work-priority">P{escape(priority_label)}</span>'
+            f'<span class="dash-access-work-action">{escape(action)}</span>'
+            f'<span class="dash-access-work-reason">{escape(reason)}</span>'
+            f"</li>"
+        )
+    return (
+        f'<ol class="dash-access-work-queue" data-work-queue="1">'
         f'{"".join(items)}'
         f"</ol>"
     )
@@ -812,11 +894,18 @@ def render_provider_operations_details_html(
         f"</div>"
         for label, value in metric_rows
     )
+    work_queue_html = render_work_queue_html(
+        d.work_queue,
+        escape=escape,
+        meets_goal=d.meets_goal,
+    )
     timeline_html = render_timeline_events_html(d.timeline, escape=escape)
     return (
         f'<div class="dash-access-ops" data-access-ops="1">'
         f'<p class="dash-truth-section-label">Provider Operations</p>'
         f'<dl class="dash-access-ops-grid">{metrics}</dl>'
+        f'<p class="dash-truth-section-label">Intended work</p>'
+        f"{work_queue_html}"
         f'<p class="dash-truth-section-label">Recent timeline</p>'
         f"{timeline_html}"
         f"</div>"

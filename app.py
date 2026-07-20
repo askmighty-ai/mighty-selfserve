@@ -6332,6 +6332,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-access-ops-row dt{font-size:13px;color:#78716c}
 .dash-access-ops-row dd{margin:0;font-size:13px;font-weight:600;color:#1c1917}
 .dash-access-ops-empty{margin:0;font-size:13px;color:#a8a29e}
+.dash-access-work-queue{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:6px}
+.dash-access-work-item{display:grid;grid-template-columns:minmax(40px,auto) minmax(90px,auto) minmax(0,1fr);gap:8px;align-items:baseline;font-size:12px;line-height:1.4;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.04)}
+.dash-access-work-priority{color:#a8a29e;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dash-access-work-action{font-weight:700;color:#57534e;text-transform:lowercase}
+.dash-access-work-reason{color:#1c1917}
 .dash-access-timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto}
 .dash-access-timeline-item{display:grid;grid-template-columns:minmax(140px,auto) minmax(120px,auto) minmax(0,1fr);gap:8px;align-items:baseline;font-size:12px;line-height:1.4;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.04)}
 .dash-access-timeline-time{color:#a8a29e;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -7110,6 +7115,37 @@ function _applyRuntimeAccessCard(access, card) {
     }
   });
 }
+function _applyRuntimeAccessWorkQueue(ops, root) {
+  if (!root || !ops) return;
+  var queue = ops.work_queue || [];
+  var list = root.querySelector('[data-work-queue="1"]');
+  var empty = root.querySelector('[data-work-queue-empty="1"]');
+  if (!queue.length) {
+    var emptyLabel = ops.meets_goal
+      ? 'Goal met — no intended work.'
+      : 'No intended work.';
+    var emptyHtml = '<p class="dash-access-ops-empty" data-work-queue-empty="1">'
+      + _escText(emptyLabel) + '</p>';
+    if (list) list.outerHTML = emptyHtml;
+    else if (empty) empty.textContent = emptyLabel;
+    return;
+  }
+  var html = queue.map(function(item) {
+    var action = item.action || '';
+    var reason = item.reason || '';
+    var priority = (item.priority != null) ? String(item.priority) : '—';
+    return '<li class="dash-access-work-item" data-work-action="' + _escText(action) + '">'
+      + '<span class="dash-access-work-priority">P' + _escText(priority) + '</span>'
+      + '<span class="dash-access-work-action">' + _escText(action) + '</span>'
+      + '<span class="dash-access-work-reason">' + _escText(reason) + '</span>'
+      + '</li>';
+  }).join('');
+  if (list) {
+    list.innerHTML = html;
+  } else if (empty) {
+    empty.outerHTML = '<ol class="dash-access-work-queue" data-work-queue="1">' + html + '</ol>';
+  }
+}
 function _applyRuntimeAccessOperations(ops, card) {
   card = card || document.querySelector('[data-runtime-access="1"]');
   if (!card || !ops) return;
@@ -7140,8 +7176,9 @@ function _applyRuntimeAccessOperations(ops, card) {
       dd.textContent = map[key];
     }
   });
+  _applyRuntimeAccessWorkQueue(ops, root);
   var list = root.querySelector('[data-access-timeline="1"]');
-  var empty = root.querySelector('.dash-access-ops-empty');
+  var empty = root.querySelector('.dash-access-ops-empty:not([data-work-queue-empty])');
   var events = ops.timeline || [];
   if (!events.length) {
     if (list) list.outerHTML = '<p class="dash-access-ops-empty">No timeline events yet.</p>';
@@ -18842,11 +18879,19 @@ def api_runtime_access_state_read():
             }
         ), 400
     presentation, operations = load_runtime_access_card_model(get_db(), uid, provider)
+    ops_payload = operations.to_dict()
     return jsonify(
         {
             "ok": True,
             "access": presentation.to_dict(),
-            "operations": operations.to_dict(),
+            "operations": ops_payload,
+            "work_queue": {
+                "evaluated_at": ops_payload.get("work_queue_evaluated_at"),
+                "count": len(ops_payload.get("work_queue") or []),
+                "items": ops_payload.get("work_queue") or [],
+                "gaps": ops_payload.get("orchestration_gaps") or [],
+                "meets_goal": bool(ops_payload.get("meets_goal")),
+            },
             "capabilities": managed.capabilities.to_dict(),
             "provider": managed.to_dict(),
         }
