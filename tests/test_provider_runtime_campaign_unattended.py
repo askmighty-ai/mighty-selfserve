@@ -167,6 +167,10 @@ def test_unattended_campaign_starts_trials_without_confirmation(tmp_path: Path):
         request_json_fn=http,
         run_experiment_fn=_fake_experiment,
         ensure_managed_browser_fn=_browser_ensure(),
+        classify_managed_browser_fn=lambda: {
+            "state": "HEALTHY",
+            "cdp_url": "http://127.0.0.1:9223",
+        },
         input_fn=lambda: (_ for _ in ()).throw(AssertionError("no confirmation expected")),
         print_fn=lambda msg: prints.append(str(msg)),
         unattended=True,
@@ -471,6 +475,10 @@ def test_resume_from_waiting_for_authentication(tmp_path: Path):
         request_json_fn=http,
         run_experiment_fn=_fake_experiment,
         ensure_managed_browser_fn=_browser_ensure(preexisting=True, launched=False),
+        classify_managed_browser_fn=lambda: {
+            "state": "HEALTHY",
+            "cdp_url": "http://127.0.0.1:9223",
+        },
         input_fn=lambda: None,
         print_fn=lambda msg: prints.append(str(msg)),
         skip_completed=True,

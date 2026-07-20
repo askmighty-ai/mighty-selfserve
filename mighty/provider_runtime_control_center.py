@@ -10,6 +10,7 @@ interface for demonstrating continuous authenticated access.
 
 from __future__ import annotations
 
+import json
 import os
 import select
 import sys
@@ -1034,6 +1035,58 @@ def redraw_console(text: str, *, stream: Any = None, use_ansi: bool = True) -> N
     out.flush()
 
 
+class ControlCenterStartupError(RuntimeError):
+    """Fatal Control Center startup failure with a stable stage name."""
+
+    def __init__(self, stage: str, message: str, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.stage = str(stage)
+        self.details = dict(details or {})
+
+
+def format_control_center_startup_failure(
+    *,
+    stage: str,
+    error: str,
+    ownership: dict[str, Any] | None = None,
+    diagnostic_path: str | None = None,
+) -> str:
+    """Human-readable fatal startup report (never return to the shell silently)."""
+    lines = [
+        "Mighty Access Control Center failed to start.",
+        f"Stage: {stage}",
+        f"Error: {error}",
+    ]
+    own = ownership or {}
+    if own:
+        lines.append(
+            "Cleanup: "
+            f"runtime_started={own.get('runtime_started_by_command')} "
+            f"runtime_stopped={own.get('runtime_stopped_by_command')} "
+            f"browser_launched={own.get('managed_browser_launched_by_command')} "
+            f"browser_closed={own.get('managed_browser_closed_at_completion')} "
+            f"browser_cleanup={own.get('browser_cleanup_policy')}"
+        )
+    if diagnostic_path:
+        lines.append(f"Diagnostic: {diagnostic_path}")
+    return "\n".join(lines)
+
+
+def write_control_center_startup_diagnostic(
+    diagnostics_dir: Path,
+    payload: dict[str, Any],
+) -> str:
+    """Persist a sanitized startup-failure diagnostic JSON and return its path."""
+    diagnostics_dir = Path(diagnostics_dir).expanduser().resolve()
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = diagnostics_dir / f"control-center-startup-failure-{stamp}.json"
+    body = dict(payload)
+    body["written_at"] = iso_now()
+    path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return str(path)
+
+
 def run_control_center(
     *,
     provider: str = "amex",
@@ -1085,6 +1138,7 @@ def run_control_center(
         DEFAULT_STATE_PATH,
         BROWSER_CLEANUP_POLICIES,
         classify_managed_amex_browser,
+        ensure_managed_amex_browser_for_campaign,
         ensure_provider_runtime_for_campaign,
         maybe_close_managed_browser_for_campaign,
         prepare_managed_amex_session_for_command,
@@ -1100,6 +1154,7 @@ def run_control_center(
     sleep = sleep_fn or time.sleep
     runtime_root = Path(root or DEFAULT_ROOT).expanduser().resolve()
     profile_dir = runtime_root / "amex"
+    diagnostics_dir = runtime_root / "diagnostics"
     host = host or DEFAULT_HOST
     port = int(port or DEFAULT_PORT)
     cdp_port = int(cdp_port or DEFAULT_CDP_PORT)
@@ -1130,6 +1185,7 @@ def run_control_center(
         runtime_status=RUNTIME_STATUS_STARTING,
         scheduler_status=SCHEDULER_STATUS_STOPPED,
     )
+    browser_info: dict[str, Any] = {}
 
     def _ownership() -> dict[str, Any]:
         return {
@@ -1142,6 +1198,112 @@ def run_control_center(
             "browser_cleanup_policy": cleanup_policy,
             "managed_browser_closed_at_completion": managed_browser_closed_at_completion,
         }
+
+    def _fail_startup(
+        stage: str,
+        error: str,
+        *,
+        outcome: str,
+        exit_status: int = 1,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        nonlocal runtime_stopped_by_command
+        if runtime_started_by_command and not runtime_stopped_by_command:
+            stopper = stop_runtime_fn or stop_provider_runtime_serve
+            try:
+                stopper(
+                    host=host,
+                    port=port,
+                    process=runtime_process,
+                    request_json_fn=http,
+                )
+                runtime_stopped_by_command = True
+            except Exception:
+                runtime_stopped_by_command = False
+        payload = {
+            "ok": False,
+            "provider": provider,
+            "outcome": outcome,
+            "stage": stage,
+            "error": error,
+            "exit_code": int(exit_status),
+            "interrupted": bool(exit_status == 130 or interrupted),
+            **_ownership(),
+            **(extra or {}),
+        }
+        try:
+            diagnostic_path = write_control_center_startup_diagnostic(
+                diagnostics_dir,
+                payload,
+            )
+        except Exception as diag_exc:  # noqa: BLE001
+            diagnostic_path = None
+            payload["diagnostic_write_error"] = f"{type(diag_exc).__name__}: {diag_exc}"
+        payload["diagnostic_path"] = diagnostic_path
+        emit(
+            format_control_center_startup_failure(
+                stage=stage,
+                error=error,
+                ownership=_ownership(),
+                diagnostic_path=diagnostic_path,
+            )
+        )
+        return payload
+
+    # Browser before runtime so serve attaches to a headed, usable CDP session
+    # instead of a foreign/zombie listener on the configured port.
+    ensure_browser = ensure_managed_browser_fn or ensure_managed_amex_browser_for_campaign
+    ensure_browser_kwargs: dict[str, Any] = {
+        "profile_dir": profile_dir,
+        "cdp_port": cdp_port,
+        "print_fn": emit,
+        "sleep_fn": sleep_fn,
+        "monotonic_fn": monotonic_fn,
+        "fetch_cdp_json_fn": fetch_cdp_json_fn,
+        "launch_native_chrome_fn": launch_native_chrome_fn,
+        "terminate_profile_processes_fn": terminate_profile_processes_fn,
+        "wait_for_profile_release_fn": wait_for_profile_release_fn,
+    }
+    if restart_managed_browser_fn is not None:
+        # ensure_managed_amex_browser_for_campaign calls restart_fn() with no args.
+        ensure_browser_kwargs["restart_fn"] = restart_managed_browser_fn
+    try:
+        browser_info = ensure_browser(**ensure_browser_kwargs)
+    except KeyboardInterrupt:
+        return _fail_startup(
+            "managed_browser",
+            "interrupted",
+            outcome="interrupted",
+            exit_status=130,
+        )
+    except Exception as exc:  # noqa: BLE001 - startup must never exit silently
+        return _fail_startup(
+            "managed_browser",
+            f"{type(exc).__name__}: {exc}",
+            outcome="browser_start_failed",
+        )
+
+    if not isinstance(browser_info, dict) or browser_info.get("ok") is False:
+        return _fail_startup(
+            "managed_browser",
+            str(
+                (browser_info or {}).get("error")
+                or (browser_info or {}).get("message")
+                or "Failed to ensure managed Amex browser"
+            ),
+            outcome="browser_start_failed",
+            extra={"browser_info": browser_info},
+        )
+
+    managed_browser_preexisting = bool(browser_info.get("managed_browser_preexisting"))
+    managed_browser_launched_by_command = bool(
+        browser_info.get("managed_browser_launched_by_campaign")
+        or browser_info.get("managed_browser_launched")
+    )
+    managed_browser_restarted_by_command = bool(
+        browser_info.get("managed_browser_restarted_by_campaign")
+        or browser_info.get("managed_browser_restarted")
+    )
 
     ensure_runtime = ensure_runtime_fn or ensure_provider_runtime_for_campaign
     runtime_info = ensure_runtime(
@@ -1158,25 +1320,30 @@ def run_control_center(
         print_fn=emit,
     )
     if not isinstance(runtime_info, dict) or not runtime_info.get("ok"):
-        payload = {
-            "ok": False,
-            "provider": provider,
-            "outcome": (runtime_info or {}).get("outcome") or "runtime_start_failed",
-            "error": (runtime_info or {}).get("error")
-            or (runtime_info or {}).get("message")
-            or "Failed to ensure Provider Runtime",
-            "exit_code": 1,
-            "interrupted": False,
-            **_ownership(),
-        }
-        emit(str(payload["error"]))
-        return payload
+        return _fail_startup(
+            "runtime",
+            str(
+                (runtime_info or {}).get("error")
+                or (runtime_info or {}).get("message")
+                or "Failed to ensure Provider Runtime"
+            ),
+            outcome=(runtime_info or {}).get("outcome") or "runtime_start_failed",
+            extra={"runtime_info": runtime_info},
+        )
 
     runtime_preexisting = bool(runtime_info.get("runtime_preexisting"))
     runtime_started_by_command = bool(runtime_info.get("runtime_started_by_campaign"))
     runtime_process = runtime_info.get("process")
     base_url = _expiration_experiment_base_url(host, port)
     access_state = replace(access_state, runtime_status=RUNTIME_STATUS_RUNNING)
+
+    def _reuse_ready_browser(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "ok": True,
+            **browser_info,
+            "managed_browser_launched": managed_browser_launched_by_command,
+            "managed_browser_restarted": managed_browser_restarted_by_command,
+        }
 
     prepare = prepare_session_fn or prepare_managed_amex_session_for_command
     try:
@@ -1189,7 +1356,7 @@ def run_control_center(
             monotonic_fn=monotonic_fn,
             input_fn=input_fn,
             print_fn=emit,
-            ensure_managed_browser_fn=ensure_managed_browser_fn,
+            ensure_managed_browser_fn=_reuse_ready_browser,
             ensure_signed_in_fn=ensure_signed_in_fn,
             bring_to_foreground_fn=bring_to_foreground_fn,
             restart_managed_browser_fn=restart_managed_browser_fn,
@@ -1201,33 +1368,44 @@ def run_control_center(
     except KeyboardInterrupt:
         interrupted = True
         session = {"ok": False, "interrupted": True, "outcome": "interrupted"}
+    except Exception as exc:  # noqa: BLE001
+        return _fail_startup(
+            "authentication",
+            f"{type(exc).__name__}: {exc}",
+            outcome="authentication_failed",
+        )
 
     if not isinstance(session, dict):
-        session = {"ok": False, "outcome": "browser_start_failed"}
+        session = {"ok": False, "outcome": "authentication_failed"}
 
-    managed_browser_preexisting = bool(session.get("managed_browser_preexisting"))
-    managed_browser_launched_by_command = bool(session.get("managed_browser_launched"))
-    managed_browser_restarted_by_command = bool(session.get("managed_browser_restarted"))
     interrupted = interrupted or bool(session.get("interrupted"))
+    if session.get("managed_browser_launched"):
+        managed_browser_launched_by_command = True
+    if session.get("managed_browser_restarted"):
+        managed_browser_restarted_by_command = True
 
     if interrupted or not session.get("ok"):
-        outcome = "interrupted" if interrupted else str(session.get("outcome") or "authentication_required")
-        if runtime_started_by_command:
-            stopper = stop_runtime_fn or stop_provider_runtime_serve
-            try:
-                stopper(host=host, port=port, process=runtime_process, request_json_fn=http)
-                runtime_stopped_by_command = True
-            except Exception:
-                pass
-        return {
-            "ok": False,
-            "provider": provider,
-            "outcome": outcome,
-            "error": session.get("error") or session.get("message") or outcome,
-            "exit_code": 130 if interrupted else 1,
-            "interrupted": interrupted,
-            **_ownership(),
-        }
+        outcome = (
+            "interrupted"
+            if interrupted
+            else str(session.get("outcome") or "authentication_required")
+        )
+        return _fail_startup(
+            "authentication" if not interrupted else "interrupted",
+            str(session.get("error") or session.get("message") or outcome),
+            outcome=outcome,
+            exit_status=130 if interrupted else 1,
+            extra={"session": {
+                k: session.get(k)
+                for k in (
+                    "outcome",
+                    "error",
+                    "message",
+                    "final_authentication_state",
+                    "authentication_attempt_count",
+                )
+            }},
+        )
 
     auth = str(session.get("final_authentication_state") or "SIGNED_IN")
     started_at = iso_now()

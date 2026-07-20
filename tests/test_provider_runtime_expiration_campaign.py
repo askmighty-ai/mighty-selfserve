@@ -327,11 +327,35 @@ def test_classify_healthy_absent_unhealthy():
     )
 
 
+def _owned_cdp(profile_dir: Path, cdp_port: int = 9223) -> dict:
+    resolved = str(Path(profile_dir).resolve())
+    return {
+        "status": "owned",
+        "cdp_port": int(cdp_port),
+        "profile_dir": resolved,
+        "processes": [{"pid": 1, "user_data_dir": resolved}],
+        "owned_processes": [{"pid": 1, "user_data_dir": resolved}],
+        "foreign_processes": [],
+    }
+
+
+def _free_cdp(profile_dir: Path, cdp_port: int = 9223) -> dict:
+    return {
+        "status": "free",
+        "cdp_port": int(cdp_port),
+        "profile_dir": str(Path(profile_dir).resolve()),
+        "processes": [],
+        "owned_processes": [],
+        "foreign_processes": [],
+    }
+
+
 def test_healthy_managed_browser_is_reused(tmp_path: Path):
     launched = MagicMock()
     restarted = MagicMock()
+    profile = tmp_path / "amex"
     result = ensure_managed_amex_browser_for_campaign(
-        profile_dir=tmp_path / "amex",
+        profile_dir=profile,
         cdp_port=9223,
         classify_fn=lambda: {
             "state": MANAGED_BROWSER_HEALTHY,
@@ -341,6 +365,7 @@ def test_healthy_managed_browser_is_reused(tmp_path: Path):
         restart_fn=restarted,
         headless_fn=lambda: False,
         print_fn=lambda *_a, **_k: None,
+        inspect_ownership_fn=lambda port, path: _owned_cdp(path, port),
     )
     assert result["managed_browser_preexisting"] is True
     assert result["managed_browser_launched_by_campaign"] is False
@@ -353,13 +378,15 @@ def test_absent_managed_browser_is_launched(tmp_path: Path):
     launched = MagicMock(
         return_value={"ok": True, "cdp_url": "http://127.0.0.1:9223", "page_target_count": 1}
     )
+    profile = tmp_path / "amex"
     result = ensure_managed_amex_browser_for_campaign(
-        profile_dir=tmp_path / "amex",
+        profile_dir=profile,
         cdp_port=9223,
         classify_fn=lambda: {"state": MANAGED_BROWSER_ABSENT, "cdp_url": None},
         launch_fn=launched,
         restart_fn=MagicMock(),
         print_fn=lambda *_a, **_k: None,
+        inspect_ownership_fn=lambda port, path: _free_cdp(path, port),
     )
     assert result["managed_browser_preexisting"] is False
     assert result["managed_browser_launched_by_campaign"] is True
@@ -370,8 +397,9 @@ def test_zero_targets_triggers_managed_browser_restart(tmp_path: Path):
     restarted = MagicMock(
         return_value={"ok": True, "cdp_url": "http://127.0.0.1:9223", "restarted": True}
     )
+    profile = tmp_path / "amex"
     result = ensure_managed_amex_browser_for_campaign(
-        profile_dir=tmp_path / "amex",
+        profile_dir=profile,
         cdp_port=9223,
         classify_fn=lambda: {
             "state": MANAGED_BROWSER_UNHEALTHY,
@@ -381,6 +409,7 @@ def test_zero_targets_triggers_managed_browser_restart(tmp_path: Path):
         launch_fn=MagicMock(),
         restart_fn=restarted,
         print_fn=lambda *_a, **_k: None,
+        inspect_ownership_fn=lambda port, path: _owned_cdp(path, port),
     )
     assert result["managed_browser_preexisting"] is True
     assert result["managed_browser_launched_by_campaign"] is True

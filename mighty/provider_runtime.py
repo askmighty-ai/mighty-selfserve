@@ -290,6 +290,10 @@ def chrome_binary() -> Path:
     raise FileNotFoundError("Google Chrome executable was not found in /Applications")
 
 
+_USER_DATA_DIR_RE = re.compile(r"--user-data-dir=(\S+)")
+_REMOTE_DEBUGGING_PORT_RE = re.compile(r"--remote-debugging-port=(\d+)")
+
+
 def profile_processes(profile_dir: Path) -> list[int]:
     """Return process IDs whose command line references this exact profile."""
     result = subprocess.run(
@@ -311,6 +315,133 @@ def profile_processes(profile_dir: Path) -> list[int]:
         if pid != os.getpid():
             found.append(pid)
     return found
+
+
+def list_chrome_processes_on_cdp_port(cdp_port: int) -> list[dict[str, Any]]:
+    """Return Chrome-like processes advertising ``--remote-debugging-port=N``."""
+    port = int(cdp_port)
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return []
+    found: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        port_match = _REMOTE_DEBUGGING_PORT_RE.search(text)
+        if port_match is None or int(port_match.group(1)) != port:
+            continue
+        try:
+            pid_text, command = text.split(None, 1)
+            pid = int(pid_text)
+        except (ValueError, IndexError):
+            continue
+        if pid == os.getpid():
+            continue
+        udd_match = _USER_DATA_DIR_RE.search(command)
+        user_data_dir = None
+        if udd_match is not None:
+            try:
+                user_data_dir = str(Path(udd_match.group(1)).expanduser().resolve())
+            except Exception:
+                user_data_dir = udd_match.group(1)
+        found.append(
+            {
+                "pid": pid,
+                "user_data_dir": user_data_dir,
+                "command": command[:300],
+            }
+        )
+    return found
+
+
+def inspect_cdp_port_ownership(cdp_port: int, profile_dir: Path) -> dict[str, Any]:
+    """Classify whether the CDP port is free, owned by profile, or foreign."""
+    profile_dir = Path(profile_dir).expanduser().resolve()
+    processes = list_chrome_processes_on_cdp_port(int(cdp_port))
+    owned: list[dict[str, Any]] = []
+    foreign: list[dict[str, Any]] = []
+    for proc in processes:
+        udd = proc.get("user_data_dir")
+        if udd and Path(str(udd)).expanduser().resolve() == profile_dir:
+            owned.append(proc)
+        else:
+            foreign.append(proc)
+    if not processes:
+        status = "free"
+    elif foreign and not owned:
+        status = "foreign"
+    elif owned and not foreign:
+        status = "owned"
+    elif owned and foreign:
+        status = "conflict"
+    else:
+        status = "unknown"
+    return {
+        "status": status,
+        "cdp_port": int(cdp_port),
+        "profile_dir": str(profile_dir),
+        "processes": processes,
+        "owned_processes": owned,
+        "foreign_processes": foreign,
+    }
+
+
+def format_cdp_port_conflict_error(ownership: dict[str, Any]) -> str:
+    """Human-readable fatal error when another Chrome owns the CDP port."""
+    port = ownership.get("cdp_port")
+    profile_dir = ownership.get("profile_dir")
+    foreign = ownership.get("foreign_processes") or []
+    details = []
+    for proc in foreign[:5]:
+        details.append(
+            f"pid={proc.get('pid')} user-data-dir={proc.get('user_data_dir') or 'unknown'}"
+        )
+    detail_text = "; ".join(details) if details else "unknown process"
+    return (
+        f"CDP port {port} is held by another Chrome process that is not the "
+        f"Mighty Amex profile ({profile_dir}). "
+        f"Details: {detail_text}. "
+        "Stop that process (often a leftover test Chrome) or re-run with "
+        f"--cdp-port <free-port>."
+    )
+
+
+def wait_for_cdp_port_clear(
+    cdp_port: int,
+    *,
+    timeout_seconds: float = 15.0,
+    sleep_fn: Any = None,
+    monotonic_fn: Any = None,
+    list_processes_fn: Any = None,
+    cdp_available_fn: Any = None,
+) -> bool:
+    """Wait until no Chrome advertises the CDP port and /json/version is down."""
+    sleep = sleep_fn or time.sleep
+    monotonic = monotonic_fn or time.monotonic
+    list_procs = list_processes_fn or list_chrome_processes_on_cdp_port
+    cdp_available = cdp_available_fn or cdp_endpoint_available
+    deadline = monotonic() + max(0.0, float(timeout_seconds))
+    while True:
+        procs = list(list_procs(int(cdp_port)) or [])
+        endpoint = None
+        try:
+            endpoint = cdp_available(int(cdp_port), timeout=0.35)
+        except TypeError:
+            endpoint = cdp_available(int(cdp_port))
+        except Exception:
+            endpoint = None
+        if not procs and endpoint is None:
+            return True
+        if monotonic() >= deadline:
+            return False
+        sleep(0.25)
 
 
 def terminate_profile_processes(profile_dir: Path, timeout: float = 15.0) -> None:
@@ -3935,9 +4066,17 @@ def restart_managed_amex_browser(
     sleep_fn: Any = None,
     monotonic_fn: Any = None,
     fetch_cdp_json_fn: Any = None,
+    inspect_ownership_fn: Any = None,
+    wait_for_cdp_port_clear_fn: Any = None,
 ) -> dict[str, Any]:
     """Stop only the Mighty Amex profile Chrome, then relaunch headed."""
     profile_dir = Path(profile_dir).expanduser().resolve()
+    cdp_port = int(cdp_port)
+    inspect = inspect_ownership_fn or inspect_cdp_port_ownership
+    ownership = inspect(cdp_port, profile_dir)
+    if ownership.get("status") in {"foreign", "conflict"}:
+        raise RuntimeError(format_cdp_port_conflict_error(ownership))
+
     terminator = terminate_profile_processes_fn or terminate_profile_processes
     waiter = wait_for_profile_release_fn or wait_for_profile_release
     terminator(profile_dir)
@@ -3945,9 +4084,25 @@ def restart_managed_amex_browser(
         raise RuntimeError(
             f"Managed Amex profile lock was not released for {profile_dir}"
         )
+
+    clearer = wait_for_cdp_port_clear_fn or wait_for_cdp_port_clear
+    if not clearer(
+        cdp_port,
+        timeout_seconds=min(15.0, float(startup_timeout_seconds)),
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+    ):
+        ownership_after = inspect(cdp_port, profile_dir)
+        if ownership_after.get("status") in {"foreign", "conflict"}:
+            raise RuntimeError(format_cdp_port_conflict_error(ownership_after))
+        raise RuntimeError(
+            f"CDP port {cdp_port} did not clear after stopping the managed "
+            f"Amex Chrome for profile {profile_dir}"
+        )
+
     launched = launch_managed_amex_browser(
         profile_dir=profile_dir,
-        cdp_port=int(cdp_port),
+        cdp_port=cdp_port,
         initial_url=initial_url,
         startup_timeout_seconds=startup_timeout_seconds,
         launch_native_chrome_fn=launch_native_chrome_fn,
@@ -4272,20 +4427,23 @@ def ensure_managed_amex_browser_for_campaign(
     launch_native_chrome_fn: Any = None,
     terminate_profile_processes_fn: Any = None,
     wait_for_profile_release_fn: Any = None,
+    inspect_ownership_fn: Any = None,
 ) -> dict[str, Any]:
     """Ensure a dedicated managed Amex Chrome window exists for the campaign."""
     emit = print_fn or print
     profile_dir = Path(profile_dir).expanduser().resolve()
+    cdp_port = int(cdp_port)
+    inspect_ownership = inspect_ownership_fn or inspect_cdp_port_ownership
     classify = classify_fn or (
         lambda: classify_managed_amex_browser(
-            int(cdp_port),
+            cdp_port,
             fetch_cdp_json_fn=fetch_cdp_json_fn,
         )
     )
     launch = launch_fn or (
         lambda: launch_managed_amex_browser(
             profile_dir=profile_dir,
-            cdp_port=int(cdp_port),
+            cdp_port=cdp_port,
             startup_timeout_seconds=startup_timeout_seconds,
             launch_native_chrome_fn=launch_native_chrome_fn,
             sleep_fn=sleep_fn,
@@ -4296,7 +4454,7 @@ def ensure_managed_amex_browser_for_campaign(
     restart = restart_fn or (
         lambda: restart_managed_amex_browser(
             profile_dir=profile_dir,
-            cdp_port=int(cdp_port),
+            cdp_port=cdp_port,
             startup_timeout_seconds=startup_timeout_seconds,
             terminate_profile_processes_fn=terminate_profile_processes_fn,
             wait_for_profile_release_fn=wait_for_profile_release_fn,
@@ -4304,13 +4462,20 @@ def ensure_managed_amex_browser_for_campaign(
             sleep_fn=sleep_fn,
             monotonic_fn=monotonic_fn,
             fetch_cdp_json_fn=fetch_cdp_json_fn,
+            inspect_ownership_fn=inspect_ownership,
         )
     )
     headless_check = headless_fn or (
         lambda: managed_chrome_appears_headless(profile_dir)
     )
 
+    def _reject_foreign_cdp() -> None:
+        ownership = inspect_ownership(cdp_port, profile_dir)
+        if ownership.get("status") in {"foreign", "conflict"}:
+            raise RuntimeError(format_cdp_port_conflict_error(ownership))
+
     emit("Checking managed Amex browser...")
+    _reject_foreign_cdp()
     classified = classify()
     state = str(classified.get("state") or MANAGED_BROWSER_ABSENT)
     preexisting = state in {MANAGED_BROWSER_HEALTHY, MANAGED_BROWSER_UNHEALTHY}
@@ -4319,6 +4484,8 @@ def ensure_managed_amex_browser_for_campaign(
     cdp_url = classified.get("cdp_url")
 
     if state == MANAGED_BROWSER_HEALTHY:
+        # A foreign Chrome can still answer CDP; refuse to reuse it.
+        _reject_foreign_cdp()
         if prefer_headed_for_authentication and headless_check():
             emit("Managed browser is headless; relaunching a visible window...")
             launched_info = restart()
@@ -4330,6 +4497,7 @@ def ensure_managed_amex_browser_for_campaign(
             emit("Reusing existing managed Amex browser.")
             emit("Browser ready.")
     elif state == MANAGED_BROWSER_ABSENT:
+        _reject_foreign_cdp()
         emit("No managed browser found.")
         emit("Launching dedicated Mighty Amex Chrome...")
         launched_info = launch()
@@ -4337,6 +4505,9 @@ def ensure_managed_amex_browser_for_campaign(
         cdp_url = launched_info.get("cdp_url")
         emit("Browser ready.")
     else:
+        # CDP is up but has no page targets. Only restart when we own the port;
+        # otherwise restart cannot free a foreign listener and will time out.
+        _reject_foreign_cdp()
         emit("Managed browser is unhealthy (no usable page targets).")
         emit("Restarting dedicated Mighty Amex Chrome...")
         launched_info = restart()
@@ -4352,7 +4523,7 @@ def ensure_managed_amex_browser_for_campaign(
         "managed_browser_preexisting": preexisting,
         "managed_browser_launched_by_campaign": launched,
         "managed_browser_restarted_by_campaign": restarted,
-        "managed_cdp_port": int(cdp_port),
+        "managed_cdp_port": cdp_port,
         "managed_profile_path": str(profile_dir),
     }
 
