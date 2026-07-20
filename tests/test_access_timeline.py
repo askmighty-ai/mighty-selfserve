@@ -63,7 +63,10 @@ def _payload(**overrides):
         recovery_planner_status=RECOVERY_STATUS_IDLE,
         authentication_state="SIGNED_IN",
         access_health=ACCESS_HEALTH_HEALTHY,
-        session_started_at="2026-07-20T10:00:00+00:00",
+        runtime_started_at="2026-07-20T09:55:00+00:00",
+        authenticated_session_started_at="2026-07-20T10:00:00+00:00",
+        autonomous_since_at="2026-07-20T10:00:00+00:00",
+        authentication_state_changed_at="2026-07-20T10:00:00+00:00",
         last_verification_at="2026-07-20T11:00:00+00:00",
         last_verification_result="SIGNED_IN",
         last_keepalive_at="2026-07-20T11:05:00+00:00",
@@ -277,7 +280,9 @@ def test_operations_details_and_render_view_details():
         ),
     ]
     details = build_provider_operations_details(payload, timeline, now=now)
-    assert details.autonomous_uptime_label != "—"
+    assert details.autonomous_duration_label != "—"
+    assert details.runtime_uptime_label != "—"
+    assert details.authenticated_session_age_label != "—"
     assert details.last_user_intervention_at == "2026-07-20T11:30:00+00:00"
     assert details.verification_last_result == "SIGNED_IN"
     assert details.keepalive_last_result == "ok"
@@ -285,7 +290,8 @@ def test_operations_details_and_render_view_details():
 
     ops_html = render_provider_operations_details_html(details, escape=html_escape)
     assert "Provider Operations" in ops_html
-    assert "Autonomous uptime" in ops_html
+    assert "Autonomous duration" in ops_html
+    assert "Runtime uptime" in ops_html
     assert "awaiting_user" in ops_html
     assert 'data-access-timeline="1"' in ops_html
 

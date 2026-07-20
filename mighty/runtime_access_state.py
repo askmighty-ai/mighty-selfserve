@@ -140,7 +140,11 @@ def validate_ingest_payload(data: dict[str, Any]) -> tuple[dict[str, Any] | None
         "last_recovery_action": data.get("last_recovery_action"),
         "last_recovery_result": data.get("last_recovery_result"),
         "escalation_reason": data.get("escalation_reason"),
-        "session_started_at": data.get("session_started_at"),
+        "runtime_started_at": data.get("runtime_started_at"),
+        "authenticated_session_started_at": data.get("authenticated_session_started_at"),
+        "autonomous_since_at": data.get("autonomous_since_at"),
+        "authentication_state_changed_at": data.get("authentication_state_changed_at"),
+        "last_user_intervention_at": data.get("last_user_intervention_at"),
         "last_verified_at": data.get("last_verified_at"),
         "last_verification_result": data.get("last_verification_result"),
         "last_keepalive_at": data.get("last_keepalive_at"),
@@ -281,8 +285,14 @@ class RuntimeAccessPresentation:
     ready_for_connector: bool
     user_action_required: bool
     last_verified_at: str | None
-    session_started_at: str | None
-    session_age_label: str
+    runtime_started_at: str | None
+    runtime_uptime_label: str
+    authenticated_session_started_at: str | None
+    authenticated_session_age_label: str
+    autonomous_since_at: str | None
+    autonomous_duration_label: str
+    authentication_state_changed_at: str | None
+    authentication_state_age_label: str
     last_update_at: str | None
     last_update_label: str
     stale: bool
@@ -306,8 +316,14 @@ class RuntimeAccessPresentation:
             "ready_for_connector": self.ready_for_connector,
             "user_action_required": self.user_action_required,
             "last_verified_at": self.last_verified_at,
-            "session_started_at": self.session_started_at,
-            "session_age_label": self.session_age_label,
+            "runtime_started_at": self.runtime_started_at,
+            "runtime_uptime_label": self.runtime_uptime_label,
+            "authenticated_session_started_at": self.authenticated_session_started_at,
+            "authenticated_session_age_label": self.authenticated_session_age_label,
+            "autonomous_since_at": self.autonomous_since_at,
+            "autonomous_duration_label": self.autonomous_duration_label,
+            "authentication_state_changed_at": self.authentication_state_changed_at,
+            "authentication_state_age_label": self.authentication_state_age_label,
             "last_update_at": self.last_update_at,
             "last_update_label": self.last_update_label,
             "stale": self.stale,
@@ -425,6 +441,13 @@ STATUS_HEADLINES = {
 }
 
 
+def _duration_label_from_ts(ts: Any, *, now: datetime) -> str:
+    parsed = parse_iso(str(ts)) if ts else None
+    if parsed is None:
+        return "—"
+    return _format_age_seconds(max(0.0, (now - parsed).total_seconds()))
+
+
 def build_runtime_access_presentation(
     row: dict[str, Any] | None,
     *,
@@ -451,8 +474,14 @@ def build_runtime_access_presentation(
             ready_for_connector=False,
             user_action_required=False,
             last_verified_at=None,
-            session_started_at=None,
-            session_age_label="—",
+            runtime_started_at=None,
+            runtime_uptime_label="—",
+            authenticated_session_started_at=None,
+            authenticated_session_age_label="—",
+            autonomous_since_at=None,
+            autonomous_duration_label="—",
+            authentication_state_changed_at=None,
+            authentication_state_age_label="—",
             last_update_at=None,
             last_update_label="never",
             stale=True,
@@ -467,10 +496,16 @@ def build_runtime_access_presentation(
         now=current,
         stale_after_seconds=stale_after_seconds,
     )
-    session_started = payload.get("session_started_at")
-    started_ts = parse_iso(str(session_started)) if session_started else None
-    session_age = (
-        max(0.0, (current - started_ts).total_seconds()) if started_ts is not None else None
+    runtime_started = payload.get("runtime_started_at")
+    auth_session_started = payload.get("authenticated_session_started_at")
+    autonomous_since = payload.get("autonomous_since_at")
+    auth_state_changed = payload.get("authentication_state_changed_at")
+    auth_state = str(payload.get("authentication_state") or "")
+    # Auth session age is only meaningful while currently SIGNED_IN.
+    auth_session_age_label = (
+        _duration_label_from_ts(auth_session_started, now=current)
+        if auth_state == "SIGNED_IN"
+        else "—"
     )
     last_update = str(payload.get("updated_at") or row.get("updated_at") or "") or None
     user_action = status == STATUS_AWAITING_USER
@@ -489,8 +524,14 @@ def build_runtime_access_presentation(
         ready_for_connector=bool(payload.get("ready_for_connector")),
         user_action_required=user_action,
         last_verified_at=payload.get("last_verified_at"),
-        session_started_at=session_started,
-        session_age_label=_format_age_seconds(session_age) if session_age is not None else "—",
+        runtime_started_at=runtime_started,
+        runtime_uptime_label=_duration_label_from_ts(runtime_started, now=current),
+        authenticated_session_started_at=auth_session_started,
+        authenticated_session_age_label=auth_session_age_label,
+        autonomous_since_at=autonomous_since,
+        autonomous_duration_label=_duration_label_from_ts(autonomous_since, now=current),
+        authentication_state_changed_at=auth_state_changed,
+        authentication_state_age_label=_duration_label_from_ts(auth_state_changed, now=current),
         last_update_at=last_update,
         last_update_label=_age_label(last_update, now=current),
         stale=status in {STATUS_STALE, STATUS_RUNTIME_OFFLINE, STATUS_NEVER_REPORTED},
@@ -550,7 +591,9 @@ def _compact_access_rows(
                 _age_label(p.last_verified_at, now=now) if p.last_verified_at else "never",
             )
         )
-    rows.append(("Session age", p.session_age_label))
+    rows.append(("Runtime uptime", p.runtime_uptime_label))
+    rows.append(("Autonomous duration", p.autonomous_duration_label))
+    rows.append(("Auth session age", p.authenticated_session_age_label))
     if capabilities.recovery:
         rows.append(("Recovery state", p.recovery_state))
         rows.append(

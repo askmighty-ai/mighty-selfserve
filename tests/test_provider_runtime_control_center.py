@@ -103,17 +103,21 @@ def test_access_state_updates_from_verification():
     assert updated.access_health == ACCESS_HEALTH_HEALTHY
     assert updated.ready_for_extraction is True
     assert updated.ready_for_connector is True
-    assert updated.session_started_at == "2026-07-19T12:00:00+00:00"
+    assert updated.authenticated_session_started_at == "2026-07-19T12:00:00+00:00"
+    assert updated.authentication_state_changed_at == "2026-07-19T12:00:00+00:00"
     assert updated.last_verification_result == "SIGNED_IN"
 
 
-def test_access_state_clears_session_on_sign_out():
+def test_access_state_preserves_session_anchor_on_transient_sign_out():
     state = AccessState(
         provider="amex",
         runtime_status=RUNTIME_STATUS_RUNNING,
         browser_status=BROWSER_STATUS_HEALTHY,
         authentication_state="SIGNED_IN",
-        session_started_at="2026-07-19T10:00:00+00:00",
+        authenticated_session_started_at="2026-07-19T10:00:00+00:00",
+        autonomous_since_at="2026-07-19T10:00:00+00:00",
+        runtime_started_at="2026-07-19T09:00:00+00:00",
+        authentication_state_changed_at="2026-07-19T10:00:00+00:00",
         overview_ok=True,
     )
     updated = apply_verification_to_access_state(
@@ -123,7 +127,11 @@ def test_access_state_clears_session_on_sign_out():
         overview_ok=False,
     )
     assert updated.authentication_state == "SIGNED_OUT"
-    assert updated.session_started_at is None
+    # Autonomous recovery may still restore continuity — do not clear anchors here.
+    assert updated.authenticated_session_started_at == "2026-07-19T10:00:00+00:00"
+    assert updated.autonomous_since_at == "2026-07-19T10:00:00+00:00"
+    assert updated.runtime_started_at == "2026-07-19T09:00:00+00:00"
+    assert updated.authentication_state_changed_at == "2026-07-19T12:00:00+00:00"
     assert updated.ready_for_extraction is False
     assert updated.access_health == ACCESS_HEALTH_DEGRADED
 
@@ -170,7 +178,10 @@ def test_render_control_center_includes_required_fields():
         scheduler_status=SCHEDULER_STATUS_RUNNING,
         authentication_state="SIGNED_IN",
         access_health=ACCESS_HEALTH_HEALTHY,
-        session_started_at="2026-07-19T13:00:00+00:00",
+        runtime_started_at="2026-07-19T12:55:00+00:00",
+        authenticated_session_started_at="2026-07-19T13:00:00+00:00",
+        autonomous_since_at="2026-07-19T13:00:00+00:00",
+        authentication_state_changed_at="2026-07-19T14:30:00+00:00",
         last_verification_at="2026-07-19T14:59:00+00:00",
         last_verification_result="SIGNED_IN",
         last_keepalive_at="2026-07-19T14:55:00+00:00",
@@ -189,12 +200,15 @@ def test_render_control_center_includes_required_fields():
     text = render_control_center(state, now=now)
     assert "Mighty Access Control Center" in text
     assert "Runtime ............ running" in text
+    assert "Runtime uptime ..... 2h 5m" in text
     assert "Browser ............ healthy" in text
     assert "Recovery Planner ... idle" in text
     assert "Scheduler .......... running" in text
     assert "Authentication ..... SIGNED_IN" in text
     assert "Access health ...... healthy" in text
-    assert "Session age ........" in text
+    assert "Auth session age ... 2h 0m" in text
+    assert "Autonomous duration  2h 0m" in text
+    assert "Auth state age ..... 30m 0s" in text
     assert "Last verification .." in text
     assert "Last keepalive ....." in text
     assert "Current strategy ... SESSION_API" in text
@@ -406,7 +420,12 @@ def test_transient_signed_out_recovered_by_confirm_verify():
         keepalive_interval_seconds=9999,
         request_json_fn=http,
         classify_browser_fn=lambda _port: {"state": "HEALTHY"},
-        state=_signed_in_state(),
+        state=_signed_in_state(
+            runtime_started_at="2026-07-19T06:00:00+00:00",
+            authenticated_session_started_at="2026-07-19T06:05:00+00:00",
+            autonomous_since_at="2026-07-19T06:05:00+00:00",
+            authentication_state_changed_at="2026-07-19T06:05:00+00:00",
+        ),
     )
     state = supervisor.run_once()
     assert state.authentication_state == "SIGNED_IN"
@@ -418,6 +437,10 @@ def test_transient_signed_out_recovered_by_confirm_verify():
     assert state.last_recovery_result == "succeeded"
     assert tracker["session_ensure"] == 0
     assert tracker["surface_ensure"] >= 1  # overview refresh after success
+    # confirm_verify must not reset runtime/autonomous/session clocks.
+    assert state.runtime_started_at == "2026-07-19T06:00:00+00:00"
+    assert state.authenticated_session_started_at == "2026-07-19T06:05:00+00:00"
+    assert state.autonomous_since_at == "2026-07-19T06:05:00+00:00"
     types = [e.event_type for e in supervisor.history.list_events()]
     assert EVENT_RECOVERY_EPISODE_STARTED in types
     assert EVENT_RECOVERY_CONFIRM_VERIFY_STARTED in types
@@ -1356,17 +1379,253 @@ def test_control_center_ctrl_c_during_console(tmp_path: Path):
     assert payload["runtime_stopped_by_command"] is True
 
 
-def test_session_age_formatting_in_state():
+def test_duration_formatting_in_state():
     started = datetime.now(timezone.utc) - timedelta(hours=2, minutes=15)
     state = AccessState(
         provider="amex",
-        session_started_at=started.isoformat(),
+        authentication_state="SIGNED_IN",
+        runtime_started_at=started.isoformat(),
+        authenticated_session_started_at=started.isoformat(),
+        autonomous_since_at=started.isoformat(),
+        authentication_state_changed_at=started.isoformat(),
     )
-    age = state.session_age_seconds()
-    assert age is not None
-    assert age >= 2 * 3600
+    assert state.runtime_uptime_seconds() is not None
+    assert state.runtime_uptime_seconds() >= 2 * 3600
+    assert state.authenticated_session_age_seconds() >= 2 * 3600
+    assert state.autonomous_duration_seconds() >= 2 * 3600
     text = render_control_center(state)
     assert "2h" in text
+
+
+def test_six_hour_runtime_survives_recent_autonomous_recovery():
+    """Regression: long Control Center run must not show ~22m after confirm_verify."""
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+    runtime_start = now - timedelta(hours=6)
+    autonomous_start = now - timedelta(hours=5, minutes=55)
+    recent_auth_transition = now - timedelta(minutes=22, seconds=38)
+    http, _tracker = _auth_scripted_http(["SIGNED_OUT", "SIGNED_IN"])
+    clocks = {"t": recent_auth_transition.isoformat()}
+
+    def _now() -> str:
+        return clocks["t"]
+
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        now_fn=_now,
+        state=_signed_in_state(
+            runtime_started_at=runtime_start.isoformat(),
+            authenticated_session_started_at=autonomous_start.isoformat(),
+            autonomous_since_at=autonomous_start.isoformat(),
+            authentication_state_changed_at=autonomous_start.isoformat(),
+        ),
+    )
+    state = supervisor.run_once()
+    assert state.authentication_state == "SIGNED_IN"
+    assert state.last_recovery_action == "confirm_verify"
+    assert state.runtime_started_at == runtime_start.isoformat()
+    assert state.authenticated_session_started_at == autonomous_start.isoformat()
+    assert state.autonomous_since_at == autonomous_start.isoformat()
+    # Auth-state age reflects the recent SIGNED_IN re-entry, not runtime age.
+    assert state.authentication_state_changed_at == recent_auth_transition.isoformat()
+
+    text = render_control_center(state, now=now)
+    assert "Runtime uptime ..... 6h 0m" in text
+    assert "Autonomous duration  5h 55m" in text
+    assert "Auth session age ... 5h 55m" in text
+    assert "Auth state age ..... 22m 38s" in text
+    assert "Session age" not in text
+
+
+def test_confirm_verify_without_user_does_not_reset_autonomous_duration():
+    http, _tracker = _auth_scripted_http(["SIGNED_OUT", "SIGNED_IN"])
+    anchor = "2026-07-20T06:00:00+00:00"
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        now_fn=lambda: "2026-07-20T12:00:00+00:00",
+        state=_signed_in_state(
+            runtime_started_at=anchor,
+            authenticated_session_started_at=anchor,
+            autonomous_since_at=anchor,
+            authentication_state_changed_at=anchor,
+            user_interruption_count=0,
+            initial_authentication_prompt_count=0,
+        ),
+    )
+    state = supervisor.run_once()
+    assert state.user_interruption_count == 0
+    assert state.autonomous_since_at == anchor
+    assert state.runtime_started_at == anchor
+    assert state.authenticated_session_started_at == anchor
+
+
+def test_mid_run_user_login_resets_autonomous_and_auth_session_clocks():
+    observed = {"n": 0}
+
+    def _now() -> str:
+        observed["n"] += 1
+        return f"2026-07-20T12:00:{observed['n']:02d}+00:00"
+
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=_supervisor_http_factory(
+            {
+                "/health": {"ok": True},
+                "/providers/amex/verify": {
+                    "ok": True,
+                    "result": {"authentication_state": "SIGNED_IN"},
+                },
+                "/providers/amex/surface/ensure": {"ok": True, "surface": "overview"},
+            }
+        ),
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        now_fn=_now,
+        state=_signed_in_state(
+            runtime_started_at="2026-07-20T06:00:00+00:00",
+            authenticated_session_started_at="2026-07-20T06:05:00+00:00",
+            autonomous_since_at="2026-07-20T06:05:00+00:00",
+            authentication_state_changed_at="2026-07-20T06:05:00+00:00",
+            user_interruption_count=1,
+            initial_authentication_prompt_count=1,
+        ),
+    )
+    supervisor.set_login_fn(
+        lambda: {
+            "ok": True,
+            "final_authentication_state": "SIGNED_IN",
+            "authentication_attempt_count": 1,
+        }
+    )
+    state = supervisor.login_recover_now()
+    assert state.authentication_state == "SIGNED_IN"
+    assert state.runtime_started_at == "2026-07-20T06:00:00+00:00"
+    assert state.authenticated_session_started_at is not None
+    assert state.authenticated_session_started_at.startswith("2026-07-20T12:00:")
+    assert state.autonomous_since_at == state.authenticated_session_started_at
+    assert state.last_user_intervention_at == state.authenticated_session_started_at
+    assert state.user_interruption_count == 2
+    assert EVENT_USER_INTERRUPTION in [e.event_type for e in supervisor.history.list_events()]
+
+
+def test_authentication_state_transition_updates_only_auth_state_age():
+    state = AccessState(
+        provider="amex",
+        runtime_status=RUNTIME_STATUS_RUNNING,
+        browser_status=BROWSER_STATUS_HEALTHY,
+        authentication_state="SIGNED_IN",
+        runtime_started_at="2026-07-20T06:00:00+00:00",
+        authenticated_session_started_at="2026-07-20T06:05:00+00:00",
+        autonomous_since_at="2026-07-20T06:05:00+00:00",
+        authentication_state_changed_at="2026-07-20T06:05:00+00:00",
+        overview_ok=True,
+    )
+    signed_out = apply_verification_to_access_state(
+        state,
+        authentication_state="LOGIN_UNKNOWN",
+        observed_at="2026-07-20T11:00:00+00:00",
+        overview_ok=False,
+    )
+    assert signed_out.authentication_state_changed_at == "2026-07-20T11:00:00+00:00"
+    assert signed_out.runtime_started_at == "2026-07-20T06:00:00+00:00"
+    assert signed_out.autonomous_since_at == "2026-07-20T06:05:00+00:00"
+    assert signed_out.authenticated_session_started_at == "2026-07-20T06:05:00+00:00"
+    restored = apply_verification_to_access_state(
+        signed_out,
+        authentication_state="SIGNED_IN",
+        observed_at="2026-07-20T11:01:00+00:00",
+        overview_ok=True,
+        recovery_planner_status=RECOVERY_STATUS_IDLE,
+    )
+    assert restored.authentication_state_changed_at == "2026-07-20T11:01:00+00:00"
+    assert restored.authenticated_session_started_at == "2026-07-20T06:05:00+00:00"
+    assert restored.autonomous_since_at == "2026-07-20T06:05:00+00:00"
+
+
+def test_awaiting_user_clears_authenticated_session_anchor():
+    http, _tracker = _auth_scripted_http(
+        ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT"]
+    )
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        now_fn=lambda: "2026-07-20T12:00:00+00:00",
+        state=_signed_in_state(
+            runtime_started_at="2026-07-20T06:00:00+00:00",
+            authenticated_session_started_at="2026-07-20T06:05:00+00:00",
+            autonomous_since_at="2026-07-20T06:05:00+00:00",
+            authentication_state_changed_at="2026-07-20T06:05:00+00:00",
+        ),
+    )
+    state = supervisor.run_once()
+    assert state.recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
+    assert state.authenticated_session_started_at is None
+    assert state.runtime_started_at == "2026-07-20T06:00:00+00:00"
+    assert state.autonomous_since_at == "2026-07-20T06:05:00+00:00"
+    assert state.authenticated_session_age_seconds(
+        now=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+    ) is None
+
+
+def test_runtime_restart_resets_runtime_uptime_only_via_new_process_anchor():
+    """A new Control Center process gets a fresh runtime_started_at."""
+    previous = AccessState(
+        provider="amex",
+        authentication_state="SIGNED_IN",
+        runtime_started_at="2026-07-20T06:00:00+00:00",
+        authenticated_session_started_at="2026-07-20T06:05:00+00:00",
+        autonomous_since_at="2026-07-20T06:05:00+00:00",
+        authentication_state_changed_at="2026-07-20T06:05:00+00:00",
+    )
+    restarted_at = "2026-07-20T12:00:00+00:00"
+    restarted = AccessState(
+        provider="amex",
+        authentication_state="SIGNED_IN",
+        runtime_started_at=restarted_at,
+        authenticated_session_started_at=restarted_at,
+        autonomous_since_at=restarted_at,
+        authentication_state_changed_at=restarted_at,
+    )
+    now = datetime(2026, 7, 20, 12, 30, tzinfo=timezone.utc)
+    assert previous.runtime_uptime_seconds(now=now) >= 6 * 3600
+    assert restarted.runtime_uptime_seconds(now=now) == 30 * 60
+    assert restarted.runtime_started_at != previous.runtime_started_at
+
+
+def test_initial_authentication_prompt_sets_autonomous_boundary_separately():
+    """Initial auth is reported separately; autonomous duration starts after it."""
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+    state = AccessState(
+        provider="amex",
+        runtime_status=RUNTIME_STATUS_RUNNING,
+        browser_status=BROWSER_STATUS_HEALTHY,
+        authentication_state="SIGNED_IN",
+        access_health=ACCESS_HEALTH_HEALTHY,
+        runtime_started_at=(now - timedelta(minutes=10)).isoformat(),
+        authenticated_session_started_at=(now - timedelta(minutes=2)).isoformat(),
+        autonomous_since_at=(now - timedelta(minutes=2)).isoformat(),
+        authentication_state_changed_at=(now - timedelta(minutes=2)).isoformat(),
+        last_user_intervention_at=(now - timedelta(minutes=2)).isoformat(),
+        initial_authentication_prompt_count=2,
+        user_interruption_count=2,
+        overview_ok=True,
+        ready_for_extraction=True,
+        ready_for_connector=True,
+    )
+    text = render_control_center(state, now=now)
+    assert "Runtime uptime ..... 10m 0s" in text
+    assert "Autonomous duration  2m 0s" in text
+    assert "Auth session age ... 2m 0s" in text
+    assert "User interruptions . 2" in text
+    # Runtime uptime (process) remains longer than autonomous duration (post-auth).
+    assert state.runtime_uptime_seconds(now=now) > state.autonomous_duration_seconds(now=now)
 
 
 def test_format_cdp_port_conflict_error_message():

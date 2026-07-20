@@ -39,7 +39,10 @@ def _healthy_state(**overrides: Any) -> AccessState:
         recovery_planner_status=RECOVERY_STATUS_IDLE,
         authentication_state="SIGNED_IN",
         access_health=ACCESS_HEALTH_HEALTHY,
-        session_started_at="2026-07-20T10:00:00+00:00",
+        runtime_started_at="2026-07-20T09:55:00+00:00",
+        authenticated_session_started_at="2026-07-20T10:00:00+00:00",
+        autonomous_since_at="2026-07-20T10:00:00+00:00",
+        authentication_state_changed_at="2026-07-20T10:00:00+00:00",
         last_verification_at="2026-07-20T11:00:00+00:00",
         last_keepalive_at="2026-07-20T11:05:00+00:00",
         recovery_attempt_count=1,
@@ -81,6 +84,11 @@ def test_serialize_access_state_includes_required_fields():
     assert payload["ready_for_connector"] is True
     assert payload["initial_authentication_prompt_count"] == 1
     assert payload["mid_run_user_intervention_count"] == 1
+    assert payload["runtime_started_at"] == "2026-07-20T09:55:00+00:00"
+    assert payload["authenticated_session_started_at"] == "2026-07-20T10:00:00+00:00"
+    assert payload["autonomous_since_at"] == "2026-07-20T10:00:00+00:00"
+    assert payload["authentication_state_changed_at"] == "2026-07-20T10:00:00+00:00"
+    assert "session_started_at" not in payload
     assert payload["runtime_instance_id"] == "inst-1"
     assert payload["updated_at"]
     assert "cookie" not in payload

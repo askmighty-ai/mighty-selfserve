@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from mighty.provider_runtime_control_center import AccessState, iso_now
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_HEARTBEAT_SECONDS = 60.0
 DEFAULT_BASE_URL = "https://mighty-selfserve-production.up.railway.app"
 DEFAULT_MAX_BACKOFF_SECONDS = 60.0
@@ -45,6 +45,8 @@ MATERIAL_FIELDS: tuple[str, ...] = (
     "initial_authentication_prompt_count",
     "mid_run_user_intervention_count",
     "runtime_instance_id",
+    "autonomous_since_at",
+    "last_user_intervention_at",
 )
 
 # Names that must never appear in a published payload.
@@ -115,7 +117,11 @@ def serialize_access_state(
         "last_recovery_action": state.last_recovery_action,
         "last_recovery_result": state.last_recovery_result,
         "escalation_reason": state.escalation_reason,
-        "session_started_at": state.session_started_at,
+        "runtime_started_at": state.runtime_started_at,
+        "authenticated_session_started_at": state.authenticated_session_started_at,
+        "autonomous_since_at": state.autonomous_since_at,
+        "authentication_state_changed_at": state.authentication_state_changed_at,
+        "last_user_intervention_at": state.last_user_intervention_at,
         "last_verified_at": state.last_verification_at,
         "last_verification_result": state.last_verification_result,
         "last_keepalive_at": state.last_keepalive_at,

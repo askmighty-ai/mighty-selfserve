@@ -543,7 +543,10 @@ class ProviderOperationsDetails:
     """Expanded Provider Operations panel model (details on request)."""
 
     provider: str
-    autonomous_uptime_label: str
+    runtime_uptime_label: str
+    autonomous_duration_label: str
+    authenticated_session_age_label: str
+    authentication_state_age_label: str
     last_user_intervention_label: str
     last_user_intervention_at: str | None
     snapshot_freshness_label: str
@@ -575,7 +578,10 @@ class ProviderOperationsDetails:
                 queue_items.append(dict(item))
         return {
             "provider": self.provider,
-            "autonomous_uptime_label": self.autonomous_uptime_label,
+            "runtime_uptime_label": self.runtime_uptime_label,
+            "autonomous_duration_label": self.autonomous_duration_label,
+            "authenticated_session_age_label": self.authenticated_session_age_label,
+            "authentication_state_age_label": self.authentication_state_age_label,
             "last_user_intervention_label": self.last_user_intervention_label,
             "last_user_intervention_at": self.last_user_intervention_at,
             "snapshot_freshness_label": self.snapshot_freshness_label,
@@ -657,10 +663,19 @@ def build_provider_operations_details(
     work_items, evaluated_at, gaps, meets_goal = _orchestration_for_payload(
         payload, provider=provider, now=current
     )
+    def _duration_from(ts: Any) -> str:
+        parsed = parse_iso(str(ts)) if ts else None
+        if parsed is None:
+            return "—"
+        return _format_age_seconds(max(0.0, (current - parsed).total_seconds()))
+
     if payload is None:
         return ProviderOperationsDetails(
             provider=provider,
-            autonomous_uptime_label="—",
+            runtime_uptime_label="—",
+            autonomous_duration_label="—",
+            authenticated_session_age_label="—",
+            authentication_state_age_label="—",
             last_user_intervention_label="never",
             last_user_intervention_at=None,
             snapshot_freshness_label="never",
@@ -686,23 +701,27 @@ def build_provider_operations_details(
 
     auth = str(payload.get("authentication_state") or "")
     recovery = str(payload.get("recovery_state") or "")
-    session_started = payload.get("session_started_at")
-    started_ts = parse_iso(str(session_started)) if session_started else None
-    autonomous = "—"
-    if (
-        auth == "SIGNED_IN"
-        and recovery != RECOVERY_STATUS_AWAITING_USER
-        and started_ts is not None
-    ):
-        autonomous = _format_age_seconds(
-            max(0.0, (current - started_ts).total_seconds())
-        )
+    runtime_uptime = _duration_from(payload.get("runtime_started_at"))
+    autonomous = _duration_from(payload.get("autonomous_since_at"))
+    if recovery == RECOVERY_STATUS_AWAITING_USER:
+        # Awaiting real user intervention — autonomous stretch is paused/ended.
+        autonomous = "—"
+    auth_session_age = (
+        _duration_from(payload.get("authenticated_session_started_at"))
+        if auth == "SIGNED_IN"
+        else "—"
+    )
+    auth_state_age = _duration_from(payload.get("authentication_state_changed_at"))
 
     intervention_at: str | None = None
-    for event in events:
-        if event.event_type == EVENT_AWAITING_USER:
-            intervention_at = event.observed_at
-            break
+    payload_intervention = payload.get("last_user_intervention_at")
+    if payload_intervention:
+        intervention_at = str(payload_intervention)
+    else:
+        for event in events:
+            if event.event_type == EVENT_AWAITING_USER:
+                intervention_at = event.observed_at
+                break
     mid_run = int(payload.get("mid_run_user_intervention_count") or 0)
     if intervention_at:
         intervention_label = _age_label(intervention_at, now=current)
@@ -717,7 +736,10 @@ def build_provider_operations_details(
 
     return ProviderOperationsDetails(
         provider=str(payload.get("provider") or provider),
-        autonomous_uptime_label=autonomous,
+        runtime_uptime_label=runtime_uptime,
+        autonomous_duration_label=autonomous,
+        authenticated_session_age_label=auth_session_age,
+        authentication_state_age_label=auth_state_age,
         last_user_intervention_label=intervention_label,
         last_user_intervention_at=intervention_at,
         snapshot_freshness_label=_age_label(updated_at, now=current),
@@ -839,7 +861,10 @@ def render_provider_operations_details_html(
         return bool(getattr(caps, name, False))
 
     metric_rows: list[tuple[str, str]] = [
-        ("Autonomous uptime", d.autonomous_uptime_label),
+        ("Runtime uptime", d.runtime_uptime_label),
+        ("Autonomous duration", d.autonomous_duration_label),
+        ("Auth session age", d.authenticated_session_age_label),
+        ("Auth state age", d.authentication_state_age_label),
         ("Last user intervention", d.last_user_intervention_label),
     ]
     if _cap("snapshots"):

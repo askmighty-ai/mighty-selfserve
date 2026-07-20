@@ -7103,7 +7103,9 @@ function _applyRuntimeAccessCard(access, card) {
     'Ready for extraction': _yesNo(!!access.ready_for_extraction),
     'Ready for connector': _yesNo(!!access.ready_for_connector),
     'User action required': _yesNo(!!access.user_action_required),
-    'Session age': access.session_age_label,
+    'Runtime uptime': access.runtime_uptime_label,
+    'Autonomous duration': access.autonomous_duration_label,
+    'Auth session age': access.authenticated_session_age_label,
     'Last update': access.last_update_label,
   };
   card.querySelectorAll('.dash-access-row').forEach(function(row) {
@@ -7157,7 +7159,10 @@ function _applyRuntimeAccessOperations(ops, card) {
   var root = card.querySelector('[data-access-ops="1"]');
   if (!root) return;
   var map = {
-    'Autonomous uptime': ops.autonomous_uptime_label,
+    'Runtime uptime': ops.runtime_uptime_label,
+    'Autonomous duration': ops.autonomous_duration_label,
+    'Auth session age': ops.authenticated_session_age_label,
+    'Auth state age': ops.authentication_state_age_label,
     'Last user intervention': ops.last_user_intervention_label,
     'Snapshot freshness': ops.snapshot_freshness_label,
     'Last verification': (ops.verification_last_label || 'never')

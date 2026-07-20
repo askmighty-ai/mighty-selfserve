@@ -214,7 +214,19 @@ class EventHistory:
 
 @dataclass
 class AccessState:
-    """Provider-independent access snapshot. UI reads only this object."""
+    """Provider-independent access snapshot. UI reads only this object.
+
+    Duration clocks (distinct; do not conflate):
+    - ``runtime_started_at``: Control Center / Provider Runtime process start.
+    - ``authenticated_session_started_at``: current provider auth session start,
+      only when continuity is known (preserved across autonomous recovery;
+      reset on mid-run interactive login; cleared when escalating to user).
+    - ``autonomous_since_at``: last real user intervention boundary (initial
+      auth completion or mid-run login). Autonomous verify/recovery must not
+      reset this.
+    - ``authentication_state_changed_at``: latest transition into the current
+      ``authentication_state`` value.
+    """
 
     provider: str = "amex"
     runtime_status: str = RUNTIME_STATUS_STOPPED
@@ -223,7 +235,11 @@ class AccessState:
     scheduler_status: str = SCHEDULER_STATUS_STOPPED
     authentication_state: str = "LOGIN_UNKNOWN"
     access_health: str = ACCESS_HEALTH_UNAVAILABLE
-    session_started_at: str | None = None
+    runtime_started_at: str | None = None
+    authenticated_session_started_at: str | None = None
+    autonomous_since_at: str | None = None
+    authentication_state_changed_at: str | None = None
+    last_user_intervention_at: str | None = None
     last_verification_at: str | None = None
     last_verification_result: str | None = None
     last_keepalive_at: str | None = None
@@ -250,12 +266,27 @@ class AccessState:
         """Deprecated alias for attempt count (kept for older callers/tests)."""
         return int(self.recovery_attempt_count)
 
-    def session_age_seconds(self, *, now: datetime | None = None) -> float | None:
-        started = parse_iso(self.session_started_at)
+    def _age_seconds(self, iso_timestamp: str | None, *, now: datetime | None = None) -> float | None:
+        started = parse_iso(iso_timestamp)
         if started is None:
             return None
         current = now or datetime.now(timezone.utc)
         return max(0.0, (current - started).total_seconds())
+
+    def runtime_uptime_seconds(self, *, now: datetime | None = None) -> float | None:
+        return self._age_seconds(self.runtime_started_at, now=now)
+
+    def authenticated_session_age_seconds(self, *, now: datetime | None = None) -> float | None:
+        """Age of the current authenticated provider session when measurable."""
+        if self.authentication_state != "SIGNED_IN":
+            return None
+        return self._age_seconds(self.authenticated_session_started_at, now=now)
+
+    def autonomous_duration_seconds(self, *, now: datetime | None = None) -> float | None:
+        return self._age_seconds(self.autonomous_since_at, now=now)
+
+    def authentication_state_age_seconds(self, *, now: datetime | None = None) -> float | None:
+        return self._age_seconds(self.authentication_state_changed_at, now=now)
 
     def snapshot(self, history: EventHistory | None = None, *, recent_limit: int = 20) -> AccessState:
         events = tuple(history.list_events(recent_limit)) if history is not None else self.recent_events
@@ -270,8 +301,15 @@ class AccessState:
             "scheduler_status": self.scheduler_status,
             "authentication_state": self.authentication_state,
             "access_health": self.access_health,
-            "session_started_at": self.session_started_at,
-            "session_age_seconds": self.session_age_seconds(),
+            "runtime_started_at": self.runtime_started_at,
+            "runtime_uptime_seconds": self.runtime_uptime_seconds(),
+            "authenticated_session_started_at": self.authenticated_session_started_at,
+            "authenticated_session_age_seconds": self.authenticated_session_age_seconds(),
+            "autonomous_since_at": self.autonomous_since_at,
+            "autonomous_duration_seconds": self.autonomous_duration_seconds(),
+            "authentication_state_changed_at": self.authentication_state_changed_at,
+            "authentication_state_age_seconds": self.authentication_state_age_seconds(),
+            "last_user_intervention_at": self.last_user_intervention_at,
             "last_verification_at": self.last_verification_at,
             "last_verification_result": self.last_verification_result,
             "last_keepalive_at": self.last_keepalive_at,
@@ -329,7 +367,13 @@ def apply_verification_to_access_state(
     browser_status: str | None = None,
     recovery_planner_status: str | None = None,
 ) -> AccessState:
-    """Update AccessState from a verification result (provider-independent)."""
+    """Update AccessState from a verification result (provider-independent).
+
+    Autonomous verification must not reset ``runtime_started_at`` or
+    ``autonomous_since_at``. Transient auth loss during recovery must not
+    clear ``authenticated_session_started_at`` (continuity is only abandoned
+    when escalating to a real user intervention boundary).
+    """
     auth = str(authentication_state or "LOGIN_UNKNOWN")
     observed = observed_at or iso_now()
     next_overview = state.overview_ok if overview_ok is None else bool(overview_ok)
@@ -337,13 +381,16 @@ def apply_verification_to_access_state(
     next_browser = browser_status or state.browser_status
     next_recovery = recovery_planner_status or state.recovery_planner_status
 
-    session_started = state.session_started_at
-    if auth == "SIGNED_IN" and not session_started:
-        session_started = observed
-    if auth != "SIGNED_IN":
-        # Session continuity broken — clear age anchor until re-authenticated.
-        if state.authentication_state == "SIGNED_IN":
-            session_started = None
+    auth_state_changed_at = state.authentication_state_changed_at
+    if auth != state.authentication_state:
+        auth_state_changed_at = observed
+
+    # Preserve authenticated-session anchor across autonomous recovery.
+    # Set only when entering SIGNED_IN without an existing accurate anchor
+    # (e.g. first SIGNED_IN after startup, or after awaiting-user cleared it).
+    authenticated_session = state.authenticated_session_started_at
+    if auth == "SIGNED_IN" and not authenticated_session:
+        authenticated_session = observed
 
     ready = (
         next_runtime == RUNTIME_STATUS_RUNNING
@@ -370,7 +417,8 @@ def apply_verification_to_access_state(
         runtime_status=next_runtime,
         browser_status=next_browser,
         recovery_planner_status=next_recovery,
-        session_started_at=session_started,
+        authenticated_session_started_at=authenticated_session,
+        authentication_state_changed_at=auth_state_changed_at,
         ready_for_extraction=ready,
         ready_for_connector=ready,
         access_health=health,
@@ -407,7 +455,10 @@ def render_control_center(
 ) -> str:
     """Render AccessState as a fixed console layout (no side effects)."""
     current = now or datetime.now(timezone.utc)
-    age = format_age(state.session_age_seconds(now=current))
+    runtime_uptime = format_age(state.runtime_uptime_seconds(now=current))
+    auth_session_age = format_age(state.authenticated_session_age_seconds(now=current))
+    autonomous_duration = format_age(state.autonomous_duration_seconds(now=current))
+    auth_state_age = format_age(state.authentication_state_age_seconds(now=current))
     lines: list[str] = []
     if include_header:
         lines.extend(
@@ -422,6 +473,7 @@ def render_control_center(
         [
             "SYSTEM",
             f"  Runtime ............ {state.runtime_status}",
+            f"  Runtime uptime ..... {runtime_uptime}",
             f"  Browser ............ {state.browser_status}",
             f"  Recovery Planner ... {state.recovery_planner_status}",
             f"  Scheduler .......... {state.scheduler_status}",
@@ -429,7 +481,9 @@ def render_control_center(
             f"PROVIDER  {state.provider}",
             f"  Authentication ..... {state.authentication_state}",
             f"  Access health ...... {state.access_health}",
-            f"  Session age ........ {age}",
+            f"  Auth session age ... {auth_session_age}",
+            f"  Autonomous duration  {autonomous_duration}",
+            f"  Auth state age ..... {auth_state_age}",
             (
                 f"  Last verification .. {format_relative(state.last_verification_at, now=current)}"
                 f"  ({state.last_verification_result or '—'})"
@@ -1346,10 +1400,12 @@ class AccessSupervisor:
         actions_attempted: list[str],
     ) -> None:
         auth = self.state.authentication_state
+        # Hard re-auth boundary: authenticated-session continuity is no longer accurate.
         self._set_recovery_fields(
             recovery_planner_status=RECOVERY_STATUS_AWAITING_USER,
             access_health=ACCESS_HEALTH_RECOVERING,
             escalation_reason=reason,
+            authenticated_session_started_at=None,
             recovery_episode_state=(
                 RECOVERY_EPISODE_EXHAUSTED if actions_attempted else RECOVERY_EPISODE_IDLE
             ),
@@ -1509,21 +1565,34 @@ class AccessSupervisor:
             return
         ok = bool(result.get("ok"))
         auth = str(result.get("final_authentication_state") or ("SIGNED_IN" if ok else "LOGIN_UNKNOWN"))
+        observed = self._now()
         with self._lock:
             self.state = apply_verification_to_access_state(
                 self.state,
                 authentication_state=auth,
-                observed_at=self._now(),
+                observed_at=observed,
                 overview_ok=ok,
                 recovery_planner_status=RECOVERY_STATUS_IDLE if ok else RECOVERY_STATUS_AWAITING_USER,
             )
-            self.state = replace(
-                self.state,
-                last_recovery_action="interactive_login",
-                last_recovery_result="succeeded" if ok else "failed",
-                escalation_reason=None if ok else "interactive_login_required",
-                recovery_episode_state=RECOVERY_EPISODE_IDLE,
-            )
+            # Mid-run user login establishes a new auth session and autonomous boundary.
+            intervention_fields: dict[str, Any] = {
+                "last_recovery_action": "interactive_login",
+                "last_recovery_result": "succeeded" if ok else "failed",
+                "escalation_reason": None if ok else "interactive_login_required",
+                "recovery_episode_state": RECOVERY_EPISODE_IDLE,
+                "last_user_intervention_at": observed,
+            }
+            if ok:
+                intervention_fields.update(
+                    {
+                        "authenticated_session_started_at": observed,
+                        "autonomous_since_at": observed,
+                        "authentication_state_changed_at": observed,
+                    }
+                )
+            else:
+                intervention_fields["authenticated_session_started_at"] = None
+            self.state = replace(self.state, **intervention_fields)
         if ok:
             self._auth_seen_signed_in = True
             self._mark_recovery_success()
@@ -1771,6 +1840,8 @@ def run_control_center(
     emit = print_fn or print
     http = request_json_fn or request_json
     sleep = sleep_fn or time.sleep
+    # Process start clock — never reset by verify/recovery/user login.
+    runtime_started_at = iso_now()
     runtime_root = Path(root or DEFAULT_ROOT).expanduser().resolve()
     profile_dir = runtime_root / "amex"
     diagnostics_dir = runtime_root / "diagnostics"
@@ -1803,6 +1874,7 @@ def run_control_center(
         current_strategy=keepalive_strategy,
         runtime_status=RUNTIME_STATUS_STARTING,
         scheduler_status=SCHEDULER_STATUS_STOPPED,
+        runtime_started_at=runtime_started_at,
     )
     browser_info: dict[str, Any] = {}
 
@@ -2027,17 +2099,27 @@ def run_control_center(
         )
 
     auth = str(session.get("final_authentication_state") or "SIGNED_IN")
-    started_at = iso_now()
+    autonomous_started_at = iso_now()
     access_state = apply_verification_to_access_state(
         access_state,
         authentication_state=auth,
-        observed_at=started_at,
+        observed_at=autonomous_started_at,
         overview_ok=True,
         runtime_status=RUNTIME_STATUS_RUNNING,
         browser_status=BROWSER_STATUS_HEALTHY,
         recovery_planner_status=RECOVERY_STATUS_IDLE,
     )
-    access_state = replace(access_state, session_started_at=started_at)
+    # Distinct duration anchors after initial auth:
+    # - runtime: process start (may predate auth)
+    # - authenticated session / autonomous: start of autonomous operation
+    # - auth-state age: transition into the post-auth authentication_state
+    access_state = replace(
+        access_state,
+        runtime_started_at=runtime_started_at,
+        authenticated_session_started_at=autonomous_started_at,
+        autonomous_since_at=autonomous_started_at,
+        authentication_state_changed_at=autonomous_started_at,
+    )
     history.append(EVENT_CONTROL_CENTER_STARTED, "Access Control Center started", details={"provider": provider})
     history.append(EVENT_VERIFICATION_SUCCESS, auth, details={"source": "initial_auth"})
     if session.get("authentication_attempt_count"):
@@ -2051,6 +2133,7 @@ def run_control_center(
             access_state,
             user_interruption_count=initial_prompts,
             initial_authentication_prompt_count=initial_prompts,
+            last_user_intervention_at=autonomous_started_at,
         )
 
     classify = classify_browser_fn or (

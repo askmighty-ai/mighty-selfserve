@@ -1010,9 +1010,25 @@ AccessStatePublisher --X-Mighty-Key--> Railway POST /api/runtime/access-state
 
 | Section | Fields |
 | --- | --- |
-| SYSTEM | Runtime, Browser, Recovery Planner, Scheduler |
-| PROVIDER | Authentication, Access health, Session age, Last verification, Last keepalive, Current strategy, Recoveries, User interruptions, Ready for extraction, Ready for connector |
+| SYSTEM | Runtime, Runtime uptime, Browser, Recovery Planner, Scheduler |
+| PROVIDER | Authentication, Access health, Auth session age, Autonomous duration, Auth state age, Last verification, Last keepalive, Current strategy, Recoveries, User interruptions, Ready for extraction, Ready for connector |
 | RECENT EVENTS | Rolling sanitized history |
+
+### Duration clocks
+
+These are distinct timestamps on `AccessState` (published schema v2). Do not
+conflate them:
+
+| Clock | Field | Meaning |
+| --- | --- | --- |
+| Runtime uptime | `runtime_started_at` | Time since the Control Center / Provider Runtime process started. Never reset by verify, keepalive, or autonomous recovery. |
+| Authenticated-session age | `authenticated_session_started_at` | Time since the current authenticated provider session began, shown only while `SIGNED_IN` and continuity is known. Preserved across autonomous recovery; reset on mid-run interactive login; cleared when escalating to awaiting-user. |
+| Autonomous duration | `autonomous_since_at` | Time since the last real user intervention boundary (initial auth completion or mid-run login). Autonomous `confirm_verify` / recovery must not reset this. |
+| Authentication-state age | `authentication_state_changed_at` | Time since the latest transition into the current `authentication_state` value (diagnostic). |
+
+The former `session_started_at` / “Session age” label was incorrect: it cleared
+on transient auth loss and re-anchored on successful autonomous recovery, so it
+showed authentication-state age rather than runtime or autonomous duration.
 
 ### CLI
 
