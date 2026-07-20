@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -24,10 +25,25 @@ from mighty.provider_runtime_control_center import (
     ACCESS_HEALTH_RECOVERING,
     BROWSER_STATUS_HEALTHY,
     BROWSER_STATUS_UNHEALTHY,
+    EVENT_AWAITING_USER,
     EVENT_BROWSER_RESTART,
     EVENT_KEEPALIVE_SUCCESS,
+    EVENT_RECOVERY_BROWSER_RESTART_SKIPPED,
+    EVENT_RECOVERY_BROWSER_RESTART_STARTED,
+    EVENT_RECOVERY_CONFIRM_VERIFY_STARTED,
+    EVENT_RECOVERY_CONFIRM_VERIFY_SUCCEEDED,
+    EVENT_RECOVERY_EPISODE_STARTED,
+    EVENT_RECOVERY_EXHAUSTED,
+    EVENT_RECOVERY_SESSION_ENSURE_FAILED,
+    EVENT_RECOVERY_SESSION_ENSURE_STARTED,
+    EVENT_RECOVERY_SUCCEEDED,
+    EVENT_RECOVERY_SURFACE_ENSURE_FAILED,
+    EVENT_RECOVERY_SURFACE_ENSURE_STARTED,
+    EVENT_USER_INTERRUPTION,
     EVENT_VERIFICATION_FAILURE,
     EVENT_VERIFICATION_SUCCESS,
+    RECOVERY_EPISODE_EXHAUSTED,
+    RECOVERY_EPISODE_IDLE,
     RECOVERY_STATUS_AWAITING_USER,
     RECOVERY_STATUS_IDLE,
     RUNTIME_STATUS_RUNNING,
@@ -160,7 +176,12 @@ def test_render_control_center_includes_required_fields():
         last_keepalive_at="2026-07-19T14:55:00+00:00",
         last_keepalive_result="ok",
         current_strategy="SESSION_API",
-        recovery_count=1,
+        recovery_attempt_count=2,
+        recovery_success_count=1,
+        recovery_failure_count=0,
+        recovery_episode_state=RECOVERY_EPISODE_IDLE,
+        last_recovery_action="confirm_verify",
+        last_recovery_result="succeeded",
         user_interruption_count=1,
         ready_for_extraction=True,
         ready_for_connector=True,
@@ -177,7 +198,13 @@ def test_render_control_center_includes_required_fields():
     assert "Last verification .." in text
     assert "Last keepalive ....." in text
     assert "Current strategy ... SESSION_API" in text
-    assert "Recoveries ......... 1" in text
+    assert "RECOVERY" in text
+    assert "State .............. idle" in text
+    assert "Attempts ........... 2" in text
+    assert "Successes .......... 1" in text
+    assert "Failures ........... 0" in text
+    assert "Last action ........ confirm_verify" in text
+    assert "Last result ........ succeeded" in text
     assert "User interruptions . 1" in text
     assert "Ready for extraction yes" in text
     assert "Ready for connector  yes" in text
@@ -257,7 +284,51 @@ def test_supervisor_loop_updates_state_and_events():
     assert EVENT_KEEPALIVE_SUCCESS in types
 
 
+def _signed_in_state(**extra: Any) -> AccessState:
+    return AccessState(
+        provider="amex",
+        runtime_status=RUNTIME_STATUS_RUNNING,
+        browser_status=BROWSER_STATUS_HEALTHY,
+        authentication_state="SIGNED_IN",
+        recovery_planner_status=RECOVERY_STATUS_IDLE,
+        overview_ok=True,
+        **extra,
+    )
+
+
+def _auth_scripted_http(verify_states: list[str], *, calls: dict[str, int] | None = None):
+    """Script verify results; track session/ensure and surface/ensure calls."""
+    tracker = calls if calls is not None else {}
+    tracker.setdefault("verify", 0)
+    tracker.setdefault("session_ensure", 0)
+    tracker.setdefault("surface_ensure", 0)
+    remaining = list(verify_states)
+
+    def _verify(_method: str, _body: dict[str, Any] | None = None):
+        tracker["verify"] += 1
+        auth = remaining.pop(0) if remaining else "SIGNED_OUT"
+        return {"ok": auth == "SIGNED_IN", "result": {"authentication_state": auth}}
+
+    def _session(_method: str, _body: dict[str, Any] | None = None):
+        tracker["session_ensure"] += 1
+        return {"ok": False, "authentication_state": "SIGNED_OUT", "error": "authentication_required"}
+
+    def _surface(_method: str, _body: dict[str, Any] | None = None):
+        tracker["surface_ensure"] += 1
+        return {"ok": False, "surface": "overview"}
+
+    return _supervisor_http_factory(
+        {
+            "/health": {"ok": True},
+            "/providers/amex/verify": _verify,
+            "/providers/amex/session/ensure": _session,
+            "/providers/amex/surface/ensure": _surface,
+        }
+    ), tracker
+
+
 def test_supervisor_marks_awaiting_user_when_signed_out():
+    """Never-signed-in SIGNED_OUT escalates without autonomous recovery actions."""
     responses = {
         "/health": {"ok": True},
         "/providers/amex/verify": {
@@ -276,7 +347,10 @@ def test_supervisor_marks_awaiting_user_when_signed_out():
     assert state.authentication_state == "SIGNED_OUT"
     assert state.recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
     assert state.access_health == ACCESS_HEALTH_RECOVERING
+    assert state.recovery_attempt_count == 0
+    assert state.escalation_reason == "authentication_required"
     assert EVENT_VERIFICATION_FAILURE in [e.event_type for e in supervisor.history.list_events()]
+    assert EVENT_AWAITING_USER in [e.event_type for e in supervisor.history.list_events()]
 
 
 def test_supervisor_repairs_unhealthy_browser():
@@ -318,9 +392,529 @@ def test_supervisor_repairs_unhealthy_browser():
     state = supervisor.run_once()
     assert restarts == ["once"]
     assert state.browser_status == BROWSER_STATUS_HEALTHY
-    assert state.recovery_count == 1
+    assert state.recovery_attempt_count == 1
+    assert state.recovery_success_count == 1
+    assert state.recovery_count == 1  # deprecated alias == attempts
     types = [e.event_type for e in supervisor.history.list_events()]
     assert EVENT_BROWSER_RESTART in types
+
+
+def test_transient_signed_out_recovered_by_confirm_verify():
+    http, tracker = _auth_scripted_http(["SIGNED_OUT", "SIGNED_IN"])
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    state = supervisor.run_once()
+    assert state.authentication_state == "SIGNED_IN"
+    assert state.recovery_planner_status == RECOVERY_STATUS_IDLE
+    assert state.recovery_attempt_count == 1
+    assert state.recovery_success_count == 1
+    assert state.recovery_failure_count == 0
+    assert state.last_recovery_action == "confirm_verify"
+    assert state.last_recovery_result == "succeeded"
+    assert tracker["session_ensure"] == 0
+    assert tracker["surface_ensure"] >= 1  # overview refresh after success
+    types = [e.event_type for e in supervisor.history.list_events()]
+    assert EVENT_RECOVERY_EPISODE_STARTED in types
+    assert EVENT_RECOVERY_CONFIRM_VERIFY_STARTED in types
+    assert EVENT_RECOVERY_CONFIRM_VERIFY_SUCCEEDED in types
+    assert EVENT_RECOVERY_SUCCEEDED in types
+
+
+def test_recovery_through_session_ensure():
+    remaining = ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_IN"]
+    tracker = {"session_ensure": 0, "surface_ensure": 0}
+
+    def _verify(_method: str, _body: dict[str, Any] | None = None):
+        auth = remaining.pop(0) if remaining else "SIGNED_OUT"
+        return {"ok": auth == "SIGNED_IN", "result": {"authentication_state": auth}}
+
+    def _session_ok(_method: str, _body: dict[str, Any] | None = None):
+        tracker["session_ensure"] += 1
+        return {"ok": True, "authentication_state": "SIGNED_IN"}
+
+    def _surface(_method: str, _body: dict[str, Any] | None = None):
+        tracker["surface_ensure"] += 1
+        return {"ok": True, "surface": "overview"}
+
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=_supervisor_http_factory(
+            {
+                "/health": {"ok": True},
+                "/providers/amex/verify": _verify,
+                "/providers/amex/session/ensure": _session_ok,
+                "/providers/amex/surface/ensure": _surface,
+            }
+        ),
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    state = supervisor.run_once()
+    assert state.authentication_state == "SIGNED_IN"
+    assert state.last_recovery_action == "session_ensure"
+    assert state.recovery_success_count == 1
+    assert state.recovery_attempt_count == 2  # confirm_verify + session_ensure
+    assert tracker["session_ensure"] == 1
+    types = [e.event_type for e in supervisor.history.list_events()]
+    assert EVENT_RECOVERY_SESSION_ENSURE_STARTED in types
+    assert EVENT_RECOVERY_SUCCEEDED in types
+
+
+def test_recovery_through_surface_ensure():
+    remaining = ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_IN"]
+    calls = {"session_ensure": 0, "surface_ensure": 0}
+
+    def _verify(_method: str, _body: dict[str, Any] | None = None):
+        auth = remaining.pop(0) if remaining else "SIGNED_OUT"
+        return {"ok": auth == "SIGNED_IN", "result": {"authentication_state": auth}}
+
+    def _session(_method: str, _body: dict[str, Any] | None = None):
+        calls["session_ensure"] += 1
+        return {"ok": False, "authentication_state": "SIGNED_OUT"}
+
+    def _surface(_method: str, _body: dict[str, Any] | None = None):
+        calls["surface_ensure"] += 1
+        return {"ok": True, "surface": "overview"}
+
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=_supervisor_http_factory(
+            {
+                "/health": {"ok": True},
+                "/providers/amex/verify": _verify,
+                "/providers/amex/session/ensure": _session,
+                "/providers/amex/surface/ensure": _surface,
+            }
+        ),
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    state = supervisor.run_once()
+    assert state.authentication_state == "SIGNED_IN"
+    assert state.last_recovery_action == "surface_ensure"
+    assert state.recovery_attempt_count == 3
+    assert state.recovery_success_count == 1
+    assert calls["session_ensure"] == 1
+    assert calls["surface_ensure"] >= 1
+    types = [e.event_type for e in supervisor.history.list_events()]
+    assert EVENT_RECOVERY_SURFACE_ENSURE_STARTED in types
+    assert EVENT_RECOVERY_SUCCEEDED in types
+
+
+def test_browser_restart_skipped_when_browser_healthy():
+    http, tracker = _auth_scripted_http(
+        ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT"]
+    )
+    restarts: list[str] = []
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        restart_browser_fn=lambda: restarts.append("bad") or {"ok": True},
+        state=_signed_in_state(),
+    )
+    state = supervisor.run_once()
+    assert restarts == []
+    assert state.recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
+    assert state.escalation_reason == "real_reauthentication_boundary"
+    types = [e.event_type for e in supervisor.history.list_events()]
+    assert EVENT_RECOVERY_BROWSER_RESTART_SKIPPED in types
+    assert EVENT_RECOVERY_BROWSER_RESTART_STARTED not in types
+
+
+def test_browser_restart_used_only_when_browser_unhealthy():
+    remaining = ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_IN"]
+    restarts: list[str] = []
+    classify_n = {"n": 0}
+
+    def _classify(_port: int):
+        classify_n["n"] += 1
+        # Tick classify healthy so auth recovery runs; mid-recovery check is unhealthy.
+        if classify_n["n"] == 1:
+            return {"state": "HEALTHY"}
+        return {"state": "UNHEALTHY"} if classify_n["n"] == 2 else {"state": "HEALTHY"}
+
+    def _verify(_method: str, _body: dict[str, Any] | None = None):
+        auth = remaining.pop(0) if remaining else "SIGNED_OUT"
+        return {"ok": auth == "SIGNED_IN", "result": {"authentication_state": auth}}
+
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=_supervisor_http_factory(
+            {
+                "/health": {"ok": True},
+                "/providers/amex/verify": _verify,
+                "/providers/amex/session/ensure": {
+                    "ok": False,
+                    "authentication_state": "SIGNED_OUT",
+                },
+                "/providers/amex/surface/ensure": {"ok": False},
+            }
+        ),
+        classify_browser_fn=_classify,
+        restart_browser_fn=lambda: restarts.append("once") or {"ok": True},
+        state=_signed_in_state(),
+    )
+    state = supervisor.run_once()
+    assert restarts == ["once"]
+    assert state.authentication_state == "SIGNED_IN"
+    assert state.last_recovery_action == "browser_restart"
+    assert state.recovery_success_count == 1
+    types = [e.event_type for e in supervisor.history.list_events()]
+    assert EVENT_RECOVERY_BROWSER_RESTART_STARTED in types
+
+
+def test_safe_actions_exhausted_then_awaiting_user():
+    http, _tracker = _auth_scripted_http(
+        ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT"]
+    )
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    state = supervisor.run_once()
+    assert state.authentication_state == "SIGNED_OUT"
+    assert state.recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
+    assert state.recovery_episode_state == RECOVERY_EPISODE_EXHAUSTED
+    assert state.escalation_reason == "real_reauthentication_boundary"
+    assert state.recovery_attempt_count == 3  # confirm + session + surface
+    assert state.recovery_success_count == 0
+    assert state.recovery_failure_count == 1
+    types = [e.event_type for e in supervisor.history.list_events()]
+    assert types.count(EVENT_RECOVERY_EPISODE_STARTED) == 1
+    assert EVENT_RECOVERY_CONFIRM_VERIFY_STARTED in types
+    assert EVENT_RECOVERY_SESSION_ENSURE_STARTED in types
+    assert EVENT_RECOVERY_SESSION_ENSURE_FAILED in types
+    assert EVENT_RECOVERY_SURFACE_ENSURE_STARTED in types
+    assert EVENT_RECOVERY_SURFACE_ENSURE_FAILED in types
+    assert EVENT_RECOVERY_EXHAUSTED in types
+    assert EVENT_AWAITING_USER in types
+
+
+def test_no_recovery_action_repeated_on_every_tick():
+    http, tracker = _auth_scripted_http(
+        ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT"]
+        + ["SIGNED_OUT"] * 10
+    )
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    supervisor.run_once()
+    session_after_first = tracker["session_ensure"]
+    surface_after_first = tracker["surface_ensure"]
+    attempts_after_first = supervisor.get_state().recovery_attempt_count
+    supervisor.run_once()
+    supervisor.run_once()
+    assert tracker["session_ensure"] == session_after_first
+    assert tracker["surface_ensure"] == surface_after_first
+    assert supervisor.get_state().recovery_attempt_count == attempts_after_first
+    assert supervisor.get_state().recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
+
+
+def test_cooldown_enforcement_between_recovery_sequences():
+    mono = {"t": 1000.0}
+
+    def _mono() -> float:
+        return mono["t"]
+
+    remaining = ["SIGNED_OUT"] * 20
+    calls = {"session_ensure": 0}
+
+    def _verify(_method: str, _body: dict[str, Any] | None = None):
+        auth = remaining.pop(0) if remaining else "SIGNED_OUT"
+        return {"ok": False, "result": {"authentication_state": auth}}
+
+    def _session(_method: str, _body: dict[str, Any] | None = None):
+        calls["session_ensure"] += 1
+        return {"ok": False, "authentication_state": "SIGNED_OUT"}
+
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        auth_recovery_cooldown_seconds=60.0,
+        max_safe_auth_recovery_attempts=2,
+        request_json_fn=_supervisor_http_factory(
+            {
+                "/health": {"ok": True},
+                "/providers/amex/verify": _verify,
+                "/providers/amex/session/ensure": _session,
+                "/providers/amex/surface/ensure": {"ok": False},
+            }
+        ),
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        monotonic_fn=_mono,
+        state=_signed_in_state(),
+    )
+    supervisor.run_once()
+    assert calls["session_ensure"] == 1
+    assert supervisor.get_state().recovery_planner_status == RECOVERY_STATUS_IDLE
+    # Still in cooldown — no second sequence.
+    mono["t"] += 10.0
+    supervisor.run_once()
+    assert calls["session_ensure"] == 1
+    # Cooldown elapsed — second sequence runs, then escalates.
+    mono["t"] += 60.0
+    supervisor.run_once()
+    assert calls["session_ensure"] == 2
+    assert supervisor.get_state().recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
+
+
+def test_new_auth_loss_episode_only_after_reset():
+    http, _tracker = _auth_scripted_http(
+        ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT"]
+    )
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    supervisor.run_once()
+    assert supervisor.get_state().recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
+    first_attempts = supervisor.get_state().recovery_attempt_count
+
+    # Still signed out / awaiting — no new episode.
+    supervisor.run_once()
+    assert supervisor.get_state().recovery_attempt_count == first_attempts
+
+    # Restore SIGNED_IN (episode reset), then lose auth again → new episode.
+    phase = {"n": 0}
+
+    def _verify2(_method: str, _body: dict[str, Any] | None = None):
+        phase["n"] += 1
+        # First tick after reset: SIGNED_IN restores healthy state.
+        # Second tick: SIGNED_OUT triggers a fresh recovery episode.
+        if phase["n"] == 1:
+            return {"ok": True, "result": {"authentication_state": "SIGNED_IN"}}
+        # Within recovery: confirm + post-session + post-surface verifications.
+        return {"ok": False, "result": {"authentication_state": "SIGNED_OUT"}}
+
+    session_calls = {"n": 0}
+
+    def _session(_method: str, _body: dict[str, Any] | None = None):
+        session_calls["n"] += 1
+        return {"ok": False, "authentication_state": "SIGNED_OUT"}
+
+    supervisor._request_json = _supervisor_http_factory(
+        {
+            "/health": {"ok": True},
+            "/providers/amex/verify": _verify2,
+            "/providers/amex/session/ensure": _session,
+            "/providers/amex/surface/ensure": {"ok": True},
+        }
+    )
+    supervisor.state = replace(
+        _signed_in_state(),
+        recovery_attempt_count=first_attempts,
+        recovery_failure_count=1,
+    )
+    supervisor._auth_seen_signed_in = True
+    supervisor._reset_auth_recovery_episode(clear_escalation=True)
+
+    # Tick 1: verify SIGNED_IN — episode stays reset, no recovery.
+    state = supervisor.run_once()
+    assert state.authentication_state == "SIGNED_IN"
+    assert state.recovery_attempt_count == first_attempts
+    assert session_calls["n"] == 0
+
+    # Tick 2: SIGNED_OUT again — new episode with fresh safe actions.
+    state = supervisor.run_once()
+    assert state.recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
+    assert state.recovery_attempt_count == first_attempts + 3
+    assert session_calls["n"] == 1
+
+
+def test_metrics_count_attempts_successes_failures():
+    http, _ = _auth_scripted_http(["SIGNED_OUT", "SIGNED_IN"])
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    state = supervisor.run_once()
+    assert state.recovery_attempt_count == 1
+    assert state.recovery_success_count == 1
+    assert state.recovery_failure_count == 0
+
+    http2, _ = _auth_scripted_http(
+        ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT"]
+    )
+    supervisor2 = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http2,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    state2 = supervisor2.run_once()
+    assert state2.recovery_attempt_count == 3
+    assert state2.recovery_success_count == 0
+    assert state2.recovery_failure_count == 1
+
+
+def test_awaiting_user_without_action_does_not_count_attempt():
+    responses = {
+        "/health": {"ok": True},
+        "/providers/amex/verify": {
+            "ok": True,
+            "result": {"authentication_state": "SIGNED_OUT"},
+        },
+        "/providers/amex/surface/ensure": {"ok": False},
+    }
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=_supervisor_http_factory(responses),
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+    )
+    state = supervisor.run_once()
+    assert state.recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
+    assert state.recovery_attempt_count == 0
+    assert state.recovery_success_count == 0
+    assert state.recovery_failure_count == 0
+    awaiting = [e for e in supervisor.history.list_events() if e.event_type == EVENT_AWAITING_USER]
+    assert awaiting
+    assert awaiting[-1].details.get("actions_attempted") == []
+
+
+def test_event_history_records_exact_recovery_sequence():
+    http, _ = _auth_scripted_http(
+        ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT"]
+    )
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    supervisor.run_once()
+    types = [e.event_type for e in supervisor.history.list_events()]
+    # Exact ordered subsequence for the autonomous recovery path.
+    expected = [
+        EVENT_RECOVERY_EPISODE_STARTED,
+        EVENT_RECOVERY_CONFIRM_VERIFY_STARTED,
+        EVENT_RECOVERY_SESSION_ENSURE_STARTED,
+        EVENT_RECOVERY_SESSION_ENSURE_FAILED,
+        EVENT_RECOVERY_SURFACE_ENSURE_STARTED,
+        EVENT_RECOVERY_SURFACE_ENSURE_FAILED,
+        EVENT_RECOVERY_BROWSER_RESTART_SKIPPED,
+        EVENT_RECOVERY_EXHAUSTED,
+        EVENT_AWAITING_USER,
+    ]
+    idx = 0
+    for event_type in types:
+        if idx < len(expected) and event_type == expected[idx]:
+            idx += 1
+    assert idx == len(expected), f"missing events; saw {types}"
+
+
+def test_explicit_l_command_still_starts_interactive_login():
+    login_calls: list[str] = []
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=_supervisor_http_factory(
+            {
+                "/health": {"ok": True},
+                "/providers/amex/verify": {
+                    "ok": True,
+                    "result": {"authentication_state": "SIGNED_IN"},
+                },
+                "/providers/amex/surface/ensure": {"ok": True},
+            }
+        ),
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=AccessState(
+            provider="amex",
+            authentication_state="SIGNED_OUT",
+            recovery_planner_status=RECOVERY_STATUS_AWAITING_USER,
+            escalation_reason="real_reauthentication_boundary",
+        ),
+    )
+    supervisor.set_login_fn(
+        lambda: login_calls.append("login")
+        or {"ok": True, "final_authentication_state": "SIGNED_IN"}
+    )
+    state = supervisor.login_recover_now()
+    assert login_calls == ["login"]
+    assert state.authentication_state == "SIGNED_IN"
+    assert state.recovery_attempt_count == 1
+    assert state.recovery_success_count == 1
+    assert state.last_recovery_action == "interactive_login"
+    types = [e.event_type for e in supervisor.history.list_events()]
+    assert EVENT_USER_INTERRUPTION in types
+
+
+def test_no_password_or_mfa_automation_in_safe_recovery():
+    login_calls: list[str] = []
+    http, tracker = _auth_scripted_http(
+        ["SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT", "SIGNED_OUT"]
+    )
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=http,
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+        state=_signed_in_state(),
+    )
+    supervisor.set_login_fn(lambda: login_calls.append("login") or {"ok": False})
+    supervisor.run_once()
+    assert login_calls == []
+    assert tracker["session_ensure"] == 1
+    assert tracker["surface_ensure"] == 1
+    # session/ensure HTTP path is invoked with no body / no recovery_fn.
+    assert supervisor.get_state().recovery_planner_status == RECOVERY_STATUS_AWAITING_USER
+
+
+def test_login_recover_counts_attempt_and_success_separately():
+    supervisor = AccessSupervisor(
+        provider="amex",
+        keepalive_interval_seconds=9999,
+        request_json_fn=_supervisor_http_factory(
+            {
+                "/health": {"ok": True},
+                "/providers/amex/verify": {
+                    "ok": True,
+                    "result": {"authentication_state": "SIGNED_IN"},
+                },
+                "/providers/amex/surface/ensure": {"ok": True},
+            }
+        ),
+        classify_browser_fn=lambda _port: {"state": "HEALTHY"},
+    )
+    supervisor.set_login_fn(
+        lambda: {"ok": True, "final_authentication_state": "SIGNED_IN"}
+    )
+    state = supervisor.login_recover_now()
+    assert state.recovery_attempt_count == 1
+    assert state.recovery_success_count == 1
+
+    supervisor.set_login_fn(
+        lambda: {"ok": False, "final_authentication_state": "SIGNED_OUT"}
+    )
+    state = supervisor.login_recover_now()
+    assert state.recovery_attempt_count == 2
+    assert state.recovery_success_count == 1
 
 
 def test_supervisor_start_stop_graceful():

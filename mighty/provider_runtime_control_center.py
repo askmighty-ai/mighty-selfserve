@@ -27,6 +27,12 @@ DEFAULT_KEEPALIVE_INTERVAL_SECONDS = 300.0
 DEFAULT_KEEPALIVE_STRATEGY = "SESSION_API"
 DEFAULT_EVENT_HISTORY_LIMIT = 100
 DEFAULT_RECENT_EVENTS_DISPLAY = 8
+DEFAULT_AUTH_RECOVERY_COOLDOWN_SECONDS = 120.0
+DEFAULT_MAX_SAFE_AUTH_RECOVERY_ATTEMPTS = 1
+
+RECOVERY_EPISODE_IDLE = "idle"
+RECOVERY_EPISODE_ACTIVE = "active"
+RECOVERY_EPISODE_EXHAUSTED = "exhausted"
 
 ACCESS_HEALTH_HEALTHY = "healthy"
 ACCESS_HEALTH_DEGRADED = "degraded"
@@ -59,6 +65,19 @@ EVENT_KEEPALIVE_SUCCESS = "keepalive_success"
 EVENT_KEEPALIVE_FAILURE = "keepalive_failure"
 EVENT_RECOVERY_STARTED = "recovery_started"
 EVENT_RECOVERY_COMPLETED = "recovery_completed"
+EVENT_RECOVERY_EPISODE_STARTED = "recovery_episode_started"
+EVENT_RECOVERY_CONFIRM_VERIFY_STARTED = "recovery_confirm_verify_started"
+EVENT_RECOVERY_CONFIRM_VERIFY_SUCCEEDED = "recovery_confirm_verify_succeeded"
+EVENT_RECOVERY_CONFIRM_VERIFY_FAILED = "recovery_confirm_verify_failed"
+EVENT_RECOVERY_SESSION_ENSURE_STARTED = "recovery_session_ensure_started"
+EVENT_RECOVERY_SESSION_ENSURE_FAILED = "recovery_session_ensure_failed"
+EVENT_RECOVERY_SURFACE_ENSURE_STARTED = "recovery_surface_ensure_started"
+EVENT_RECOVERY_SURFACE_ENSURE_FAILED = "recovery_surface_ensure_failed"
+EVENT_RECOVERY_BROWSER_RESTART_STARTED = "recovery_browser_restart_started"
+EVENT_RECOVERY_BROWSER_RESTART_SKIPPED = "recovery_browser_restart_skipped"
+EVENT_RECOVERY_SUCCEEDED = "recovery_succeeded"
+EVENT_RECOVERY_EXHAUSTED = "recovery_exhausted"
+EVENT_AWAITING_USER = "awaiting_user"
 EVENT_BROWSER_RESTART = "browser_restart"
 EVENT_USER_INTERRUPTION = "user_interruption"
 EVENT_CONNECTOR_REFRESH = "connector_refresh"
@@ -210,7 +229,13 @@ class AccessState:
     last_keepalive_at: str | None = None
     last_keepalive_result: str | None = None
     current_strategy: str | None = DEFAULT_KEEPALIVE_STRATEGY
-    recovery_count: int = 0
+    recovery_attempt_count: int = 0
+    recovery_success_count: int = 0
+    recovery_failure_count: int = 0
+    last_recovery_action: str | None = None
+    last_recovery_result: str | None = None
+    recovery_episode_state: str = RECOVERY_EPISODE_IDLE
+    escalation_reason: str | None = None
     user_interruption_count: int = 0
     ready_for_extraction: bool = False
     ready_for_connector: bool = False
@@ -218,6 +243,11 @@ class AccessState:
     last_error: str | None = None
     updated_at: str = field(default_factory=iso_now)
     recent_events: tuple[AccessEvent, ...] = ()
+
+    @property
+    def recovery_count(self) -> int:
+        """Deprecated alias for attempt count (kept for older callers/tests)."""
+        return int(self.recovery_attempt_count)
 
     def session_age_seconds(self, *, now: datetime | None = None) -> float | None:
         started = parse_iso(self.session_started_at)
@@ -246,7 +276,14 @@ class AccessState:
             "last_keepalive_at": self.last_keepalive_at,
             "last_keepalive_result": self.last_keepalive_result,
             "current_strategy": self.current_strategy,
-            "recovery_count": self.recovery_count,
+            "recovery_attempt_count": self.recovery_attempt_count,
+            "recovery_success_count": self.recovery_success_count,
+            "recovery_failure_count": self.recovery_failure_count,
+            "recovery_count": self.recovery_attempt_count,
+            "last_recovery_action": self.last_recovery_action,
+            "last_recovery_result": self.last_recovery_result,
+            "recovery_episode_state": self.recovery_episode_state,
+            "escalation_reason": self.escalation_reason,
             "user_interruption_count": self.user_interruption_count,
             "ready_for_extraction": self.ready_for_extraction,
             "ready_for_connector": self.ready_for_connector,
@@ -400,10 +437,23 @@ def render_control_center(
                 f"  ({state.last_keepalive_result or '—'})"
             ),
             f"  Current strategy ... {state.current_strategy or '—'}",
-            f"  Recoveries ......... {state.recovery_count}",
             f"  User interruptions . {state.user_interruption_count}",
             f"  Ready for extraction {_yes_no(state.ready_for_extraction)}",
             f"  Ready for connector  {_yes_no(state.ready_for_connector)}",
+            "",
+            "RECOVERY",
+            f"  State .............. {state.recovery_episode_state}",
+            f"  Attempts ........... {state.recovery_attempt_count}",
+            f"  Successes .......... {state.recovery_success_count}",
+            f"  Failures ........... {state.recovery_failure_count}",
+            f"  Last action ........ {state.last_recovery_action or '—'}",
+            f"  Last result ........ {state.last_recovery_result or '—'}",
+        ]
+    )
+    if state.escalation_reason:
+        lines.append(f"  Escalation ......... {state.escalation_reason}")
+    lines.extend(
+        [
             "",
             "RECENT EVENTS",
         ]
@@ -463,6 +513,8 @@ class AccessSupervisor:
         interval_seconds: float = DEFAULT_SUPERVISOR_INTERVAL_SECONDS,
         keepalive_interval_seconds: float = DEFAULT_KEEPALIVE_INTERVAL_SECONDS,
         keepalive_strategy: str = DEFAULT_KEEPALIVE_STRATEGY,
+        auth_recovery_cooldown_seconds: float = DEFAULT_AUTH_RECOVERY_COOLDOWN_SECONDS,
+        max_safe_auth_recovery_attempts: int = DEFAULT_MAX_SAFE_AUTH_RECOVERY_ATTEMPTS,
         state: AccessState | None = None,
         history: EventHistory | None = None,
         request_json_fn: Callable[..., Any] | None = None,
@@ -480,6 +532,8 @@ class AccessSupervisor:
         self.interval_seconds = max(1.0, float(interval_seconds))
         self.keepalive_interval_seconds = max(0.0, float(keepalive_interval_seconds))
         self.keepalive_strategy = str(keepalive_strategy or DEFAULT_KEEPALIVE_STRATEGY)
+        self.auth_recovery_cooldown_seconds = max(0.0, float(auth_recovery_cooldown_seconds))
+        self.max_safe_auth_recovery_attempts = max(1, int(max_safe_auth_recovery_attempts))
         self.state = state or AccessState(provider=self.provider, current_strategy=self.keepalive_strategy)
         self.history = history or EventHistory()
         self._request_json = request_json_fn
@@ -499,6 +553,13 @@ class AccessSupervisor:
         self._force_login = False
         self._login_fn: Callable[[], dict[str, Any]] | None = None
         self._connector_refresh_fn: Callable[[], dict[str, Any]] | None = None
+        # Bounded auth-loss recovery episode (no credentials / MFA automation).
+        self._auth_seen_signed_in = self.state.authentication_state == "SIGNED_IN"
+        self._auth_loss_eligible = False
+        self._recovery_active = False
+        self._episode_sequence_count = 0
+        self._episode_actions: list[str] = []
+        self._last_auth_recovery_mono: float | None = None
 
     @property
     def base_url(self) -> str:
@@ -667,18 +728,21 @@ class AccessSupervisor:
             self._recompute_health_locked()
 
     def _verify_auth(self) -> None:
+        previous_auth = self.state.authentication_state
         try:
             payload = self._http("POST", f"/providers/{self.provider}/verify", timeout=45.0)
         except Exception as exc:  # noqa: BLE001
             observed = self._now()
+            auth = "LOGIN_UNKNOWN"
             with self._lock:
                 self.state = apply_verification_to_access_state(
                     self.state,
-                    authentication_state="LOGIN_UNKNOWN",
+                    authentication_state=auth,
                     observed_at=observed,
                     overview_ok=False,
                 )
                 self.state = replace(self.state, last_error=str(exc))
+            self._note_auth_transition(previous_auth, auth)
             self._append(EVENT_VERIFICATION_FAILURE, f"verify error: {exc}", ok=False)
             return
 
@@ -691,7 +755,12 @@ class AccessSupervisor:
         ok = auth == "SIGNED_IN"
         with self._lock:
             recovery = self.state.recovery_planner_status
-            if ok and recovery in {RECOVERY_STATUS_AWAITING_USER, RECOVERY_STATUS_FAILED, RECOVERY_STATUS_RECOVERING}:
+            if ok and recovery in {
+                RECOVERY_STATUS_AWAITING_USER,
+                RECOVERY_STATUS_FAILED,
+                RECOVERY_STATUS_RECOVERING,
+                RECOVERY_STATUS_PLANNING,
+            }:
                 recovery = RECOVERY_STATUS_IDLE
             self.state = apply_verification_to_access_state(
                 self.state,
@@ -699,12 +768,22 @@ class AccessSupervisor:
                 observed_at=observed,
                 recovery_planner_status=recovery,
             )
+        self._note_auth_transition(previous_auth, auth)
         self._append(
             EVENT_VERIFICATION_SUCCESS if ok else EVENT_VERIFICATION_FAILURE,
             auth,
             ok=ok,
             details={"authentication_state": auth},
         )
+
+    def _note_auth_transition(self, previous_auth: str, auth: str) -> None:
+        if auth == "SIGNED_IN":
+            self._auth_seen_signed_in = True
+            if not self._recovery_active:
+                self._reset_auth_recovery_episode(clear_escalation=True)
+            return
+        if previous_auth == "SIGNED_IN" and auth in {"SIGNED_OUT", "LOGIN_UNKNOWN"}:
+            self._auth_loss_eligible = True
 
     def _verify_overview(self) -> None:
         if self.state.authentication_state != "SIGNED_IN":
@@ -786,26 +865,533 @@ class AccessSupervisor:
             details={"strategy": strategy, "reason": reason},
         )
 
+    def _mark_recovery_attempt(self, **fields: Any) -> None:
+        with self._lock:
+            self.state = replace(
+                self.state,
+                recovery_attempt_count=self.state.recovery_attempt_count + 1,
+                updated_at=self._now(),
+                **fields,
+            )
+
+    def _mark_recovery_success(self, **fields: Any) -> None:
+        with self._lock:
+            self.state = replace(
+                self.state,
+                recovery_success_count=self.state.recovery_success_count + 1,
+                updated_at=self._now(),
+                **fields,
+            )
+
+    def _mark_recovery_failure(self, **fields: Any) -> None:
+        with self._lock:
+            self.state = replace(
+                self.state,
+                recovery_failure_count=self.state.recovery_failure_count + 1,
+                updated_at=self._now(),
+                **fields,
+            )
+
+    def _set_recovery_fields(self, **fields: Any) -> None:
+        with self._lock:
+            self.state = replace(self.state, updated_at=self._now(), **fields)
+            self._recompute_health_locked()
+
+    def _reset_auth_recovery_episode(self, *, clear_escalation: bool = False) -> None:
+        self._auth_loss_eligible = False
+        self._episode_sequence_count = 0
+        self._episode_actions = []
+        self._last_auth_recovery_mono = None
+        fields: dict[str, Any] = {"recovery_episode_state": RECOVERY_EPISODE_IDLE}
+        if clear_escalation:
+            fields["escalation_reason"] = None
+        with self._lock:
+            self.state = replace(self.state, updated_at=self._now(), **fields)
+
+    def _can_attempt_auth_recovery(self) -> bool:
+        if self._episode_sequence_count >= self.max_safe_auth_recovery_attempts:
+            return False
+        if self._last_auth_recovery_mono is None:
+            return True
+        elapsed = self._monotonic() - self._last_auth_recovery_mono
+        return elapsed >= self.auth_recovery_cooldown_seconds
+
     def _maybe_repair(self) -> None:
         browser = self.state.browser_status
         auth = self.state.authentication_state
         if browser in {BROWSER_STATUS_MISSING, BROWSER_STATUS_UNHEALTHY}:
             self._repair_browser()
             return
-        if auth != "SIGNED_IN" and self.state.recovery_planner_status == RECOVERY_STATUS_IDLE:
-            with self._lock:
-                self.state = replace(
-                    self.state,
-                    recovery_planner_status=RECOVERY_STATUS_AWAITING_USER,
-                    access_health=ACCESS_HEALTH_RECOVERING,
-                    updated_at=self._now(),
+        if auth == "SIGNED_IN":
+            return
+        if auth not in {"SIGNED_OUT", "LOGIN_UNKNOWN"}:
+            return
+        if self.state.recovery_planner_status != RECOVERY_STATUS_IDLE:
+            return
+        if self._recovery_active:
+            return
+
+        if self._auth_loss_eligible:
+            if self._can_attempt_auth_recovery():
+                self._run_safe_auth_recovery()
+                return
+            if self._episode_sequence_count >= self.max_safe_auth_recovery_attempts:
+                self._escalate_awaiting_user(
+                    reason="safe_recovery_exhausted",
+                    actions_attempted=list(self._episode_actions),
                 )
+                return
+            # Cooldown active — wait quietly; do not re-run ensure APIs each tick.
+            return
+
+        # Clean signed-out/unknown without a prior SIGNED_IN session: escalate only.
+        self._escalate_awaiting_user(
+            reason="authentication_required",
+            actions_attempted=[],
+        )
+
+    def _run_safe_auth_recovery(self) -> None:
+        """Bounded safe recovery before escalating to interactive login."""
+        self._recovery_active = True
+        self._episode_sequence_count += 1
+        self._last_auth_recovery_mono = self._monotonic()
+        self._episode_actions = []
+        attempted: list[str] = []
+
+        self._set_recovery_fields(
+            recovery_planner_status=RECOVERY_STATUS_RECOVERING,
+            recovery_episode_state=RECOVERY_EPISODE_ACTIVE,
+            access_health=ACCESS_HEALTH_RECOVERING,
+            escalation_reason=None,
+            last_recovery_action="episode_start",
+            last_recovery_result="started",
+        )
+        self._append(
+            EVENT_RECOVERY_EPISODE_STARTED,
+            "safe auth recovery episode started",
+            details={
+                "action": "episode_start",
+                "outcome": "started",
+                "auth_state": self.state.authentication_state,
+                "reason": "signed_in_to_signed_out_or_unknown",
+                "sequence": self._episode_sequence_count,
+            },
+        )
+
+        try:
+            if self._recovery_action_confirm_verify(attempted):
+                return
+            if self._recovery_action_session_ensure(attempted):
+                return
+            if self._recovery_action_surface_ensure(attempted):
+                return
+            if self._recovery_action_browser_restart_if_unhealthy(attempted):
+                return
+
+            self._episode_actions = list(attempted)
+            if self._episode_sequence_count >= self.max_safe_auth_recovery_attempts:
+                self._mark_recovery_failure(
+                    last_recovery_action=attempted[-1] if attempted else "episode",
+                    last_recovery_result="exhausted",
+                    recovery_episode_state=RECOVERY_EPISODE_EXHAUSTED,
+                )
+                self._escalate_awaiting_user(
+                    reason="real_reauthentication_boundary",
+                    actions_attempted=attempted,
+                )
+            else:
+                # Leave planner idle so a later tick may retry after cooldown.
+                self._set_recovery_fields(
+                    recovery_planner_status=RECOVERY_STATUS_IDLE,
+                    recovery_episode_state=RECOVERY_EPISODE_ACTIVE,
+                    last_recovery_action=attempted[-1] if attempted else "episode",
+                    last_recovery_result="sequence_failed_cooldown",
+                )
+                self._append(
+                    EVENT_RECOVERY_EXHAUSTED,
+                    "safe recovery sequence failed; cooldown before retry",
+                    ok=False,
+                    details={
+                        "action": "episode",
+                        "outcome": "sequence_failed_cooldown",
+                        "auth_state": self.state.authentication_state,
+                        "reason": "retry_remaining",
+                        "actions_attempted": list(attempted),
+                        "sequence": self._episode_sequence_count,
+                    },
+                )
+        finally:
+            self._recovery_active = False
+
+    def _recovery_action_confirm_verify(self, attempted: list[str]) -> bool:
+        action = "confirm_verify"
+        attempted.append(action)
+        self._mark_recovery_attempt(
+            recovery_planner_status=RECOVERY_STATUS_RECOVERING,
+            last_recovery_action=action,
+            last_recovery_result="started",
+            access_health=ACCESS_HEALTH_RECOVERING,
+        )
+        self._append(
+            EVENT_RECOVERY_CONFIRM_VERIFY_STARTED,
+            "confirming auth denial",
+            details={
+                "action": action,
+                "outcome": "started",
+                "auth_state": self.state.authentication_state,
+                "reason": "distinguish_transient_denial",
+            },
+        )
+        self._verify_auth()
+        auth = self.state.authentication_state
+        if auth == "SIGNED_IN":
             self._append(
-                EVENT_RECOVERY_STARTED,
-                "authentication degraded; awaiting login/recover (press l)",
-                ok=False,
-                details={"authentication_state": auth},
+                EVENT_RECOVERY_CONFIRM_VERIFY_SUCCEEDED,
+                "confirm verify restored SIGNED_IN",
+                details={
+                    "action": action,
+                    "outcome": "succeeded",
+                    "auth_state": auth,
+                    "reason": "transient_denial",
+                },
             )
+            self._finish_auth_recovery_success(action, reason="confirm_verify_restored_session")
+            return True
+        self._set_recovery_fields(last_recovery_action=action, last_recovery_result="failed")
+        self._append(
+            EVENT_RECOVERY_CONFIRM_VERIFY_FAILED,
+            f"confirm verify still {auth}",
+            ok=False,
+            details={
+                "action": action,
+                "outcome": "failed",
+                "auth_state": auth,
+                "reason": "hard_logout_or_unknown",
+            },
+        )
+        return False
+
+    def _recovery_action_session_ensure(self, attempted: list[str]) -> bool:
+        action = "session_ensure"
+        attempted.append(action)
+        self._mark_recovery_attempt(
+            recovery_planner_status=RECOVERY_STATUS_RECOVERING,
+            last_recovery_action=action,
+            last_recovery_result="started",
+            access_health=ACCESS_HEALTH_RECOVERING,
+        )
+        self._append(
+            EVENT_RECOVERY_SESSION_ENSURE_STARTED,
+            "invoking session/ensure",
+            details={
+                "action": action,
+                "outcome": "started",
+                "auth_state": self.state.authentication_state,
+                "reason": "runtime_session_ensure",
+            },
+        )
+        try:
+            self._http(
+                "POST",
+                f"/providers/{self.provider}/session/ensure",
+                timeout=45.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._set_recovery_fields(
+                last_recovery_action=action,
+                last_recovery_result="failed",
+                last_error=str(exc),
+            )
+            self._append(
+                EVENT_RECOVERY_SESSION_ENSURE_FAILED,
+                f"session/ensure error: {exc}",
+                ok=False,
+                details={
+                    "action": action,
+                    "outcome": "failed",
+                    "auth_state": self.state.authentication_state,
+                    "reason": "runtime_error",
+                },
+            )
+            self._verify_auth()
+            if self.state.authentication_state == "SIGNED_IN":
+                self._finish_auth_recovery_success(action, reason="session_ensure_restored_session")
+                return True
+            return False
+
+        self._verify_auth()
+        auth = self.state.authentication_state
+        if auth == "SIGNED_IN":
+            self._finish_auth_recovery_success(action, reason="session_ensure_restored_session")
+            return True
+        self._set_recovery_fields(last_recovery_action=action, last_recovery_result="failed")
+        self._append(
+            EVENT_RECOVERY_SESSION_ENSURE_FAILED,
+            f"session/ensure still {auth}",
+            ok=False,
+            details={
+                "action": action,
+                "outcome": "failed",
+                "auth_state": auth,
+                "reason": "session_not_restored",
+            },
+        )
+        return False
+
+    def _recovery_action_surface_ensure(self, attempted: list[str]) -> bool:
+        action = "surface_ensure"
+        attempted.append(action)
+        self._mark_recovery_attempt(
+            recovery_planner_status=RECOVERY_STATUS_RECOVERING,
+            last_recovery_action=action,
+            last_recovery_result="started",
+            access_health=ACCESS_HEALTH_RECOVERING,
+        )
+        self._append(
+            EVENT_RECOVERY_SURFACE_ENSURE_STARTED,
+            "invoking surface/ensure overview",
+            details={
+                "action": action,
+                "outcome": "started",
+                "auth_state": self.state.authentication_state,
+                "reason": "soft_provider_surface_recovery",
+            },
+        )
+        try:
+            self._http(
+                "POST",
+                f"/providers/{self.provider}/surface/ensure",
+                {"surface": "overview"},
+                timeout=45.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._set_recovery_fields(
+                last_recovery_action=action,
+                last_recovery_result="failed",
+                last_error=str(exc),
+            )
+            self._append(
+                EVENT_RECOVERY_SURFACE_ENSURE_FAILED,
+                f"surface/ensure error: {exc}",
+                ok=False,
+                details={
+                    "action": action,
+                    "outcome": "failed",
+                    "auth_state": self.state.authentication_state,
+                    "reason": "runtime_error",
+                },
+            )
+            self._verify_auth()
+            if self.state.authentication_state == "SIGNED_IN":
+                self._finish_auth_recovery_success(action, reason="surface_ensure_restored_session")
+                return True
+            return False
+
+        self._verify_auth()
+        auth = self.state.authentication_state
+        if auth == "SIGNED_IN":
+            self._finish_auth_recovery_success(action, reason="surface_ensure_restored_session")
+            return True
+        self._set_recovery_fields(last_recovery_action=action, last_recovery_result="failed")
+        self._append(
+            EVENT_RECOVERY_SURFACE_ENSURE_FAILED,
+            f"surface/ensure still {auth}",
+            ok=False,
+            details={
+                "action": action,
+                "outcome": "failed",
+                "auth_state": auth,
+                "reason": "surface_not_authenticated",
+            },
+        )
+        return False
+
+    def _recovery_action_browser_restart_if_unhealthy(self, attempted: list[str]) -> bool:
+        self._refresh_browser_status()
+        browser = self.state.browser_status
+        if browser == BROWSER_STATUS_HEALTHY:
+            self._append(
+                EVENT_RECOVERY_BROWSER_RESTART_SKIPPED,
+                "browser healthy; restart skipped",
+                details={
+                    "action": "browser_restart",
+                    "outcome": "skipped",
+                    "auth_state": self.state.authentication_state,
+                    "reason": "browser_healthy",
+                },
+            )
+            return False
+
+        action = "browser_restart"
+        attempted.append(action)
+        if self._restart_browser is None:
+            self._set_recovery_fields(last_recovery_action=action, last_recovery_result="unavailable")
+            self._append(
+                EVENT_RECOVERY_BROWSER_RESTART_STARTED,
+                "browser restart unavailable",
+                ok=False,
+                details={
+                    "action": action,
+                    "outcome": "unavailable",
+                    "auth_state": self.state.authentication_state,
+                    "reason": "restart_fn_missing",
+                },
+            )
+            return False
+
+        self._mark_recovery_attempt(
+            recovery_planner_status=RECOVERY_STATUS_RECOVERING,
+            browser_status=BROWSER_STATUS_LAUNCHING,
+            last_recovery_action=action,
+            last_recovery_result="started",
+            access_health=ACCESS_HEALTH_RECOVERING,
+        )
+        self._append(
+            EVENT_RECOVERY_BROWSER_RESTART_STARTED,
+            "restarting degraded browser during auth recovery",
+            details={
+                "action": action,
+                "outcome": "started",
+                "auth_state": self.state.authentication_state,
+                "reason": "browser_unhealthy",
+            },
+        )
+        self._append(EVENT_BROWSER_RESTART, "managed browser restart (auth recovery)")
+        try:
+            result = self._restart_browser() or {}
+            ok = bool(result.get("ok", True))
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            self._set_recovery_fields(
+                last_recovery_action=action,
+                last_recovery_result="failed",
+                last_error=str(exc),
+                browser_status=BROWSER_STATUS_UNHEALTHY,
+            )
+            self._append(
+                EVENT_RECOVERY_COMPLETED,
+                f"browser restart failed: {exc}",
+                ok=False,
+                details={
+                    "action": action,
+                    "outcome": "failed",
+                    "auth_state": self.state.authentication_state,
+                    "reason": "restart_exception",
+                },
+            )
+            return False
+
+        self._refresh_browser_status()
+        self._verify_auth()
+        auth = self.state.authentication_state
+        if ok and auth == "SIGNED_IN":
+            self._finish_auth_recovery_success(action, reason="browser_restart_restored_session")
+            return True
+        self._set_recovery_fields(
+            last_recovery_action=action,
+            last_recovery_result="failed",
+        )
+        self._append(
+            EVENT_RECOVERY_COMPLETED,
+            f"browser restart did not restore auth ({auth})",
+            ok=False,
+            details={
+                "action": action,
+                "outcome": "failed",
+                "auth_state": auth,
+                "reason": "auth_still_degraded",
+            },
+        )
+        return False
+
+    def _finish_auth_recovery_success(self, action: str, *, reason: str) -> None:
+        auth = self.state.authentication_state
+        self._mark_recovery_success(
+            recovery_planner_status=RECOVERY_STATUS_IDLE,
+            recovery_episode_state=RECOVERY_EPISODE_IDLE,
+            last_recovery_action=action,
+            last_recovery_result="succeeded",
+            escalation_reason=None,
+        )
+        with self._lock:
+            self._recompute_health_locked()
+        self._append(
+            EVENT_RECOVERY_SUCCEEDED,
+            f"safe recovery succeeded via {action}",
+            details={
+                "action": action,
+                "outcome": "succeeded",
+                "auth_state": auth,
+                "reason": reason,
+            },
+        )
+        self._append(
+            EVENT_RECOVERY_COMPLETED,
+            f"safe recovery succeeded via {action}",
+            details={"action": action, "auth_state": auth},
+        )
+        self._episode_actions = []
+        self._auth_loss_eligible = False
+        self._episode_sequence_count = 0
+        self._last_auth_recovery_mono = None
+        # Overview was skipped while signed out; refresh now that auth is restored.
+        self._verify_overview()
+
+    def _escalate_awaiting_user(
+        self,
+        *,
+        reason: str,
+        actions_attempted: list[str],
+    ) -> None:
+        auth = self.state.authentication_state
+        self._set_recovery_fields(
+            recovery_planner_status=RECOVERY_STATUS_AWAITING_USER,
+            access_health=ACCESS_HEALTH_RECOVERING,
+            escalation_reason=reason,
+            recovery_episode_state=(
+                RECOVERY_EPISODE_EXHAUSTED if actions_attempted else RECOVERY_EPISODE_IDLE
+            ),
+        )
+        if actions_attempted:
+            self._append(
+                EVENT_RECOVERY_EXHAUSTED,
+                "safe autonomous recovery exhausted",
+                ok=False,
+                details={
+                    "action": "episode",
+                    "outcome": "exhausted",
+                    "auth_state": auth,
+                    "reason": reason,
+                    "actions_attempted": list(actions_attempted),
+                },
+            )
+        self._append(
+            EVENT_AWAITING_USER,
+            "real re-authentication boundary; press l for interactive login",
+            ok=False,
+            details={
+                "action": "awaiting_user",
+                "outcome": "escalated",
+                "auth_state": auth,
+                "reason": reason,
+                "actions_attempted": list(actions_attempted),
+                "final_auth_evidence": auth,
+            },
+        )
+        # Compatibility event for older console/tests.
+        self._append(
+            EVENT_RECOVERY_STARTED,
+            "authentication degraded; awaiting login/recover (press l)",
+            ok=False,
+            details={
+                "authentication_state": auth,
+                "autonomous_strategies_attempted": list(actions_attempted),
+                "escalation": "awaiting_user",
+                "reason": reason,
+            },
+        )
+        self._auth_loss_eligible = False
+        self._episode_actions = list(actions_attempted)
 
     def _repair_browser(self) -> None:
         if self._restart_browser is None:
@@ -818,15 +1404,13 @@ class AccessSupervisor:
                 )
             self._append(EVENT_RECOVERY_STARTED, "browser degraded; restart unavailable", ok=False)
             return
-        with self._lock:
-            self.state = replace(
-                self.state,
-                recovery_planner_status=RECOVERY_STATUS_RECOVERING,
-                browser_status=BROWSER_STATUS_LAUNCHING,
-                recovery_count=self.state.recovery_count + 1,
-                access_health=ACCESS_HEALTH_RECOVERING,
-                updated_at=self._now(),
-            )
+        self._mark_recovery_attempt(
+            recovery_planner_status=RECOVERY_STATUS_RECOVERING,
+            browser_status=BROWSER_STATUS_LAUNCHING,
+            last_recovery_action="browser_restart",
+            last_recovery_result="started",
+            access_health=ACCESS_HEALTH_RECOVERING,
+        )
         self._append(EVENT_RECOVERY_STARTED, "restarting managed browser")
         self._append(EVENT_BROWSER_RESTART, "managed browser restart")
         try:
@@ -840,18 +1424,31 @@ class AccessSupervisor:
                     recovery_planner_status=RECOVERY_STATUS_FAILED,
                     browser_status=BROWSER_STATUS_UNHEALTHY,
                     last_error=str(exc),
+                    last_recovery_action="browser_restart",
+                    last_recovery_result="failed",
                     updated_at=self._now(),
                 )
             self._append(EVENT_RECOVERY_COMPLETED, f"browser restart failed: {exc}", ok=False)
             return
         self._refresh_browser_status()
-        with self._lock:
-            self.state = replace(
-                self.state,
-                recovery_planner_status=RECOVERY_STATUS_IDLE if ok else RECOVERY_STATUS_FAILED,
-                updated_at=self._now(),
+        if ok:
+            self._mark_recovery_success(
+                recovery_planner_status=RECOVERY_STATUS_IDLE,
+                last_recovery_action="browser_restart",
+                last_recovery_result="succeeded",
             )
-            self._recompute_health_locked()
+            with self._lock:
+                self._recompute_health_locked()
+        else:
+            with self._lock:
+                self.state = replace(
+                    self.state,
+                    recovery_planner_status=RECOVERY_STATUS_FAILED,
+                    last_recovery_action="browser_restart",
+                    last_recovery_result="failed",
+                    updated_at=self._now(),
+                )
+                self._recompute_health_locked()
         self._append(
             EVENT_RECOVERY_COMPLETED,
             "browser restart ok" if ok else "browser restart failed",
@@ -859,15 +1456,15 @@ class AccessSupervisor:
         )
 
     def _run_login_recover(self) -> None:
-        with self._lock:
-            self.state = replace(
-                self.state,
-                recovery_planner_status=RECOVERY_STATUS_RECOVERING,
-                user_interruption_count=self.state.user_interruption_count + 1,
-                recovery_count=self.state.recovery_count + 1,
-                access_health=ACCESS_HEALTH_RECOVERING,
-                updated_at=self._now(),
-            )
+        # Explicit interactive login begins a fresh episode boundary.
+        self._reset_auth_recovery_episode(clear_escalation=True)
+        self._mark_recovery_attempt(
+            recovery_planner_status=RECOVERY_STATUS_RECOVERING,
+            user_interruption_count=self.state.user_interruption_count + 1,
+            last_recovery_action="interactive_login",
+            last_recovery_result="started",
+            access_health=ACCESS_HEALTH_RECOVERING,
+        )
         self._append(EVENT_USER_INTERRUPTION, "login/recover requested")
         self._append(EVENT_RECOVERY_STARTED, "interactive login/recover")
         if self._login_fn is None:
@@ -876,6 +1473,8 @@ class AccessSupervisor:
                     self.state,
                     recovery_planner_status=RECOVERY_STATUS_FAILED,
                     last_error="login_fn unavailable",
+                    last_recovery_action="interactive_login",
+                    last_recovery_result="failed",
                     updated_at=self._now(),
                 )
             self._append(EVENT_RECOVERY_COMPLETED, "login_fn unavailable", ok=False)
@@ -887,6 +1486,9 @@ class AccessSupervisor:
                 self.state = replace(
                     self.state,
                     recovery_planner_status=RECOVERY_STATUS_AWAITING_USER,
+                    last_recovery_action="interactive_login",
+                    last_recovery_result="interrupted",
+                    escalation_reason="login_interrupted",
                     updated_at=self._now(),
                 )
             self._append(EVENT_RECOVERY_COMPLETED, "login interrupted", ok=False)
@@ -897,6 +1499,8 @@ class AccessSupervisor:
                     self.state,
                     recovery_planner_status=RECOVERY_STATUS_FAILED,
                     last_error=str(exc),
+                    last_recovery_action="interactive_login",
+                    last_recovery_result="failed",
                     updated_at=self._now(),
                 )
             self._append(EVENT_RECOVERY_COMPLETED, f"login failed: {exc}", ok=False)
@@ -911,6 +1515,16 @@ class AccessSupervisor:
                 overview_ok=ok,
                 recovery_planner_status=RECOVERY_STATUS_IDLE if ok else RECOVERY_STATUS_AWAITING_USER,
             )
+            self.state = replace(
+                self.state,
+                last_recovery_action="interactive_login",
+                last_recovery_result="succeeded" if ok else "failed",
+                escalation_reason=None if ok else "interactive_login_required",
+                recovery_episode_state=RECOVERY_EPISODE_IDLE,
+            )
+        if ok:
+            self._auth_seen_signed_in = True
+            self._mark_recovery_success()
         self._append(
             EVENT_RECOVERY_COMPLETED,
             f"login/recover → {auth}",
