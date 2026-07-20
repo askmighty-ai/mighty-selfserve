@@ -1,7 +1,10 @@
 """Railway persistence and presentation for published local AccessState.
 
 Stores the latest AccessState per (user_id, provider, runtime_instance_id),
-computes stale/offline presentation, and renders the dashboard access card.
+computes stale/offline presentation, and renders dashboard provider cards.
+
+Provider discovery and display names come from the Provider Registry. AccessState
+and timeline contracts are unchanged — this module only presents published state.
 
 This is intentionally separate from provider_session_state / login_truth —
 those model extension-driven product session truth. This models Control Center
@@ -23,6 +26,11 @@ from mighty.access_timeline import (
     record_timeline_from_transition,
     render_provider_operations_details_html,
 )
+from mighty.provider_registry import (
+    ManagedProvider,
+    ProviderPlatformCapabilities,
+    get_provider_registry,
+)
 from mighty.provider_runtime_control_center import (
     ACCESS_HEALTH_HEALTHY,
     RECOVERY_STATUS_AWAITING_USER,
@@ -39,6 +47,8 @@ STATUS_RUNTIME_OFFLINE = "runtime_offline"
 STATUS_NEVER_REPORTED = "never_reported"
 
 DEFAULT_STALE_AFTER_SECONDS = 180.0  # 3× default 60s heartbeat
+
+# Backward-compatible display map; prefer Provider Registry for new code.
 PROVIDER_DISPLAY = {
     "amex": "American Express",
 }
@@ -377,13 +387,41 @@ STATUS_LABELS = {
     STATUS_NEVER_REPORTED: "No state received yet",
 }
 
+
+def _provider_display_name(provider: str) -> str:
+    registry = get_provider_registry()
+    registered = registry.get(provider)
+    if registered is not None:
+        return registered.display_name
+    return PROVIDER_DISPLAY.get(provider, provider.title() if provider else "Provider")
+
+
+def status_headline_for(status: str, display_name: str) -> str:
+    """Provider-generic status headline (no hard-coded Amex copy)."""
+    name = display_name or "Provider"
+    if status == STATUS_HEALTHY:
+        return f"Local {name} access is healthy."
+    if status == STATUS_RECOVERING:
+        return f"Local {name} access is recovering."
+    if status == STATUS_AWAITING_USER:
+        return f"Local {name} access needs your attention."
+    if status == STATUS_STALE:
+        return f"Local {name} access report is stale."
+    if status == STATUS_RUNTIME_OFFLINE:
+        return "Local Provider Runtime appears offline."
+    if status == STATUS_NEVER_REPORTED:
+        return "No local AccessState has been reported yet."
+    return f"Local {name} access report is stale."
+
+
+# Backward-compatible Amex-oriented headlines (derived from registry display name).
 STATUS_HEADLINES = {
-    STATUS_HEALTHY: "Local Amex access is healthy.",
-    STATUS_RECOVERING: "Local Amex access is recovering.",
-    STATUS_AWAITING_USER: "Local Amex access needs your attention.",
-    STATUS_STALE: "Local Amex access report is stale.",
-    STATUS_RUNTIME_OFFLINE: "Local Provider Runtime appears offline.",
-    STATUS_NEVER_REPORTED: "No local AccessState has been reported yet.",
+    STATUS_HEALTHY: status_headline_for(STATUS_HEALTHY, "American Express"),
+    STATUS_RECOVERING: status_headline_for(STATUS_RECOVERING, "American Express"),
+    STATUS_AWAITING_USER: status_headline_for(STATUS_AWAITING_USER, "American Express"),
+    STATUS_STALE: status_headline_for(STATUS_STALE, "American Express"),
+    STATUS_RUNTIME_OFFLINE: status_headline_for(STATUS_RUNTIME_OFFLINE, "American Express"),
+    STATUS_NEVER_REPORTED: status_headline_for(STATUS_NEVER_REPORTED, "American Express"),
 }
 
 
@@ -395,7 +433,7 @@ def build_runtime_access_presentation(
     stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
 ) -> RuntimeAccessPresentation:
     current = now or datetime.now(timezone.utc)
-    display = PROVIDER_DISPLAY.get(provider, provider.title())
+    display = _provider_display_name(provider)
     if row is None:
         status = STATUS_NEVER_REPORTED
         return RuntimeAccessPresentation(
@@ -420,7 +458,7 @@ def build_runtime_access_presentation(
             stale=True,
             runtime_instance_id=None,
             escalation_reason=None,
-            headline=STATUS_HEADLINES[status],
+            headline=status_headline_for(status, display),
         )
 
     payload = dict(row.get("payload") or {})
@@ -458,7 +496,7 @@ def build_runtime_access_presentation(
         stale=status in {STATUS_STALE, STATUS_RUNTIME_OFFLINE, STATUS_NEVER_REPORTED},
         runtime_instance_id=payload.get("runtime_instance_id") or row.get("runtime_instance_id"),
         escalation_reason=payload.get("escalation_reason"),
-        headline=STATUS_HEADLINES.get(status, STATUS_HEADLINES[STATUS_STALE]),
+        headline=status_headline_for(status, display),
     )
 
 
@@ -470,7 +508,7 @@ def load_provider_operations_details(
     now: datetime | None = None,
     timeline_limit: int = 20,
 ) -> Any:
-    """Load expanded Provider Operations details for the Amex card."""
+    """Load expanded Provider Operations details for a managed provider card."""
     row = get_runtime_access_state(db, user_id, provider)
     payload = dict(row.get("payload") or {}) if row else None
     timeline = list_access_timeline_events(
@@ -488,38 +526,68 @@ def load_provider_operations_details(
     )
 
 
+def _capabilities_for_provider(provider: str) -> ProviderPlatformCapabilities:
+    return get_provider_registry().capabilities_for(provider)
+
+
+def _compact_access_rows(
+    presentation: RuntimeAccessPresentation,
+    capabilities: ProviderPlatformCapabilities,
+    *,
+    now: datetime,
+) -> list[tuple[str, str]]:
+    """Build compact card rows, omitting unsupported capability fields."""
+    p = presentation
+    yes_no = lambda v: "yes" if v else "no"
+    rows: list[tuple[str, str]] = [
+        ("Access status", p.status_label),
+        ("Authentication", p.authentication_state),
+    ]
+    if capabilities.verification:
+        rows.append(
+            (
+                "Last verified",
+                _age_label(p.last_verified_at, now=now) if p.last_verified_at else "never",
+            )
+        )
+    rows.append(("Session age", p.session_age_label))
+    if capabilities.recovery:
+        rows.append(("Recovery state", p.recovery_state))
+        rows.append(
+            (
+                "Recovery counts",
+                (
+                    f"{p.recovery_attempts} attempts · "
+                    f"{p.recovery_successes} ok · {p.recovery_failures} fail"
+                ),
+            )
+        )
+    if capabilities.connector_readiness:
+        rows.append(("Ready for extraction", yes_no(p.ready_for_extraction)))
+        rows.append(("Ready for connector", yes_no(p.ready_for_connector)))
+    rows.append(("User action required", yes_no(p.user_action_required)))
+    rows.append(("Last update", p.last_update_label))
+    if p.escalation_reason:
+        rows.append(("Escalation", str(p.escalation_reason)))
+    return rows
+
+
 def render_runtime_access_card(
     presentation: RuntimeAccessPresentation,
     *,
     escape: Callable[[Any], str],
     operations: Any | None = None,
+    capabilities: ProviderPlatformCapabilities | None = None,
 ) -> str:
-    """Render Amex Access card using Truth Dashboard visual language.
+    """Render one managed-provider Access card using Truth Dashboard visual language.
 
     Compact by default; Provider Operations details expand via View details.
+    Capability flags control which rows appear (no hard-coded Amex assumptions).
     """
     p = presentation
-    yes_no = lambda v: "yes" if v else "no"
-    rows = [
-        ("Access status", p.status_label),
-        ("Authentication", p.authentication_state),
-        ("Last verified", _age_label(p.last_verified_at, now=datetime.now(timezone.utc))
-         if p.last_verified_at
-         else "never"),
-        ("Session age", p.session_age_label),
-        ("Recovery state", p.recovery_state),
-        (
-            "Recovery counts",
-            f"{p.recovery_attempts} attempts · {p.recovery_successes} ok · {p.recovery_failures} fail",
-        ),
-        ("Ready for extraction", yes_no(p.ready_for_extraction)),
-        ("Ready for connector", yes_no(p.ready_for_connector)),
-        ("User action required", yes_no(p.user_action_required)),
-        ("Last update", p.last_update_label),
-    ]
-    if p.escalation_reason:
-        rows.append(("Escalation", str(p.escalation_reason)))
-
+    caps = capabilities if capabilities is not None else _capabilities_for_provider(p.provider)
+    now = datetime.now(timezone.utc)
+    rows = _compact_access_rows(p, caps, now=now)
     dl = "".join(
         f'<div class="dash-access-row">'
         f'<dt>{escape(label)}</dt>'
@@ -533,19 +601,25 @@ def render_runtime_access_card(
             [],
             provider=p.provider,
         )
-    ops_html = render_provider_operations_details_html(operations, escape=escape)
+    ops_html = render_provider_operations_details_html(
+        operations,
+        escape=escape,
+        capabilities=caps,
+    )
     details = (
         f'<details class="dash-access-details" data-access-details="1">'
         f'<summary class="dash-access-details-summary">View details</summary>'
         f"{ops_html}"
         f"</details>"
     )
+    caps_attr = ",".join(caps.enabled_names())
     return (
         f'<section class="dash-access-card" '
         f'data-runtime-access="1" '
         f'data-provider="{escape(p.provider)}" '
         f'data-access-status="{escape(p.status)}" '
-        f'aria-label="American Express local access">'
+        f'data-provider-capabilities="{escape(caps_attr)}" '
+        f'aria-label="{escape(p.display_name)} local access">'
         f'<p class="dash-truth-section-label">Local Provider Runtime</p>'
         f'<h2 class="dash-access-title">{escape(p.display_name)} access</h2>'
         f'<p class="dash-access-headline" data-access-headline="1">{escape(p.headline)}</p>'
@@ -596,3 +670,97 @@ def load_runtime_access_card_model(
         now=now,
     )
     return presentation, operations
+
+
+@dataclass(frozen=True)
+class RuntimeAccessProviderCard:
+    """One registry-backed provider card: managed provider + presentation + ops."""
+
+    managed: ManagedProvider
+    presentation: RuntimeAccessPresentation
+    operations: Any
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.managed.to_dict(),
+            "access": self.presentation.to_dict(),
+            "operations": self.operations.to_dict(),
+            "capabilities": self.managed.capabilities.to_dict(),
+        }
+
+
+def load_runtime_access_provider_cards(
+    db: Any,
+    user_id: str,
+    *,
+    now: datetime | None = None,
+    stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
+    providers: tuple[ManagedProvider, ...] | None = None,
+) -> list[RuntimeAccessProviderCard]:
+    """Load one access card model per registered (or supplied) managed provider."""
+    managed_list = providers if providers is not None else get_provider_registry().list_providers()
+    cards: list[RuntimeAccessProviderCard] = []
+    for managed in managed_list:
+        presentation, operations = load_runtime_access_card_model(
+            db,
+            user_id,
+            managed.provider_id,
+            now=now,
+            stale_after_seconds=stale_after_seconds,
+        )
+        cards.append(
+            RuntimeAccessProviderCard(
+                managed=managed,
+                presentation=presentation,
+                operations=operations,
+            )
+        )
+    return cards
+
+
+def render_runtime_access_provider_list(
+    cards: list[RuntimeAccessProviderCard] | tuple[RuntimeAccessProviderCard, ...],
+    *,
+    escape: Callable[[Any], str],
+) -> str:
+    """Render the Provider Manager list — one Access card per managed provider."""
+    if not cards:
+        return (
+            '<section class="dash-access-provider-list" data-provider-manager="1" '
+            'aria-label="Managed providers">'
+            '<p class="dash-access-empty">No managed providers are registered.</p>'
+            "</section>"
+        )
+    body = "".join(
+        render_runtime_access_card(
+            card.presentation,
+            escape=escape,
+            operations=card.operations,
+            capabilities=card.managed.capabilities,
+        )
+        for card in cards
+    )
+    return (
+        f'<section class="dash-access-provider-list" data-provider-manager="1" '
+        f'aria-label="Managed providers">'
+        f"{body}"
+        f"</section>"
+    )
+
+
+def load_and_render_runtime_access_provider_list(
+    db: Any,
+    user_id: str,
+    *,
+    escape: Callable[[Any], str],
+    now: datetime | None = None,
+    stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
+) -> str:
+    """Convenience: load registry providers and render the dashboard list."""
+    cards = load_runtime_access_provider_cards(
+        db,
+        user_id,
+        now=now,
+        stale_after_seconds=stale_after_seconds,
+    )
+    return render_runtime_access_provider_list(cards, escape=escape)

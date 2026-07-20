@@ -300,11 +300,14 @@ def test_dashboard_includes_access_card(client):
     page = client.get("/dashboard")
     assert page.status_code == 200
     html = page.get_data(as_text=True)
+    assert 'data-provider-manager="1"' in html
     assert 'data-runtime-access="1"' in html
+    assert 'data-provider="amex"' in html
     assert "American Express access" in html
     assert "View details" in html
     assert "_pollRuntimeAccessState" in html
     assert "_applyRuntimeAccessOperations" in html
+    assert "encodeURIComponent(provider)" in html
 
 
 def test_never_reported_on_fresh_user(client):

@@ -7080,8 +7080,8 @@ function _escText(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
-function _applyRuntimeAccessCard(access) {
-  var card = document.querySelector('[data-runtime-access="1"]');
+function _applyRuntimeAccessCard(access, card) {
+  card = card || document.querySelector('[data-runtime-access="1"]');
   if (!card || !access) return;
   card.setAttribute('data-access-status', access.status || 'never_reported');
   var badge = card.querySelector('[data-access-badge="1"]');
@@ -7110,8 +7110,8 @@ function _applyRuntimeAccessCard(access) {
     }
   });
 }
-function _applyRuntimeAccessOperations(ops) {
-  var card = document.querySelector('[data-runtime-access="1"]');
+function _applyRuntimeAccessOperations(ops, card) {
+  card = card || document.querySelector('[data-runtime-access="1"]');
   if (!card || !ops) return;
   var root = card.querySelector('[data-access-ops="1"]');
   if (!root) return;
@@ -7163,11 +7163,17 @@ function _applyRuntimeAccessOperations(ops) {
   }
 }
 function _pollRuntimeAccessState() {
-  fetch('/api/runtime/access-state?provider=amex').then(function(r){return r.json();}).then(function(d){
-    if (!d || !d.ok || !d.access) return;
-    _applyRuntimeAccessCard(d.access);
-    if (d.operations) _applyRuntimeAccessOperations(d.operations);
-  }).catch(function(){});
+  var cards = document.querySelectorAll('[data-runtime-access="1"]');
+  if (!cards.length) return;
+  cards.forEach(function(card) {
+    var provider = card.getAttribute('data-provider') || 'amex';
+    fetch('/api/runtime/access-state?provider=' + encodeURIComponent(provider))
+      .then(function(r){return r.json();}).then(function(d){
+        if (!d || !d.ok || !d.access) return;
+        _applyRuntimeAccessCard(d.access, card);
+        if (d.operations) _applyRuntimeAccessOperations(d.operations, card);
+      }).catch(function(){});
+  });
 }
 _pollRuntimeAccessState();
 setInterval(_pollRuntimeAccessState, 10000);
@@ -10256,14 +10262,10 @@ def dashboard():
         _runtime_access_html = ""
         try:
             from mighty.runtime_access_state import (
-                load_runtime_access_card_model,
-                render_runtime_access_card,
+                load_and_render_runtime_access_provider_list,
             )
-            _runtime_access, _runtime_ops = load_runtime_access_card_model(
-                get_db(), session["user_id"], "amex"
-            )
-            _runtime_access_html = render_runtime_access_card(
-                _runtime_access, escape=he, operations=_runtime_ops
+            _runtime_access_html = load_and_render_runtime_access_provider_list(
+                get_db(), session["user_id"], escape=he
             )
         except Exception:
             _runtime_access_html = ""
@@ -18823,19 +18825,30 @@ def api_runtime_access_state_ingest():
 @app.route("/api/runtime/access-state", methods=["GET"])
 @require_login_or_key
 def api_runtime_access_state_read():
-    """Return presented local AccessState for the dashboard (Amex vertical slice)."""
+    """Return presented local AccessState for a registered managed provider."""
+    from mighty.provider_registry import get_provider_registry
     from mighty.runtime_access_state import load_runtime_access_card_model
 
     uid = get_current_user_id()
+    registry = get_provider_registry()
     provider = (request.args.get("provider") or "amex").strip().lower()
-    if provider != "amex":
-        return jsonify({"ok": False, "error": "only amex is supported in this slice"}), 400
+    managed = registry.get(provider)
+    if managed is None:
+        return jsonify(
+            {
+                "ok": False,
+                "error": f"provider not registered: {provider}",
+                "registered_providers": list(registry.provider_ids()),
+            }
+        ), 400
     presentation, operations = load_runtime_access_card_model(get_db(), uid, provider)
     return jsonify(
         {
             "ok": True,
             "access": presentation.to_dict(),
             "operations": operations.to_dict(),
+            "capabilities": managed.capabilities.to_dict(),
+            "provider": managed.to_dict(),
         }
     )
 

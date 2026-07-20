@@ -731,44 +731,80 @@ def render_provider_operations_details_html(
     details: ProviderOperationsDetails,
     *,
     escape: Any,
+    capabilities: Any | None = None,
 ) -> str:
-    """Render the expandable Provider Operations details body."""
+    """Render the expandable Provider Operations details body.
+
+    When ``capabilities`` is provided (ProviderPlatformCapabilities), only rows for
+    supported capabilities are shown. When omitted, all historical rows render so
+    existing Amex callers stay unchanged.
+    """
     d = details
-    metric_rows = [
+    caps = capabilities
+    show_all = caps is None
+
+    def _cap(name: str) -> bool:
+        if show_all:
+            return True
+        return bool(getattr(caps, name, False))
+
+    metric_rows: list[tuple[str, str]] = [
         ("Autonomous uptime", d.autonomous_uptime_label),
         ("Last user intervention", d.last_user_intervention_label),
-        ("Snapshot freshness", d.snapshot_freshness_label),
-        (
-            "Last verification",
-            (
-                f"{d.verification_last_label}"
-                + (f" ({d.verification_last_result})" if d.verification_last_result else "")
-            ),
-        ),
-        (
-            "Last keepalive",
-            (
-                f"{d.keepalive_last_label}"
-                + (f" ({d.keepalive_last_result})" if d.keepalive_last_result else "")
-            ),
-        ),
-        ("Recovery state", d.recovery_state),
-        (
-            "Recovery metrics",
-            (
-                f"{d.recovery_attempts} attempts · "
-                f"{d.recovery_successes} ok · {d.recovery_failures} fail"
-            ),
-        ),
     ]
-    if d.last_recovery_action:
+    if _cap("snapshots"):
+        metric_rows.append(("Snapshot freshness", d.snapshot_freshness_label))
+    if _cap("verification"):
         metric_rows.append(
             (
-                "Last recovery",
-                f"{d.last_recovery_action}"
-                + (f" — {d.last_recovery_result}" if d.last_recovery_result else ""),
+                "Last verification",
+                (
+                    f"{d.verification_last_label}"
+                    + (
+                        f" ({d.verification_last_result})"
+                        if d.verification_last_result
+                        else ""
+                    )
+                ),
             )
         )
+    if _cap("keepalive"):
+        metric_rows.append(
+            (
+                "Last keepalive",
+                (
+                    f"{d.keepalive_last_label}"
+                    + (
+                        f" ({d.keepalive_last_result})"
+                        if d.keepalive_last_result
+                        else ""
+                    )
+                ),
+            )
+        )
+    if _cap("recovery"):
+        metric_rows.append(("Recovery state", d.recovery_state))
+        metric_rows.append(
+            (
+                "Recovery metrics",
+                (
+                    f"{d.recovery_attempts} attempts · "
+                    f"{d.recovery_successes} ok · {d.recovery_failures} fail"
+                ),
+            )
+        )
+        if d.last_recovery_action:
+            metric_rows.append(
+                (
+                    "Last recovery",
+                    f"{d.last_recovery_action}"
+                    + (
+                        f" — {d.last_recovery_result}"
+                        if d.last_recovery_result
+                        else ""
+                    ),
+                )
+            )
     metrics = "".join(
         f'<div class="dash-access-ops-row">'
         f"<dt>{escape(label)}</dt>"
