@@ -17,6 +17,7 @@ from mighty.capability_state import (
     TRUTH_PROVIDER_DISPLAY,
     build_capability_view,
 )
+from mighty.attention_view import AttentionView
 from mighty.customer_account_access import CustomerAccountAccessView
 from mighty.customer_local_time import format_customer_local_time
 from mighty.home_state import HomeStateResult
@@ -549,6 +550,57 @@ def render_account_access_table(
     )
 
 
+def render_attention_panel(
+    attention: AttentionView,
+    *,
+    escape: Callable[[Any], str],
+) -> str:
+    """Render AttentionView primary — Home does not re-rank."""
+    primary = attention.primary
+    silence = attention.silence.value if attention.silence is not None else ""
+    if primary is None:
+        if attention.silence is None:
+            return ""
+        label = {
+            "all_clear": "Nothing needs you right now.",
+            "suppressed": "Attention is snoozed for now.",
+            "awaiting_data": "Mighty is waiting on account data.",
+        }.get(silence, "Nothing needs you right now.")
+        return (
+            f'<section class="dash-attention" aria-label="Attention" '
+            f'data-silence="{escape(silence)}">'
+            f'<p class="dash-attention-silence">{escape(label)}</p>'
+            f"</section>"
+        )
+
+    cta_html = ""
+    if primary.cta_label and primary.cta_url:
+        external = primary.cta_url.startswith("http")
+        target = ' target="_blank" rel="noopener"' if external else ""
+        cta_html = (
+            f'<a href="{escape(primary.cta_url)}" '
+            f'class="dash-brief-featured-cta dash-attention-cta"{target}>'
+            f"{escape(primary.cta_label)}</a>"
+        )
+    elif primary.cta_label:
+        cta_html = (
+            f'<span class="dash-attention-cta-disabled">'
+            f"{escape(primary.cta_label)}</span>"
+        )
+
+    return (
+        f'<section class="dash-attention" aria-label="Attention" '
+        f'data-attention-id="{escape(primary.attention_id)}" '
+        f'data-attention-class="{escape(primary.attention_class.value)}" '
+        f'data-interrupt="{"1" if attention.render_hints.interrupt else "0"}">'
+        f'<p class="dash-attention-eyebrow">Needs you</p>'
+        f'<h2 class="dash-attention-title">{escape(primary.title)}</h2>'
+        f'<p class="dash-attention-body">{escape(primary.body)}</p>'
+        f"{cta_html}"
+        f"</section>"
+    )
+
+
 def render_home_page(
     result: HomeStateResult,
     *,
@@ -557,8 +609,10 @@ def render_home_page(
     last_checked: str = "",
     escape: Callable[[Any], str],
     extension_info: dict[str, Any] | None = None,
+    attention: AttentionView | None = None,
+    use_attention: bool = False,
 ) -> str:
-    """Render the Truth Dashboard — Amex capability instrument only."""
+    """Render Home: AttentionView for attention + Truth capability instrument."""
     del first_name, today_label  # Greeting removed; diagnostic instrument only.
     capability = result.capability
     if capability is None:
@@ -575,6 +629,10 @@ def render_home_page(
                 else result.provider_open_url
             ),
         )
+
+    attention_html = ""
+    if use_attention and attention is not None:
+        attention_html = render_attention_panel(attention, escape=escape)
 
     footer = ""
     # Prefer explicit last_checked from the caller (Dashboard wires selected
@@ -604,6 +662,7 @@ def render_home_page(
         f'<h1 class="dash-brief-greeting">Mighty</h1>'
         f'<p class="dash-truth-subhead">Can Mighty see and extract authenticated American Express account data?</p>'
         f"</header>"
+        f"{attention_html}"
         f'<section class="dash-brief-primary" aria-label="Capability status">'
         f"{render_capability_panel(capability, escape=escape, extension_info=extension_info)}"
         f"</section>"
