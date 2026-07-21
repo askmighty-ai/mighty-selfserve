@@ -68,7 +68,7 @@ read_attention_snapshot(db, user_id, *, now) -> AttentionReadSnapshot
 | Home | Dashboard hero render | `record_attention_shadow(..., "home")` after existing `resolve_home_state` |
 | Worker | `GET /api/account-status` | `record_attention_shadow(..., "worker")` before JSON response |
 
-Shadow writes `attention_shadow` (latest per user×surface). Failures are swallowed. **Home/Worker UI and CTAs are unchanged** — they do not read AttentionState yet.
+Shadow writes `attention_shadow` (latest per user×surface). When a legacy probe is supplied, also writes `attention_compare` agreement metrics (latest per user×surface). Failures are swallowed. **Home/Worker UI and CTAs remain on the legacy path until cutover flags flip** — see [ATTENTION_PLATFORM_ADOPTION.md](ATTENTION_PLATFORM_ADOPTION.md).
 
 ---
 
