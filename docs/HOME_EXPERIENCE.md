@@ -36,18 +36,17 @@ Every Home state shares the same skeleton. Only the **hero** (Daily Brief) and *
 
 ---
 
-## The six Home states
+## Attention vs enrollment on Home
 
-Home resolves to exactly one dominant state at a time. Priority order when multiple conditions exist:
+**Attention interrupts** (login blockers, agent authorization, silence) are owned by the Attention Platform: `AttentionState` → `AttentionView`. Home **renders** that view; it does not re-rank.
 
-1. **Login** (blocked — user action required)
-2. **Empty** (nothing tracked yet)
-3. **Waiting** (tracked but no fresh data)
-4. **Update** (transient — extraction in progress)
-5. **Recommendation** (actionable value surfaced)
-6. **All clear** (default when healthy)
+**Enrollment / operational context** (empty portfolio, waiting for first data, update-in-progress) may still be prepared by `resolve_home_state` for capability/Truth presentation. Those are not a second attention ranking table.
 
-Login and Empty are mutually exclusive with All clear. Update is transient and overlays Waiting or Login briefly. Recommendation can coexist with All clear only when the recommendation is informational (not urgent); otherwise Recommendation wins.
+See [ATTENTION_PLATFORM_ADOPTION.md](ATTENTION_PLATFORM_ADOPTION.md) and [ATTENTION_VIEW.md](ATTENTION_VIEW.md).
+
+### Historical six-state model (superseded for attention)
+
+The former Home-local priority (Login → Empty → Waiting → Update → Recommendation → All clear) is **removed** as attention policy. Login/recommendation interrupts must come from AttentionView.
 
 ---
 
