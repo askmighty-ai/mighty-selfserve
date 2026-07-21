@@ -187,3 +187,34 @@ class TestAttentionDelivery:
             send_push=lambda *a: True,
         )
         assert n == 1
+
+    def test_retries_failed_delivery_after_backoff(self, db):
+        from mighty.attention_delivery import DELIVERY_RETRY_BACKOFF_SECONDS
+
+        _seed_auth_blocker(db)
+        first = deliver_attention_primary(
+            db, USER_ID, now=FIXED_NOW, send_push=lambda *a: False
+        )
+        assert first is not None
+        assert first.status == "failed"
+        assert first.attempt_count == 1
+
+        # Within backoff → skip
+        mid = deliver_attention_primary(
+            db,
+            USER_ID,
+            now=FIXED_NOW + timedelta(seconds=10),
+            send_push=lambda *a: True,
+        )
+        assert mid is not None
+        assert mid.status == "skipped"
+        assert mid.detail == "retry_backoff"
+
+        # After backoff → retry succeeds
+        later = FIXED_NOW + timedelta(seconds=DELIVERY_RETRY_BACKOFF_SECONDS + 1)
+        second = deliver_attention_primary(
+            db, USER_ID, now=later, send_push=lambda *a: True
+        )
+        assert second is not None
+        assert second.status == "delivered"
+        assert second.attempt_count == 2

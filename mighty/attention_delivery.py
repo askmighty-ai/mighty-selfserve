@@ -26,6 +26,11 @@ _PUSH_URGENCIES = frozenset(
     }
 )
 
+# Milestone 5 — retry / SLA constants.
+MAX_DELIVERY_ATTEMPTS = 3
+DELIVERY_RETRY_BACKOFF_SECONDS = 60
+BLOCKER_DELIVERY_SLA_SECONDS = 60
+
 PushSender = Callable[[str, str, str, str | None], bool]
 
 
@@ -36,6 +41,7 @@ class DeliveryAttempt:
     channel: str
     status: str  # delivered | failed | skipped
     detail: str | None = None
+    attempt_count: int = 0
 
 
 def ensure_attention_delivery_tables(db: Any, *, commit: bool = True) -> None:
@@ -49,6 +55,8 @@ def ensure_attention_delivery_tables(db: Any, *, commit: bool = True) -> None:
             status       TEXT NOT NULL,
             attempted_at TEXT NOT NULL,
             detail       TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 1,
+            first_attempted_at TEXT,
             PRIMARY KEY (user_id, attention_id, channel)
         )
         """
@@ -57,6 +65,16 @@ def ensure_attention_delivery_tables(db: Any, *, commit: bool = True) -> None:
         "CREATE INDEX IF NOT EXISTS idx_attention_delivery_user "
         "ON attention_delivery_receipt(user_id)"
     )
+    for ddl in (
+        "ALTER TABLE attention_delivery_receipt ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE attention_delivery_receipt ADD COLUMN first_attempted_at TEXT",
+    ):
+        try:
+            db.execute(ddl)
+        except Exception as exc:  # noqa: BLE001 — sqlite duplicate column
+            msg = str(exc).lower()
+            if "duplicate column" not in msg and "already exists" not in msg:
+                raise
     if commit:
         db.commit()
 
@@ -70,7 +88,8 @@ def get_delivery_receipt(
     ensure_attention_delivery_tables(db, commit=False)
     row = db.execute(
         """
-        SELECT user_id, attention_id, channel, status, attempted_at, detail
+        SELECT user_id, attention_id, channel, status, attempted_at, detail,
+               attempt_count, first_attempted_at
         FROM attention_delivery_receipt
         WHERE user_id = ? AND attention_id = ? AND channel = ?
         """,
@@ -87,6 +106,8 @@ def get_delivery_receipt(
         "status": row[3],
         "attempted_at": row[4],
         "detail": row[5],
+        "attempt_count": row[6] if len(row) > 6 else 1,
+        "first_attempted_at": row[7] if len(row) > 7 else row[4],
     }
 
 
@@ -99,20 +120,29 @@ def record_delivery_receipt(
     status: str,
     now: datetime,
     detail: str | None = None,
+    attempt_count: int = 1,
+    first_attempted_at: str | None = None,
     commit: bool = True,
 ) -> None:
     ensure_attention_delivery_tables(db, commit=False)
     stamp = _ensure_aware(now).replace(microsecond=0).isoformat()
+    first = first_attempted_at or stamp
     db.execute(
         """
         INSERT INTO attention_delivery_receipt (
-            user_id, attention_id, channel, status, attempted_at, detail
+            user_id, attention_id, channel, status, attempted_at, detail,
+            attempt_count, first_attempted_at
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id, attention_id, channel) DO UPDATE SET
             status=excluded.status,
             attempted_at=excluded.attempted_at,
-            detail=excluded.detail
+            detail=excluded.detail,
+            attempt_count=excluded.attempt_count,
+            first_attempted_at=COALESCE(
+                attention_delivery_receipt.first_attempted_at,
+                excluded.first_attempted_at
+            )
         """,
         (
             str(user_id).strip(),
@@ -121,6 +151,8 @@ def record_delivery_receipt(
             str(status).strip(),
             stamp,
             detail,
+            int(attempt_count),
+            first,
         ),
     )
     if commit:
@@ -217,6 +249,11 @@ def _deliver_attention_primary(
         )
 
     existing = get_delivery_receipt(db, uid, primary.attention_id, "push")
+    prior_attempts = int((existing or {}).get("attempt_count") or 0)
+    first_attempted_at = (existing or {}).get("first_attempted_at") or (
+        (existing or {}).get("attempted_at")
+    )
+
     if existing and existing.get("status") == "delivered":
         return DeliveryAttempt(
             user_id=uid,
@@ -224,7 +261,33 @@ def _deliver_attention_primary(
             channel="push",
             status="skipped",
             detail="already_delivered",
+            attempt_count=prior_attempts or 1,
         )
+
+    if existing and existing.get("status") == "failed":
+        if prior_attempts >= MAX_DELIVERY_ATTEMPTS:
+            return DeliveryAttempt(
+                user_id=uid,
+                attention_id=primary.attention_id,
+                channel="push",
+                status="skipped",
+                detail="max_retries",
+                attempt_count=prior_attempts,
+            )
+        last = _parse_iso(existing.get("attempted_at"))
+        if last is not None:
+            age = (now - last).total_seconds()
+            if age < DELIVERY_RETRY_BACKOFF_SECONDS:
+                return DeliveryAttempt(
+                    user_id=uid,
+                    attention_id=primary.attention_id,
+                    channel="push",
+                    status="skipped",
+                    detail="retry_backoff",
+                    attempt_count=prior_attempts,
+                )
+
+    next_attempt = prior_attempts + 1 if prior_attempts else 1
 
     if send_push is None:
         record_delivery_receipt(
@@ -235,6 +298,8 @@ def _deliver_attention_primary(
             status="skipped",
             now=now,
             detail="no_push_sender",
+            attempt_count=next_attempt,
+            first_attempted_at=first_attempted_at,
         )
         return DeliveryAttempt(
             user_id=uid,
@@ -242,6 +307,7 @@ def _deliver_attention_primary(
             channel="push",
             status="skipped",
             detail="no_push_sender",
+            attempt_count=next_attempt,
         )
 
     view = build_attention_view(state, surface="push")
@@ -253,6 +319,7 @@ def _deliver_attention_primary(
             channel="push",
             status="skipped",
             detail="no_presentation",
+            attempt_count=prior_attempts,
         )
 
     title = presentation.title
@@ -275,12 +342,31 @@ def _deliver_attention_primary(
         status=status,
         now=now,
         detail=detail,
+        attempt_count=next_attempt,
+        first_attempted_at=first_attempted_at,
     )
+    if (
+        not ok
+        and primary.urgency is AttentionUrgency.BLOCKER
+        and first_attempted_at
+    ):
+        first_dt = _parse_iso(str(first_attempted_at))
+        if first_dt is not None:
+            elapsed = (now - first_dt).total_seconds()
+            if elapsed >= BLOCKER_DELIVERY_SLA_SECONDS:
+                logger.info(
+                    "attention.sla_breached user_id=%s attention_id=%s "
+                    "channel=push elapsed_s=%.0f",
+                    uid,
+                    primary.attention_id,
+                    elapsed,
+                )
     logger.info(
-        "attention.%s user_id=%s attention_id=%s channel=push",
+        "attention.%s user_id=%s attention_id=%s channel=push attempt=%s",
         "delivered" if ok else "delivery_failed",
         uid,
         primary.attention_id,
+        next_attempt,
     )
     return DeliveryAttempt(
         user_id=uid,
@@ -288,7 +374,21 @@ def _deliver_attention_primary(
         channel="push",
         status=status,
         detail=detail,
+        attempt_count=next_attempt,
     )
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        text = str(value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _list_enrolled_user_ids(db: Any) -> list[str]:

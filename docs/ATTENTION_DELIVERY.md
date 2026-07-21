@@ -34,6 +34,16 @@ run_attention_delivery_sweep(db, *, now, user_ids=None, send_push=None)
 
 Scheduler: same heartbeat as AttentionSupervisor (`ENABLE_ATTENTION_SUPERVISOR`). Push sender is injected from `app.py` (`send_web_push` + notify/subscription gates).
 
+### Retry / SLA (Milestone 5)
+
+| Constant | Value |
+|----------|-------|
+| `MAX_DELIVERY_ATTEMPTS` | 3 |
+| `DELIVERY_RETRY_BACKOFF_SECONDS` | 60 |
+| `BLOCKER_DELIVERY_SLA_SECONDS` | 60 |
+
+Failed receipts are retried after backoff until max attempts. Blocker primaries that remain undelivered past SLA log `attention.sla_breached`.
+
 ---
 
 ## HTTP (commands + view)

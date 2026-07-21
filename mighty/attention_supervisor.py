@@ -34,6 +34,7 @@ class AttentionSupervisorResult:
     users_scanned: int
     in_flight_cleared: int
     orphans_deleted: int
+    reopened: int
     errors: int
 
 
@@ -45,6 +46,7 @@ def run_attention_supervisor(
 ) -> AttentionSupervisorResult:
     """Clear timed-out in_flight overlays and GC orphan overlays.
 
+    Timed-out in_flight clears log ``attention.reopened`` (RFC §6.3).
     ``now`` must be supplied by the caller. Never raises.
     """
     try:
@@ -54,11 +56,12 @@ def run_attention_supervisor(
             user_ids = list_attention_overlay_user_ids(db)
     except Exception:
         logger.exception("attention_supervisor_init_failed")
-        return AttentionSupervisorResult(0, 0, 0, 1)
+        return AttentionSupervisorResult(0, 0, 0, 0, 1)
 
     users_scanned = 0
     in_flight_cleared = 0
     orphans_deleted = 0
+    reopened = 0
     errors = 0
 
     for raw_uid in user_ids:
@@ -67,9 +70,10 @@ def run_attention_supervisor(
             continue
         users_scanned += 1
         try:
-            cleared, deleted = _supervise_user(db, uid, now=now)
+            cleared, deleted, reopened_n = _supervise_user(db, uid, now=now)
             in_flight_cleared += cleared
             orphans_deleted += deleted
+            reopened += reopened_n
         except Exception:
             errors += 1
             logger.exception("attention_supervisor_user_failed user_id=%s", uid)
@@ -78,20 +82,22 @@ def run_attention_supervisor(
         users_scanned=users_scanned,
         in_flight_cleared=in_flight_cleared,
         orphans_deleted=orphans_deleted,
+        reopened=reopened,
         errors=errors,
     )
 
 
-def _supervise_user(db: Any, user_id: str, *, now: datetime) -> tuple[int, int]:
+def _supervise_user(db: Any, user_id: str, *, now: datetime) -> tuple[int, int, int]:
     overlays = list_attention_overlays(db, user_id)
     if not overlays:
-        return 0, 0
+        return 0, 0, 0
 
     snap = read_attention_snapshot(db, user_id, now=now)
     live_ids = {item.attention_id for item in snap.candidates}
 
     cleared = 0
     deleted = 0
+    reopened = 0
     for overlay in overlays:
         # Orphan GC: root cause gone → delete overlay.
         if overlay.attention_id not in live_ids:
@@ -108,8 +114,15 @@ def _supervise_user(db: Any, user_id: str, *, now: datetime) -> tuple[int, int]:
         if age >= IN_FLIGHT_TIMEOUT_SECONDS:
             clear_attention_overlay(db, user_id, overlay.attention_id)
             cleared += 1
+            # Candidate still live → item is visible/open again.
+            reopened += 1
+            logger.info(
+                "attention.reopened user_id=%s attention_id=%s reason=in_flight_timeout",
+                user_id,
+                overlay.attention_id,
+            )
 
-    return cleared, deleted
+    return cleared, deleted, reopened
 
 
 def _ensure_aware(value: datetime) -> datetime:
