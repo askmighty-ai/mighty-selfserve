@@ -16,6 +16,7 @@ from mighty.admin_local_time import parse_admin_timestamp
 from mighty.attention_compiler import (
     WORKER_REACHABLE_SLA_SECONDS,
     AuthorizeRow,
+    BenefitSignal,
     WorkerSignal,
 )
 from mighty.auth_truth import AuthTruth, project_auth_truth
@@ -88,6 +89,78 @@ def load_account_states_for_attention(db: Any, user_id: str) -> list[AccountStat
         return list(list_account_states(db, uid))
     except Exception:
         return []
+
+
+def load_benefit_signals(
+    db: Any,
+    user_id: str,
+    *,
+    now: datetime,
+) -> list[BenefitSignal]:
+    """Load open action_items as BenefitSignal compiler inputs.
+
+    Mirrors open-item filtering (not dismissed/completed/snoozed). Does not
+    decide value_at_risk vs opportunity — that is producer policy.
+    """
+    uid = str(user_id or "").strip()
+    if not uid:
+        return []
+    now = _ensure_aware(now)
+    now_iso = now.replace(microsecond=0).isoformat()
+    try:
+        rows = db.execute(
+            """
+            SELECT id, source, field_key, label, value, btype, urgency,
+                   days_left, exp_date, created_at
+            FROM action_items
+            WHERE user_id = ?
+              AND dismissed_at IS NULL
+              AND completed_at IS NULL
+              AND (snoozed_until IS NULL OR snoozed_until < ?)
+            ORDER BY
+                CASE urgency WHEN 'urgent' THEN 0 WHEN 'soon' THEN 1 ELSE 2 END,
+                CASE WHEN days_left IS NULL THEN 9999 ELSE days_left END,
+                id ASC
+            """,
+            (uid, now_iso),
+        ).fetchall()
+    except Exception:
+        return []
+
+    signals: list[BenefitSignal] = []
+    for row in rows:
+        mapping = _row_mapping(row)
+        provider = _optional_str(mapping.get("source"))
+        field_key = _optional_str(mapping.get("field_key"))
+        if not provider or not field_key:
+            continue
+        days_left = mapping.get("days_left")
+        try:
+            days_left_int = int(days_left) if days_left is not None else None
+        except (TypeError, ValueError):
+            days_left_int = None
+        urgency = (_optional_str(mapping.get("urgency")) or "info").lower()
+        kind = "expiring" if urgency in {"urgent", "soon"} else "opportunity"
+        try:
+            signals.append(
+                BenefitSignal(
+                    user_id=uid,
+                    provider=provider,
+                    field_key=field_key,
+                    btype=_optional_str(mapping.get("btype")) or "other",
+                    urgency=urgency,
+                    days_left=days_left_int,
+                    exp_date=_optional_str(mapping.get("exp_date")),
+                    label=_optional_str(mapping.get("label")),
+                    value=_optional_str(mapping.get("value")),
+                    kind=kind,
+                    observed_at=_optional_str(mapping.get("created_at")),
+                    source_item_id=_optional_str(mapping.get("id")),
+                )
+            )
+        except Exception:
+            continue
+    return signals
 
 
 def load_worker_signal(

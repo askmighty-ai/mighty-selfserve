@@ -14,7 +14,7 @@ See docs/ATTENTION_COMPILER.md and docs/ATTENTION_COMPILER_DATA_GAP.md.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 from mighty.account_state import CONN_CONNECTED, DATA_NONE, DATA_PARTIAL
 from mighty.attention import (
@@ -25,9 +25,11 @@ from mighty.attention import (
     REASON_LOGIN,
     REASON_LOGIN_UNKNOWN,
     REASON_MFA,
+    REASON_OPPORTUNITY,
     REASON_PENDING_AUTHORIZATION,
     REASON_STALE,
     REASON_UNKNOWN_HUMAN,
+    REASON_VALUE_AT_RISK,
     REASON_WORKER_MISSING,
     REASON_WORKER_UNREACHABLE,
     AttentionClass,
@@ -37,6 +39,7 @@ from mighty.attention import (
     AttentionSourceKind,
     AttentionUrgency,
 )
+from mighty.classify import is_actionable, is_needs_attention
 from mighty.auth_truth import (
     ACCESS_BROWSER_SESSION,
     ACCESS_MANAGED_RUNTIME,
@@ -373,6 +376,150 @@ def compile_worker_attention(signal: WorkerSignal) -> AttentionItem | None:
     )
 
 
+# --- BenefitSignal → value_at_risk / opportunity (Milestone 4) ----------------
+
+
+BenefitKind = Literal["expiring", "opportunity"]
+BenefitUrgency = Literal["urgent", "soon", "info"]
+
+# Design note: actionable types with days_left at or below this are value_at_risk.
+VALUE_AT_RISK_DAYS_LEFT_MAX = 14
+
+
+@dataclass(frozen=True)
+class BenefitSignal:
+    """Minimal benefit/action-item fact for AttentionCompiler (RFC §4.3)."""
+
+    user_id: str
+    provider: str
+    field_key: str
+    btype: str
+    urgency: str = "info"
+    days_left: int | None = None
+    exp_date: str | None = None
+    label: str | None = None
+    value: str | None = None
+    kind: str = "opportunity"
+    observed_at: str | None = None
+    source_item_id: str | None = None
+
+    def __post_init__(self) -> None:
+        user_id = str(self.user_id or "").strip()
+        provider = _normalize_provider(self.provider)
+        field_key = str(self.field_key or "").strip()
+        if not user_id:
+            raise ValueError("BenefitSignal.user_id must be a non-empty string")
+        if not provider:
+            raise ValueError("BenefitSignal.provider must be a non-empty string")
+        if not field_key:
+            raise ValueError("BenefitSignal.field_key must be a non-empty string")
+        if user_id != self.user_id:
+            object.__setattr__(self, "user_id", user_id)
+        if provider != self.provider:
+            object.__setattr__(self, "provider", provider)
+        if field_key != self.field_key:
+            object.__setattr__(self, "field_key", field_key)
+        urgency = str(self.urgency or "info").strip().lower() or "info"
+        if urgency not in {"urgent", "soon", "info"}:
+            urgency = "info"
+        if urgency != self.urgency:
+            object.__setattr__(self, "urgency", urgency)
+        btype = str(self.btype or "other").strip().lower() or "other"
+        if btype != self.btype:
+            object.__setattr__(self, "btype", btype)
+
+
+def benefit_fingerprint(provider: str, field_key: str) -> str:
+    """Stable root-cause identity for a benefit field."""
+    return f"benefit:{_normalize_provider(provider)}:{str(field_key).strip()}"
+
+
+def benefit_attention_id(user_id: str, attention_class: str, provider: str, field_key: str) -> str:
+    """Deterministic attention_id for benefit-derived candidates."""
+    return (
+        f"att_{str(user_id).strip()}_{attention_class}"
+        f"_{_normalize_provider(provider)}_{str(field_key).strip()}"
+    )
+
+
+def benefit_source_ref(signal: BenefitSignal) -> str:
+    """Join key back to the owning action_item / benefit field."""
+    if signal.source_item_id:
+        return f"action_item:{str(signal.source_item_id).strip()}"
+    return benefit_fingerprint(signal.provider, signal.field_key)
+
+
+def benefit_is_value_at_risk(signal: BenefitSignal) -> bool:
+    """True when the signal should compile as value_at_risk (not opportunity)."""
+    if not (is_actionable(signal.btype) or is_needs_attention(signal.btype)):
+        return False
+    if signal.urgency in {"urgent", "soon"}:
+        return True
+    if signal.days_left is not None and signal.days_left <= VALUE_AT_RISK_DAYS_LEFT_MAX:
+        return is_actionable(signal.btype) or is_needs_attention(signal.btype)
+    return False
+
+
+def compile_benefit_attention(signal: BenefitSignal) -> AttentionItem | None:
+    """Compile one BenefitSignal into value_at_risk or opportunity.
+
+    Mutually exclusive: value_at_risk wins when time pressure applies;
+    otherwise actionable benefits emit opportunity. Non-actionable /
+    non-attention types return ``None``.
+    """
+    if not isinstance(signal, BenefitSignal):
+        raise TypeError("signal must be a BenefitSignal")
+
+    actionable = is_actionable(signal.btype) or is_needs_attention(signal.btype)
+    if not actionable:
+        return None
+
+    if benefit_is_value_at_risk(signal):
+        return AttentionItem(
+            schema_version=ATTENTION_ITEM_SCHEMA_VERSION,
+            attention_id=benefit_attention_id(
+                signal.user_id,
+                AttentionClass.VALUE_AT_RISK.value,
+                signal.provider,
+                signal.field_key,
+            ),
+            user_id=signal.user_id,
+            attention_class=AttentionClass.VALUE_AT_RISK,
+            urgency=AttentionUrgency.TIME_SENSITIVE,
+            provider=signal.provider,
+            fingerprint=benefit_fingerprint(signal.provider, signal.field_key),
+            reason=AttentionReason(code=REASON_VALUE_AT_RISK),
+            cta_key=AttentionCtaKey.OPEN_ACCOUNT_DETAIL,
+            source_kind=AttentionSourceKind.BENEFIT,
+            source_ref=benefit_source_ref(signal),
+            observed_at=signal.observed_at,
+            becomes_stale_at=signal.exp_date,
+            interruption_expected=False,
+        )
+
+    return AttentionItem(
+        schema_version=ATTENTION_ITEM_SCHEMA_VERSION,
+        attention_id=benefit_attention_id(
+            signal.user_id,
+            AttentionClass.OPPORTUNITY.value,
+            signal.provider,
+            signal.field_key,
+        ),
+        user_id=signal.user_id,
+        attention_class=AttentionClass.OPPORTUNITY,
+        urgency=AttentionUrgency.OPPORTUNITY,
+        provider=signal.provider,
+        fingerprint=benefit_fingerprint(signal.provider, signal.field_key),
+        reason=AttentionReason(code=REASON_OPPORTUNITY),
+        cta_key=AttentionCtaKey.OPEN_ACCOUNT_DETAIL,
+        source_kind=AttentionSourceKind.BENEFIT,
+        source_ref=benefit_source_ref(signal),
+        observed_at=signal.observed_at,
+        becomes_stale_at=None,
+        interruption_expected=False,
+    )
+
+
 # --- AccountState → data_gap (Milestone 4) -------------------------------------
 
 
@@ -437,6 +584,7 @@ def compile_attention_candidates(
     auth_truths: Sequence[AuthTruth] = (),
     authorize_rows: Sequence[AuthorizeRow] = (),
     worker_signal: WorkerSignal | None = None,
+    benefit_signals: Sequence[BenefitSignal] = (),
     account_states: Sequence[Any] = (),
 ) -> tuple[AttentionItem, ...]:
     """Gather AttentionItems from supported compiler inputs.
@@ -461,6 +609,10 @@ def compile_attention_candidates(
         worker_item = compile_worker_attention(worker_signal)
         if worker_item is not None:
             items.append(worker_item)
+    for signal in benefit_signals:
+        benefit_item = compile_benefit_attention(signal)
+        if benefit_item is not None:
+            items.append(benefit_item)
     for account in account_states:
         gap = compile_data_gap_attention(account)
         if gap is not None:
