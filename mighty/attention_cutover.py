@@ -49,3 +49,18 @@ def attention_cutover_enabled(surface: str) -> bool:
 def attention_cutover_exposes_payload(surface: str) -> bool:
     """True when API payloads may include AttentionView (on or shadow)."""
     return attention_cutover_mode(surface) in ("on", "shadow")
+
+
+def attention_shadow_compare_enabled(surface: str | None = None) -> bool:
+    """True when legacy probes should feed attention_compare.
+
+    Default after M5: off when cutover is ``on`` (Attention is SSoT). Enable
+    with ``ATTENTION_SHADOW_COMPARE=1`` for soak validation, or when the
+    surface cutover mode is still ``shadow``.
+    """
+    raw = os.environ.get("ATTENTION_SHADOW_COMPARE")
+    if raw is not None and str(raw).strip() != "":
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    if surface is not None and attention_cutover_mode(surface) == "shadow":
+        return True
+    return False

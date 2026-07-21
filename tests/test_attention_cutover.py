@@ -33,7 +33,11 @@ from mighty.attention_consumer import (
     attention_api_payload,
     consume_attention_for_surface,
 )
-from mighty.attention_cutover import attention_cutover_enabled, attention_cutover_mode
+from mighty.attention_cutover import (
+    attention_cutover_enabled,
+    attention_cutover_mode,
+    attention_shadow_compare_enabled,
+)
 from mighty.attention_store import ensure_attention_overlay_tables
 from mighty.home_ui import render_attention_panel, render_home_page
 from mighty.home_state import resolve_home_state
@@ -126,17 +130,27 @@ class TestCutoverFlags:
         assert attention_cutover_mode("worker") == "shadow"
         assert attention_cutover_mode("home") == "on"
 
+    def test_shadow_compare_opt_in(self, monkeypatch):
+        monkeypatch.delenv("ATTENTION_SHADOW_COMPARE", raising=False)
+        monkeypatch.setenv("ATTENTION_CUTOVER", "on")
+        assert attention_shadow_compare_enabled("home") is False
+        monkeypatch.setenv("ATTENTION_SHADOW_COMPARE", "1")
+        assert attention_shadow_compare_enabled("home") is True
+        monkeypatch.delenv("ATTENTION_SHADOW_COMPARE", raising=False)
+        monkeypatch.setenv("ATTENTION_CUTOVER_WORKER", "shadow")
+        assert attention_shadow_compare_enabled("worker") is True
+
 
 class TestConsumerCutover:
-    def test_on_uses_attention_view(self, db, monkeypatch):
+    def test_on_uses_attention_view_without_legacy_probe(self, db, monkeypatch):
         monkeypatch.setenv("ATTENTION_CUTOVER_HOME", "on")
+        monkeypatch.delenv("ATTENTION_SHADOW_COMPARE", raising=False)
         _persist_signed_out(db)
-        legacy = legacy_signal_from_home(home_state="login", provider="amex")
         result = consume_attention_for_surface(
             db,
             USER_ID,
             "home",
-            legacy=legacy,
+            legacy=None,
             now=FIXED_NOW,
             provider_open_urls={"amex": "https://amex.test"},
         )
@@ -145,9 +159,8 @@ class TestConsumerCutover:
         assert result.view.primary is not None
         assert result.view.primary.attention_class.value == "auth_blocker"
         assert result.view.primary.cta_url == "https://amex.test"
-        loaded = load_attention_compare(db, USER_ID, "home")
-        assert loaded is not None
-        assert loaded["agreement"] == AttentionAgreement.EXACT_AGREEMENT.value
+        # Without a legacy probe, compare metrics are not written.
+        assert load_attention_compare(db, USER_ID, "home") is None
 
     def test_shadow_does_not_use_for_ui(self, db, monkeypatch):
         monkeypatch.setenv("ATTENTION_CUTOVER_WORKER", "shadow")

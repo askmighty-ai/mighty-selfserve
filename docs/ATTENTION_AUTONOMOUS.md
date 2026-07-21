@@ -1,6 +1,6 @@
 # Autonomous Attention — Milestone 5 Design Note
 
-**Status:** In progress  
+**Status:** Complete  
 **RFC:** [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) §4.2 / §6 / §7 / Part X / P5  
 **Depends on:** Milestone 4 ([ATTENTION_INTELLIGENT.md](ATTENTION_INTELLIGENT.md))
 
@@ -133,10 +133,10 @@ Until then: keep flags; stop **requiring** legacy probes when mode=`on` (compare
 | PR | Theme |
 |----|-------|
 | 1 | This Design Note + RFC pointer | done |
-| 2 | Minimal `runtime_access_state` read/write + Trust producer + gather/engine | in progress |
-| 3 | Supervisor reopen logging + delivery retry | pending |
-| 4 | Production metrics module + heartbeat hook | pending |
-| 5 | Cutover retirement criteria doc + opt-in legacy compare + safe cleanup | pending |
+| 2 | Minimal `runtime_access_state` read/write + Trust producer + gather/engine | done |
+| 3 | Supervisor reopen logging + delivery retry | done |
+| 4 | Production metrics module + heartbeat hook | done |
+| 5 | Cutover retirement criteria doc + opt-in legacy compare + safe cleanup | done |
 
 ## Risks
 
@@ -171,3 +171,9 @@ Until then: keep flags; stop **requiring** legacy probes when mode=`on` (compare
 - Production metrics for coverage / false silence / false interruption / delivery SLA  
 - Objective cutover retirement criteria documented; obsolete probe path optional  
 - Invariants preserved; tests green; docs updated  
+
+## Completion notes
+
+Shipped on `main` via PRs #138–#142.
+
+**Follow-ons for Milestone 6 (suggested):** Runtime focus bridge after API auth; hard-delete cutover flags after soak; Activity UI wire-up; unexpected-human-minutes time series; richer admin metrics dashboard.  

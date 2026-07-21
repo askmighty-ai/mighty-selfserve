@@ -10217,18 +10217,21 @@ def dashboard():
                 _is_dev_debug(user) and request.args.get("force_capability_unknown")
             ),
         )
-        # Milestone 3: AttentionView cutover + shadow/compare (safe fallback).
+        # AttentionView cutover (safe fallback). Legacy compare is opt-in (M5).
         _attention_view = None
         _use_attention = False
         try:
-            from mighty.attention_compare import legacy_signal_from_home
             from mighty.attention_consumer import consume_attention_for_surface
-            _cap = _home_result.capability
-            _legacy_home = legacy_signal_from_home(
-                home_state=_home_result.state.value if _home_result.state else None,
-                action_required=bool(_cap and _cap.action_required),
-                provider=(_cap.provider if _cap else None),
-            )
+            from mighty.attention_cutover import attention_shadow_compare_enabled
+            _legacy_home = None
+            if attention_shadow_compare_enabled("home"):
+                from mighty.attention_compare import legacy_signal_from_home
+                _cap = _home_result.capability
+                _legacy_home = legacy_signal_from_home(
+                    home_state=_home_result.state.value if _home_result.state else None,
+                    action_required=bool(_cap and _cap.action_required),
+                    provider=(_cap.provider if _cap else None),
+                )
             _attn_home = consume_attention_for_surface(
                 get_db(),
                 session["user_id"],
@@ -18943,20 +18946,23 @@ def api_account_status():
     from mighty.capability_state import filter_customer_accounts
     # Customer surface: Amex-only Truth Dashboard contract.
     accounts = filter_customer_accounts(accounts)
-    # Milestone 3: AttentionView for Worker + shadow/compare (safe fallback).
+    # AttentionView for Worker (safe fallback). Legacy compare is opt-in (M5).
     _attention_payload = None
     try:
-        from mighty.attention_compare import legacy_signal_from_worker
         from mighty.attention_consumer import (
             attention_api_payload,
             consume_attention_for_surface,
         )
-        _loop = summary.access_loop or {}
-        _legacy_worker = legacy_signal_from_worker(
-            needs_login_count=int(summary.needs_login_count or 0),
-            needs_sign_in=int(_loop.get("needs_sign_in") or 0),
-            provider=(accounts[0].source if accounts else None),
-        )
+        from mighty.attention_cutover import attention_shadow_compare_enabled
+        _legacy_worker = None
+        if attention_shadow_compare_enabled("worker"):
+            from mighty.attention_compare import legacy_signal_from_worker
+            _loop = summary.access_loop or {}
+            _legacy_worker = legacy_signal_from_worker(
+                needs_login_count=int(summary.needs_login_count or 0),
+                needs_sign_in=int(_loop.get("needs_sign_in") or 0),
+                provider=(accounts[0].source if accounts else None),
+            )
         _attn_worker = consume_attention_for_surface(
             db,
             uid,
