@@ -834,6 +834,11 @@ def init_db():
         except Exception:
             pass
         try:
+            from mighty.auth_truth import ensure_auth_truth_tables
+            ensure_auth_truth_tables(db)
+        except Exception:
+            pass
+        try:
             from mighty.account_snapshot import ensure_account_snapshot_tables
             ensure_account_snapshot_tables(db)
         except Exception:
