@@ -224,6 +224,26 @@ class TestEnginePipeline:
         assert state.primary.provider == "amex"
         assert state.silence == SilenceVerdict.AWAITING_DATA
 
+    def test_missing_worker_is_system_primary(self, db):
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                extension_version TEXT,
+                extension_last_seen_at TEXT
+            )
+            """
+        )
+        db.execute("INSERT INTO users (id) VALUES (?)", (USER_ID,))
+        db.commit()
+        _persist_account(db, "amex", data_status=DATA_COMPLETE)
+        _write_pss(db, provider="amex", state="signed_in", evidence_type="dom")
+        state = read_attention(db, USER_ID, now=FIXED_NOW)
+        assert state.primary is not None
+        assert state.primary.attention_class == AttentionClass.SYSTEM
+        assert state.primary.cta_key.value == "install_worker"
+        assert state.silence is None
+
 
 class TestShadow:
     def test_record_and_load_shadow(self, db):

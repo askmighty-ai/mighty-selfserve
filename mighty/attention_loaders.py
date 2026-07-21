@@ -12,8 +12,17 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from mighty.account_state import AccountState, list_account_states
-from mighty.attention_compiler import AuthorizeRow
+from mighty.admin_local_time import parse_admin_timestamp
+from mighty.attention_compiler import (
+    WORKER_REACHABLE_SLA_SECONDS,
+    AuthorizeRow,
+    WorkerSignal,
+)
 from mighty.auth_truth import AuthTruth, project_auth_truth
+from mighty.extension_version import (
+    extension_update_required,
+    read_expected_extension_version,
+)
 
 
 def load_authorize_rows(
@@ -79,6 +88,67 @@ def load_account_states_for_attention(db: Any, user_id: str) -> list[AccountStat
         return list(list_account_states(db, uid))
     except Exception:
         return []
+
+
+def load_worker_signal(
+    db: Any,
+    user_id: str,
+    *,
+    now: datetime,
+    enrolled_account_count: int | None = None,
+) -> WorkerSignal | None:
+    """Load extension heartbeat facts as a WorkerSignal compiler input.
+
+    Reachability is age of ``extension_last_seen_at`` vs
+    ``WORKER_REACHABLE_SLA_SECONDS``. No ranking policy here.
+    """
+    uid = str(user_id or "").strip()
+    if not uid:
+        return None
+    now = _ensure_aware(now)
+    if enrolled_account_count is None:
+        enrolled_account_count = len(load_account_states_for_attention(db, uid))
+
+    # Unknown user / missing table → no WorkerSignal (do not invent SYSTEM).
+    try:
+        row = db.execute(
+            "SELECT extension_version, extension_last_seen_at FROM users WHERE id=?",
+            (uid,),
+        ).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+
+    mapping = _row_mapping(row)
+    version = _optional_str(mapping.get("extension_version"))
+    last_seen_raw = _optional_str(mapping.get("extension_last_seen_at"))
+    installed = bool(version or last_seen_raw)
+    reachable = False
+    if last_seen_raw:
+        seen_dt = parse_admin_timestamp(last_seen_raw)
+        if seen_dt is not None:
+            if seen_dt.tzinfo is None:
+                seen_dt = seen_dt.replace(tzinfo=timezone.utc)
+            age = (now - seen_dt).total_seconds()
+            reachable = age <= WORKER_REACHABLE_SLA_SECONDS
+
+    update_required = False
+    try:
+        expected = read_expected_extension_version()
+        update_required = extension_update_required(version, expected)
+    except Exception:
+        update_required = False
+
+    return WorkerSignal(
+        user_id=uid,
+        installed=installed,
+        reachable=reachable,
+        last_seen_at=last_seen_raw,
+        version=version,
+        update_required=update_required,
+        enrolled_account_count=int(enrolled_account_count or 0),
+    )
 
 
 def load_auth_truths(
