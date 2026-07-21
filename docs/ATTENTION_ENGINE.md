@@ -28,7 +28,8 @@ DB facts
 | **AttentionStore** | Overlay persistence |
 | **compose_attention** | Overlay filter + ranking + suppressed |
 | **attention_engine** | Call the above in order; return immutable `AttentionState` |
-| **Home / Worker (shadow)** | Record engine output; must not invent attention |
+| **AttentionView** | Surface window + copy/CTA resolution ([ATTENTION_VIEW.md](ATTENTION_VIEW.md)) |
+| **Home / Worker** | Consume AttentionView after cutover; shadow/compare during rollout |
 
 ---
 

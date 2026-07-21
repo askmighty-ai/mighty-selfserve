@@ -579,6 +579,8 @@ ACCOUNT_STATE.md should be amended in a follow-on edit to demote `next_recommend
 
 **Milestone 2 (Attention Core) status:** P2 complete for the pure core + thin engine + Home/Worker **shadow recording** (no customer cutover, no push). See [ATTENTION_ENGINE.md](ATTENTION_ENGINE.md).
 
+**Milestone 3 (Platform Adoption):** P3/P4 in progress — AttentionView, agreement metrics, Home/Worker cutover, then delete Home-local ranking. See [ATTENTION_PLATFORM_ADOPTION.md](ATTENTION_PLATFORM_ADOPTION.md).
+
 Out of scope: credential storage as default path, multi-item push, household attention, Connector→AuthTruth.
 
 ---
