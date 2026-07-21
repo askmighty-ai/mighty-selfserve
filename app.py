@@ -1763,13 +1763,18 @@ def _run_attention_supervisor_once(*, label: str = "scheduled") -> int:
                     flush=True,
                 )
                 delivered = 0
-            changed = result.in_flight_cleared + result.orphans_deleted
+            changed = (
+                result.in_flight_cleared
+                + result.orphans_deleted
+                + result.reopened
+            )
             if changed or result.errors or delivered:
                 print(
                     f"[AttentionSupervisor] {label}: "
                     f"users={result.users_scanned} "
                     f"in_flight_cleared={result.in_flight_cleared} "
                     f"orphans_deleted={result.orphans_deleted} "
+                    f"reopened={result.reopened} "
                     f"delivery_attempts={delivered} "
                     f"errors={result.errors}",
                     flush=True,

@@ -138,6 +138,7 @@ class TestAttentionSupervisor:
 
         result = run_attention_supervisor(db, now=FIXED_NOW)
         assert result.in_flight_cleared == 1
+        assert result.reopened == 1
         assert get_attention_overlay(db, USER_ID, item.attention_id) is None
 
     def test_keeps_fresh_in_flight(self, db):

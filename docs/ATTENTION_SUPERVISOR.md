@@ -28,6 +28,7 @@ run_attention_supervisor(db, *, now, user_ids=None) -> AttentionSupervisorResult
 | `users_scanned` | Users with overlays processed |
 | `in_flight_cleared` | Timed-out in_flight overlays deleted |
 | `orphans_deleted` | Overlays whose attention_id not in candidates |
+| `reopened` | Timed-out clears where candidate still live (`attention.reopened`) |
 | `errors` | Per-user failures swallowed |
 
 Default user set: `list_attention_overlay_user_ids(db)`.
