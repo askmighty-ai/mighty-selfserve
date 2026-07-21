@@ -1,13 +1,18 @@
-"""AttentionCompiler — AuthTruth → AttentionItem (PR 2B).
+"""AttentionCompiler — platform facts → AttentionItem (PR 2B / 2F).
 
-Pure deterministic mapping from a single AuthTruth projection to an optional
-auth_blocker AttentionItem. No ranking, overlays, persistence, Home, or
-notifications.
+Pure deterministic producers:
 
-See docs/ATTENTION_COMPILER.md.
+* AuthTruth → optional auth_blocker (PR 2B)
+* AuthorizeRow → optional agent_authorization (PR 2F)
+
+No ranking, overlays, persistence, Home, or notifications.
+
+See docs/ATTENTION_COMPILER.md and docs/ATTENTION_COMPILER_AUTHORIZE.md.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from mighty.attention import (
     ATTENTION_ITEM_SCHEMA_VERSION,
@@ -15,6 +20,7 @@ from mighty.attention import (
     REASON_CONSENT,
     REASON_LOGIN,
     REASON_MFA,
+    REASON_PENDING_AUTHORIZATION,
     REASON_UNKNOWN_HUMAN,
     AttentionClass,
     AttentionCtaKey,
@@ -29,6 +35,8 @@ from mighty.auth_truth import (
     AuthInterruption,
     AuthTruth,
 )
+
+AUTHORIZE_STATUS_PENDING = "pending"
 
 # Auth-blocker reason codes the compiler may emit (RFC §3 / §4).
 _AUTH_BLOCKER_REASONS = frozenset(
@@ -130,3 +138,91 @@ def _cta_for_access_method(access_method: str) -> AttentionCtaKey:
         return AttentionCtaKey.START_PROVIDER_LOGIN
     # api / manual never project needs_human today; keep a safe no-op CTA.
     return AttentionCtaKey.NOOP
+
+
+# --- AuthorizeRow → agent_authorization (PR 2F) ---------------------------------
+
+
+class AuthorizeRowValidationError(ValueError):
+    """Raised when an AuthorizeRow is missing required identity fields."""
+
+
+@dataclass(frozen=True)
+class AuthorizeRow:
+    """Minimal authorize-store fact for the AttentionCompiler (RFC §4.3).
+
+    Not a second ledger — loaders map existing ``actions`` rows into this shape.
+    """
+
+    action_id: str
+    user_id: str
+    status: str
+    created_at: str | None = None
+    expires_at: str | None = None
+    provider: str | None = None
+
+    def __post_init__(self) -> None:
+        action_id = str(self.action_id or "").strip()
+        user_id = str(self.user_id or "").strip()
+        if not action_id:
+            raise AuthorizeRowValidationError("action_id must be a non-empty string")
+        if not user_id:
+            raise AuthorizeRowValidationError("user_id must be a non-empty string")
+        if action_id != self.action_id:
+            object.__setattr__(self, "action_id", action_id)
+        if user_id != self.user_id:
+            object.__setattr__(self, "user_id", user_id)
+        status = str(self.status or "").strip().lower()
+        if status != self.status:
+            object.__setattr__(self, "status", status)
+        if self.provider is not None:
+            provider = str(self.provider).strip().lower() or None
+            if provider != self.provider:
+                object.__setattr__(self, "provider", provider)
+
+
+def authorize_row_fingerprint(action_id: str) -> str:
+    """Stable root-cause identity for a pending authorize row."""
+    return f"authorize:row:{str(action_id).strip()}"
+
+
+def authorize_attention_id(user_id: str, action_id: str) -> str:
+    """Deterministic attention_id for agent_authorization candidates."""
+    return (
+        f"att_{str(user_id).strip()}_agent_authorization_row{str(action_id).strip()}"
+    )
+
+
+def authorize_source_ref(action_id: str) -> str:
+    """Join key back to the authorize store row."""
+    return f"authorize:{str(action_id).strip()}"
+
+
+def compile_authorize_attention(row: AuthorizeRow) -> AttentionItem | None:
+    """Compile one AuthorizeRow into an optional agent_authorization item.
+
+    Only ``status=pending`` emits. Terminal statuses (approved, denied, expired,
+    …) return ``None`` so the candidate disappears without Store upserts
+    (RFC D5 / Part XIV scenario 5).
+    """
+    if not isinstance(row, AuthorizeRow):
+        raise AuthorizeRowValidationError("row must be an AuthorizeRow")
+    if row.status != AUTHORIZE_STATUS_PENDING:
+        return None
+
+    return AttentionItem(
+        schema_version=ATTENTION_ITEM_SCHEMA_VERSION,
+        attention_id=authorize_attention_id(row.user_id, row.action_id),
+        user_id=row.user_id,
+        attention_class=AttentionClass.AGENT_AUTHORIZATION,
+        urgency=AttentionUrgency.BLOCKER,
+        provider=row.provider,
+        fingerprint=authorize_row_fingerprint(row.action_id),
+        reason=AttentionReason(code=REASON_PENDING_AUTHORIZATION),
+        cta_key=AttentionCtaKey.OPEN_ACTIVITY_APPROVAL,
+        source_kind=AttentionSourceKind.AUTHORIZE,
+        source_ref=authorize_source_ref(row.action_id),
+        observed_at=row.created_at,
+        becomes_stale_at=row.expires_at,
+        interruption_expected=False,
+    )

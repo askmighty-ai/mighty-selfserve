@@ -1,19 +1,21 @@
-# AttentionCompiler — AuthTruth → AttentionItem
+# AttentionCompiler — platform facts → AttentionItem
 
-**Status:** Implemented (PR 2B)  
+**Status:** Implemented (PR 2B auth; PR 2F authorize)  
 **RFC:** [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) §4 / Part XIV  
 **Module:** `mighty/attention_compiler.py`  
-**Depends on:** [AUTH_TRUTH.md](AUTH_TRUTH.md) (PR1), [ATTENTION_ITEM.md](ATTENTION_ITEM.md) (PR 2A)
+**Depends on:** [AUTH_TRUTH.md](AUTH_TRUTH.md) (PR1), [ATTENTION_ITEM.md](ATTENTION_ITEM.md) (PR 2A)  
+**Authorize slice:** [ATTENTION_COMPILER_AUTHORIZE.md](ATTENTION_COMPILER_AUTHORIZE.md)
 
 ## Why this exists
 
-The AttentionCompiler turns platform facts into immutable `AttentionItem` candidates. PR 2B implements **only** the AuthTruth → optional auth-blocker mapping:
+The AttentionCompiler turns platform facts into immutable `AttentionItem` candidates. Producers so far:
 
 ```text
-AuthTruth  →  Optional[AttentionItem]
+AuthTruth     →  Optional[AttentionItem]   # PR 2B auth_blocker
+AuthorizeRow  →  Optional[AttentionItem]   # PR 2F agent_authorization
 ```
 
-Given identical `AuthTruth` values, identical `AttentionItem` values (or `None`) must be produced. Fingerprints and `attention_id`s are deterministic and replay-stable.
+Given identical inputs, identical `AttentionItem` values (or `None`) must be produced. Fingerprints and `attention_id`s are deterministic and replay-stable.
 
 ---
 
@@ -75,11 +77,14 @@ Helpers: `auth_blocker_fingerprint`, `auth_blocker_attention_id`, `auth_truth_so
 - No AttentionStore / overlays / persistence
 - No Home / Worker / Push / Activity integration
 - No notifications, APIs, UI, or metrics
-- No Authorize / Benefit / Worker / AccountState compiler inputs
+- No Benefit / Worker / AccountState compiler inputs
 - No `access_degraded` (stale) emission
+- No multi-input gather helper (callers combine lists)
 
 ---
 
 ## Tests
 
 `tests/test_attention_compiler.py` — exhaustive golden `to_dict()` fixtures for every auth-blocker reason, plus replay-stability proofs (identical Truth → identical Item; reason-change keeps fingerprint/`attention_id`).
+
+`tests/test_attention_compiler_authorize.py` — AuthorizeRow → agent_authorization (PR 2F).
