@@ -15,9 +15,12 @@ The AttentionCompiler turns platform facts into immutable `AttentionItem` candid
 AuthTruth     →  Optional[AttentionItem]   # PR 2B auth_blocker
 AuthorizeRow  →  Optional[AttentionItem]   # PR 2F agent_authorization
 AuthTruth     →  Optional[AttentionItem]   # PR 2G access_degraded (stale / login_unknown)
+inputs[]      →  tuple[AttentionItem, ...] # PR 2H gather (no ranking)
 ```
 
 Given identical inputs, identical `AttentionItem` values (or `None`) must be produced. Fingerprints and `attention_id`s are deterministic and replay-stable.
+
+Gather: [ATTENTION_COMPILER_CANDIDATES.md](ATTENTION_COMPILER_CANDIDATES.md).
 
 ---
 
@@ -80,7 +83,6 @@ Helpers: `auth_blocker_fingerprint`, `auth_blocker_attention_id`, `auth_truth_so
 - No Home / Worker / Push / Activity integration
 - No notifications, APIs, UI, or metrics
 - No Benefit / Worker / AccountState compiler inputs
-- No multi-input gather helper (callers combine lists)
 
 ---
 
@@ -91,3 +93,5 @@ Helpers: `auth_blocker_fingerprint`, `auth_blocker_attention_id`, `auth_truth_so
 `tests/test_attention_compiler_authorize.py` — AuthorizeRow → agent_authorization (PR 2F).
 
 `tests/test_attention_compiler_access_degraded.py` — AuthTruth → access_degraded (PR 2G).
+
+`tests/test_attention_compiler_candidates.py` — multi-input gather (PR 2H).
