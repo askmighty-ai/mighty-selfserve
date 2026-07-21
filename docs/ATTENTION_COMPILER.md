@@ -1,10 +1,11 @@
 # AttentionCompiler — platform facts → AttentionItem
 
-**Status:** Implemented (PR 2B auth; PR 2F authorize)  
+**Status:** Implemented (PR 2B auth; PR 2F authorize; PR 2G access_degraded)  
 **RFC:** [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) §4 / Part XIV  
 **Module:** `mighty/attention_compiler.py`  
 **Depends on:** [AUTH_TRUTH.md](AUTH_TRUTH.md) (PR1), [ATTENTION_ITEM.md](ATTENTION_ITEM.md) (PR 2A)  
-**Authorize slice:** [ATTENTION_COMPILER_AUTHORIZE.md](ATTENTION_COMPILER_AUTHORIZE.md)
+**Authorize slice:** [ATTENTION_COMPILER_AUTHORIZE.md](ATTENTION_COMPILER_AUTHORIZE.md)  
+**Degraded slice:** [ATTENTION_COMPILER_ACCESS_DEGRADED.md](ATTENTION_COMPILER_ACCESS_DEGRADED.md)
 
 ## Why this exists
 
@@ -13,6 +14,7 @@ The AttentionCompiler turns platform facts into immutable `AttentionItem` candid
 ```text
 AuthTruth     →  Optional[AttentionItem]   # PR 2B auth_blocker
 AuthorizeRow  →  Optional[AttentionItem]   # PR 2F agent_authorization
+AuthTruth     →  Optional[AttentionItem]   # PR 2G access_degraded (stale / login_unknown)
 ```
 
 Given identical inputs, identical `AttentionItem` values (or `None`) must be produced. Fingerprints and `attention_id`s are deterministic and replay-stable.
@@ -45,7 +47,7 @@ AuthTruth does not use `*_required` terminal strings as its public state. Human-
 
 Additional rules in this PR:
 
-* **Stale alone** (`stale=True`, `needs_human=False`) emits nothing. `access_degraded` is a later compiler input class.
+* **Stale alone** (`stale=True`, `needs_human=False`) emits nothing from the **blocker** path. See PR 2G `compile_access_degraded_attention`.
 * **Dual path** never reaches this function as a customer blocker: AuthTruth already projects the **primary** method only; non-primary Runtime `needs_human` stays ops-only.
 * **Reason resolution:** prefer `needs_human_reason`, else `interruption` when it is a known auth reason, else `unknown_human`.
 * **CTA:** `browser_session` → `start_provider_login`; `managed_runtime` → `focus_managed_runtime`; other methods → `noop` (they do not project `needs_human` today).
@@ -78,7 +80,6 @@ Helpers: `auth_blocker_fingerprint`, `auth_blocker_attention_id`, `auth_truth_so
 - No Home / Worker / Push / Activity integration
 - No notifications, APIs, UI, or metrics
 - No Benefit / Worker / AccountState compiler inputs
-- No `access_degraded` (stale) emission
 - No multi-input gather helper (callers combine lists)
 
 ---
@@ -88,3 +89,5 @@ Helpers: `auth_blocker_fingerprint`, `auth_blocker_attention_id`, `auth_truth_so
 `tests/test_attention_compiler.py` — exhaustive golden `to_dict()` fixtures for every auth-blocker reason, plus replay-stability proofs (identical Truth → identical Item; reason-change keeps fingerprint/`attention_id`).
 
 `tests/test_attention_compiler_authorize.py` — AuthorizeRow → agent_authorization (PR 2F).
+
+`tests/test_attention_compiler_access_degraded.py` — AuthTruth → access_degraded (PR 2G).

@@ -19,8 +19,10 @@ from mighty.attention import (
     REASON_CAPTCHA,
     REASON_CONSENT,
     REASON_LOGIN,
+    REASON_LOGIN_UNKNOWN,
     REASON_MFA,
     REASON_PENDING_AUTHORIZATION,
+    REASON_STALE,
     REASON_UNKNOWN_HUMAN,
     AttentionClass,
     AttentionCtaKey,
@@ -35,6 +37,7 @@ from mighty.auth_truth import (
     AuthInterruption,
     AuthTruth,
 )
+from mighty.authentication_state import AuthenticationState
 
 AUTHORIZE_STATUS_PENDING = "pending"
 
@@ -196,6 +199,55 @@ def authorize_attention_id(user_id: str, action_id: str) -> str:
 def authorize_source_ref(action_id: str) -> str:
     """Join key back to the authorize store row."""
     return f"authorize:{str(action_id).strip()}"
+
+
+def access_degraded_fingerprint(provider: str) -> str:
+    """Stable root-cause identity for non-blocker auth degradation."""
+    return f"auth:{_normalize_provider(provider)}:access_degraded"
+
+
+def access_degraded_attention_id(user_id: str, provider: str) -> str:
+    """Deterministic attention_id for access_degraded candidates."""
+    return (
+        f"att_{str(user_id).strip()}_access_degraded_{_normalize_provider(provider)}"
+    )
+
+
+def compile_access_degraded_attention(truth: AuthTruth) -> AttentionItem | None:
+    """Compile AuthTruth into an optional access_degraded AttentionItem.
+
+    Emits when the primary method is stale and/or login_unknown **without**
+    ``needs_human``. When ``needs_human`` is true, ``compile_auth_attention``
+    owns the candidate and this returns ``None``.
+    """
+    if truth.needs_human:
+        return None
+
+    reason_code: str | None = None
+    if truth.stale:
+        reason_code = REASON_STALE
+    elif truth.state == AuthenticationState.LOGIN_UNKNOWN:
+        reason_code = REASON_LOGIN_UNKNOWN
+    else:
+        return None
+
+    provider = _normalize_provider(truth.provider)
+    return AttentionItem(
+        schema_version=ATTENTION_ITEM_SCHEMA_VERSION,
+        attention_id=access_degraded_attention_id(truth.user_id, provider),
+        user_id=str(truth.user_id).strip(),
+        attention_class=AttentionClass.ACCESS_DEGRADED,
+        urgency=AttentionUrgency.INFORMATIONAL,
+        provider=provider,
+        fingerprint=access_degraded_fingerprint(provider),
+        reason=AttentionReason(code=reason_code),
+        cta_key=AttentionCtaKey.OPEN_ACCOUNT_DETAIL,
+        source_kind=AttentionSourceKind.AUTH,
+        source_ref=auth_truth_source_ref(truth.user_id, provider),
+        observed_at=truth.observed_at,
+        becomes_stale_at=None,
+        interruption_expected=bool(truth.interruption_expected),
+    )
 
 
 def compile_authorize_attention(row: AuthorizeRow) -> AttentionItem | None:
