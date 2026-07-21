@@ -261,12 +261,11 @@ class AttentionOverlay:
 @dataclass(frozen=True)
 class AttentionState:
     schema_version: int
-    user_id: str
-    generated_at: str
     primary: AttentionItem | None
-    queue: tuple[AttentionItem, ...]    # ranked; primary first if present
-    counts: AttentionCounts
-    silence: SilenceVerdict             # all_clear | suppressed | awaiting_data
+    remaining: tuple[AttentionItem, ...]  # ranked after primary; empty if none
+    silence: SilenceVerdict | None        # None = not silent (effective ranks 1–5 visible)
+    # Full product snapshots may also carry user_id / generated_at / counts;
+    # the pure ranker contract is primary + remaining + silence only.
 
 @dataclass(frozen=True)
 class AttentionView:
@@ -434,7 +433,7 @@ No `auth.rejected` product event — illegal writes never reach a second store; 
 
 ## Part VII — Ranking policy (single table)
 
-**Higher band wins. Within a band, lower rank number wins. Ties: `provider` ASC, then `attention_id` ASC.**
+**Higher band wins. Within a band, lower rank number wins.**
 
 | Rank | Class | Urgency (must match) |
 |------|-------|----------------------|
@@ -447,17 +446,31 @@ No `auth.rejected` product event — illegal writes never reach a second store; 
 | 7 | `access_degraded` | informational |
 | 8 | `data_gap` | informational |
 
-Within rank 5, earlier `becomes_stale_at` wins; if equal, lex tie-break.
+**Effectiveness (before ranking / silence)**
+
+An item is **ineffective** when `becomes_stale_at is not None` and `now >= becomes_stale_at`. Ineffective items are excluded from ranking and silence evaluation. The clock (`now`) is supplied by the caller — no internal wall-clock reads.
+
+**Total order among effective items**
+
+1. Lower rank number wins.
+2. Within rank 5 only: earlier `becomes_stale_at` wins; `becomes_stale_at=None` sorts last.
+3. Lexical tie-break: `provider` ASC (treat `provider=None` as `""`), then `attention_id` ASC.
+
+Input order must never affect output. Select exactly one **primary** when any effective item exists; **remaining** is the rest of the effective set in the same total order.
 
 **Silence**
 
+`SilenceVerdict` is only: `all_clear` | `suppressed` | `awaiting_data`.  
+`AttentionState.silence` is **optional**: `None` means at least one effective rank 1–5 item is visible — the product is **not silent**. Do not invent an `active` verdict.
+
 | Verdict | Condition |
 |---------|-----------|
-| `all_clear` | No visible items in ranks 1–5 |
-| `suppressed` | Rank 1–4 exists but all such items snoozed (Home shows suppressed honesty, not fake All clear) |
-| `awaiting_data` | No ranks 1–5 visible; rank 7–8 visible |
+| `None` (not silent) | At least one effective item in ranks 1–5 |
+| `all_clear` | No effective items in ranks 1–5 (queue may still hold ranks 6–8) |
+| `awaiting_data` | No effective ranks 1–5; at least one effective rank 7–8 (`awaiting_data` wins over `all_clear`) |
+| `suppressed` | Rank 1–4 exists but all such items snoozed (Home shows suppressed honesty, not fake All clear). Requires overlays — not produced by the pure ranker alone. |
 
-Opportunities (rank 6) may show below fold when `all_clear`; they never create `all_clear` by themselves and never fill the hero when ranks 1–4 are snoozed.
+`all_clear` means no effective ranks 1–5, **not** that the entire queue is empty. An effective rank 6–8 item may still be selected as **primary** while `silence=all_clear`. Opportunities (rank 6) may show below fold when `all_clear`; they never create `all_clear` by themselves and never fill the hero when ranks 1–4 are snoozed.
 
 **Delivery SLA (unchanged intent)**
 
@@ -632,7 +645,11 @@ attention.*        = product attention lifecycle (opened/updated/reopened/snooze
 ```text
 trust > agent_authorization > auth_blocker > system
   > value_at_risk > opportunity > access_degraded > data_gap
-tie: provider ASC, attention_id ASC
+exclude: becomes_stale_at set and now >= becomes_stale_at
+rank 5: earlier becomes_stale_at; None last
+tie: (provider or "") ASC, attention_id ASC
+silence: None if ranks 1–5; else awaiting_data if 7–8; else all_clear
+         (suppressed only with overlays)
 ```
 
 ---
