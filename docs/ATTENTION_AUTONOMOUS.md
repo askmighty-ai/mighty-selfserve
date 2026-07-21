@@ -132,11 +132,11 @@ Until then: keep flags; stop **requiring** legacy probes when mode=`on` (compare
 
 | PR | Theme |
 |----|-------|
-| 1 | This Design Note + RFC pointer |
-| 2 | Minimal `runtime_access_state` read/write + Trust producer + gather/engine |
-| 3 | Supervisor reopen logging + delivery retry |
-| 4 | Production metrics module + heartbeat hook |
-| 5 | Cutover retirement criteria doc + opt-in legacy compare + safe cleanup |
+| 1 | This Design Note + RFC pointer | done |
+| 2 | Minimal `runtime_access_state` read/write + Trust producer + gather/engine | in progress |
+| 3 | Supervisor reopen logging + delivery retry | pending |
+| 4 | Production metrics module + heartbeat hook | pending |
+| 5 | Cutover retirement criteria doc + opt-in legacy compare + safe cleanup | pending |
 
 ## Risks
 

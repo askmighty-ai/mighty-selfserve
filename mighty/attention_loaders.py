@@ -17,12 +17,22 @@ from mighty.attention_compiler import (
     WORKER_REACHABLE_SLA_SECONDS,
     AuthorizeRow,
     BenefitSignal,
+    TrustSignal,
     WorkerSignal,
 )
-from mighty.auth_truth import AuthTruth, project_auth_truth
+from mighty.auth_truth import (
+    ACCESS_MANAGED_RUNTIME,
+    AuthTruth,
+    normalize_access_method,
+    project_auth_truth,
+)
 from mighty.extension_version import (
     extension_update_required,
     read_expected_extension_version,
+)
+from mighty.runtime_access_state import (
+    compute_presentation_status,
+    get_runtime_access_state,
 )
 
 
@@ -89,6 +99,72 @@ def load_account_states_for_attention(db: Any, user_id: str) -> list[AccountStat
         return list(list_account_states(db, uid))
     except Exception:
         return []
+
+
+def load_trust_signals(
+    db: Any,
+    user_id: str,
+    *,
+    now: datetime,
+    accounts: Sequence[AccountState] | None = None,
+) -> list[TrustSignal]:
+    """Load TrustSignal inputs for managed_runtime enrolled accounts.
+
+    Soft-fails when runtime_access_state is unavailable. No emit policy here.
+    """
+    uid = str(user_id or "").strip()
+    if not uid:
+        return []
+    now = _ensure_aware(now)
+    if accounts is None:
+        accounts = load_account_states_for_attention(db, uid)
+
+    signals: list[TrustSignal] = []
+    for account in accounts:
+        provider = str(getattr(account, "provider", "") or "").strip().lower()
+        if not provider:
+            continue
+        method = normalize_access_method(getattr(account, "access_method", None))
+        if method != ACCESS_MANAGED_RUNTIME:
+            continue
+        try:
+            row = get_runtime_access_state(db, uid, provider)
+        except Exception:
+            row = None
+        payload = dict((row or {}).get("payload") or {})
+        status = compute_presentation_status(row, now=now)
+        observed = (
+            payload.get("authentication_state_changed_at")
+            or payload.get("updated_at")
+            or (row or {}).get("updated_at")
+        )
+        needs_human = (
+            bool(payload.get("needs_human")) if "needs_human" in payload else False
+        )
+        try:
+            signals.append(
+                TrustSignal(
+                    user_id=uid,
+                    provider=provider,
+                    access_method=method,
+                    presentation_status=status,
+                    authentication_state=_optional_str(
+                        payload.get("authentication_state")
+                    ),
+                    access_health=_optional_str(payload.get("access_health")),
+                    recovery_state=_optional_str(payload.get("recovery_state")),
+                    runtime_state=_optional_str(payload.get("runtime_state")),
+                    escalation_reason=_optional_str(payload.get("escalation_reason")),
+                    observed_at=_optional_str(observed),
+                    needs_human=needs_human,
+                    interruption_expected=bool(
+                        payload.get("interruption_expected") or False
+                    ),
+                )
+            )
+        except Exception:
+            continue
+    return signals
 
 
 def load_benefit_signals(

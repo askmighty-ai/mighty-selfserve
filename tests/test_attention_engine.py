@@ -244,6 +244,59 @@ class TestEnginePipeline:
         assert state.primary.cta_key.value == "install_worker"
         assert state.silence is None
 
+    def test_managed_runtime_awaiting_user_is_trust_primary(self, db):
+        from mighty.auth_truth import ACCESS_MANAGED_RUNTIME
+        from mighty.runtime_access_state import (
+            ensure_runtime_access_state_tables,
+            upsert_runtime_access_state,
+        )
+
+        ensure_runtime_access_state_tables(db)
+        state = AccountState(
+            user_id=USER_ID,
+            provider="amex",
+            display_name="Amex",
+            category="financial",
+            access_method=ACCESS_MANAGED_RUNTIME,
+            connection_state=CONN_CONNECTED,
+            session_health="healthy",
+            last_verified_at=None,
+            data_status=DATA_COMPLETE,
+            last_data_refresh=None,
+            observations_available=[],
+            field_count=0,
+            next_recommended_action=None,
+            confidence=Confidence(
+                level="high", score=90, factors=ConfidenceFactors()
+            ),
+            status_line="",
+            is_actionable=False,
+            updated_at=FIXED_NOW.isoformat(),
+            version=ACCOUNT_STATE_VERSION,
+        )
+        persist_account_state(db, state)
+        upsert_runtime_access_state(
+            db,
+            USER_ID,
+            {
+                "schema_version": 2,
+                "provider": "amex",
+                "runtime_instance_id": "rt-1",
+                "updated_at": FIXED_NOW.isoformat(),
+                "authentication_state": "SIGNED_IN",
+                "access_health": "degraded",
+                "runtime_state": "running",
+                "browser_state": "healthy",
+                "recovery_state": "awaiting_user",
+                "escalation_reason": "mfa",
+            },
+        )
+        result = read_attention(db, USER_ID, now=FIXED_NOW)
+        assert result.primary is not None
+        assert result.primary.attention_class == AttentionClass.TRUST
+        assert result.primary.cta_key.value == "focus_managed_runtime"
+        assert result.silence is None
+
     def test_expiring_benefit_is_value_at_risk_primary(self, db):
         db.execute(
             """
