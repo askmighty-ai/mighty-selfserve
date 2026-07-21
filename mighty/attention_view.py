@@ -369,6 +369,12 @@ def _copy_for(item: AttentionItem, provider_name: str) -> tuple[str, str, str | 
         return title, body, user_copy.home_open_provider_cta(provider_name)
 
     if cls == AttentionClass.SYSTEM:
+        if reason == "worker_unreachable":
+            return (
+                "Mighty's worker needs a refresh",
+                "Open Chrome with the Mighty extension so account watching can continue.",
+                "Open worker setup",
+            )
         return (
             "Mighty needs a quick setup step",
             "Finish worker setup so Mighty can keep watching your accounts.",
@@ -384,14 +390,14 @@ def _copy_for(item: AttentionItem, provider_name: str) -> tuple[str, str, str | 
 
     if cls == AttentionClass.VALUE_AT_RISK:
         return (
-            "Something time-sensitive needs you",
-            "Review this before value is lost.",
+            f"Time-sensitive value on {provider_name}",
+            f"Review this {provider_name} item before the value is lost.",
             "Review",
         )
 
     if cls == AttentionClass.OPPORTUNITY:
         return (
-            "Something worth a look",
+            f"Something worth a look on {provider_name}",
             "Optional — only if you want to act on it.",
             "View",
         )

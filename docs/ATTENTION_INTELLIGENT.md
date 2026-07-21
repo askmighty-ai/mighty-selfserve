@@ -1,6 +1,6 @@
 # Intelligent Attention — Milestone 4 Design Note
 
-**Status:** In progress  
+**Status:** Complete  
 **RFC:** [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) §4.3 / §4.4 / §6 / §7  
 **Depends on:** Milestone 3 ([ATTENTION_PLATFORM_ADOPTION.md](ATTENTION_PLATFORM_ADOPTION.md))
 
@@ -133,9 +133,9 @@ CTA side effects (Access Manager verification enqueue) remain outside Store — 
 | 3 | WorkerSignal → system | Heartbeat columns exist; unblocks setup hero | done |
 | 4 | BenefitSignal → value_at_risk + opportunity | Reuses `action_items`; enables rank 5–6 | done |
 | 5 | AttentionSupervisor | Unblocks stuck in_flight; GC orphans | done |
-| 6 | HTTP attention commands + read view | Surfaces can drive overlays without inventing policy | in progress |
-| 7 | AttentionDelivery + receipts | Push uses primary only; observability for SLA | in progress |
-| 8 | Replay/e2e + metrics + RFC status | Harden + close milestone | pending |
+| 6 | HTTP attention commands + read view | Surfaces can drive overlays without inventing policy | done |
+| 7 | AttentionDelivery + receipts | Push uses primary only; observability for SLA | done |
+| 8 | Replay/e2e + metrics + RFC status | Harden + close milestone | done |
 
 Each PR stays focused, keeps tests green, and updates its module doc.
 
@@ -173,3 +173,22 @@ Each PR stays focused, keeps tests green, and updates its module doc.
 - No consumer implements its own attention policy  
 - AttentionState remains SSoT; AttentionView presentation-only  
 - Existing invariants intact; relevant tests pass; docs updated  
+
+## Completion notes
+
+Shipped on `main` via PRs #131–#137 (design → producers → supervisor → delivery/HTTP → hardening).
+
+**Production data flow (M4):**
+
+```text
+account_state / PSS / actions / action_items / users.extension_*
+  → attention_loaders
+  → compile_attention_candidates (gather)
+  → compose_attention (+ overlays)
+  → AttentionState
+  → AttentionView(surface) → Home / Worker
+  → AttentionDelivery(primary push) + receipts
+  → AttentionSupervisor (in_flight timeout + orphan GC)
+```
+
+**Follow-ons for Milestone 5 (suggested):** trust producer, richer delivery SLA metrics/dashboards, Activity authorize filter surface, Runtime focus CTA after Runtime API auth, retire cutover shadow probes when confidence is permanent.  
