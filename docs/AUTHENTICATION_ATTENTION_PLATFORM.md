@@ -256,6 +256,7 @@ class AttentionOverlay:
     attention_id: str
     status: OverlayStatus               # clear | snoozed | in_flight | durable_dismissed
     until: str | None                   # snooze end
+    started_at: str | None              # in_flight start (Supervisor timeout uses this)
     updated_at: str
 
 @dataclass(frozen=True)

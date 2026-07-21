@@ -27,7 +27,7 @@ This PR does **not** implement overlays, Store, persistence, delivery, Home, or 
 | **AttentionItem (PR 2A)** | Immutable candidate contract | Ranking |
 | **AttentionCompiler (PR 2B+)** | Emit candidates from facts | Order / silence |
 | **AttentionStore (later)** | Snooze / dismiss / in_flight / receipts | Ranking policy |
-| **Composition (later)** | Overlays → filtered candidates → ranker | Inventing silence without overlays |
+| **Composition (PR 2D)** | Overlays → filtered candidates → ranker; produces `suppressed` | Persistence / HTTP |
 
 ---
 
