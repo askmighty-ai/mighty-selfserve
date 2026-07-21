@@ -382,6 +382,24 @@ def _copy_for(item: AttentionItem, provider_name: str) -> tuple[str, str, str | 
         )
 
     if cls == AttentionClass.TRUST:
+        if reason == "awaiting_user":
+            return (
+                f"{provider_name} needs a quick confirmation",
+                f"Mighty's Runtime is waiting on you for {provider_name}.",
+                f"Open {provider_name}",
+            )
+        if reason in {"runtime_offline", "never_reported"}:
+            return (
+                f"{provider_name} Runtime is unavailable",
+                f"Mighty cannot confirm autonomous access for {provider_name}.",
+                f"Open {provider_name}",
+            )
+        if reason == "stale":
+            return (
+                f"{provider_name} Runtime status is stale",
+                f"Mighty has not received a fresh Runtime update for {provider_name}.",
+                f"Open {provider_name}",
+            )
         return (
             "Trust check required",
             "Mighty needs you to confirm something before continuing.",

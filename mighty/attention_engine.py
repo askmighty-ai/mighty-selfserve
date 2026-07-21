@@ -19,6 +19,7 @@ from mighty.attention_loaders import (
     load_auth_truths,
     load_authorize_rows,
     load_benefit_signals,
+    load_trust_signals,
     load_worker_signal,
 )
 from mighty.attention_overlay import AttentionOverlay, compose_attention
@@ -73,6 +74,9 @@ def read_attention_snapshot(
         accounts=account_states,
     )
     authorize_rows = load_authorize_rows(db, uid)
+    trust_signals = load_trust_signals(
+        db, uid, now=now, accounts=account_states
+    )
     worker_signal = load_worker_signal(
         db,
         uid,
@@ -83,6 +87,7 @@ def read_attention_snapshot(
     candidates = compile_attention_candidates(
         auth_truths=auth_truths,
         authorize_rows=authorize_rows,
+        trust_signals=trust_signals,
         worker_signal=worker_signal,
         benefit_signals=benefit_signals,
         account_states=account_states,

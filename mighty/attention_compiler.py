@@ -4,11 +4,12 @@ Pure deterministic producers:
 
 * AuthTruth → optional auth_blocker / access_degraded
 * AuthorizeRow → optional agent_authorization
-* AccountState → optional data_gap (Milestone 4)
+* TrustSignal → optional trust (Milestone 5)
+* WorkerSignal / BenefitSignal / AccountState → M4 producers
 
 No ranking, overlays, persistence, Home, or notifications.
 
-See docs/ATTENTION_COMPILER.md and docs/ATTENTION_COMPILER_DATA_GAP.md.
+See docs/ATTENTION_COMPILER.md and docs/ATTENTION_COMPILER_TRUST.md.
 """
 
 from __future__ import annotations
@@ -19,15 +20,19 @@ from typing import Any, Literal, Sequence
 from mighty.account_state import CONN_CONNECTED, DATA_NONE, DATA_PARTIAL
 from mighty.attention import (
     ATTENTION_ITEM_SCHEMA_VERSION,
+    REASON_AWAITING_USER,
     REASON_CAPTCHA,
     REASON_CONSENT,
     REASON_DATA_GAP,
     REASON_LOGIN,
     REASON_LOGIN_UNKNOWN,
     REASON_MFA,
+    REASON_NEVER_REPORTED,
     REASON_OPPORTUNITY,
     REASON_PENDING_AUTHORIZATION,
+    REASON_RUNTIME_OFFLINE,
     REASON_STALE,
+    REASON_TRUST,
     REASON_UNKNOWN_HUMAN,
     REASON_VALUE_AT_RISK,
     REASON_WORKER_MISSING,
@@ -286,6 +291,119 @@ def compile_authorize_attention(row: AuthorizeRow) -> AttentionItem | None:
         observed_at=row.created_at,
         becomes_stale_at=row.expires_at,
         interruption_expected=False,
+    )
+
+
+# --- TrustSignal → trust (Milestone 5) ----------------------------------------
+
+
+_TRUST_EMIT_STATUSES = frozenset(
+    {
+        "awaiting_user",
+        "runtime_offline",
+        "never_reported",
+        "stale",
+    }
+)
+
+_TRUST_REASON_BY_STATUS = {
+    "awaiting_user": REASON_AWAITING_USER,
+    "runtime_offline": REASON_RUNTIME_OFFLINE,
+    "never_reported": REASON_NEVER_REPORTED,
+    "stale": REASON_STALE,
+}
+
+
+@dataclass(frozen=True)
+class TrustSignal:
+    """Minimal Runtime trust fact for AttentionCompiler (RFC §4.2 trust)."""
+
+    user_id: str
+    provider: str
+    access_method: str
+    presentation_status: str
+    authentication_state: str | None = None
+    access_health: str | None = None
+    recovery_state: str | None = None
+    runtime_state: str | None = None
+    escalation_reason: str | None = None
+    observed_at: str | None = None
+    needs_human: bool = False
+    interruption_expected: bool = False
+
+    def __post_init__(self) -> None:
+        user_id = str(self.user_id or "").strip()
+        provider = _normalize_provider(self.provider)
+        if not user_id:
+            raise ValueError("TrustSignal.user_id must be a non-empty string")
+        if not provider:
+            raise ValueError("TrustSignal.provider must be a non-empty string")
+        if user_id != self.user_id:
+            object.__setattr__(self, "user_id", user_id)
+        if provider != self.provider:
+            object.__setattr__(self, "provider", provider)
+        method = str(self.access_method or "").strip().lower()
+        if method != self.access_method:
+            object.__setattr__(self, "access_method", method)
+        status = str(self.presentation_status or "").strip().lower()
+        if status != self.presentation_status:
+            object.__setattr__(self, "presentation_status", status)
+
+
+def trust_fingerprint(provider: str) -> str:
+    """Stable root-cause identity for Runtime trust on a provider."""
+    return f"trust:{_normalize_provider(provider)}:runtime"
+
+
+def trust_attention_id(user_id: str, provider: str) -> str:
+    """Deterministic attention_id for trust candidates."""
+    return f"att_{str(user_id).strip()}_trust_{_normalize_provider(provider)}"
+
+
+def trust_source_ref(user_id: str, provider: str) -> str:
+    """Join key back to runtime_access_state."""
+    return f"runtime_access_state:{str(user_id).strip()}:{_normalize_provider(provider)}"
+
+
+def compile_trust_attention(signal: TrustSignal) -> AttentionItem | None:
+    """Compile TrustSignal into an optional trust AttentionItem.
+
+    Emits only for managed_runtime primary method when presentation status
+    indicates broken Runtime trust. When ``needs_human`` is true, auth_blocker
+    owns the candidate and this returns ``None``.
+    """
+    if not isinstance(signal, TrustSignal):
+        raise TypeError("signal must be a TrustSignal")
+    if signal.access_method != ACCESS_MANAGED_RUNTIME:
+        return None
+    if signal.needs_human:
+        return None
+    status = signal.presentation_status
+    if status not in _TRUST_EMIT_STATUSES:
+        return None
+    # Stale healthy signed-in is freshness noise, not trust interrupt.
+    if status == "stale":
+        auth = str(signal.authentication_state or "").strip().upper()
+        health = str(signal.access_health or "").strip().lower()
+        if auth == "SIGNED_IN" and health in {"", "healthy"}:
+            return None
+
+    reason = _TRUST_REASON_BY_STATUS.get(status, REASON_TRUST)
+    return AttentionItem(
+        schema_version=ATTENTION_ITEM_SCHEMA_VERSION,
+        attention_id=trust_attention_id(signal.user_id, signal.provider),
+        user_id=signal.user_id,
+        attention_class=AttentionClass.TRUST,
+        urgency=AttentionUrgency.BLOCKER,
+        provider=signal.provider,
+        fingerprint=trust_fingerprint(signal.provider),
+        reason=AttentionReason(code=reason),
+        cta_key=AttentionCtaKey.FOCUS_MANAGED_RUNTIME,
+        source_kind=AttentionSourceKind.TRUST,
+        source_ref=trust_source_ref(signal.user_id, signal.provider),
+        observed_at=signal.observed_at,
+        becomes_stale_at=None,
+        interruption_expected=bool(signal.interruption_expected),
     )
 
 
@@ -583,6 +701,7 @@ def compile_attention_candidates(
     *,
     auth_truths: Sequence[AuthTruth] = (),
     authorize_rows: Sequence[AuthorizeRow] = (),
+    trust_signals: Sequence[TrustSignal] = (),
     worker_signal: WorkerSignal | None = None,
     benefit_signals: Sequence[BenefitSignal] = (),
     account_states: Sequence[Any] = (),
@@ -605,6 +724,10 @@ def compile_attention_candidates(
         authorize_item = compile_authorize_attention(row)
         if authorize_item is not None:
             items.append(authorize_item)
+    for signal in trust_signals:
+        trust_item = compile_trust_attention(signal)
+        if trust_item is not None:
+            items.append(trust_item)
     if worker_signal is not None:
         worker_item = compile_worker_attention(worker_signal)
         if worker_item is not None:

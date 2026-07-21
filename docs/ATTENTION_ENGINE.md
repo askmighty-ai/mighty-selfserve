@@ -43,6 +43,7 @@ DB facts
 | `load_auth_truths` | enrolled providers × `project_auth_truth` | `AuthTruth[]` |
 | `load_worker_signal` | `users.extension_*` | `WorkerSignal` or `None` |
 | `load_benefit_signals` | open `action_items` | `BenefitSignal[]` |
+| `load_trust_signals` | managed_runtime accounts × `runtime_access_state` | `TrustSignal[]` |
 
 Provider list comes from enrollment (`account_state`), not from inventing accounts in Attention. One AccountState load is reused for AuthTruth projection, worker enrollment count, and data_gap gather.
 

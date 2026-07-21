@@ -33,6 +33,9 @@ REASON_SYSTEM = "system"
 REASON_WORKER_MISSING = "worker_missing"
 REASON_WORKER_UNREACHABLE = "worker_unreachable"
 REASON_TRUST = "trust"
+REASON_AWAITING_USER = "awaiting_user"
+REASON_RUNTIME_OFFLINE = "runtime_offline"
+REASON_NEVER_REPORTED = "never_reported"
 
 
 class AttentionClass(str, Enum):
