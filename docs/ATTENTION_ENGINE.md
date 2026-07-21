@@ -10,7 +10,7 @@ The Attention Engine is a thin composer over existing pure stages. It owns **no*
 
 ```text
 DB facts
-  → load AuthTruth[] + AuthorizeRow[] + AccountState[] + overlays
+  → load AuthTruth[] + AuthorizeRow[] + WorkerSignal + AccountState[] + overlays
   → compile_attention_candidates
   → compose_attention (overlays + select_attention)
   → AttentionState
@@ -40,8 +40,9 @@ DB facts
 | `load_account_states_for_attention` | `account_state` | `AccountState[]` (data_gap input) |
 | `load_authorize_rows` | `actions` | `AuthorizeRow[]` (default: `status=pending`) |
 | `load_auth_truths` | enrolled providers × `project_auth_truth` | `AuthTruth[]` |
+| `load_worker_signal` | `users.extension_*` | `WorkerSignal` or `None` |
 
-Provider list comes from enrollment (`account_state`), not from inventing accounts in Attention. One AccountState load is reused for AuthTruth projection and data_gap gather.
+Provider list comes from enrollment (`account_state`), not from inventing accounts in Attention. One AccountState load is reused for AuthTruth projection, worker enrollment count, and data_gap gather.
 
 ---
 
@@ -76,7 +77,8 @@ Shadow writes `attention_shadow` (latest per user×surface). When a legacy probe
 ## Milestone 4 extensions
 
 - `data_gap` producer wired (AccountState → gather). See [ATTENTION_COMPILER_DATA_GAP.md](ATTENTION_COMPILER_DATA_GAP.md).
-- Benefit / Worker producers, AttentionSupervisor, and delivery remain follow-on M4 work ([ATTENTION_INTELLIGENT.md](ATTENTION_INTELLIGENT.md)).
+- `system` worker producer wired (WorkerSignal → gather). See [ATTENTION_COMPILER_WORKER.md](ATTENTION_COMPILER_WORKER.md).
+- Benefit producers, AttentionSupervisor, and delivery remain follow-on M4 work ([ATTENTION_INTELLIGENT.md](ATTENTION_INTELLIGENT.md)).
 
 ## Non-goals (historical Milestone 2)
 

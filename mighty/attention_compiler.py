@@ -28,6 +28,8 @@ from mighty.attention import (
     REASON_PENDING_AUTHORIZATION,
     REASON_STALE,
     REASON_UNKNOWN_HUMAN,
+    REASON_WORKER_MISSING,
+    REASON_WORKER_UNREACHABLE,
     AttentionClass,
     AttentionCtaKey,
     AttentionItem,
@@ -284,6 +286,93 @@ def compile_authorize_attention(row: AuthorizeRow) -> AttentionItem | None:
     )
 
 
+# --- WorkerSignal → system (Milestone 4) --------------------------------------
+
+
+# Reachability SLA for extension heartbeat (design note).
+WORKER_REACHABLE_SLA_SECONDS = 72 * 60 * 60
+
+
+@dataclass(frozen=True)
+class WorkerSignal:
+    """Minimal worker/extension presence fact for AttentionCompiler (RFC §4.3)."""
+
+    user_id: str
+    installed: bool
+    reachable: bool
+    last_seen_at: str | None = None
+    version: str | None = None
+    update_required: bool = False
+    enrolled_account_count: int = 0
+
+    def __post_init__(self) -> None:
+        user_id = str(self.user_id or "").strip()
+        if not user_id:
+            raise ValueError("WorkerSignal.user_id must be a non-empty string")
+        if user_id != self.user_id:
+            object.__setattr__(self, "user_id", user_id)
+        if self.last_seen_at is not None:
+            text = str(self.last_seen_at).strip() or None
+            if text != self.last_seen_at:
+                object.__setattr__(self, "last_seen_at", text)
+        if self.version is not None:
+            version = str(self.version).strip() or None
+            if version != self.version:
+                object.__setattr__(self, "version", version)
+
+
+def worker_system_fingerprint() -> str:
+    """Stable root-cause identity for missing/unreachable worker setup."""
+    return "worker:setup"
+
+
+def worker_system_attention_id(user_id: str) -> str:
+    """Deterministic attention_id for the worker system candidate."""
+    return f"att_{str(user_id).strip()}_system_worker"
+
+
+def worker_source_ref(user_id: str) -> str:
+    """Join key back to the user worker heartbeat row."""
+    return f"worker:{str(user_id).strip()}"
+
+
+def compile_worker_attention(signal: WorkerSignal) -> AttentionItem | None:
+    """Compile WorkerSignal into an optional system AttentionItem.
+
+    Emits only when the user has enrolled accounts and the worker is missing
+    or unreachable. Empty onboarding remains enrollment UX outside Attention.
+    ``update_required`` alone does not emit (not a blocker for M4).
+    """
+    if not isinstance(signal, WorkerSignal):
+        raise TypeError("signal must be a WorkerSignal")
+    if int(signal.enrolled_account_count or 0) <= 0:
+        return None
+    if signal.installed and signal.reachable:
+        return None
+
+    reason = (
+        REASON_WORKER_MISSING
+        if not signal.installed
+        else REASON_WORKER_UNREACHABLE
+    )
+    return AttentionItem(
+        schema_version=ATTENTION_ITEM_SCHEMA_VERSION,
+        attention_id=worker_system_attention_id(signal.user_id),
+        user_id=signal.user_id,
+        attention_class=AttentionClass.SYSTEM,
+        urgency=AttentionUrgency.BLOCKER,
+        provider=None,
+        fingerprint=worker_system_fingerprint(),
+        reason=AttentionReason(code=reason),
+        cta_key=AttentionCtaKey.INSTALL_WORKER,
+        source_kind=AttentionSourceKind.WORKER,
+        source_ref=worker_source_ref(signal.user_id),
+        observed_at=signal.last_seen_at,
+        becomes_stale_at=None,
+        interruption_expected=False,
+    )
+
+
 # --- AccountState → data_gap (Milestone 4) -------------------------------------
 
 
@@ -347,6 +436,7 @@ def compile_attention_candidates(
     *,
     auth_truths: Sequence[AuthTruth] = (),
     authorize_rows: Sequence[AuthorizeRow] = (),
+    worker_signal: WorkerSignal | None = None,
     account_states: Sequence[Any] = (),
 ) -> tuple[AttentionItem, ...]:
     """Gather AttentionItems from supported compiler inputs.
@@ -367,6 +457,10 @@ def compile_attention_candidates(
         authorize_item = compile_authorize_attention(row)
         if authorize_item is not None:
             items.append(authorize_item)
+    if worker_signal is not None:
+        worker_item = compile_worker_attention(worker_signal)
+        if worker_item is not None:
+            items.append(worker_item)
     for account in account_states:
         gap = compile_data_gap_attention(account)
         if gap is not None:

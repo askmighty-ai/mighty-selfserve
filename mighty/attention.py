@@ -30,6 +30,8 @@ REASON_DATA_GAP = "data_gap"
 REASON_VALUE_AT_RISK = "value_at_risk"
 REASON_OPPORTUNITY = "opportunity"
 REASON_SYSTEM = "system"
+REASON_WORKER_MISSING = "worker_missing"
+REASON_WORKER_UNREACHABLE = "worker_unreachable"
 REASON_TRUST = "trust"
 
 
