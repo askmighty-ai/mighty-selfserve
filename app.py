@@ -10108,6 +10108,14 @@ def dashboard():
                 _is_dev_debug(user) and request.args.get("force_capability_unknown")
             ),
         )
+        # Milestone 2 shadow: record Attention Engine output without cutover.
+        try:
+            from mighty.attention_shadow import record_attention_shadow, shadow_now
+            record_attention_shadow(
+                get_db(), session["user_id"], "home", now=shadow_now()
+            )
+        except Exception:
+            pass
         _extension_info = None
         try:
             from mighty.extension_version import get_extension_version_status
@@ -18696,6 +18704,12 @@ def api_account_status():
     from mighty.capability_state import filter_customer_accounts
     # Customer surface: Amex-only Truth Dashboard contract.
     accounts = filter_customer_accounts(accounts)
+    # Milestone 2 shadow: record Attention Engine for Worker without cutover.
+    try:
+        from mighty.attention_shadow import record_attention_shadow, shadow_now
+        record_attention_shadow(db, uid, "worker", now=shadow_now())
+    except Exception:
+        pass
     return jsonify({
         "ok": True,
         "accounts": [a.to_dict() for a in accounts],

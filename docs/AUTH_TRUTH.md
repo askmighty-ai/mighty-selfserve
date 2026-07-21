@@ -21,7 +21,7 @@ Persisting `auth_truth` is materialization of the projection for cheap reads —
 | Write auth evidence | Access Manager / Runtime only |
 | Choose primary `access_method` | AccountState / enrollment (config input) |
 | Project primary-method product auth | AuthTruth projector |
-| Rank / notify humans | Attention (later); not this module |
+| Rank / notify humans | Attention Engine ([ATTENTION_ENGINE.md](ATTENTION_ENGINE.md)); not this module |
 
 ## Interface gap (documented, not extended)
 
