@@ -24,19 +24,26 @@ from mighty.provider_session_state import (
     ProviderSessionState,
     get_provider_session_state,
 )
-from mighty.runtime_access_state import (
-    DEFAULT_STALE_AFTER_SECONDS,
-    get_runtime_access_state,
-)
 from mighty.session_verification import session_evidence_age_seconds
 
 AUTH_TRUTH_SCHEMA_VERSION = 2
+
+# Mirrors Runtime AccessState default (3× 60s heartbeat). Kept local so the
+# AuthTruth *model* remains importable when runtime_access_state is absent.
+DEFAULT_STALE_AFTER_SECONDS = 180.0
 
 # Primary access methods (RFC AuthTruth vocabulary).
 ACCESS_BROWSER_SESSION = "browser_session"
 ACCESS_MANAGED_RUNTIME = "managed_runtime"
 ACCESS_API = "api"
 ACCESS_MANUAL = "manual"
+
+
+def _get_runtime_access_state(db: Any, user_id: str, provider: str) -> Any:
+    """Lazy import — projector-only dependency on Runtime publications."""
+    from mighty.runtime_access_state import get_runtime_access_state
+
+    return get_runtime_access_state(db, user_id, provider)
 
 # AccountState historically stores railway-backed access as mighty_login.
 # AuthTruth uses managed_runtime; normalize at the projector boundary.
@@ -473,7 +480,7 @@ def project_auth_truth(
         )
 
     if method == ACCESS_MANAGED_RUNTIME:
-        row = get_runtime_access_state(db, user_id, provider)
+        row = _get_runtime_access_state(db, user_id, provider)
         return _project_managed_runtime(
             user_id=user_id,
             provider=provider,
