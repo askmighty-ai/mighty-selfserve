@@ -1,24 +1,27 @@
-"""AttentionCompiler — platform facts → AttentionItem (PR 2B / 2F).
+"""AttentionCompiler — platform facts → AttentionItem.
 
 Pure deterministic producers:
 
-* AuthTruth → optional auth_blocker (PR 2B)
-* AuthorizeRow → optional agent_authorization (PR 2F)
+* AuthTruth → optional auth_blocker / access_degraded
+* AuthorizeRow → optional agent_authorization
+* AccountState → optional data_gap (Milestone 4)
 
 No ranking, overlays, persistence, Home, or notifications.
 
-See docs/ATTENTION_COMPILER.md and docs/ATTENTION_COMPILER_AUTHORIZE.md.
+See docs/ATTENTION_COMPILER.md and docs/ATTENTION_COMPILER_DATA_GAP.md.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
+from mighty.account_state import CONN_CONNECTED, DATA_NONE, DATA_PARTIAL
 from mighty.attention import (
     ATTENTION_ITEM_SCHEMA_VERSION,
     REASON_CAPTCHA,
     REASON_CONSENT,
+    REASON_DATA_GAP,
     REASON_LOGIN,
     REASON_LOGIN_UNKNOWN,
     REASON_MFA,
@@ -281,12 +284,72 @@ def compile_authorize_attention(row: AuthorizeRow) -> AttentionItem | None:
     )
 
 
+# --- AccountState → data_gap (Milestone 4) -------------------------------------
+
+
+def data_gap_fingerprint(provider: str) -> str:
+    """Stable root-cause identity for missing/partial account data."""
+    return f"account_data:{_normalize_provider(provider)}:data_gap"
+
+
+def data_gap_attention_id(user_id: str, provider: str) -> str:
+    """Deterministic attention_id for data_gap candidates."""
+    return f"att_{str(user_id).strip()}_data_gap_{_normalize_provider(provider)}"
+
+
+def account_state_source_ref(user_id: str, provider: str) -> str:
+    """Join key back to the AccountState row for (user, provider)."""
+    return f"account_state:{str(user_id).strip()}:{_normalize_provider(provider)}"
+
+
+def compile_data_gap_attention(account: Any) -> AttentionItem | None:
+    """Compile AccountState into an optional data_gap AttentionItem.
+
+    Emits when the account is ``connected`` and ``data_status`` is ``none`` or
+    ``partial``. Auth blockers remain a separate producer; ranking prefers them.
+    """
+    connection_state = str(getattr(account, "connection_state", "") or "").strip().lower()
+    data_status = str(getattr(account, "data_status", "") or "").strip().lower()
+    if connection_state != CONN_CONNECTED:
+        return None
+    if data_status not in {DATA_NONE, DATA_PARTIAL}:
+        return None
+
+    user_id = str(getattr(account, "user_id", "") or "").strip()
+    provider = _normalize_provider(getattr(account, "provider", "") or "")
+    if not user_id or not provider:
+        return None
+
+    observed = getattr(account, "last_data_refresh", None) or getattr(
+        account, "updated_at", None
+    )
+    observed_at = str(observed).strip() if observed else None
+
+    return AttentionItem(
+        schema_version=ATTENTION_ITEM_SCHEMA_VERSION,
+        attention_id=data_gap_attention_id(user_id, provider),
+        user_id=user_id,
+        attention_class=AttentionClass.DATA_GAP,
+        urgency=AttentionUrgency.INFORMATIONAL,
+        provider=provider,
+        fingerprint=data_gap_fingerprint(provider),
+        reason=AttentionReason(code=REASON_DATA_GAP),
+        cta_key=AttentionCtaKey.OPEN_PROVIDER_SURFACE,
+        source_kind=AttentionSourceKind.ACCOUNT_DATA,
+        source_ref=account_state_source_ref(user_id, provider),
+        observed_at=observed_at or None,
+        becomes_stale_at=None,
+        interruption_expected=False,
+    )
+
+
 def compile_attention_candidates(
     *,
     auth_truths: Sequence[AuthTruth] = (),
     authorize_rows: Sequence[AuthorizeRow] = (),
+    account_states: Sequence[Any] = (),
 ) -> tuple[AttentionItem, ...]:
-    """Gather AttentionItems from supported compiler inputs (PR 2H).
+    """Gather AttentionItems from supported compiler inputs.
 
     Pure and order-stable within each input family. Does not rank or apply
     overlays — see ``select_attention`` / ``compose_attention``.
@@ -304,4 +367,8 @@ def compile_attention_candidates(
         authorize_item = compile_authorize_attention(row)
         if authorize_item is not None:
             items.append(authorize_item)
+    for account in account_states:
+        gap = compile_data_gap_attention(account)
+        if gap is not None:
+            items.append(gap)
     return tuple(items)

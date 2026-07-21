@@ -126,16 +126,16 @@ CTA side effects (Access Manager verification enqueue) remain outside Store — 
 
 ## Proposed implementation order
 
-| PR | Theme | Why this order |
-|----|-------|----------------|
-| 1 | This Design Note | Align reviewers before code |
-| 2 | data_gap producer + loader | AccountState already listed by engine; lowest new surface |
-| 3 | WorkerSignal → system | Heartbeat columns exist; unblocks setup hero |
-| 4 | BenefitSignal → value_at_risk + opportunity | Reuses `action_items`; enables rank 5–6 |
-| 5 | AttentionSupervisor | Unblocks stuck in_flight; GC orphans |
-| 6 | HTTP attention commands + read view | Surfaces can drive overlays without inventing policy |
-| 7 | AttentionDelivery + receipts | Push uses primary only; observability for SLA |
-| 8 | Replay/e2e + metrics + RFC status | Harden + close milestone |
+| PR | Theme | Why this order | Status |
+|----|-------|----------------|--------|
+| 1 | This Design Note | Align reviewers before code | done |
+| 2 | data_gap producer + loader | AccountState already listed by engine; lowest new surface | in progress |
+| 3 | WorkerSignal → system | Heartbeat columns exist; unblocks setup hero | pending |
+| 4 | BenefitSignal → value_at_risk + opportunity | Reuses `action_items`; enables rank 5–6 | pending |
+| 5 | AttentionSupervisor | Unblocks stuck in_flight; GC orphans | pending |
+| 6 | HTTP attention commands + read view | Surfaces can drive overlays without inventing policy | pending |
+| 7 | AttentionDelivery + receipts | Push uses primary only; observability for SLA | pending |
+| 8 | Replay/e2e + metrics + RFC status | Harden + close milestone | pending |
 
 Each PR stays focused, keeps tests green, and updates its module doc.
 

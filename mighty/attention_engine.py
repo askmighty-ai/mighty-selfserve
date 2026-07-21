@@ -14,7 +14,11 @@ from typing import Any
 
 from mighty.attention import AttentionItem
 from mighty.attention_compiler import compile_attention_candidates
-from mighty.attention_loaders import load_auth_truths, load_authorize_rows
+from mighty.attention_loaders import (
+    load_account_states_for_attention,
+    load_auth_truths,
+    load_authorize_rows,
+)
 from mighty.attention_overlay import AttentionOverlay, compose_attention
 from mighty.attention_state import AttentionState
 from mighty.attention_store import (
@@ -58,11 +62,19 @@ def read_attention_snapshot(
     generated_at = now.replace(microsecond=0).isoformat()
     uid = str(user_id or "").strip()
 
-    auth_truths = load_auth_truths(db, uid, now=now, projected_at=generated_at)
+    account_states = load_account_states_for_attention(db, uid)
+    auth_truths = load_auth_truths(
+        db,
+        uid,
+        now=now,
+        projected_at=generated_at,
+        accounts=account_states,
+    )
     authorize_rows = load_authorize_rows(db, uid)
     candidates = compile_attention_candidates(
         auth_truths=auth_truths,
         authorize_rows=authorize_rows,
+        account_states=account_states,
     )
     ensure_attention_overlay_tables(db, commit=False)
     overlays = tuple(list_attention_overlays(db, uid))

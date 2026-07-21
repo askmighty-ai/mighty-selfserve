@@ -17,6 +17,7 @@ from mighty.account_state import (
     ACCESS_BROWSER_SESSION,
     ACCOUNT_STATE_VERSION,
     CONN_CONNECTED,
+    DATA_COMPLETE,
     DATA_NONE,
     AccountState,
     Confidence,
@@ -76,7 +77,12 @@ def db(tmp_path):
     conn.close()
 
 
-def _persist_account(db, provider: str = "amex"):
+def _persist_account(
+    db,
+    provider: str = "amex",
+    *,
+    data_status: str = DATA_COMPLETE,
+):
     state = AccountState(
         user_id=USER_ID,
         provider=provider,
@@ -86,7 +92,7 @@ def _persist_account(db, provider: str = "amex"):
         connection_state=CONN_CONNECTED,
         session_health="healthy",
         last_verified_at=None,
-        data_status=DATA_NONE,
+        data_status=data_status,
         last_data_refresh=None,
         observations_available=[],
         field_count=0,
@@ -203,11 +209,20 @@ class TestEnginePipeline:
         ]
 
     def test_healthy_account_all_clear(self, db):
-        _persist_account(db, "amex")
+        _persist_account(db, "amex", data_status=DATA_COMPLETE)
         _write_pss(db, provider="amex", state="signed_in", evidence_type="dom")
         state = read_attention(db, USER_ID, now=FIXED_NOW)
         assert state.primary is None
         assert state.silence == SilenceVerdict.ALL_CLEAR
+
+    def test_connected_without_data_emits_data_gap(self, db):
+        _persist_account(db, "amex", data_status=DATA_NONE)
+        _write_pss(db, provider="amex", state="signed_in", evidence_type="dom")
+        state = read_attention(db, USER_ID, now=FIXED_NOW)
+        assert state.primary is not None
+        assert state.primary.attention_class == AttentionClass.DATA_GAP
+        assert state.primary.provider == "amex"
+        assert state.silence == SilenceVerdict.AWAITING_DATA
 
 
 class TestShadow:
