@@ -15,8 +15,8 @@ Make `AttentionState` / `AttentionView` the single source of truth for attention
 | Attention Engine | `read_attention` → loaders → compile → overlays → `AttentionState` |
 | Home | Calls `resolve_home_state` (six-state ranking) then renders Truth Dashboard from `CapabilityView`; shadow records engine output only |
 | Worker | `GET /api/account-status` builds per-account status + `access_loop` summary; popup ranks interruption from `needs_sign_in` / `needs_attention` counts; shadow records engine output only |
-| AttentionView | Not implemented |
-| Agreement metrics | Not implemented |
+| AttentionView | Implemented — see [ATTENTION_VIEW.md](ATTENTION_VIEW.md) |
+| Agreement metrics | Implemented — `attention_compare` table + `mighty/attention_compare.py` |
 
 ## Attention decision paths to retire
 

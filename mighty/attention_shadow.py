@@ -1,9 +1,10 @@
-"""Attention shadow recorder — Milestone 2 (no customer cutover).
+"""Attention shadow recorder — Milestone 2/3 (shadow + agreement metrics).
 
 Records Attention Engine output beside Home/Worker without changing product
-policy or UI. Surfaces continue to use existing Home / account-status paths.
+policy or UI until cutover flags flip. Optionally records agreement metrics
+against a read-only legacy attention probe.
 
-See docs/ATTENTION_ENGINE.md.
+See docs/ATTENTION_ENGINE.md and docs/ATTENTION_PLATFORM_ADOPTION.md.
 """
 
 from __future__ import annotations
@@ -13,6 +14,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from mighty.attention_compare import (
+    AttentionCompareResult,
+    LegacyAttentionSignal,
+    record_attention_compare,
+)
 from mighty.attention_engine import AttentionReadSnapshot, read_attention_snapshot
 
 logger = logging.getLogger(__name__)
@@ -45,24 +51,75 @@ def record_attention_shadow(
     surface: AttentionSurface,
     *,
     now: datetime,
+    legacy: LegacyAttentionSignal | None = None,
     commit: bool = True,
 ) -> AttentionReadSnapshot | None:
     """Run the Attention Engine and persist a shadow snapshot.
 
+    When ``legacy`` is provided, also records agreement/disagreement metrics.
     Failures are swallowed and logged — shadow must never break Home/Worker.
     Returns the snapshot on success, else ``None``.
     """
+    snapshot: AttentionReadSnapshot | None = None
+    platform_failed = False
     try:
         snapshot = read_attention_snapshot(db, user_id, now=now)
-        persist_attention_shadow(db, surface, snapshot, commit=commit)
-        return snapshot
+        persist_attention_shadow(db, surface, snapshot, commit=False)
     except Exception:
+        platform_failed = True
         logger.exception(
             "attention_shadow_failed user_id=%s surface=%s",
             user_id,
             surface,
         )
-        return None
+
+    if legacy is not None:
+        record_attention_compare(
+            db,
+            user_id,
+            surface,
+            legacy=legacy,
+            state=None if snapshot is None else snapshot.state,
+            platform_failed=platform_failed or snapshot is None,
+            generated_at=None if snapshot is None else snapshot.generated_at,
+            commit=False,
+        )
+
+    if commit:
+        try:
+            db.commit()
+        except Exception:
+            logger.exception(
+                "attention_shadow_commit_failed user_id=%s surface=%s",
+                user_id,
+                surface,
+            )
+    return snapshot
+
+
+def record_attention_shadow_with_compare(
+    db: Any,
+    user_id: str,
+    surface: AttentionSurface,
+    *,
+    now: datetime,
+    legacy: LegacyAttentionSignal,
+    commit: bool = True,
+) -> tuple[AttentionReadSnapshot | None, AttentionCompareResult | None]:
+    """Shadow + compare helper used by Home/Worker adoption wiring."""
+    snapshot = record_attention_shadow(
+        db, user_id, surface, now=now, legacy=legacy, commit=commit
+    )
+    # Compare already persisted inside record_attention_shadow; recompute for
+    # callers that need the in-memory result without a DB round-trip.
+    from mighty.attention_compare import compare_attention
+
+    result = compare_attention(
+        legacy,
+        None if snapshot is None else snapshot.state,
+        platform_failed=snapshot is None,
+    )
+    return snapshot, result
 
 
 def persist_attention_shadow(

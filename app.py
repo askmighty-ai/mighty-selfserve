@@ -10108,11 +10108,22 @@ def dashboard():
                 _is_dev_debug(user) and request.args.get("force_capability_unknown")
             ),
         )
-        # Milestone 2 shadow: record Attention Engine output without cutover.
+        # Milestone 3 shadow + agreement metrics (no customer cutover yet).
         try:
+            from mighty.attention_compare import legacy_signal_from_home
             from mighty.attention_shadow import record_attention_shadow, shadow_now
+            _cap = _home_result.capability
+            _legacy_home = legacy_signal_from_home(
+                home_state=_home_result.state.value if _home_result.state else None,
+                action_required=bool(_cap and _cap.action_required),
+                provider=(_cap.provider if _cap else None),
+            )
             record_attention_shadow(
-                get_db(), session["user_id"], "home", now=shadow_now()
+                get_db(),
+                session["user_id"],
+                "home",
+                now=shadow_now(),
+                legacy=_legacy_home,
             )
         except Exception:
             pass
@@ -18704,10 +18715,19 @@ def api_account_status():
     from mighty.capability_state import filter_customer_accounts
     # Customer surface: Amex-only Truth Dashboard contract.
     accounts = filter_customer_accounts(accounts)
-    # Milestone 2 shadow: record Attention Engine for Worker without cutover.
+    # Milestone 3 shadow + agreement metrics (no customer cutover yet).
     try:
+        from mighty.attention_compare import legacy_signal_from_worker
         from mighty.attention_shadow import record_attention_shadow, shadow_now
-        record_attention_shadow(db, uid, "worker", now=shadow_now())
+        _loop = summary.access_loop or {}
+        _legacy_worker = legacy_signal_from_worker(
+            needs_login_count=int(summary.needs_login_count or 0),
+            needs_sign_in=int(_loop.get("needs_sign_in") or 0),
+            provider=(accounts[0].source if accounts else None),
+        )
+        record_attention_shadow(
+            db, uid, "worker", now=shadow_now(), legacy=_legacy_worker
+        )
     except Exception:
         pass
     return jsonify({
