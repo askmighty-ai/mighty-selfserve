@@ -94,6 +94,43 @@ function _dotForLoop(loop) {
   return 'amber';
 }
 
+function _attentionPayload(accountStatus) {
+  if (!accountStatus || !accountStatus.attention) return null;
+  return accountStatus.attention;
+}
+
+function renderAttention(accountStatus) {
+  const attn = _attentionPayload(accountStatus);
+  if (!attn || !attn.used_attention || !attn.view) return false;
+
+  progressWrap.classList.add('hidden');
+  const view = attn.view;
+  const primary = view.primary;
+  const hints = view.render_hints || {};
+
+  if (primary && hints.interrupt) {
+    setDot('red');
+    label.textContent = primary.title || 'Needs your attention';
+    headerSub.textContent = w().subtitle_running || 'Running in Chrome';
+    const body = primary.body || '';
+    const cta = primary.cta_label ? String(primary.cta_label) : '';
+    showDetail([body, cta].filter(Boolean).join('<br>') || '&nbsp;');
+    return true;
+  }
+
+  if (view.silence === 'all_clear' || view.silence === 'awaiting_data' || view.silence === 'suppressed') {
+    setDot(view.silence === 'all_clear' ? 'green' : 'amber');
+    label.textContent = primary && primary.title
+      ? primary.title
+      : (w().status_keeping_updated || 'Keeping your accounts up to date');
+    headerSub.textContent = w().subtitle_running || 'Running in Chrome';
+    showDetail(primary && primary.body ? primary.body : '&nbsp;');
+    return true;
+  }
+
+  return false;
+}
+
 function renderAccessLoop(data) {
   const loop = _accessLoopSummary(data);
   progressWrap.classList.add('hidden');
@@ -137,6 +174,10 @@ function render(data) {
     return;
   }
 
+  if (data.account_status && renderAttention(data.account_status)) {
+    return;
+  }
+
   if (data.account_status && data.account_status.summary) {
     renderAccessLoop(data.account_status);
     return;
@@ -151,6 +192,11 @@ function render(data) {
 }
 
 function _summaryNeedsUserAction(accountStatus) {
+  const attn = _attentionPayload(accountStatus);
+  if (attn && attn.used_attention && attn.view) {
+    const hints = attn.view.render_hints || {};
+    return !!hints.interrupt;
+  }
   if (!accountStatus || !accountStatus.summary) return false;
   const loop = accountStatus.summary.access_loop || accountStatus.summary;
   const needsSignIn = Number(loop.needs_sign_in || loop.needs_login_count || 0);

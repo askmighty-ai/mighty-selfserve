@@ -40,14 +40,15 @@ Failure rule: engine/view errors never break Home or Worker; fall back to non-at
 
 | Step | PR theme | Default | Rollback |
 |------|----------|---------|----------|
-| 1 | `AttentionView` + copy/CTA resolution | n/a | revert PR |
-| 2 | Shadow comparison + agreement metrics table | always record | stop writes / revert |
-| 3 | Home cutover behind `ATTENTION_CUTOVER_HOME` | `shadow` | set `off` or `shadow` |
-| 4 | Worker cutover behind `ATTENTION_CUTOVER_WORKER` | `shadow` | set `off` or `shadow` |
-| 5 | Defaults → `on`; remove Home ranking + Worker count-based interrupt policy | `on` | env `shadow`/`off` briefly, then delete flags |
-| 6 | Docs, obsolete flags/tests, green suite on main | — | — |
+| 1 | `AttentionView` + copy/CTA resolution | done (#127) | revert PR |
+| 2 | Shadow comparison + agreement metrics table | done (#128) | stop writes / revert |
+| 3–4 | Home + Worker cutover (`ATTENTION_CUTOVER_*`) | **`on`** | set `shadow` or `off` |
+| 5 | Remove Home ranking + Worker count-based interrupt policy | follow-on | — |
+| 6 | Docs, obsolete flags/tests, green suite on main | follow-on | — |
 
 Flag values: `off` | `shadow` | `on`.
+
+Env keys: `ATTENTION_CUTOVER`, `ATTENTION_CUTOVER_HOME`, `ATTENTION_CUTOVER_WORKER`.
 
 ## Agreement taxonomy (minimum)
 

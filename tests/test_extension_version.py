@@ -65,7 +65,7 @@ def _api_key(mighty, uid):
 
 def test_manifest_version_incremented_in_this_pr():
     version = json.loads(MANIFEST.read_text(encoding="utf-8"))["version"]
-    assert version == "1.3.20"
+    assert version == "1.3.21"
     assert re.fullmatch(r"\d+(?:\.\d+){1,3}", version)
 
 

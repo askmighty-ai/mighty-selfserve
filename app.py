@@ -6307,6 +6307,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 /* Truth Dashboard (single-provider capability instrument) */
 .dash-truth-card .dash-brief-header{margin-bottom:8px}
 .dash-truth-subhead{margin:6px 0 0;font-size:14px;color:#57534e;line-height:1.45;max-width:40rem}
+.dash-attention{margin:0 0 18px;padding:16px 18px;border:1px solid #e7e5e4;border-radius:12px;background:#fafaf9}
+.dash-attention-eyebrow{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e}
+.dash-attention-title{margin:0 0 8px;font-size:20px;font-weight:700;color:#1c1917;letter-spacing:-0.3px;line-height:1.25}
+.dash-attention-body{margin:0 0 14px;font-size:14px;color:#57534e;line-height:1.45;white-space:pre-line}
+.dash-attention-silence{margin:0;font-size:14px;color:#57534e;line-height:1.45}
+.dash-attention-cta{margin-top:2px}
+.dash-attention-cta-disabled{display:inline-flex;font-size:14px;font-weight:600;color:#a8a29e}
 .dash-truth-panel{margin-top:8px;padding:16px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
 .dash-truth-provider{margin:0 0 10px;font-size:20px;font-weight:650;color:#1c1917;letter-spacing:-0.02em}
 .dash-truth-headline{margin:0 0 12px;font-size:16px;font-weight:600;color:#1c1917;line-height:1.4}
@@ -10108,25 +10115,30 @@ def dashboard():
                 _is_dev_debug(user) and request.args.get("force_capability_unknown")
             ),
         )
-        # Milestone 3 shadow + agreement metrics (no customer cutover yet).
+        # Milestone 3: AttentionView cutover + shadow/compare (safe fallback).
+        _attention_view = None
+        _use_attention = False
         try:
             from mighty.attention_compare import legacy_signal_from_home
-            from mighty.attention_shadow import record_attention_shadow, shadow_now
+            from mighty.attention_consumer import consume_attention_for_surface
             _cap = _home_result.capability
             _legacy_home = legacy_signal_from_home(
                 home_state=_home_result.state.value if _home_result.state else None,
                 action_required=bool(_cap and _cap.action_required),
                 provider=(_cap.provider if _cap else None),
             )
-            record_attention_shadow(
+            _attn_home = consume_attention_for_surface(
                 get_db(),
                 session["user_id"],
                 "home",
-                now=shadow_now(),
                 legacy=_legacy_home,
+                provider_open_urls=_home_provider_urls,
             )
+            _attention_view = _attn_home.view
+            _use_attention = _attn_home.used_attention
         except Exception:
-            pass
+            _attention_view = None
+            _use_attention = False
         _extension_info = None
         try:
             from mighty.extension_version import get_extension_version_status
@@ -10149,6 +10161,8 @@ def dashboard():
             last_checked=_truth_last_checked,
             escape=he,
             extension_info=_extension_info,
+            attention=_attention_view,
+            use_attention=_use_attention,
         )
 
     hero_section_html = _render_home_hero()
@@ -18715,22 +18729,31 @@ def api_account_status():
     from mighty.capability_state import filter_customer_accounts
     # Customer surface: Amex-only Truth Dashboard contract.
     accounts = filter_customer_accounts(accounts)
-    # Milestone 3 shadow + agreement metrics (no customer cutover yet).
+    # Milestone 3: AttentionView for Worker + shadow/compare (safe fallback).
+    _attention_payload = None
     try:
         from mighty.attention_compare import legacy_signal_from_worker
-        from mighty.attention_shadow import record_attention_shadow, shadow_now
+        from mighty.attention_consumer import (
+            attention_api_payload,
+            consume_attention_for_surface,
+        )
         _loop = summary.access_loop or {}
         _legacy_worker = legacy_signal_from_worker(
             needs_login_count=int(summary.needs_login_count or 0),
             needs_sign_in=int(_loop.get("needs_sign_in") or 0),
             provider=(accounts[0].source if accounts else None),
         )
-        record_attention_shadow(
-            db, uid, "worker", now=shadow_now(), legacy=_legacy_worker
+        _attn_worker = consume_attention_for_surface(
+            db,
+            uid,
+            "worker",
+            legacy=_legacy_worker,
+            provider_display_names=display_names,
         )
+        _attention_payload = attention_api_payload(_attn_worker)
     except Exception:
-        pass
-    return jsonify({
+        _attention_payload = None
+    _payload = {
         "ok": True,
         "accounts": [a.to_dict() for a in accounts],
         "summary": summary.to_dict(),
@@ -18745,7 +18768,10 @@ def api_account_status():
             "waiting_for_extension": WAITING_FOR_EXTENSION,
             "error": ERROR,
         },
-    })
+    }
+    if _attention_payload is not None:
+        _payload["attention"] = _attention_payload
+    return jsonify(_payload)
 
 
 @app.route("/api/providers/amex/check", methods=["POST"])
