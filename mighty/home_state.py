@@ -1,10 +1,12 @@
 """
 mighty.home_state
 ─────────────────
-Resolve Mighty Home into one of six attention-inbox states.
+Prepare Home capability / enrollment context for rendering.
 
-See docs/HOME_EXPERIENCE.md for product rules. Uses existing account status
-and Action prioritization — no new scoring thresholds.
+Attention ranking and hero selection are owned by the Attention Platform
+(AttentionState → AttentionView). This module must not re-rank attention.
+
+See docs/HOME_EXPERIENCE.md and docs/ATTENTION_PLATFORM_ADOPTION.md.
 """
 
 from __future__ import annotations
@@ -22,8 +24,7 @@ from mighty.account_status import (
     WAITING_FOR_EXTENSION,
     AccountStatus,
 )
-from mighty.action import Action, ActionCategory, ActionPriority
-from mighty.action_builders import attention_actions, savings_actions
+from mighty.action import Action
 from mighty.capability_state import (
     CapabilityView,
     TRUTH_PROVIDER,
@@ -45,11 +46,17 @@ from mighty import user_copy
 
 
 class HomeState(str, Enum):
+    """Enrollment / operational Home context — not attention ranking.
+
+    ``LOGIN`` and ``RECOMMENDATION`` remain for deserialization compatibility
+    but are no longer produced; attention interrupts come from AttentionView.
+    """
+
     UPDATE = "update"
-    LOGIN = "login"
+    LOGIN = "login"  # deprecated — not produced; use AttentionView
     EMPTY = "empty"
     WAITING = "waiting"
-    RECOMMENDATION = "recommendation"
+    RECOMMENDATION = "recommendation"  # deprecated — not produced
     ALL_CLEAR = "all_clear"
 
 
@@ -123,13 +130,6 @@ class HomeStateResult:
     provider_open_url: str | None = None
 
 
-_PRIORITY_ORDER = {
-    ActionPriority.URGENT: 0,
-    ActionPriority.SOON: 1,
-    ActionPriority.INFO: 2,
-}
-
-
 def _access_views_from_accounts(
     accounts: Sequence[AccountStatus],
 ) -> list[CustomerAccountAccessView]:
@@ -176,13 +176,6 @@ def _health_counts(
     return counts
 
 
-def _pick_login_account(accounts: Sequence[AccountStatus]) -> AccountStatus | None:
-    login_accounts = [a for a in accounts if a.status == NEEDS_LOGIN]
-    if not login_accounts:
-        return None
-    return login_accounts[0]
-
-
 def _pick_waiting_account(accounts: Sequence[AccountStatus]) -> AccountStatus | None:
     waiting = [a for a in accounts if a.status in (WAITING_FOR_EXTENSION, ERROR)]
     if waiting:
@@ -207,46 +200,6 @@ def _waiting_row_label(acct: AccountStatus) -> str:
     ):
         return user_copy.CONNECTION_STATUS_LINES.get("connected", "Connected — awaiting data")
     return user_copy.ACCOUNTS_STATUS_AWAITING_FIRST
-
-
-def _is_recommendation_action(action: Action) -> bool:
-    if action.category == ActionCategory.LOGIN_ISSUE or action.benefit_type == "login_required":
-        return False
-    if action.is_demo:
-        return False
-    if action.category in {
-        ActionCategory.EXPIRING_BENEFIT,
-        ActionCategory.SAVINGS_OPPORTUNITY,
-        ActionCategory.ALERT,
-    }:
-        return True
-    return action.score is not None and action.category == ActionCategory.DISCOVERY
-
-
-def _sort_recommendation_actions(actions: Sequence[Action]) -> list[Action]:
-    candidates = [a for a in actions if _is_recommendation_action(a)]
-    return sorted(
-        candidates,
-        key=lambda a: (
-            _PRIORITY_ORDER.get(a.priority, 9),
-            -(a.score or 0),
-            a.days_until_due if a.days_until_due is not None else 9999,
-        ),
-    )
-
-
-def _featured_from_action(action: Action) -> HomeFeatured:
-    cta_label = (action.recommended_next_step or action.action_label or "").strip()
-    cta_url = (action.action_url or "").strip() or "/credentials"
-    body = (action.reasoning or action.summary or user_copy.ACTION_SURFACED_FROM.format(
-        source=action.display_name or action.primary_source() or "your account",
-    )).strip()
-    return HomeFeatured(
-        headline=action.title,
-        body=body,
-        cta_label=cta_label or None,
-        cta_url=cta_url or None,
-    )
 
 
 def _resolve_updating_name(
@@ -299,18 +252,16 @@ def resolve_home_state(
     force_unknown: bool = False,
     write_persist: bool = False,
 ) -> HomeStateResult:
-    """Pick the dominant Home state and featured content.
+    """Prepare capability + enrollment/operational context for Home.
 
-    CapabilityView is always Amex-first (Truth Dashboard). Callers that want a
-    single-provider customer home should pass only Amex accounts (dashboard does).
+    Does **not** rank attention or select a cross-account hero CTA — that is
+    AttentionView's job. ``actions`` is accepted for API compatibility only.
 
-    Customer-visible capability is gated: while verification is in flight the
-    prior stable card is held (see customer_capability_presentation).
-
-    Customer-facing GETs must keep ``write_persist=False`` so presentation
-    rows are not written on read. Command paths may opt in.
+    CapabilityView is always Amex-first (Truth Dashboard). Customer-facing GETs
+    must keep ``write_persist=False`` so presentation rows are not written on
+    read. Command paths may opt in.
     """
-    actions = list(actions or [])
+    _ = actions  # Accepted for compatibility; Attention Platform owns ranking.
     access_views = _access_views_from_accounts(accounts)
     health = _health_counts(accounts, access_views=access_views)
     enrolled = len(accounts)
@@ -427,36 +378,6 @@ def resolve_home_state(
         kwargs["secondary_recommendations"] = []
         return HomeStateResult(**kwargs)
 
-    login_acct = _pick_login_account(accounts)
-    if login_acct:
-        plural = health.needs_login > 1
-        headline = user_copy.TOWER_HERO_NEEDS_YOU
-        body_lines = tower.hero_lines()
-        body_lines.append(tower.attention_line())
-        body = "\n".join(body_lines) if body_lines else user_copy.home_login_body(login_acct.display_name)
-        cta_label = login_acct.user_action_label or user_copy.home_login_cta(login_acct.display_name)
-        cta_url = login_acct.user_action_url or "/credentials"
-        secondary = user_copy.HOME_VIEW_NEEDS_LOGIN_LABEL if plural else None
-        return _attach_update_context(
-            _result(
-                state=HomeState.LOGIN,
-                priority_summary=user_copy.HOME_PRIORITY_LOGIN,
-                featured=HomeFeatured(
-                    headline=headline,
-                    body=body,
-                    cta_label=cta_label,
-                    cta_url=cta_url,
-                    secondary_label=secondary,
-                    secondary_url="/credentials?filter=needs_attention" if secondary else None,
-                ),
-                health=health,
-                show_health=True,
-                activity_pending_count=pending_activity_count,
-                freshness_label=freshness_label,
-            ),
-            updating_name,
-        )
-
     if enrolled == 0:
         body = user_copy.HOME_EMPTY_BODY
         if worker_setup_needed:
@@ -528,7 +449,6 @@ def resolve_home_state(
         headline = tower.hero_headline()
         body_lines = [line for line in tower.hero_lines() if not line.startswith("Current activity:")]
         body_lines.append("Current activity: Refreshing account")
-        body_lines.append(tower.attention_line())
         body = "\n".join(body_lines)
         return _result(
             state=HomeState.UPDATE,
@@ -547,62 +467,22 @@ def resolve_home_state(
             updating_display_name=updating_name,
         )
 
-    rec_candidates = _sort_recommendation_actions(
-        attention_actions(actions) + savings_actions(actions) + list(actions),
-    )
-    seen: set[int] = set()
-    unique_recs: list[Action] = []
-    for action in rec_candidates:
-        aid = id(action)
-        if aid in seen:
-            continue
-        seen.add(aid)
-        unique_recs.append(action)
-    featured_rec = unique_recs[0] if unique_recs else None
-    if featured_rec and (
-        featured_rec.priority in (ActionPriority.URGENT, ActionPriority.SOON)
-        or featured_rec.category == ActionCategory.SAVINGS_OPPORTUNITY
-        or featured_rec.score
-    ):
-        secondary = unique_recs[1:3]
-        featured = _featured_from_action(featured_rec)
-        count_secondary = len(secondary)
-        if count_secondary:
-            summary = user_copy.home_recommendation_priority(count_secondary + 1)
-        else:
-            summary = user_copy.HOME_PRIORITY_RECOMMENDATION
-        return _result(
-            state=HomeState.RECOMMENDATION,
-            priority_summary=summary,
-            featured=featured,
-            health=health,
-            secondary_recommendations=secondary,
-            show_health=True,
-            show_metrics=bool(benefit_count or tracked_value_label),
-            metrics_accounts=enrolled,
-            metrics_benefits=benefit_count,
-            metrics_value=tracked_value_label,
-            activity_pending_count=pending_activity_count,
-            freshness_label=freshness_label,
-        )
-
+    # Attention interrupts (login, authorize, …) are rendered from AttentionView.
+    # HomeState here is only enrollment/operational context + capability.
     cta_label = user_copy.HOME_VIEW_ACCOUNTS_LABEL
     cta_url = "/credentials"
     if enrolled == 1 and accounts[0].status == UP_TO_DATE:
         cta_label = user_copy.home_view_provider_cta(accounts[0].display_name)
-    setup_incomplete = health.waiting
-    attention = health.attention_required
-    if attention:
-        body_lines = tower.hero_lines()
-        body_lines.append(tower.attention_line())
-        return _result(
+    body_lines = tower.hero_lines()
+    return _attach_update_context(
+        _result(
             state=HomeState.ALL_CLEAR,
-            priority_summary=user_copy.HOME_PRIORITY_LOGIN,
+            priority_summary=user_copy.HOME_PRIORITY_ALL_CLEAR,
             featured=HomeFeatured(
                 headline=tower.hero_headline(),
-                body="\n".join(body_lines),
-                cta_label=user_copy.HOME_VIEW_ACCOUNTS_LABEL,
-                cta_url="/credentials?filter=needs_attention",
+                body="\n".join(body_lines) if body_lines else user_copy.TOWER_ATTENTION_NONE,
+                cta_label=cta_label,
+                cta_url=cta_url,
             ),
             health=health,
             show_health=True,
@@ -612,24 +492,6 @@ def resolve_home_state(
             metrics_value=tracked_value_label,
             activity_pending_count=pending_activity_count,
             freshness_label=freshness_label,
-        )
-    body_lines = tower.hero_lines()
-    body_lines.append(tower.attention_line())
-    return _result(
-        state=HomeState.ALL_CLEAR,
-        priority_summary=user_copy.HOME_PRIORITY_ALL_CLEAR,
-        featured=HomeFeatured(
-            headline=tower.hero_headline(),
-            body="\n".join(body_lines),
-            cta_label=cta_label,
-            cta_url=cta_url,
         ),
-        health=health,
-        show_health=True,
-        show_metrics=bool(benefit_count or tracked_value_label),
-        metrics_accounts=enrolled,
-        metrics_benefits=benefit_count,
-        metrics_value=tracked_value_label,
-        activity_pending_count=pending_activity_count,
-        freshness_label=freshness_label,
+        updating_name,
     )

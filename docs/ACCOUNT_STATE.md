@@ -144,7 +144,7 @@ class Confidence:
 
 #### `RecommendedAction`
 
-Single prioritized CTA — replaces scattered lifecycle CTAs, `AccountStatus.user_action_*`, and Home hero selection input.
+Per-account repair CTA for Accounts/detail only. **Not** the cross-account Home hero — that is owned by Attention (`AttentionState.primary` / `AttentionView`). Replaces scattered lifecycle CTAs and `AccountStatus.user_action_*` on account rows.
 
 ```python
 @dataclass

@@ -1,6 +1,6 @@
 # Attention Platform Adoption — Milestone 3 Design Note
 
-**Status:** In progress  
+**Status:** Complete (cutover on; legacy Home attention ranking removed)  
 **RFC:** [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) P3/P4  
 **Depends on:** Milestone 2 ([ATTENTION_ENGINE.md](ATTENTION_ENGINE.md))
 
@@ -42,9 +42,9 @@ Failure rule: engine/view errors never break Home or Worker; fall back to non-at
 |------|----------|---------|----------|
 | 1 | `AttentionView` + copy/CTA resolution | done (#127) | revert PR |
 | 2 | Shadow comparison + agreement metrics table | done (#128) | stop writes / revert |
-| 3–4 | Home + Worker cutover (`ATTENTION_CUTOVER_*`) | **`on`** | set `shadow` or `off` |
-| 5 | Remove Home ranking + Worker count-based interrupt policy | follow-on | — |
-| 6 | Docs, obsolete flags/tests, green suite on main | follow-on | — |
+| 3–4 | Home + Worker cutover (`ATTENTION_CUTOVER_*`) | **`on`** (#129) | set `shadow` or `off` |
+| 5 | Remove Home ranking / recommendation hero selection | this cleanup | — |
+| 6 | Docs updated; cutover flags retained for rollback | done | — |
 
 Flag values: `off` | `shadow` | `on`.
 

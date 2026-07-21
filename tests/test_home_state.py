@@ -1,4 +1,4 @@
-"""Tests for Home state resolution (Truth Dashboard / Amex capability)."""
+"""Tests for Home state preparation (capability / enrollment — not attention)."""
 
 from mighty.account_status import AccountStatus
 from mighty.action import Action, ActionCategory, ActionPriority
@@ -35,7 +35,7 @@ def _acct(
     )
 
 
-class TestHomeStatePriority:
+class TestHomeStateNoAttentionRanking:
     def test_empty_when_no_accounts(self):
         result = resolve_home_state(accounts=[])
         assert result.state == HomeState.EMPTY
@@ -43,7 +43,7 @@ class TestHomeStatePriority:
         assert result.capability is not None
         assert result.capability.state == CapabilityState.LOGIN_UNKNOWN
 
-    def test_login_wins_while_updating(self):
+    def test_signed_out_builds_capability_without_login_ranking(self):
         accounts = [
             _acct("amex", "American Express", "needs_login"),
         ]
@@ -53,12 +53,12 @@ class TestHomeStatePriority:
             updating_source="amex",
             updating_display_name="American Express",
         )
-        assert result.state == HomeState.LOGIN
-        assert result.featured.cta_label == "Log in to American Express"
-        assert result.updating_display_name == "American Express"
+        # AttentionView owns login interrupt; HomeState must not select LOGIN.
+        assert result.state != HomeState.LOGIN
         assert result.capability.state == CapabilityState.SIGNED_OUT
+        assert result.capability.action_required is True
 
-    def test_update_when_no_blockers(self):
+    def test_update_when_refreshing_healthy_account(self):
         accounts = [
             _acct("amex", "American Express", "up_to_date"),
         ]
@@ -72,20 +72,6 @@ class TestHomeStatePriority:
         assert result.show_health is False
         assert result.secondary_recommendations == []
 
-    def test_login_when_session_blocked(self):
-        accounts = [
-            _acct("amex", "American Express", "needs_login"),
-            _acct("delta", "Delta", "up_to_date"),
-        ]
-        result = resolve_home_state(accounts=accounts)
-        assert result.state == HomeState.LOGIN
-        assert result.health.needs_login == 1
-        assert result.health.up_to_date == 1
-        assert result.featured.cta_label == "Log in to American Express"
-        assert result.capability.state == CapabilityState.SIGNED_OUT
-        # Customer access_views are Amex-only for Truth Dashboard rendering.
-        assert all(v.provider == "amex" for v in result.access_views)
-
     def test_waiting_when_no_fresh_data(self):
         accounts = [
             _acct("amex", "American Express", "waiting_for_extension"),
@@ -93,9 +79,9 @@ class TestHomeStatePriority:
         result = resolve_home_state(accounts=accounts)
         assert result.state == HomeState.WAITING
         assert result.waiting_rows
-        assert "Open American Express" in result.featured.cta_label
+        assert "Open American Express" in (result.featured.cta_label or "")
 
-    def test_recommendation_state_still_resolves_but_ui_hides_recs(self):
+    def test_actions_do_not_produce_recommendation_ranking(self):
         accounts = [_acct("amex", "American Express", "up_to_date")]
         actions = [
             Action(
@@ -109,10 +95,9 @@ class TestHomeStatePriority:
             )
         ]
         result = resolve_home_state(accounts=accounts, actions=actions)
-        assert result.state == HomeState.RECOMMENDATION
-        assert result.featured.headline == actions[0].title
+        assert result.state != HomeState.RECOMMENDATION
+        assert result.state == HomeState.ALL_CLEAR
         assert result.secondary_recommendations == []
-        assert result.show_metrics is False
 
     def test_all_clear_when_healthy(self):
         accounts = [
@@ -124,58 +109,28 @@ class TestHomeStatePriority:
         assert result.health.up_to_date == 2
         assert result.show_health is False
 
-    def test_all_clear_for_now_when_still_setting_up(self):
-        """2 up to date + 6 still setting up + 0 user actions."""
-        accounts = [
-            _acct("amex", "American Express", "up_to_date"),
-            _acct("delta", "Delta", "up_to_date"),
-            _acct("hilton", "Hilton", "waiting_for_extension"),
-            _acct("united", "United", "waiting_for_extension"),
-            _acct("marriott", "Marriott", "checking"),
-            _acct("chase", "Chase", "waiting_for_extension"),
-            _acct("citi", "Citi", "waiting_for_extension"),
-            _acct("capitalone", "Capital One", "waiting_for_extension"),
-        ]
-        result = resolve_home_state(accounts=accounts, actions=[])
-        assert result.state == HomeState.ALL_CLEAR
-        assert result.health.up_to_date == 2
-        assert result.health.waiting == 6
-        assert result.health.attention_required == 0
-        assert result.show_health is False
-        assert result.tower.watching_count == 2
-        assert result.tower.waiting_count + result.tower.refreshing_count == 6
-
-    def test_attention_hero_when_error_with_setup_incomplete(self):
-        """1 up to date + 6 still setting up + 1 needs attention → hero agrees."""
+    def test_health_buckets_still_counted(self):
         accounts = [
             _acct("amex", "American Express", "up_to_date"),
             _acct("hilton", "Hilton", "waiting_for_extension"),
-            _acct("united", "United", "waiting_for_extension"),
-            _acct("marriott", "Marriott", "checking"),
-            _acct("chase", "Chase", "waiting_for_extension"),
-            _acct("citi", "Citi", "waiting_for_extension"),
-            _acct("capitalone", "Capital One", "waiting_for_extension"),
             _acct("delta", "Delta", "error"),
+            _acct("chase", "Chase", "needs_login"),
         ]
         result = resolve_home_state(accounts=accounts, actions=[])
         assert result.health.up_to_date == 1
-        assert result.health.waiting == 6
-        assert result.health.attention_required == 1
-        assert result.tower.needs_you_count == 1
-        assert result.featured.cta_url == "/credentials?filter=needs_attention"
-        assert result.show_health is False
+        assert result.health.waiting == 1
+        assert result.health.needs_attention == 1
+        assert result.health.needs_login == 1
+        assert result.state != HomeState.LOGIN
+        assert result.state != HomeState.RECOMMENDATION
 
-    def test_signed_out_shows_login_hero(self):
+    def test_amex_only_access_views_for_truth(self):
         accounts = [
             _acct("amex", "American Express", "needs_login"),
             _acct("delta", "Delta", "up_to_date"),
-            _acct("hilton", "Hilton", "waiting_for_extension"),
         ]
         result = resolve_home_state(accounts=accounts)
-        assert result.state == HomeState.LOGIN
-        assert result.health.needs_login == 1
-        assert result.health.waiting == 1
-        assert "Log in" in (result.featured.cta_label or "")
+        assert all(v.provider == "amex" for v in result.access_views)
         assert result.capability.state == CapabilityState.SIGNED_OUT
 
     def test_setup_states_never_counted_as_needs_login(self):
@@ -185,14 +140,3 @@ class TestHomeStatePriority:
             assert result.health.needs_login == 0
             assert result.health.waiting == 1
             assert result.state != HomeState.LOGIN
-
-    def test_updating_and_error_align_with_accounts_buckets(self):
-        accounts = [
-            _acct("amex", "American Express", "updating"),
-            _acct("delta", "Delta", "error"),
-        ]
-        result = resolve_home_state(accounts=accounts)
-        assert result.health.waiting == 1  # updating → still setting up
-        assert result.health.needs_attention == 1  # error → needs attention
-        assert result.health.needs_login == 0
-        assert result.state != HomeState.LOGIN
