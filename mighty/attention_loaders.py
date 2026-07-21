@@ -1,4 +1,4 @@
-"""Attention input loaders — DB facts → compiler inputs (Milestone 2).
+"""Attention input loaders — DB facts → compiler inputs.
 
 No ranking, overlay, or producer policy. Maps existing stores into the
 shapes AttentionCompiler already understands.
@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
-from mighty.account_state import list_account_states
+from mighty.account_state import AccountState, list_account_states
 from mighty.attention_compiler import AuthorizeRow
 from mighty.auth_truth import AuthTruth, project_auth_truth
 
@@ -67,27 +67,44 @@ def load_authorize_rows(
     return result
 
 
+def load_account_states_for_attention(db: Any, user_id: str) -> list[AccountState]:
+    """Load AccountState rows for data_gap compilation.
+
+    Enrollment owns the provider list. No producer policy here.
+    """
+    uid = str(user_id or "").strip()
+    if not uid:
+        return []
+    try:
+        return list(list_account_states(db, uid))
+    except Exception:
+        return []
+
+
 def load_auth_truths(
     db: Any,
     user_id: str,
     *,
     now: datetime,
     projected_at: str | None = None,
+    accounts: Sequence[AccountState] | None = None,
 ) -> list[AuthTruth]:
     """Project AuthTruth for each enrolled account (account_state providers).
 
     Enrollment owns the provider list. Projection uses the existing AuthTruth
-    projector (primary access_method only).
+    projector (primary access_method only). Pass ``accounts`` to reuse a
+    single AccountState load with the data_gap path.
     """
     uid = str(user_id or "").strip()
     if not uid:
         return []
     now = _ensure_aware(now)
     projected = projected_at or now.replace(microsecond=0).isoformat()
-    try:
-        accounts = list_account_states(db, uid)
-    except Exception:
-        accounts = []
+    if accounts is None:
+        try:
+            accounts = list_account_states(db, uid)
+        except Exception:
+            accounts = []
 
     truths: list[AuthTruth] = []
     for account in accounts:
