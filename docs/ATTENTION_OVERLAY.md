@@ -27,7 +27,7 @@ This PR does **not** persist overlays, expose HTTP commands, deliver notificatio
 | **Attention overlays / compose (this module)** | Overlay contract, visibility filter, `suppressed` composition | Persistence, APIs, copy, delivery |
 | **AttentionItem (PR 2A)** | Immutable candidates | Interaction state |
 | **select_attention (PR 2C)** | Effectiveness + total order + non-overlay silence | Overlays |
-| **AttentionStore (later)** | Persist snooze / dismiss / in_flight / receipts | Ranking policy |
+| **AttentionStore (PR 2E)** | Persist snooze / dismiss / in_flight; command validation | Ranking policy |
 | **AttentionSupervisor (later)** | Persist-clear timed-out in_flight / GC | Browser I/O |
 
 ---
@@ -90,10 +90,10 @@ Input order never affects output. Items and overlays are never mutated.
 
 ## Non-goals (this PR)
 
-- No SQLite / AttentionStore persistence
+- No SQLite / AttentionStore persistence (PR 2E)
 - No HTTP snooze/dismiss/cta routes
 - No delivery receipts
 - No AttentionSupervisor job / GC writes
 - No Home / Worker / Push / copy resolution
-- No command validation (max snooze 1h, dismiss-opportunity-only) — Store write path later
+- No command validation (max snooze 1h, dismiss-opportunity-only) — Store write path (PR 2E)
 - No compiler input expansion
