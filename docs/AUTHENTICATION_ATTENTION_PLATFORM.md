@@ -581,9 +581,9 @@ ACCOUNT_STATE.md should be amended in a follow-on edit to demote `next_recommend
 
 **Milestone 3 (Platform Adoption):** Complete — AttentionView, agreement metrics, Home/Worker cutover (default **on**), legacy Home attention ranking removed. Rollback via `ATTENTION_CUTOVER_*=shadow|off`. See [ATTENTION_PLATFORM_ADOPTION.md](ATTENTION_PLATFORM_ADOPTION.md) · [ATTENTION_CUTOVER.md](ATTENTION_CUTOVER.md).
 
-**Milestone 4 (Intelligent Attention):** Complete — Benefit / Worker / data_gap producers, AttentionSupervisor, primary delivery + receipts, HTTP attention commands. Extends the platform; does not redesign it. See [ATTENTION_INTELLIGENT.md](ATTENTION_INTELLIGENT.md).
+**Milestone 4 (Intelligent Attention):** Complete — Benefit / Worker / data_gap producers, AttentionSupervisor, primary delivery + receipts, HTTP attention commands. Extends the platform; does not redesign it. See [ATTENTION_INTELLIGENT.md](ATTENTION_INTELLIGENT.md) · [milestones/MILESTONE_4.md](milestones/MILESTONE_4.md).
 
-**Milestone 5 (Autonomous Attention):** Complete — Runtime Trust producer, supervisor reopen + delivery retry, product metrics, cutover retirement criteria with opt-in legacy compare. Strengthens production readiness; does not redesign architecture. See [ATTENTION_AUTONOMOUS.md](ATTENTION_AUTONOMOUS.md).
+**Milestone 5 (Autonomous Attention):** Complete — Runtime Trust producer, supervisor reopen + delivery retry, product metrics, cutover retirement criteria with opt-in legacy compare. Strengthens production readiness; does not redesign architecture. See [ATTENTION_AUTONOMOUS.md](ATTENTION_AUTONOMOUS.md) · [milestones/MILESTONE_5.md](milestones/MILESTONE_5.md).
 
 Out of scope: credential storage as default path, multi-item push, household attention, Connector→AuthTruth.
 

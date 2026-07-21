@@ -1,6 +1,7 @@
 # Intelligent Attention — Milestone 4 Design Note
 
 **Status:** Complete  
+**Milestone report:** [milestones/MILESTONE_4.md](milestones/MILESTONE_4.md)  
 **RFC:** [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) §4.3 / §4.4 / §6 / §7  
 **Depends on:** Milestone 3 ([ATTENTION_PLATFORM_ADOPTION.md](ATTENTION_PLATFORM_ADOPTION.md))
 

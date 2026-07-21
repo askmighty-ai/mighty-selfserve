@@ -1,6 +1,7 @@
 # Autonomous Attention — Milestone 5 Design Note
 
 **Status:** Complete  
+**Milestone report:** [milestones/MILESTONE_5.md](milestones/MILESTONE_5.md)  
 **RFC:** [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) §4.2 / §6 / §7 / Part X / P5  
 **Depends on:** Milestone 4 ([ATTENTION_INTELLIGENT.md](ATTENTION_INTELLIGENT.md))
 
