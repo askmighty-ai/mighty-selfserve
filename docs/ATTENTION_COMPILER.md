@@ -1,0 +1,85 @@
+# AttentionCompiler — AuthTruth → AttentionItem
+
+**Status:** Implemented (PR 2B)  
+**RFC:** [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) §4 / Part XIV  
+**Module:** `mighty/attention_compiler.py`  
+**Depends on:** [AUTH_TRUTH.md](AUTH_TRUTH.md) (PR1), [ATTENTION_ITEM.md](ATTENTION_ITEM.md) (PR 2A)
+
+## Why this exists
+
+The AttentionCompiler turns platform facts into immutable `AttentionItem` candidates. PR 2B implements **only** the AuthTruth → optional auth-blocker mapping:
+
+```text
+AuthTruth  →  Optional[AttentionItem]
+```
+
+Given identical `AuthTruth` values, identical `AttentionItem` values (or `None`) must be produced. Fingerprints and `attention_id`s are deterministic and replay-stable.
+
+---
+
+## Responsibility boundary
+
+| Layer | Owns | Does not own |
+|-------|------|--------------|
+| **AttentionCompiler (this module)** | Pure AuthTruth → auth_blocker mapping; deterministic ids | Ranking, overlays, store, UI, copy |
+| **AttentionItem (PR 2A)** | Frozen candidate contract | Creating candidates |
+| **AuthTruth (PR1)** | Primary-method auth projection | Attention shape |
+| **AttentionStore / Ranker / View (later)** | Overlays, order, surfaces | Inventing candidates |
+
+---
+
+## Auth-blocker mapping
+
+AuthTruth does not use `*_required` terminal strings as its public state. Human-need is projected as `needs_human` + `needs_human_reason` / `interruption` (RFC §3). The brief vocabulary maps as follows:
+
+| Brief phrase | AuthTruth condition | Compiler output |
+|--------------|---------------------|-----------------|
+| `signed_in` (no human) | `needs_human is False` | `None` |
+| `login_required` | `needs_human` + reason `login` | `auth_blocker` (`reason=login`) |
+| `mfa_required` | `needs_human` + reason `mfa` | `auth_blocker` (`reason=mfa`) |
+| `captcha_required` | `needs_human` + reason `captcha` | `auth_blocker` (`reason=captcha`) |
+| `consent_required` | `needs_human` + reason `consent` | `auth_blocker` (`reason=consent`) |
+| `unknown_human` | `needs_human` + reason `unknown_human` | `auth_blocker` (`reason=unknown_human`) |
+
+Additional rules in this PR:
+
+* **Stale alone** (`stale=True`, `needs_human=False`) emits nothing. `access_degraded` is a later compiler input class.
+* **Dual path** never reaches this function as a customer blocker: AuthTruth already projects the **primary** method only; non-primary Runtime `needs_human` stays ops-only.
+* **Reason resolution:** prefer `needs_human_reason`, else `interruption` when it is a known auth reason, else `unknown_human`.
+* **CTA:** `browser_session` → `start_provider_login`; `managed_runtime` → `focus_managed_runtime`; other methods → `noop` (they do not project `needs_human` today).
+* **`becomes_stale_at`:** always `None` for auth blockers (deadlines belong to benefit/signal facts).
+* **`observed_at` / `interruption_expected`:** passed through from AuthTruth.
+* **`projected_at`:** never copied onto the item (would break fact-derived determinism).
+
+---
+
+## Deterministic identity
+
+| Field | Formula |
+|-------|---------|
+| `fingerprint` | `auth:{provider}:needs_human` |
+| `attention_id` | `att_{user_id}_auth_blocker_{provider}_needs_human` |
+| `source_ref` | `auth_truth:{user_id}:{provider}` |
+| `source_kind` | `auth` |
+| `attention_class` / `urgency` | `auth_blocker` / `blocker` |
+
+Provider is lowercased. **Fingerprint and `attention_id` do not include the interruption reason**, so login → captcha is one candidate identity with an updated `reason` (RFC Part XIV scenario 3).
+
+Helpers: `auth_blocker_fingerprint`, `auth_blocker_attention_id`, `auth_truth_source_ref`, `compile_auth_attention`.
+
+---
+
+## Non-goals (this PR)
+
+- No ranking / primary selection
+- No AttentionStore / overlays / persistence
+- No Home / Worker / Push / Activity integration
+- No notifications, APIs, UI, or metrics
+- No Authorize / Benefit / Worker / AccountState compiler inputs
+- No `access_degraded` (stale) emission
+
+---
+
+## Tests
+
+`tests/test_attention_compiler.py` — exhaustive golden `to_dict()` fixtures for every auth-blocker reason, plus replay-stability proofs (identical Truth → identical Item; reason-change keeps fingerprint/`attention_id`).
