@@ -23,7 +23,7 @@ compose_attention(items, store.list(user_id), now)  →  AttentionState
 |-------|------|--------------|
 | **AttentionStore (this module)** | Overlay CRUD; snooze / dismiss / in_flight / clear command validation | Ranking, AuthTruth, delivery, HTTP |
 | **compose / apply (PR 2D)** | Read-path visibility + suppressed | Persistence |
-| **AttentionSupervisor (later)** | Timeout clear + GC of orphan overlays | Browser I/O |
+| **AttentionSupervisor** | Timeout clear + GC of orphan overlays ([ATTENTION_SUPERVISOR.md](ATTENTION_SUPERVISOR.md)) | Browser I/O |
 | **HTTP / surfaces (later)** | Route → command → optional Access Manager side effect | Inventing overlays |
 
 ---

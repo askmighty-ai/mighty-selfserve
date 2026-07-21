@@ -28,7 +28,7 @@ This PR does **not** persist overlays, expose HTTP commands, deliver notificatio
 | **AttentionItem (PR 2A)** | Immutable candidates | Interaction state |
 | **select_attention (PR 2C)** | Effectiveness + total order + non-overlay silence | Overlays |
 | **AttentionStore (PR 2E)** | Persist snooze / dismiss / in_flight; command validation | Ranking policy |
-| **AttentionSupervisor (later)** | Persist-clear timed-out in_flight / GC | Browser I/O |
+| **AttentionSupervisor** | Persist-clear timed-out in_flight / GC ([ATTENTION_SUPERVISOR.md](ATTENTION_SUPERVISOR.md)) | Browser I/O |
 
 ---
 

@@ -131,8 +131,8 @@ CTA side effects (Access Manager verification enqueue) remain outside Store — 
 | 1 | This Design Note | Align reviewers before code | done |
 | 2 | data_gap producer + loader | AccountState already listed by engine; lowest new surface | done |
 | 3 | WorkerSignal → system | Heartbeat columns exist; unblocks setup hero | done |
-| 4 | BenefitSignal → value_at_risk + opportunity | Reuses `action_items`; enables rank 5–6 | in progress |
-| 5 | AttentionSupervisor | Unblocks stuck in_flight; GC orphans | pending |
+| 4 | BenefitSignal → value_at_risk + opportunity | Reuses `action_items`; enables rank 5–6 | done |
+| 5 | AttentionSupervisor | Unblocks stuck in_flight; GC orphans | in progress |
 | 6 | HTTP attention commands + read view | Surfaces can drive overlays without inventing policy | pending |
 | 7 | AttentionDelivery + receipts | Push uses primary only; observability for SLA | pending |
 | 8 | Replay/e2e + metrics + RFC status | Harden + close milestone | pending |

@@ -1720,6 +1720,57 @@ def _start_verification_maintenance_scheduler():
     )
 
 
+def _run_attention_supervisor_once(*, label: str = "scheduled") -> int:
+    """Clear timed-out in_flight overlays and GC orphan attention overlays."""
+    from datetime import datetime, timezone
+
+    from mighty.attention_supervisor import run_attention_supervisor
+
+    try:
+        with app.app_context():
+            result = run_attention_supervisor(
+                get_db(), now=datetime.now(timezone.utc)
+            )
+            changed = result.in_flight_cleared + result.orphans_deleted
+            if changed or result.errors:
+                print(
+                    f"[AttentionSupervisor] {label}: "
+                    f"users={result.users_scanned} "
+                    f"in_flight_cleared={result.in_flight_cleared} "
+                    f"orphans_deleted={result.orphans_deleted} "
+                    f"errors={result.errors}",
+                    flush=True,
+                )
+            return changed
+    except Exception as e:
+        print(f"[AttentionSupervisor] {label} error: {e}", flush=True)
+        return 0
+
+
+def _start_attention_supervisor_scheduler():
+    """Independent heartbeat for Attention in_flight timeout + overlay GC.
+
+    Failures are swallowed — Attention must never block Home/Worker/sync.
+    """
+    import time as _time_as
+
+    interval = max(30, int(os.environ.get("ATTENTION_SUPERVISOR_INTERVAL_SECONDS", "60")))
+
+    def _loop():
+        _run_attention_supervisor_once(label="startup")
+        while True:
+            _time_as.sleep(interval)
+            _run_attention_supervisor_once(label="heartbeat")
+
+    t = threading.Thread(target=_loop, daemon=True, name="attention-supervisor")
+    t.start()
+    print(
+        f"[Mighty] Attention supervisor scheduler started "
+        f"(every {interval}s; startup sweep enabled)",
+        flush=True,
+    )
+
+
 # ── Site URL health check ──────────────────────────────────────────────────────
 # Proactively detects dead domains and domain migrations before users notice.
 # Checks all known account entry URLs weekly; stores results in site_url_health.
@@ -23318,4 +23369,7 @@ if __name__ == "__main__":
     # Independent verification timeout ownership (opt-out via env).
     if os.environ.get("ENABLE_VERIFICATION_MAINTENANCE", "true").lower() == "true":
         _start_verification_maintenance_scheduler()
+    # Attention in_flight timeout + orphan overlay GC (opt-out via env).
+    if os.environ.get("ENABLE_ATTENTION_SUPERVISOR", "true").lower() == "true":
+        _start_attention_supervisor_scheduler()
     app.run(host="0.0.0.0", port=PORT, debug=False)
