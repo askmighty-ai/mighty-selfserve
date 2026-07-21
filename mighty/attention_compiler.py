@@ -13,6 +13,7 @@ See docs/ATTENTION_COMPILER.md and docs/ATTENTION_COMPILER_AUTHORIZE.md.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 from mighty.attention import (
     ATTENTION_ITEM_SCHEMA_VERSION,
@@ -278,3 +279,29 @@ def compile_authorize_attention(row: AuthorizeRow) -> AttentionItem | None:
         becomes_stale_at=row.expires_at,
         interruption_expected=False,
     )
+
+
+def compile_attention_candidates(
+    *,
+    auth_truths: Sequence[AuthTruth] = (),
+    authorize_rows: Sequence[AuthorizeRow] = (),
+) -> tuple[AttentionItem, ...]:
+    """Gather AttentionItems from supported compiler inputs (PR 2H).
+
+    Pure and order-stable within each input family. Does not rank or apply
+    overlays — see ``select_attention`` / ``compose_attention``.
+    """
+    items: list[AttentionItem] = []
+    for truth in auth_truths:
+        blocker = compile_auth_attention(truth)
+        if blocker is not None:
+            items.append(blocker)
+            continue
+        degraded = compile_access_degraded_attention(truth)
+        if degraded is not None:
+            items.append(degraded)
+    for row in authorize_rows:
+        authorize_item = compile_authorize_attention(row)
+        if authorize_item is not None:
+            items.append(authorize_item)
+    return tuple(items)
