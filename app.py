@@ -1746,6 +1746,7 @@ def _run_attention_supervisor_once(*, label: str = "scheduled") -> int:
     from datetime import datetime, timezone
 
     from mighty.attention_delivery import run_attention_delivery_sweep
+    from mighty.attention_metrics import run_attention_metrics_sweep
     from mighty.attention_supervisor import run_attention_supervisor
 
     try:
@@ -1763,12 +1764,23 @@ def _run_attention_supervisor_once(*, label: str = "scheduled") -> int:
                     flush=True,
                 )
                 delivered = 0
+            try:
+                metrics = run_attention_metrics_sweep(db, now=now)
+            except Exception as metrics_exc:
+                print(
+                    f"[AttentionMetrics] {label} error: {metrics_exc}",
+                    flush=True,
+                )
+                metrics = None
             changed = (
                 result.in_flight_cleared
                 + result.orphans_deleted
                 + result.reopened
             )
-            if changed or result.errors or delivered:
+            if changed or result.errors or delivered or metrics is not None:
+                coverage = (
+                    f"{metrics.autonomous_coverage:.3f}" if metrics else "n/a"
+                )
                 print(
                     f"[AttentionSupervisor] {label}: "
                     f"users={result.users_scanned} "
@@ -1776,6 +1788,7 @@ def _run_attention_supervisor_once(*, label: str = "scheduled") -> int:
                     f"orphans_deleted={result.orphans_deleted} "
                     f"reopened={result.reopened} "
                     f"delivery_attempts={delivered} "
+                    f"coverage={coverage} "
                     f"errors={result.errors}",
                     flush=True,
                 )
