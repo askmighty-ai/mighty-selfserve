@@ -193,6 +193,30 @@ def list_attention_overlays(db: Any, user_id: str) -> list[AttentionOverlay]:
     return [AttentionOverlay.from_dict(json.loads(row[0])) for row in rows]
 
 
+def list_attention_overlay_user_ids(db: Any) -> list[str]:
+    """Return distinct user_ids that currently have attention overlays."""
+    ensure_attention_overlay_tables(db, commit=False)
+    rows = db.execute(
+        """
+        SELECT DISTINCT user_id FROM attention_overlay
+        ORDER BY user_id ASC
+        """
+    ).fetchall()
+    result: list[str] = []
+    for row in rows:
+        if isinstance(row, dict):
+            uid = row.get("user_id")
+        else:
+            try:
+                uid = row["user_id"]
+            except Exception:
+                uid = row[0]
+        text = str(uid or "").strip()
+        if text:
+            result.append(text)
+    return result
+
+
 def delete_attention_overlay(
     db: Any,
     user_id: str,
@@ -306,6 +330,7 @@ __all__ = [
     "dismiss_attention",
     "ensure_attention_overlay_tables",
     "get_attention_overlay",
+    "list_attention_overlay_user_ids",
     "list_attention_overlays",
     "snooze_attention",
     "start_attention_cta",
