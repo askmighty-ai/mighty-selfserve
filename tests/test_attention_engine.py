@@ -244,6 +244,46 @@ class TestEnginePipeline:
         assert state.primary.cta_key.value == "install_worker"
         assert state.silence is None
 
+    def test_expiring_benefit_is_value_at_risk_primary(self, db):
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS action_items (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                field_key TEXT NOT NULL,
+                label TEXT,
+                value TEXT,
+                btype TEXT,
+                urgency TEXT,
+                days_left INTEGER,
+                exp_date TEXT,
+                created_at TEXT,
+                dismissed_at TEXT,
+                snoozed_until TEXT,
+                completed_at TEXT
+            )
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO action_items
+            (user_id, source, field_key, label, value, btype, urgency,
+             days_left, exp_date, created_at)
+            VALUES (?, 'amex', 'companion_cert', 'Companion Certificate', '1',
+                    'certificate', 'urgent', 5, '2026-07-28T00:00:00', ?)
+            """,
+            (USER_ID, FIXED_NOW.isoformat()),
+        )
+        db.commit()
+        _persist_account(db, "amex", data_status=DATA_COMPLETE)
+        _write_pss(db, provider="amex", state="signed_in", evidence_type="dom")
+        state = read_attention(db, USER_ID, now=FIXED_NOW)
+        assert state.primary is not None
+        assert state.primary.attention_class == AttentionClass.VALUE_AT_RISK
+        assert state.primary.provider == "amex"
+        assert state.silence is None
+
 
 class TestShadow:
     def test_record_and_load_shadow(self, db):
