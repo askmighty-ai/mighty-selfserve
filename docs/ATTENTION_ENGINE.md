@@ -81,7 +81,8 @@ Shadow writes `attention_shadow` (latest per user×surface). When a legacy probe
 - `data_gap` producer wired (AccountState → gather). See [ATTENTION_COMPILER_DATA_GAP.md](ATTENTION_COMPILER_DATA_GAP.md).
 - `system` worker producer wired (WorkerSignal → gather). See [ATTENTION_COMPILER_WORKER.md](ATTENTION_COMPILER_WORKER.md).
 - Benefit producers wired (`value_at_risk` / `opportunity`). See [ATTENTION_COMPILER_BENEFIT.md](ATTENTION_COMPILER_BENEFIT.md).
-- AttentionSupervisor and delivery remain follow-on M4 work ([ATTENTION_INTELLIGENT.md](ATTENTION_INTELLIGENT.md)).
+- AttentionSupervisor: [ATTENTION_SUPERVISOR.md](ATTENTION_SUPERVISOR.md)
+- Delivery + HTTP commands: [ATTENTION_DELIVERY.md](ATTENTION_DELIVERY.md)
 
 ## Non-goals (historical Milestone 2)
 

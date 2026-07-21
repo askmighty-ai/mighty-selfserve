@@ -1720,28 +1720,61 @@ def _start_verification_maintenance_scheduler():
     )
 
 
+def _attention_push_sender(user_id: str, title: str, body: str, url: str | None) -> bool:
+    """Best-effort web-push enqueue for AttentionDelivery. Returns False if skipped."""
+    db = get_db()
+    try:
+        user = db.execute(
+            "SELECT notify_push FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+        if user is not None and not user["notify_push"]:
+            return False
+        subs = db.execute(
+            "SELECT 1 FROM push_subscriptions WHERE user_id=? LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if not subs:
+            return False
+    except Exception:
+        return False
+    send_web_push(user_id, title, body, url or "/", action_id=None)
+    return True
+
+
 def _run_attention_supervisor_once(*, label: str = "scheduled") -> int:
     """Clear timed-out in_flight overlays and GC orphan attention overlays."""
     from datetime import datetime, timezone
 
+    from mighty.attention_delivery import run_attention_delivery_sweep
     from mighty.attention_supervisor import run_attention_supervisor
 
     try:
         with app.app_context():
-            result = run_attention_supervisor(
-                get_db(), now=datetime.now(timezone.utc)
-            )
+            now = datetime.now(timezone.utc)
+            db = get_db()
+            result = run_attention_supervisor(db, now=now)
+            try:
+                delivered = run_attention_delivery_sweep(
+                    db, now=now, send_push=_attention_push_sender
+                )
+            except Exception as delivery_exc:
+                print(
+                    f"[AttentionDelivery] {label} error: {delivery_exc}",
+                    flush=True,
+                )
+                delivered = 0
             changed = result.in_flight_cleared + result.orphans_deleted
-            if changed or result.errors:
+            if changed or result.errors or delivered:
                 print(
                     f"[AttentionSupervisor] {label}: "
                     f"users={result.users_scanned} "
                     f"in_flight_cleared={result.in_flight_cleared} "
                     f"orphans_deleted={result.orphans_deleted} "
+                    f"delivery_attempts={delivered} "
                     f"errors={result.errors}",
                     flush=True,
                 )
-            return changed
+            return changed + delivered
     except Exception as e:
         print(f"[AttentionSupervisor] {label} error: {e}", flush=True)
         return 0
@@ -12095,6 +12128,118 @@ def api_record():
     )
     get_db().commit()
     return jsonify({"status": "logged", "record_id": action_id})
+
+@app.route("/api/attention/view", methods=["GET"])
+@require_login
+def api_attention_view():
+    """Return AttentionView for a surface (presentation only; no ranking)."""
+    from datetime import datetime, timezone
+
+    from mighty.attention_commands import build_view_payload
+
+    user = _session_user_row()
+    surface = (request.args.get("surface") or "home").strip().lower()
+    if surface not in {"home", "worker", "accounts", "activity", "push", "email"}:
+        return jsonify({"error": "invalid surface"}), 400
+    try:
+        payload = build_view_payload(
+            get_db(),
+            user["id"],
+            surface,  # type: ignore[arg-type]
+            now=datetime.now(timezone.utc),
+        )
+        return jsonify(payload)
+    except Exception as e:
+        print(f"[AttentionAPI] view error: {e}", flush=True)
+        return jsonify({"error": "attention_unavailable"}), 503
+
+
+@app.route("/api/attention/<attention_id>/snooze", methods=["POST"])
+@require_login
+def api_attention_snooze(attention_id):
+    from datetime import datetime, timezone
+
+    from mighty.attention_commands import command_snooze
+    from mighty.attention_store import AttentionStoreCommandError
+
+    user = _session_user_row()
+    try:
+        return jsonify(
+            command_snooze(
+                get_db(),
+                user["id"],
+                attention_id,
+                now=datetime.now(timezone.utc),
+            )
+        )
+    except AttentionStoreCommandError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        print(f"[AttentionAPI] snooze error: {e}", flush=True)
+        return jsonify({"error": "attention_command_failed"}), 503
+
+
+@app.route("/api/attention/<attention_id>/dismiss", methods=["POST"])
+@require_login
+def api_attention_dismiss(attention_id):
+    from datetime import datetime, timezone
+
+    from mighty.attention_commands import command_dismiss
+    from mighty.attention_store import AttentionStoreCommandError
+
+    user = _session_user_row()
+    try:
+        return jsonify(
+            command_dismiss(
+                get_db(),
+                user["id"],
+                attention_id,
+                now=datetime.now(timezone.utc),
+            )
+        )
+    except AttentionStoreCommandError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        print(f"[AttentionAPI] dismiss error: {e}", flush=True)
+        return jsonify({"error": "attention_command_failed"}), 503
+
+
+@app.route("/api/attention/<attention_id>/cta", methods=["POST"])
+@require_login
+def api_attention_cta(attention_id):
+    from datetime import datetime, timezone
+
+    from mighty.attention_commands import command_cta
+    from mighty.attention_store import AttentionStoreCommandError
+    from mighty.provider_access_manager import request_provider_verification
+
+    user = _session_user_row()
+
+    def _request_verification(db, user_id, provider):
+        return request_provider_verification(
+            db,
+            user_id,
+            provider,
+            trigger_source="user_check_now",
+            requested_by="attention_cta",
+        )
+
+    try:
+        return jsonify(
+            command_cta(
+                get_db(),
+                user["id"],
+                attention_id,
+                now=datetime.now(timezone.utc),
+                request_verification=_request_verification,
+            )
+        )
+    except AttentionStoreCommandError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        print(f"[AttentionAPI] cta error: {e}", flush=True)
+        return jsonify({"error": "attention_command_failed"}), 503
+
 
 @app.route("/api/authorize", methods=["POST"])
 def api_authorize():

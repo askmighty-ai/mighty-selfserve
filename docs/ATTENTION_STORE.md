@@ -85,11 +85,10 @@ Store helpers validate `user_id == item.user_id` before write.
 
 ---
 
-## Non-goals (this PR)
+## Related (Milestone 4)
 
-- No HTTP routes
-- No Access Manager / Runtime side commands
-- No delivery receipts table
-- No supervisor job
-- No Home / compose wiring into app.py
-- No events / metrics emission
+- HTTP command routes: [ATTENTION_DELIVERY.md](ATTENTION_DELIVERY.md)
+- Supervisor timeout/GC: [ATTENTION_SUPERVISOR.md](ATTENTION_SUPERVISOR.md)
+- Delivery receipts: `attention_delivery_receipt` via [ATTENTION_DELIVERY.md](ATTENTION_DELIVERY.md)
+
+Store itself still does not own HTTP, delivery, or browser I/O.
