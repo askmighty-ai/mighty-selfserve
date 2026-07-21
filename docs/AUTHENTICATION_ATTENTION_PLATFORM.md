@@ -577,6 +577,8 @@ ACCOUNT_STATE.md should be amended in a follow-on edit to demote `next_recommend
 | **P4** | Remove Home-local ranking; amend AccountState hero field |
 | **P5** | Runtime focus CTA only after Runtime API auth |
 
+**Milestone 2 (Attention Core) status:** P2 complete for the pure core + thin engine + Home/Worker **shadow recording** (no customer cutover, no push). See [ATTENTION_ENGINE.md](ATTENTION_ENGINE.md).
+
 Out of scope: credential storage as default path, multi-item push, household attention, Connector→AuthTruth.
 
 ---
