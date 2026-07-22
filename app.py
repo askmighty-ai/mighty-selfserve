@@ -5366,6 +5366,13 @@ def api_user():
 
 def expire_pending():
     """Mark timed-out pending authorizations as expired."""
+    try:
+        from mighty.agent_action_store import expire_awaiting_actions
+
+        expire_awaiting_actions(get_db(), commit=True)
+        return
+    except Exception:
+        pass
     get_db().execute(
         "UPDATE actions SET status='timeout', decided_at=? "
         "WHERE status='pending' AND expires_at < ?",
@@ -5388,6 +5395,14 @@ STATUS_BADGE = {
     "approved": '<span class="badge badge-approved">Approved</span>',
     "denied":   '<span class="badge badge-denied">Denied</span>',
     "timeout":  '<span class="badge badge-timeout">Timed out</span>',
+    # Milestone 11 lifecycle labels (Activity compatibility)
+    "awaiting_authorization": '<span class="badge badge-pending">Pending</span>',
+    "authorized": '<span class="badge badge-approved">Approved</span>',
+    "executing": '<span class="badge badge-approved">Executing</span>',
+    "completed": '<span class="badge badge-approved">Completed</span>',
+    "failed": '<span class="badge badge-timeout">Failed</span>',
+    "cancelled": '<span class="badge badge-denied">Cancelled</span>',
+    "expired": '<span class="badge badge-timeout">Timed out</span>',
 }
 
 
@@ -11753,14 +11768,22 @@ def decide(action_id):
     decision = data.get("decision")
     if decision not in ("approve", "deny"):
         return jsonify({"error": "invalid"}), 400
-    status = "approved" if decision == "approve" else "denied"
-    db = get_db()
-    db.execute(
-        "UPDATE actions SET status=?, decided_at=? WHERE id=? AND user_id=? AND status='pending'",
-        (status, iso(), action_id, session["user_id"]),
+    from mighty.trusted_agent import decide_authorization
+
+    result = decide_authorization(
+        get_db(),
+        action_id=action_id,
+        user_id=session["user_id"],
+        decision="approved" if decision == "approve" else "denied",
+        auth_channel="activity",
+        commit=True,
     )
-    db.commit()
-    return jsonify({"status": status})
+    if result.error or result.action is None:
+        return jsonify({"error": result.error or "not_found"}), 404
+    return jsonify({
+        "status": result.action.status,
+        "lifecycle_state": result.action.lifecycle_state,
+    })
 
 @app.route("/dashboard/has-pending")
 @require_login
@@ -12168,23 +12191,40 @@ def approve_submit(token):
     decision = data.get("decision")
     if decision not in ("approve", "deny"):
         return jsonify({"error": "invalid"}), 400
-    status = "approved" if decision == "approve" else "denied"
     db = get_db()
-    res = db.execute(
-        "UPDATE actions SET status=?, decided_at=? WHERE approval_token=? AND status='pending'",
-        (status, iso(), token),
-    )
-    db.commit()
-    if res.rowcount == 0:
+    row = db.execute(
+        "SELECT id, user_id, status, lifecycle_state FROM actions WHERE approval_token=?",
+        (token,),
+    ).fetchone()
+    if not row:
         return jsonify({"error": "not found or already decided"}), 404
-    return jsonify({"status": status})
+    status = (row["status"] or "").lower()
+    lifecycle = (row["lifecycle_state"] or "") if "lifecycle_state" in row.keys() else ""
+    if status != "pending" and lifecycle not in ("awaiting_authorization", "proposed", ""):
+        return jsonify({"error": "not found or already decided"}), 404
+    from mighty.trusted_agent import decide_authorization
+
+    result = decide_authorization(
+        db,
+        action_id=row["id"],
+        user_id=row["user_id"],
+        decision="approved" if decision == "approve" else "denied",
+        auth_channel="approve_token",
+        commit=True,
+    )
+    if result.error or result.action is None:
+        return jsonify({"error": "not found or already decided"}), 404
+    return jsonify({
+        "status": result.action.status,
+        "lifecycle_state": result.action.lifecycle_state,
+    })
 
 
 # ── API ───────────────────────────────────────────────────────────────────────
 
 @app.route("/api/record", methods=["POST"])
 def api_record():
-    """Log a completed action — no approval needed."""
+    """Log a completed action — no approval needed (auto-authorize + receipt)."""
     user, data = api_user()
     if not user:
         return jsonify({"error": "Invalid or missing api_key"}), 401
@@ -12193,20 +12233,33 @@ def api_record():
     action_type       = data.get("action_type", "other")
     label             = data.get("label", "Action")
     fields            = data.get("fields")
-    outcome           = data.get("outcome", "completed")
-    consequence_level = data.get("consequence_level", "routine")
+    consequence_level = data.get("consequence_level", "informational")
+    agent_id          = data.get("agent_id") or data.get("agent")
     if user["minimal_logging"]:
         label  = action_type
         fields = None
-    action_id         = secrets.token_hex(16)
-    get_db().execute(
-        "INSERT INTO actions (id,user_id,action_type,label,fields,status,outcome,consequence_level,created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (action_id, user["id"], action_type, label,
-         json.dumps(fields) if fields else None, "logged", outcome, consequence_level, iso()),
+    from mighty.trusted_agent import propose_and_log
+
+    result = propose_and_log(
+        get_db(),
+        user_id=user["id"],
+        action_type=action_type,
+        label=label,
+        fields=fields,
+        consequence_level=consequence_level or "informational",
+        agent_id=agent_id,
+        commit=True,
     )
-    get_db().commit()
-    return jsonify({"status": "logged", "record_id": action_id})
+    action = getattr(result, "action", None)
+    if action is None:
+        return jsonify({"error": "record_failed"}), 503
+    receipt = getattr(result, "receipt", None)
+    return jsonify({
+        "status": action.status,
+        "lifecycle_state": action.lifecycle_state,
+        "record_id": action.action_id,
+        "receipt": receipt.to_dict() if receipt else None,
+    })
 
 @app.route("/api/attention/view", methods=["GET"])
 @require_login
@@ -12332,25 +12385,41 @@ def api_authorize():
     label             = data.get("label", "Action")
     fields            = data.get("fields")
     consequence_level = data.get("consequence_level", "routine")
+    agent_id          = data.get("agent_id") or data.get("agent")
+    provider          = data.get("provider")
     if user["minimal_logging"]:
         label  = action_type
         fields = None
-    action_id         = secrets.token_hex(16)
-    approval_token    = secrets.token_urlsafe(24)
-    expires_at        = (utcnow() + timedelta(seconds=TIMEOUT_SEC)).isoformat()
-    get_db().execute(
-        "INSERT INTO actions "
-        "(id,user_id,action_type,label,fields,status,approval_token,consequence_level,created_at,expires_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (action_id, user["id"], action_type, label,
-         json.dumps(fields) if fields else None,
-         "pending", approval_token, consequence_level, iso(), expires_at),
+    from mighty.trusted_agent import propose_action
+
+    proposed = propose_action(
+        get_db(),
+        user_id=user["id"],
+        action_type=action_type,
+        label=label,
+        fields=fields,
+        consequence_level=consequence_level,
+        agent_id=agent_id,
+        provider=provider,
+        timeout_sec=TIMEOUT_SEC,
+        commit=True,
     )
-    get_db().commit()
-    url          = base_url()
-    approval_url = f"{url}/approve/{approval_token}"
+    if proposed.error:
+        return jsonify({"error": "authorize_failed"}), 503
+    if proposed.suppressed_duplicate:
+        return jsonify({
+            "status": "duplicate_suppressed",
+            "message": "An identical open authorization already exists.",
+        }), 409
+    action = proposed.action
+    if action is None:
+        return jsonify({"error": "authorize_failed"}), 503
+    action_id = action.action_id
+    approval_token = action.approval_token
+    url = base_url()
+    approval_url = f"{url}/approve/{approval_token}" if approval_token else None
     # Push notification via ntfy.sh (if user has enabled it)
-    if user["notify_ntfy"]:
+    if approval_url and user["notify_ntfy"]:
         send_ntfy_notification(
             api_key=user["api_key"],
             label=label,
@@ -12358,7 +12427,7 @@ def api_authorize():
             approval_url=approval_url,
         )
     # Email notification via Postmark (if user has enabled it)
-    if user["notify_email"]:
+    if approval_url and user["notify_email"]:
         send_authorization_email(
             to_email=NOTIFY_EMAIL_OVERRIDE or user["email"],
             label=label,
@@ -12367,7 +12436,7 @@ def api_authorize():
             approval_url=approval_url,
         )
     # Web Push notification
-    if user["notify_push"]:
+    if approval_url and user["notify_push"]:
         send_web_push(
             user_id=user["id"],
             title=f"Action needed: {action_type}",
@@ -12376,10 +12445,12 @@ def api_authorize():
             action_id=action_id,
         )
     return jsonify({
-        "status":     "pending",
+        "status":     action.status,
+        "lifecycle_state": action.lifecycle_state,
         "request_id": action_id,
         "poll_url":   f"{url}/api/status/{action_id}",
         "expires_in": TIMEOUT_SEC,
+        "proposal_hash": action.proposal_hash,
         "message":    "Authorization request created. Now ask the user 'Shall I proceed?' and wait for their response. Then call mighty_decide with this request_id and decision 'approved' or 'denied' based on what they say.",
     })
 
@@ -12414,18 +12485,60 @@ def api_decide():
         return jsonify({"error": "request_id is required"}), 400
     if decision not in ("approved", "denied"):
         return jsonify({"error": "decision must be 'approved' or 'denied'"}), 400
-    row = get_db().execute(
-        "SELECT id FROM actions WHERE id=? AND user_id=?",
-        (request_id, user["id"]),
-    ).fetchone()
-    if not row:
-        return jsonify({"error": "not found"}), 404
-    get_db().execute(
-        "UPDATE actions SET status=?, decided_at=? WHERE id=?",
-        (decision, iso(), request_id),
+    from mighty.trusted_agent import decide_authorization
+
+    result = decide_authorization(
+        get_db(),
+        action_id=request_id,
+        user_id=user["id"],
+        decision=decision,
+        auth_channel="chat",
+        commit=True,
     )
-    get_db().commit()
-    return jsonify({"status": decision, "request_id": request_id})
+    if result.error == "not_found":
+        return jsonify({"error": "not found"}), 404
+    if result.error:
+        return jsonify({"error": result.error}), 409
+    action = result.action
+    return jsonify({
+        "status": action.status if action else decision,
+        "lifecycle_state": action.lifecycle_state if action else None,
+        "request_id": request_id,
+    })
+
+
+@app.route("/api/execute", methods=["POST"])
+def api_execute():
+    """Execute an authorized Action and return an immutable receipt (Milestone 11)."""
+    user, data = api_user()
+    if not user:
+        return jsonify({"error": "Invalid or missing api_key"}), 401
+    if not _rate_limit(user["id"], "api_execute", limit=100, window=60):
+        return jsonify({"error": "Rate limit exceeded"}), 429
+    request_id = data.get("request_id") or data.get("action_id") or ""
+    if not request_id:
+        return jsonify({"error": "request_id is required"}), 400
+    from mighty.trusted_agent import execute_action
+
+    result = execute_action(
+        get_db(),
+        action_id=request_id,
+        user_id=user["id"],
+        commit=True,
+    )
+    if result.error == "not_found":
+        return jsonify({"error": "not found"}), 404
+    if result.error:
+        return jsonify({"error": result.error}), 409
+    receipt = result.receipt
+    action = result.action
+    return jsonify({
+        "status": action.status if action else None,
+        "lifecycle_state": action.lifecycle_state if action else None,
+        "request_id": request_id,
+        "receipt": receipt.to_dict() if receipt else None,
+        "idempotent_replay": bool(result.retried),
+    })
 
 
 @app.route("/api/log-decision", methods=["POST"])
@@ -12444,23 +12557,38 @@ def api_log_decision():
     fields            = data.get("fields")
     decision          = data.get("decision", "")
     consequence_level = data.get("consequence_level", "routine")
+    agent_id          = data.get("agent_id") or data.get("agent")
     if decision not in ("approved", "denied"):
         return jsonify({"error": "decision must be 'approved' or 'denied'"}), 400
-    action_id = secrets.token_hex(16)
-    now       = iso()
     if user["minimal_logging"]:
         label  = action_type  # store only the category, not the full description
         fields = None
-    get_db().execute(
-        "INSERT INTO actions "
-        "(id,user_id,action_type,label,fields,status,consequence_level,created_at,decided_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (action_id, user["id"], action_type, label,
-         json.dumps(fields) if fields else None,
-         decision, consequence_level, now, now),
+    from mighty.trusted_agent import propose_and_log
+
+    result = propose_and_log(
+        get_db(),
+        user_id=user["id"],
+        action_type=action_type,
+        label=label,
+        fields=fields,
+        consequence_level=consequence_level,
+        agent_id=agent_id,
+        decision=decision,
+        commit=True,
     )
-    get_db().commit()
-    return jsonify({"status": decision, "record_id": action_id})
+    action = getattr(result, "action", None)
+    if action is None:
+        return jsonify({"error": "log_decision_failed"}), 503
+    return jsonify({
+        "status": action.status,
+        "lifecycle_state": action.lifecycle_state,
+        "record_id": action.action_id,
+        "receipt": (
+            result.receipt.to_dict()
+            if hasattr(result, "receipt") and result.receipt
+            else None
+        ),
+    })
 
 
 # ── Service worker ────────────────────────────────────────────────────────────
