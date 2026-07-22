@@ -1,7 +1,7 @@
 # Canonical Account Snapshots
 
 **Status:** Implemented (PR #94); Change Intelligence on diffs (Milestone 9)  
-**Related:** [PRODUCT_ACCOUNT_STATE.md](PRODUCT_ACCOUNT_STATE.md) · [ACCOUNT_STATE.md](ACCOUNT_STATE.md) · [ACCESS_FLOW.md](ACCESS_FLOW.md) · [FRESHNESS_CHANGE.md](FRESHNESS_CHANGE.md)
+**Related:** [PRODUCT_ACCOUNT_STATE.md](PRODUCT_ACCOUNT_STATE.md) · [ACCOUNT_STATE.md](ACCOUNT_STATE.md) · [ACCESS_FLOW.md](ACCESS_FLOW.md) · [FRESHNESS_CHANGE.md](FRESHNESS_CHANGE.md) · [VALUE_INTELLIGENCE.md](VALUE_INTELLIGENCE.md)
 
 ---
 
@@ -122,6 +122,9 @@ Table: `account_snapshots` (append-only).
 - On each successful persist, Milestone 9 diffs previous→new into
   `account_changes` (meaningful deltas + fingerprint dedupe). See
   [FRESHNESS_CHANGE.md](FRESHNESS_CHANGE.md).
+- Milestone 10 reconciles `account_opportunities` from
+  `normalized_fields` (value facts; not Attention ranking). See
+  [VALUE_INTELLIGENCE.md](VALUE_INTELLIGENCE.md).
 
 ---
 

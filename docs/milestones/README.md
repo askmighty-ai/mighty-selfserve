@@ -53,4 +53,5 @@ Update this section as decisions are made; do not wait until milestone close.
 | 7 | Automatic Account Discovery and Enrollment | Complete | [MILESTONE_7.md](MILESTONE_7.md) |
 | 8 | Natural-Session Coverage | Complete | [MILESTONE_8.md](MILESTONE_8.md) |
 | 9 | Freshness and Change Intelligence | Complete | [MILESTONE_9.md](MILESTONE_9.md) |
-| 10 | Value Intelligence | Pending | Create at kickoff |
+| 10 | Value Intelligence | Complete | [MILESTONE_10.md](MILESTONE_10.md) |
+| 11 | Trusted Agent Authorization | Pending | Create at kickoff |

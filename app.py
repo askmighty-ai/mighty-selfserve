@@ -888,40 +888,9 @@ print(f"[Mighty] POSTMARK_API_KEY={'set' if POSTMARK_API_KEY else 'NOT SET'}", f
 
 def _parse_expiry_days(label, val):
     """Return days until expiry from a label+value string, or None."""
-    import re as _re_exp
-    import datetime as _dt_exp
-    combined = f"{label} {val}"
-    _mm_map = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
-               'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
-    # MM/DD/YYYY
-    m = _re_exp.search(r'\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b', combined)
-    if m:
-        try:
-            mo, da, yr = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            if yr < 100: yr += 2000
-            return (_dt_exp.date(yr, mo, da) - _dt_exp.date.today()).days
-        except Exception: pass
-    # "Aug 31, 2026" or "August 31, 2026" (day present)
-    m3 = _re_exp.search(
-        r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+(\d{1,2}),?\s+(\d{4})',
-        combined, _re_exp.I)
-    if m3:
-        try:
-            mo = _mm_map[m3.group(1)[:3].lower()]
-            da = int(m3.group(2))
-            yr = int(m3.group(3))
-            return (_dt_exp.date(yr, mo, da) - _dt_exp.date.today()).days
-        except Exception: pass
-    # "Aug 2026" (no day — use 1st of month)
-    m2 = _re_exp.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+(\d{4})',
-                         combined, _re_exp.I)
-    if m2:
-        try:
-            mo = _mm_map[m2.group(1)[:3].lower()]
-            yr = int(m2.group(2))
-            return (_dt_exp.date(yr, mo, 1) - _dt_exp.date.today()).days
-        except Exception: pass
-    return None
+    from mighty.expiry import parse_expiry_days
+
+    return parse_expiry_days(label, val)
 
 _ALERT_THRESHOLDS = [7, 14, 30]  # send at each crossing, closest first
 
