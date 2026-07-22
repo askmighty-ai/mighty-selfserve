@@ -528,6 +528,13 @@ def create_account_snapshot_from_extraction(
         # Failure isolation: snapshot persist must succeed even if change
         # intelligence fails. safe_observe already swallows; this is belt/suspenders.
         pass
+    try:
+        from mighty.value_intelligence import safe_reconcile_opportunities_from_snapshot
+
+        safe_reconcile_opportunities_from_snapshot(db, snapshot=persisted)
+    except Exception:
+        # Failure isolation: Value Intelligence must not block snapshot writes.
+        pass
     return persisted
 
 

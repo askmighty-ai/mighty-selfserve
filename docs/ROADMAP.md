@@ -34,6 +34,7 @@ Mighty separates **discovery**, **enrollment**, **access truth**, **recovery**, 
 | **Natural Session** | Passive browse / ensure-due freshness decisions; executes only through PAM; defers to Recovery |
 | **AccountState** | Per-account mirror for Accounts/detail; does **not** own discovery or the cross-account hero |
 | **Freshness / Change** | Data currency + meaningful snapshot diffs (`account_changes`); facts for History/Briefs — not Attention ranking |
+| **Value Intelligence** | Durable opportunity facts from snapshots (`account_opportunities`); computes value — not Attention ranking |
 | **Attention** | Product policy: compile → overlays → rank → `AttentionState` → `AttentionView` → surfaces / delivery |
 
 One write plane for auth. One recovery lifecycle owner. One compiler gather path for attention. One ranking table. One analytics owner per human moment.
@@ -79,7 +80,7 @@ Failure / access facts
 | 7 | Automatic Account Discovery and Enrollment | Accounts appear from the user’s existing digital life without bulk “Add account” rituals | Complete | [milestones/MILESTONE_7.md](milestones/MILESTONE_7.md) |
 | 8 | Natural-Session Coverage | Mighty captures and maintains sessions through normal browsing, not sync marathons | Complete | [milestones/MILESTONE_8.md](milestones/MILESTONE_8.md) |
 | 9 | Freshness and Change Intelligence | Users know what changed and that data is current — without status-dashboard noise | Complete | [milestones/MILESTONE_9.md](milestones/MILESTONE_9.md) |
-| 10 | Value Intelligence | Mighty surfaces value at risk and opportunities worth acting on | Pending | — |
+| 10 | Value Intelligence | Mighty surfaces value at risk and opportunities worth acting on | Complete | [milestones/MILESTONE_10.md](milestones/MILESTONE_10.md) |
 | 11 | Trusted Agent Authorization | Agents act only with verified, inspectable human approval | Pending | — |
 | 12 | Trust, Privacy, and Control | Users understand and control what Mighty can see and do | Pending | — |
 
@@ -89,12 +90,12 @@ RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_A
 
 ## Current milestone
 
-**None (planning).** Milestone 9 — Freshness and Change Intelligence is complete.
+**None (planning).** Milestone 10 — Value Intelligence is complete.
 
 | Field | Value |
 |-------|-------|
-| **Last completed** | M9 — [milestones/MILESTONE_9.md](milestones/MILESTONE_9.md) |
-| **Next** | Milestone 10 — Value Intelligence |
+| **Last completed** | M10 — [milestones/MILESTONE_10.md](milestones/MILESTONE_10.md) |
+| **Next** | Milestone 11 — Trusted Agent Authorization |
 
 ---
 
@@ -130,7 +131,7 @@ Capabilities and technical items deliberately **not** committed as numbered prod
 | Credential storage as default auth path | Explicit non-goal |
 | Connector → AuthTruth dependency | Forbidden by RFC; Connectors use Runtime session APIs |
 | Full Provider Runtime Control Center restore | Thin `runtime_access_state` shipped for AuthTruth/Trust; full CC separate |
-| Opportunity sources beyond `action_items` | Belongs under Value Intelligence (M10) when promoted |
+| Opportunity sources beyond `action_items` | M10 shipped `account_opportunities`; Attention loader bridge still parking-lot |
 | First-class product analytics event table | Supporting observability; not a product milestone |
 | Weekly digest / Daily Brief surfaces | Product Architecture horizon |
 | Mobile-complete auth CTAs for browser_session | Capability-aware; phone may not complete login |

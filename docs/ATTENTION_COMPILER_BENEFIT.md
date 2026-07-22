@@ -48,6 +48,9 @@ One signal emits **at most one** item (value_at_risk XOR opportunity).
 - No partnerships / `_generate_opportunities` second source yet  
 - No provider branching in shared ranking  
 - No Home recommendation ranking restoration  
+- Value Intelligence (`account_opportunities`, Milestone 10) computes durable
+  opportunity **facts** and does **not** emit AttentionItems — loaders may
+  consume those facts later without a second ranker  
 
 ---
 
