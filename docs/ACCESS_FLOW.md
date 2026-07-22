@@ -19,14 +19,19 @@ Minimize minutes of user effort per connected account. Access acquisition should
 ## Canonical production path
 
 ```
-Command (Check now / ensure-due / recovery)
-  → Provider Access Manager.request_provider_verification(trigger_source=…)
+Command (Check now / ensure-due / natural-session observe / recovery)
+  → Natural Session (Milestone 8): skip_fresh | defer_recovery | enqueue
+  → Provider Access Manager.request_provider_verification / ensure_if_stale
       → session_verification (schedule)
       → extension GET /pending (read-only claim) → runSessionVerification
       → provider_access_probe (classify)
       → provider_session_state (persist definitive evidence only)
       → Amex: session_verified → extracting → correlated /amex/extract
       → access cycle completed only after extraction success (or signed_out)
+
+Natural browse emits ``provider_page_observed`` via
+``POST /api/extension/natural-session/observe``. Ensure-due runs
+``run_natural_session_ensure_due`` (defers when Recovery is active).
 ```
 
 Customer GETs never enqueue or expire. Timeout ownership is command-side only:

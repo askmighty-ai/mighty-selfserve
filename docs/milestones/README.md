@@ -51,4 +51,5 @@ Update this section as decisions are made; do not wait until milestone close.
 | OS | Engineering Operating System | Complete | [MILESTONE_OS.md](MILESTONE_OS.md) |
 | 6 | Autonomous Recovery | Complete | [MILESTONE_6.md](MILESTONE_6.md) |
 | 7 | Automatic Account Discovery and Enrollment | Complete | [MILESTONE_7.md](MILESTONE_7.md) |
-| 8 | Natural-Session Coverage | Pending | Create at kickoff |
+| 8 | Natural-Session Coverage | Complete | [MILESTONE_8.md](MILESTONE_8.md) |
+| 9 | Freshness and Change Intelligence | Pending | Create at kickoff |
