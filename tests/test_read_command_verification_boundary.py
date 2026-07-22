@@ -709,7 +709,7 @@ def test_ensure_stale_callers_classified():
     ensure_due = app_src.split(
         "def api_extension_session_verification_ensure_due", 1
     )[1].split("\n@app.route", 1)[0]
-    assert "ensure_stale_provider_access_checks" in ensure_due
+    assert "run_natural_session_ensure_due" in ensure_due
 
 
 def test_check_now_endpoint_in_routes(client):
@@ -1049,7 +1049,7 @@ def test_no_get_call_graph_contains_mutating_maintenance():
     # Pure-read default is explicit in login_truth Current Access path.
     assert "apply_maintenance=False" in login_src
 
-    # Command owner: ensure-due → ensure_stale → run_verification_maintenance
+    # Command owner: ensure-due → Natural Session → PAM ensure_if_stale
     pam = (ROOT / "mighty" / "provider_access_manager.py").read_text()
     assert "def run_verification_maintenance" in pam
     assert "run_verification_maintenance(db, user_id" in pam
@@ -1057,7 +1057,10 @@ def test_no_get_call_graph_contains_mutating_maintenance():
     ensure_due = app_src.split(
         "def api_extension_session_verification_ensure_due", 1
     )[1].split("\n@app.route", 1)[0]
-    assert "ensure_stale_provider_access_checks" in ensure_due
+    assert "run_natural_session_ensure_due" in ensure_due
+    ns = (ROOT / "mighty" / "natural_session.py").read_text()
+    assert "ensure_provider_access_check_if_stale" in ns
+    assert "has_active_recovery_for_provider" in ns
     maintain = app_src.split(
         "def api_extension_session_verification_maintain", 1
     )[1].split("\n@app.route", 1)[0]

@@ -1152,8 +1152,49 @@ async function requestDueSessionVerifications(triggerSource) {
     if (created.length) {
       console.log('[Mighty] ensure-due created', triggerSource, created.join(','));
     }
+    if (data?.natural_session?.deferred_recovery) {
+      console.log(
+        '[Mighty] natural-session deferred_recovery',
+        data.natural_session.deferred_recovery,
+      );
+    }
   } catch (e) {
     console.warn('[Mighty] ensure-due error:', e.message);
+  }
+}
+
+/**
+ * Natural Session observe — notify server that the user is on a provider surface.
+ * Server decides skip_fresh / enqueue_verify / defer_recovery (Milestone 8).
+ */
+async function observeNaturalProviderSession(provider) {
+  const { api_key } = await chrome.storage.local.get('api_key');
+  if (!api_key || !provider) return;
+  try {
+    const resp = await fetch(
+      `${MIGHTY_URL}/api/extension/natural-session/observe`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Mighty-Key': api_key,
+        },
+        body: JSON.stringify({
+          provider,
+          trigger_source: 'provider_page_observed',
+        }),
+      },
+    );
+    if (!resp.ok) {
+      console.warn('[Mighty] natural-session observe failed', resp.status);
+      return;
+    }
+    const data = await resp.json().catch(() => ({}));
+    if (data?.enqueued) {
+      console.log('[Mighty] natural-session enqueued', provider, data.reason);
+    }
+  } catch (e) {
+    console.warn('[Mighty] natural-session observe error:', e.message);
   }
 }
 
@@ -5085,6 +5126,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       const path = new URL(tab.url).pathname;
       if (path !== '/' && !_SKIP_PATH_RE.test(path)) {
         _supplementCapturePage(tabId, tab, source).catch(() => {});
+        // Milestone 8 — Natural Session observe (PAM freshness via provider_page_observed).
+        observeNaturalProviderSession(source).catch(() => {});
       }
       return;
     }

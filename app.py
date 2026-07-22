@@ -23221,12 +23221,16 @@ def api_extension_session_verification_pending():
 
 @app.route("/api/extension/session-verification/ensure-due", methods=["POST"])
 def api_extension_session_verification_ensure_due():
-    """Extension-owned scheduled command: enqueue due stale verifications.
+    """Extension-owned scheduled command: Natural Session ensure-due sweep.
 
     trigger_source defaults to scheduled_recheck. Optional body.trigger_source
-    may be extension_startup on worker boot.
+    may be extension_startup on worker boot. Defers to Recovery when active.
     """
-    from mighty.provider_access_manager import ensure_stale_provider_access_checks
+    from mighty.natural_session import run_natural_session_ensure_due
+    from mighty.natural_session_metrics import (
+        compute_natural_session_metrics,
+        persist_natural_session_metric_snapshot,
+    )
     from mighty.session_verification import (
         VERIFICATION_TRIGGER_SOURCES,
         session_verification_to_json,
@@ -23241,19 +23245,75 @@ def api_extension_session_verification_ensure_due():
         return jsonify({"error": "invalid trigger_source"}), 400
     if trigger in {"user_check_now", "admin_debug"}:
         return jsonify({"error": "trigger_source not allowed for ensure-due"}), 400
-    created = ensure_stale_provider_access_checks(
-        get_db(),
+    db = get_db()
+    sweep = run_natural_session_ensure_due(
+        db,
         user["id"],
         trigger_source=trigger,
         requested_by=f"extension:{user['id']}",
     )
+    try:
+        snap = compute_natural_session_metrics(
+            sweep, now=datetime.now(timezone.utc)
+        )
+        persist_natural_session_metric_snapshot(db, snap)
+    except Exception as _nsm:
+        print(f"[Mighty] natural_session metrics: {_nsm}", flush=True)
+    created = {}
+    for result in sweep.results:
+        if result.enqueued and result.verification is not None:
+            created[result.provider] = session_verification_to_json(result.verification)
     return jsonify({
         "ok": True,
         "trigger_source": trigger,
-        "created": {
-            provider: session_verification_to_json(ver)
-            for provider, ver in created.items()
+        "created": created,
+        "natural_session": {
+            "detections": sweep.detections,
+            "enqueued": sweep.enqueued,
+            "skipped_fresh": sweep.skipped_fresh,
+            "deferred_recovery": sweep.deferred_recovery,
         },
+    })
+
+
+@app.route("/api/extension/natural-session/observe", methods=["POST"])
+def api_extension_natural_session_observe():
+    """Natural browse observation → Natural Session decision (Milestone 8).
+
+    Body: {provider, trigger_source?=provider_page_observed}
+    """
+    from mighty.natural_session import observe_natural_session
+    from mighty.session_verification import VERIFICATION_TRIGGER_SOURCES
+
+    user, body = api_user()
+    if not user:
+        return jsonify({"error": "invalid api key"}), 401
+    body = body or {}
+    provider = str(body.get("provider") or "").strip().lower()
+    if not provider:
+        return jsonify({"error": "provider required"}), 400
+    trigger = str(
+        body.get("trigger_source") or "provider_page_observed"
+    ).strip().lower()
+    if trigger not in VERIFICATION_TRIGGER_SOURCES:
+        return jsonify({"error": "invalid trigger_source"}), 400
+    if trigger in {"user_check_now", "admin_debug"}:
+        return jsonify({"error": "trigger_source not allowed for observe"}), 400
+    result = observe_natural_session(
+        get_db(),
+        user["id"],
+        provider,
+        trigger_source=trigger,
+        now=datetime.now(timezone.utc),
+        requested_by=f"extension:{user['id']}",
+    )
+    return jsonify({
+        "ok": True,
+        "provider": result.provider,
+        "action": result.action,
+        "reason": result.reason,
+        "enqueued": result.enqueued,
+        "verification_id": result.verification_id,
     })
 
 

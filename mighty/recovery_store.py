@@ -200,6 +200,18 @@ def list_active_cases_for_user(db: Any, user_id: str) -> list[RecoveryCase]:
     return [_case_from_row(r) for r in rows if r]
 
 
+def has_active_recovery_for_provider(
+    db: Any, user_id: str, provider: str
+) -> bool:
+    """True when Recovery owns an active case for this provider (any root_cause)."""
+    prov = str(provider or "").strip().lower()
+    if not prov:
+        return False
+    return any(
+        case.provider == prov for case in list_active_cases_for_user(db, user_id)
+    )
+
+
 def list_escalated_providers(db: Any, user_id: str) -> set[str]:
     """Providers with a latest terminal escalation (for Attention gate)."""
     ensure_recovery_tables(db, commit=False)
