@@ -16,7 +16,7 @@ Build a unified Natural Session pipeline connecting browser activity, PAM, Recov
 
 | PR | Theme |
 |----|--------|
-| *(this PR)* | Design note, Natural Session policy/coordinator, ensure-due + observe wire-up, extension emitter, tests |
+| [#150](https://github.com/askmighty-ai/mighty-selfserve/pull/150) | Design note, Natural Session policy/coordinator, ensure-due + observe wire-up, extension emitter, tests |
 
 ## Architecture changes
 
