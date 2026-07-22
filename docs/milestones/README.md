@@ -2,6 +2,8 @@
 
 Living, authoritative records for Mighty engineering milestones.
 
+**Operating system:** [ROADMAP.md](../ROADMAP.md) · [ENGINEERING_CHARTER.md](../ENGINEERING_CHARTER.md) · [CONTRIBUTING_ENGINEERING.md](../CONTRIBUTING_ENGINEERING.md)
+
 ## Convention
 
 | Path | Role |
@@ -46,3 +48,5 @@ Update this section as decisions are made; do not wait until milestone close.
 |-----------|-------|--------|--------|
 | 4 | Intelligent Attention | Complete | [MILESTONE_4.md](MILESTONE_4.md) |
 | 5 | Autonomous Attention | Complete | [MILESTONE_5.md](MILESTONE_5.md) |
+| OS | Engineering Operating System | Complete | [MILESTONE_OS.md](MILESTONE_OS.md) |
+| 6 | *(not started)* | Pending | Create at kickoff |

@@ -6,7 +6,15 @@ Personal authorization layer for AI agents. Sign up, get an API key, paste a sys
 
 Mighty discovers accounts from email, keeps them current through passive browser capture, and surfaces attention only when something needs you. Login is the only manual step; sync is infrastructure, not a user ritual.
 
-Read the full [Product Manifesto](docs/PRODUCT_MANIFESTO.md). Engineers: see [CONTRIBUTING_PRODUCT.md](CONTRIBUTING_PRODUCT.md) for how to apply these principles in pull requests.
+Read the full [Product Manifesto](docs/PRODUCT_MANIFESTO.md).
+
+**Engineering operating system** (canonical):
+
+- [Roadmap](docs/ROADMAP.md) — vision, milestones, parking lot  
+- [Engineering Charter](docs/ENGINEERING_CHARTER.md) — authority, invariants, escalation, definition of done  
+- [Contributing (Engineering)](docs/CONTRIBUTING_ENGINEERING.md) — how milestones and living reports work  
+
+Product PR guidance: [CONTRIBUTING_PRODUCT.md](CONTRIBUTING_PRODUCT.md).
 
 ## Deploy to Railway
 
