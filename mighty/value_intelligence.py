@@ -57,19 +57,84 @@ def reconcile_opportunities_from_snapshot(
             today_d = today or date.today()
 
         fields = getattr(snapshot, "normalized_fields", None) or ()
-        policy = compute_opportunity_candidates(
+        value_result = compute_opportunity_candidates(
             fields,
             provider=provider,
             today=today_d,
             user_intent=user_intent,
             user_type_affinity=user_type_affinity,
         )
-        obs.policy = policy
+        # Milestone 12 — honor User Policy opportunity suppression / monitoring.
+        uid = str(getattr(snapshot, "user_id", "") or "")
+        candidates = value_result.candidates
+        try:
+            from mighty.policy_store import load_user_policy
+            from mighty.user_policy import (
+                opportunity_kind_suppressed,
+                provider_monitoring_enabled,
+            )
+
+            user_pol = load_user_policy(db, uid)
+            if not provider_monitoring_enabled(user_pol, provider):
+                from mighty.value_policy import OpportunityCandidate
+
+                candidates = tuple(
+                    OpportunityCandidate(
+                        kind=c.kind,
+                        field_key=c.field_key,
+                        label=c.label,
+                        value=c.value,
+                        field_type=c.field_type,
+                        score=c.score,
+                        urgency=c.urgency,
+                        days_left=c.days_left,
+                        exp_date=c.exp_date,
+                        value_estimate=c.value_estimate,
+                        fingerprint=c.fingerprint,
+                        summary=c.summary,
+                        suppressed=True,
+                        suppress_reason="policy_monitor_disabled",
+                        metadata=dict(c.metadata),
+                    )
+                    for c in candidates
+                )
+            else:
+                from mighty.value_policy import OpportunityCandidate
+
+                filtered = []
+                for c in candidates:
+                    if opportunity_kind_suppressed(user_pol, c.kind):
+                        filtered.append(
+                            OpportunityCandidate(
+                                kind=c.kind,
+                                field_key=c.field_key,
+                                label=c.label,
+                                value=c.value,
+                                field_type=c.field_type,
+                                score=c.score,
+                                urgency=c.urgency,
+                                days_left=c.days_left,
+                                exp_date=c.exp_date,
+                                value_estimate=c.value_estimate,
+                                fingerprint=c.fingerprint,
+                                summary=c.summary,
+                                suppressed=True,
+                                suppress_reason="policy_opportunity_suppressed",
+                                metadata=dict(c.metadata),
+                            )
+                        )
+                    else:
+                        filtered.append(c)
+                candidates = tuple(filtered)
+        except Exception:
+            candidates = value_result.candidates
+
+        obs.policy = value_result
         result = reconcile_opportunities(
             db,
-            user_id=str(getattr(snapshot, "user_id", "") or ""),
+            user_id=uid,
             provider=provider,
-            candidates=policy.candidates,
+            candidates=candidates,
             snapshot_id=str(getattr(snapshot, "snapshot_id", "") or "") or None,
             today=today_d,
             commit=commit,
@@ -80,7 +145,7 @@ def reconcile_opportunities_from_snapshot(
             "expired=%s active=%s var_total=%.2f",
             provider,
             result.generated,
-            policy.suppressed,
+            value_result.suppressed,
             result.expired,
             result.active,
             result.value_at_risk_total,

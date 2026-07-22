@@ -11826,6 +11826,12 @@ def update_notifications():
          session["user_id"])
     )
     db.commit()
+    try:
+        from mighty.policy_store import sync_policy_from_users
+
+        sync_policy_from_users(db, session["user_id"], commit=True)
+    except Exception:
+        pass
     return jsonify({"ok": True})
 
 
@@ -11839,7 +11845,39 @@ def update_alert_expiry():
         (1 if data.get("enabled") else 0, session["user_id"])
     )
     get_db().commit()
+    try:
+        from mighty.policy_store import sync_policy_from_users
+
+        sync_policy_from_users(get_db(), session["user_id"], commit=True)
+    except Exception:
+        pass
     return jsonify({"ok": True})
+
+
+@app.route("/api/policy", methods=["GET"])
+@require_login
+def api_get_policy():
+    """Inspect effective User Policy (Milestone 12 governance)."""
+    from mighty.policy_store import load_user_policy
+
+    policy = load_user_policy(get_db(), session["user_id"])
+    return jsonify({"policy": policy.to_dict()})
+
+
+@app.route("/api/policy", methods=["PATCH", "PUT"])
+@require_login
+def api_update_policy():
+    """Update governance knobs; syncs Settings columns (no parallel settings)."""
+    check_csrf()
+    data = request.get_json(force=True) or {}
+    from mighty.policy_store import load_user_policy, save_user_policy
+    from mighty.user_policy import policy_from_dict
+
+    current = load_user_policy(get_db(), session["user_id"])
+    merged = {**current.to_dict(), **data, "user_id": session["user_id"], "source": "store"}
+    policy = policy_from_dict(merged, user_id=session["user_id"])
+    saved = save_user_policy(get_db(), policy, sync_users=True, commit=True)
+    return jsonify({"ok": True, "policy": saved.to_dict()})
 
 
 @app.route("/settings/privacy", methods=["POST"])
@@ -11856,6 +11894,12 @@ def update_privacy():
         )
     )
     get_db().commit()
+    try:
+        from mighty.policy_store import sync_policy_from_users
+
+        sync_policy_from_users(get_db(), session["user_id"], commit=True)
+    except Exception:
+        pass
     return jsonify({"ok": True})
 
 

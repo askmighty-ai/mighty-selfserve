@@ -153,6 +153,7 @@ class AgentAction:
     outcome: str | None
     auth_channel: str | None = None
     execution_attempt: int = 0
+    decision_explanation: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -175,6 +176,7 @@ class AgentAction:
             "outcome": self.outcome,
             "auth_channel": self.auth_channel,
             "execution_attempt": self.execution_attempt,
+            "decision_explanation": self.decision_explanation,
         }
 
 
@@ -216,6 +218,7 @@ def ensure_agent_action_tables(db: Any, *, commit: bool = True) -> None:
         ("proposal_hash", "TEXT"),
         ("auth_channel", "TEXT"),
         ("execution_attempt", "INTEGER DEFAULT 0"),
+        ("decision_explanation", "TEXT"),
     ]
     for name, decl in alterations:
         if name not in cols:
@@ -282,6 +285,7 @@ def _row_to_action(row: Any) -> AgentAction:
         outcome=mapping.get("outcome"),
         auth_channel=mapping.get("auth_channel"),
         execution_attempt=int(mapping.get("execution_attempt") or 0),
+        decision_explanation=mapping.get("decision_explanation"),
     )
 
 
@@ -334,6 +338,7 @@ def insert_action(
     decided_at: str | None = None,
     outcome: str | None = None,
     auth_channel: str | None = None,
+    decision_explanation: str | None = None,
     action_id: str | None = None,
     created_at: str | None = None,
     commit: bool = True,
@@ -368,8 +373,8 @@ def insert_action(
             id, user_id, action_type, label, fields, status, outcome,
             approval_token, created_at, decided_at, expires_at, consequence_level,
             lifecycle_state, agent_id, provider, fingerprint, proposal_hash,
-            auth_channel, execution_attempt
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+            auth_channel, execution_attempt, decision_explanation
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)
         """,
         (
             aid,
@@ -390,6 +395,7 @@ def insert_action(
             fp,
             ph,
             auth_channel,
+            decision_explanation,
         ),
     )
     if commit:

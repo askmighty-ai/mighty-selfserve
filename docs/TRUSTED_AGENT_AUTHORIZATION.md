@@ -31,12 +31,15 @@ Establish the trust boundary between AI agents and real-world actions — not ag
 
 | Concern | Owner |
 |---------|--------|
+| **User Policy** | Durable user intent ([USER_POLICY.md](USER_POLICY.md)) |
 | **Action + authorization facts** | Trusted Agent Authorization (`actions` + lifecycle) |
 | **Immutable execution receipts** | `action_execution_receipts` |
 | **Interruption** | Attention (`AuthorizeRow` → `agent_authorization`) |
 | **History presentation** | Activity (reads `actions` + receipts) |
 | **Access repair human** | Recovery (separate axis) |
 | **Provider execution behavior** | Adapters / capability registry |
+
+Authorization evaluates **Policy + facts**. Execution never bypasses Policy.
 
 Authorization computes **trust decisions**. Execution performs **work**. Activity presents **history**. Attention decides **interruption**.
 

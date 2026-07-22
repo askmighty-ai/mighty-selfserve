@@ -60,6 +60,7 @@ class ProposeResult:
     action: AgentAction | None = None
     decision: AuthorizationDecision | None = None
     suppressed_duplicate: bool = False
+    suppressed_execution: bool = False
     error: str | None = None
 
 
@@ -136,6 +137,13 @@ def propose_action(
         expires_at = (now + timedelta(seconds=timeout_sec)).replace(
             microsecond=0
         ).isoformat()
+        user_policy = None
+        try:
+            from mighty.policy_store import load_user_policy
+
+            user_policy = load_user_policy(db, user_id)
+        except Exception:
+            user_policy = None
         decision = evaluate_authorization_policy(
             action_type=action_type,
             consequence_level=level,
@@ -144,8 +152,10 @@ def propose_action(
             now=now,
             duplicate_open=duplicate,
             record_only=record_only,
+            user_policy=user_policy,
         )
         result.decision = decision
+        explanation = decision.explanation or ""
 
         if decision.outcome == AUTH_DENY and decision.reason == "duplicate_open_action":
             result.suppressed_duplicate = True
@@ -157,6 +167,8 @@ def propose_action(
             return result
 
         if decision.outcome == AUTH_DENY:
+            if decision.reason == "provider_override_deny":
+                result.suppressed_execution = True
             action = insert_action(
                 db,
                 user_id=user_id,
@@ -171,6 +183,7 @@ def propose_action(
                 expires_at=expires_at,
                 outcome=decision.reason,
                 auth_channel="policy",
+                decision_explanation=explanation,
                 commit=commit,
             )
             result.action = action
@@ -189,12 +202,14 @@ def propose_action(
                 lifecycle_state=STATE_AWAITING_AUTHORIZATION,
                 approval_token=new_approval_token(),
                 expires_at=expires_at,
+                auth_channel="policy",
+                decision_explanation=explanation,
                 commit=commit,
             )
             result.action = action
             return result
 
-        # Auto-authorize (informational / record_only)
+        # Auto-authorize (informational / record_only / policy auto)
         stamp = utc_now_iso()
         action = insert_action(
             db,
@@ -209,6 +224,7 @@ def propose_action(
             decided_at=stamp,
             expires_at=expires_at,
             auth_channel="policy_auto",
+            decision_explanation=explanation,
             commit=commit,
         )
         result.action = action
@@ -342,6 +358,12 @@ def execute_action(
             execution_attempt=attempt,
             commit=False,
         )
+        detail_payload = detail if isinstance(detail, dict) else {"raw": detail}
+        if action.decision_explanation:
+            detail_payload = {
+                **detail_payload,
+                "policy_explanation": action.decision_explanation,
+            }
         receipt = persist_receipt(
             db,
             action_id=action_id,
@@ -353,7 +375,7 @@ def execute_action(
             execution_result=result_label,
             execution_attempt=attempt,
             proposal_hash=action.proposal_hash,
-            detail=detail if isinstance(detail, dict) else {"raw": detail},
+            detail=detail_payload,
             provider=action.provider,
             commit=commit,
         )

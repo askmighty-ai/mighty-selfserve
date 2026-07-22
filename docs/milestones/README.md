@@ -55,4 +55,4 @@ Update this section as decisions are made; do not wait until milestone close.
 | 9 | Freshness and Change Intelligence | Complete | [MILESTONE_9.md](MILESTONE_9.md) |
 | 10 | Value Intelligence | Complete | [MILESTONE_10.md](MILESTONE_10.md) |
 | 11 | Trusted Agent Authorization | Complete | [MILESTONE_11.md](MILESTONE_11.md) |
-| 12 | Trust, Privacy, and Control | Pending | Create at kickoff |
+| 12 | Trust, Privacy, and User Governance | Complete | [MILESTONE_12.md](MILESTONE_12.md) |
