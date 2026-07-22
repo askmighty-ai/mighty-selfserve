@@ -22,14 +22,16 @@ Canonical product north star: [PRODUCT_MANIFESTO.md](PRODUCT_MANIFESTO.md). Long
 
 ## Architecture vision
 
-Mighty separates **access truth**, **recovery**, and **attention**:
+Mighty separates **discovery**, **enrollment**, **access truth**, **recovery**, and **attention**:
 
 | Layer | Role |
 |-------|------|
+| **Discovery** | Durable provider-relationship facts from mailbox evidence (`account_discovery`) |
+| **Enrollment** | Canonical watched-account write (`_register_account_source` / discovery enroll) |
 | **Access writers** | Access Manager (extension / PSS) and Provider Runtime (`AccessState`, `needs_human`) |
 | **AuthTruth** | Pure projection of primary access-method evidence — not a second auth write store |
 | **Recovery** | Deterministic planner + lifecycle that attempts safe autonomous repair before human interrupt |
-| **AccountState** | Per-account mirror for Accounts/detail; does **not** own the cross-account hero |
+| **AccountState** | Per-account mirror for Accounts/detail; does **not** own discovery or the cross-account hero |
 | **Attention** | Product policy: compile → overlays → rank → `AttentionState` → `AttentionView` → surfaces / delivery |
 
 One write plane for auth. One recovery lifecycle owner. One compiler gather path for attention. One ranking table. One analytics owner per human moment.
@@ -72,7 +74,7 @@ Failure / access facts
 | Milestone | Capability | User outcome | Status | Record |
 |-----------|------------|--------------|--------|--------|
 | 6 | Autonomous Recovery | When something breaks, Mighty tries every safe recovery path before asking for help | Complete | [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) |
-| 7 | Automatic Account Discovery and Enrollment | Accounts appear from the user’s existing digital life without bulk “Add account” rituals | Pending | — |
+| 7 | Automatic Account Discovery and Enrollment | Accounts appear from the user’s existing digital life without bulk “Add account” rituals | Complete | [milestones/MILESTONE_7.md](milestones/MILESTONE_7.md) |
 | 8 | Natural-Session Coverage | Mighty captures and maintains sessions through normal browsing, not sync marathons | Pending | — |
 | 9 | Freshness and Change Intelligence | Users know what changed and that data is current — without status-dashboard noise | Pending | — |
 | 10 | Value Intelligence | Mighty surfaces value at risk and opportunities worth acting on | Pending | — |
@@ -85,12 +87,12 @@ RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_A
 
 ## Current milestone
 
-**None (planning).** Milestone 6 — Autonomous Recovery is complete.
+**None (planning).** Milestone 7 — Automatic Account Discovery and Enrollment is complete.
 
 | Field | Value |
 |-------|-------|
-| **Last completed** | M6 — [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) |
-| **Next** | Milestone 7 — Automatic Account Discovery and Enrollment |
+| **Last completed** | M7 — [milestones/MILESTONE_7.md](milestones/MILESTONE_7.md) |
+| **Next** | Milestone 8 — Natural-Session Coverage |
 
 ---
 
