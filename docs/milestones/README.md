@@ -18,13 +18,27 @@ Chat completion summaries are convenience only — **this folder is the source o
 1. Objective  
 2. PRs merged  
 3. Architecture changes  
-4. Final production data flow  
-5. Validation performed  
-6. Tests executed  
-7. Metrics added  
-8. Technical debt  
-9. Lessons learned  
-10. Recommendation for the next milestone  
+4. Architecture Decisions *(required beginning with Milestone 6)*  
+5. Final production data flow  
+6. Validation performed  
+7. Tests executed  
+8. Metrics added  
+9. Technical debt  
+10. Lessons learned  
+11. Recommendation for the next milestone  
+
+### Architecture Decisions
+
+Capture significant autonomous engineering judgment made during the milestone — not implementation detail.
+
+For each decision, record:
+
+- **Decision** — what was chosen  
+- **Why it was chosen** — the reasoning that made it the right call  
+- **Alternatives considered** — if any  
+- **Long-term architectural impact** — what this commits us to or unlocks  
+
+Update this section as decisions are made; do not wait until milestone close.
 
 ## Index
 
