@@ -1822,6 +1822,81 @@ def _start_attention_supervisor_scheduler():
     )
 
 
+def _run_recovery_supervisor_once(*, label: str = "heartbeat") -> int:
+    """One Recovery Supervisor + metrics sweep. Never raises to caller."""
+    try:
+        from datetime import datetime, timezone
+
+        from mighty.recovery_metrics import (
+            compute_recovery_metrics,
+            persist_recovery_metric_snapshot,
+        )
+        from mighty.recovery_supervisor import run_recovery_supervisor
+
+        now = datetime.now(timezone.utc)
+        with app.app_context():
+            db = get_db()
+            result = run_recovery_supervisor(db, now=now)
+            try:
+                metrics = compute_recovery_metrics(db, now=now)
+                persist_recovery_metric_snapshot(db, metrics)
+            except Exception as metrics_exc:
+                print(f"[RecoveryMetrics] {label} error: {metrics_exc}", flush=True)
+                metrics = None
+            if (
+                result.cases_touched
+                or result.attempts
+                or result.escalated
+                or result.succeeded
+                or result.errors
+                or metrics is not None
+            ):
+                coverage = (
+                    f"{metrics.autonomous_recovery_coverage:.3f}"
+                    if metrics
+                    else "n/a"
+                )
+                print(
+                    f"[RecoverySupervisor] {label}: "
+                    f"users={result.users_scanned} "
+                    f"cases={result.cases_touched} "
+                    f"attempts={result.attempts} "
+                    f"escalated={result.escalated} "
+                    f"succeeded={result.succeeded} "
+                    f"coverage={coverage} "
+                    f"errors={result.errors}",
+                    flush=True,
+                )
+            return result.cases_touched + result.attempts
+    except Exception as e:
+        print(f"[RecoverySupervisor] {label} error: {e}", flush=True)
+        return 0
+
+
+def _start_recovery_supervisor_scheduler():
+    """Independent heartbeat for Autonomous Recovery (Milestone 6).
+
+    Failures are swallowed — recovery must never block Home/Worker/sync.
+    """
+    import time as _time_as
+
+    interval = max(30, int(os.environ.get("RECOVERY_SUPERVISOR_INTERVAL_SECONDS", "60")))
+
+    def _loop():
+        _run_recovery_supervisor_once(label="startup")
+        while True:
+            _time_as.sleep(interval)
+            _run_recovery_supervisor_once(label="heartbeat")
+
+    t = threading.Thread(target=_loop, daemon=True, name="recovery-supervisor")
+    t.start()
+    print(
+        f"[Mighty] Recovery supervisor scheduler started "
+        f"(every {interval}s; startup sweep enabled)",
+        flush=True,
+    )
+
+
 # ── Site URL health check ──────────────────────────────────────────────────────
 # Proactively detects dead domains and domain migrations before users notice.
 # Checks all known account entry URLs weekly; stores results in site_url_health.
@@ -23541,4 +23616,7 @@ if __name__ == "__main__":
     # Attention in_flight timeout + orphan overlay GC (opt-out via env).
     if os.environ.get("ENABLE_ATTENTION_SUPERVISOR", "true").lower() == "true":
         _start_attention_supervisor_scheduler()
+    # Autonomous Recovery planner heartbeat (opt-out via env).
+    if os.environ.get("ENABLE_RECOVERY_SUPERVISOR", "true").lower() == "true":
+        _start_recovery_supervisor_scheduler()
     app.run(host="0.0.0.0", port=PORT, debug=False)

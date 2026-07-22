@@ -43,6 +43,7 @@ from mighty.provider_session_state import (
     ensure_provider_session_state_tables,
     upsert_provider_session_state,
 )
+from tests.recovery_test_helpers import escalate_recovery
 
 FIXED_NOW = datetime(2026, 7, 21, 12, 0, 0, tzinfo=timezone.utc)
 USER_ID = "user-1"
@@ -166,6 +167,7 @@ class TestEnginePipeline:
     def test_signed_out_and_pending_authorize_ranks_agent_first(self, db):
         _persist_account(db, "amex")
         _write_pss(db, provider="amex", state="signed_out", evidence_type="login_form")
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         _insert_action(db, action_id="42", status="pending")
 
         state = read_attention(db, USER_ID, now=FIXED_NOW)
@@ -181,6 +183,7 @@ class TestEnginePipeline:
     def test_snooze_blocker_yields_suppressed(self, db):
         _persist_account(db, "amex")
         _write_pss(db, provider="amex", state="signed_out", evidence_type="login_form")
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         snap = read_attention_snapshot(db, USER_ID, now=FIXED_NOW)
         blocker = next(
             item
@@ -200,6 +203,7 @@ class TestEnginePipeline:
     def test_replay_determinism(self, db):
         _persist_account(db, "amex")
         _write_pss(db, provider="amex", state="signed_out", evidence_type="login_form")
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         _insert_action(db, action_id="42", status="pending")
         first = read_attention_snapshot(db, USER_ID, now=FIXED_NOW)
         second = read_attention_snapshot(db, USER_ID, now=FIXED_NOW)
@@ -207,6 +211,16 @@ class TestEnginePipeline:
         assert [c.to_dict() for c in first.candidates] == [
             c.to_dict() for c in second.candidates
         ]
+
+    def test_signed_out_suppresses_auth_until_recovery_escalates(self, db):
+        _persist_account(db, "amex")
+        _write_pss(db, provider="amex", state="signed_out", evidence_type="login_form")
+        state = read_attention(db, USER_ID, now=FIXED_NOW)
+        assert state.primary is None
+        assert not any(
+            item.attention_class == AttentionClass.AUTH_BLOCKER
+            for item in state.remaining
+        )
 
     def test_healthy_account_all_clear(self, db):
         _persist_account(db, "amex", data_status=DATA_COMPLETE)
@@ -291,6 +305,9 @@ class TestEnginePipeline:
                 "escalation_reason": "mfa",
             },
         )
+        escalate_recovery(
+            db, USER_ID, "amex", root_cause="awaiting_user", now=FIXED_NOW
+        )
         result = read_attention(db, USER_ID, now=FIXED_NOW)
         assert result.primary is not None
         assert result.primary.attention_class == AttentionClass.TRUST
@@ -342,6 +359,7 @@ class TestShadow:
     def test_record_and_load_shadow(self, db):
         _persist_account(db, "amex")
         _write_pss(db, provider="amex", state="signed_out", evidence_type="login_form")
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         snap = record_attention_shadow(
             db, USER_ID, "home", now=FIXED_NOW
         )

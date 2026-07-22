@@ -35,6 +35,7 @@ from mighty.provider_session_state import (
     ensure_provider_session_state_tables,
     upsert_provider_session_state,
 )
+from tests.recovery_test_helpers import escalate_recovery
 
 FIXED_NOW = datetime(2026, 7, 21, 12, 0, 0, tzinfo=timezone.utc)
 USER_ID = "user-1"
@@ -91,6 +92,7 @@ def _seed_auth_blocker(db):
             confidence="high",
         ),
     )
+    escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
 
 
 class TestAttentionDelivery:

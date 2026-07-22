@@ -36,6 +36,7 @@ from mighty.attention_store import (
 )
 from mighty.attention_supervisor import run_attention_supervisor
 from mighty.attention_view import build_attention_view
+from tests.recovery_test_helpers import escalate_recovery
 from mighty.provider_session_state import (
     SessionEvidence,
     ensure_provider_session_state_tables,
@@ -156,6 +157,7 @@ class TestM4Replay:
         )
         _account(db, "amex", data_status=DATA_NONE)
         _pss(db, "amex", "signed_out", "login_form")
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         db.execute(
             """
             INSERT INTO actions
@@ -199,6 +201,7 @@ class TestM4Replay:
         )
         _account(db, "amex", data_status=DATA_COMPLETE)
         _pss(db, "amex", "signed_out", "login_form")
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         db.commit()
 
         state = read_attention(db, USER_ID, now=FIXED_NOW)

@@ -705,14 +705,23 @@ def compile_attention_candidates(
     worker_signal: WorkerSignal | None = None,
     benefit_signals: Sequence[BenefitSignal] = (),
     account_states: Sequence[Any] = (),
+    recovery_attention_allowed: frozenset[str] | None = None,
 ) -> tuple[AttentionItem, ...]:
     """Gather AttentionItems from supported compiler inputs.
 
     Pure and order-stable within each input family. Does not rank or apply
     overlays — see ``select_attention`` / ``compose_attention``.
+
+    ``recovery_attention_allowed`` gates auth / trust / access_degraded
+    producers (Milestone 6). ``None`` disables the gate (unit-test helper).
+    When provided, only listed providers may emit those human-interrupt
+    classes — typically Recovery Store ``escalated`` providers.
     """
     items: list[AttentionItem] = []
     for truth in auth_truths:
+        provider = _normalize_provider(truth.provider)
+        if recovery_attention_allowed is not None and provider not in recovery_attention_allowed:
+            continue
         blocker = compile_auth_attention(truth)
         if blocker is not None:
             items.append(blocker)
@@ -725,6 +734,9 @@ def compile_attention_candidates(
         if authorize_item is not None:
             items.append(authorize_item)
     for signal in trust_signals:
+        provider = _normalize_provider(signal.provider)
+        if recovery_attention_allowed is not None and provider not in recovery_attention_allowed:
+            continue
         trust_item = compile_trust_attention(signal)
         if trust_item is not None:
             items.append(trust_item)

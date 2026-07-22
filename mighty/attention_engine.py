@@ -28,6 +28,7 @@ from mighty.attention_store import (
     ensure_attention_overlay_tables,
     list_attention_overlays,
 )
+from mighty.recovery_store import list_escalated_providers
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,11 @@ def read_attention_snapshot(
         enrolled_account_count=len(account_states),
     )
     benefit_signals = load_benefit_signals(db, uid, now=now)
+    try:
+        recovery_allowed = frozenset(list_escalated_providers(db, uid))
+    except Exception:
+        # Recovery tables absent or read failure — fail closed (no interrupt).
+        recovery_allowed = frozenset()
     candidates = compile_attention_candidates(
         auth_truths=auth_truths,
         authorize_rows=authorize_rows,
@@ -91,6 +97,7 @@ def read_attention_snapshot(
         worker_signal=worker_signal,
         benefit_signals=benefit_signals,
         account_states=account_states,
+        recovery_attention_allowed=recovery_allowed,
     )
     ensure_attention_overlay_tables(db, commit=False)
     overlays = tuple(list_attention_overlays(db, uid))

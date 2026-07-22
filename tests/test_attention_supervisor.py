@@ -47,6 +47,7 @@ from mighty.provider_session_state import (
     ensure_provider_session_state_tables,
     upsert_provider_session_state,
 )
+from tests.recovery_test_helpers import escalate_recovery
 
 FIXED_NOW = datetime(2026, 7, 21, 12, 0, 0, tzinfo=timezone.utc)
 USER_ID = "user-1"
@@ -131,6 +132,7 @@ class TestAttentionSupervisor:
     def test_clears_timed_out_in_flight(self, db):
         _persist_account(db)
         _write_signed_out(db)
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         item = _auth_item()
         started = FIXED_NOW - timedelta(seconds=IN_FLIGHT_TIMEOUT_SECONDS + 60)
         start_attention_cta(db, item, now=started)
@@ -144,6 +146,7 @@ class TestAttentionSupervisor:
     def test_keeps_fresh_in_flight(self, db):
         _persist_account(db)
         _write_signed_out(db)
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         item = _auth_item()
         start_attention_cta(db, item, now=FIXED_NOW - timedelta(minutes=5))
         result = run_attention_supervisor(db, now=FIXED_NOW)

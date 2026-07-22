@@ -1,6 +1,6 @@
 # Autonomous Recovery — Milestone 6 Design Note
 
-**Status:** In progress  
+**Status:** Complete  
 **Milestone report:** [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md)  
 **RFC:** [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) · [ACCESS_FLOW.md](ACCESS_FLOW.md) · [AUTH_TRUTH.md](AUTH_TRUTH.md)  
 **Depends on:** Milestone 5 ([ATTENTION_AUTONOMOUS.md](ATTENTION_AUTONOMOUS.md))
