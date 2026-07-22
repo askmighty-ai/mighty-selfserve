@@ -16,7 +16,7 @@ Build a provider-independent authorization and execution pipeline that transform
 
 | PR | Theme |
 |----|--------|
-| *(this PR)* | Design note, auth policy/store/receipts/coordinator, API wire-up, Attention/Activity integration, tests |
+| [#156](https://github.com/askmighty-ai/mighty-selfserve/pull/156) | Design note, auth policy/store/receipts/coordinator, API wire-up, Attention/Activity integration, tests |
 
 ## Architecture changes
 
