@@ -731,6 +731,12 @@ def init_db():
         except Exception:
             pass
         try:
+            from mighty.discovery_store import ensure_discovery_tables
+
+            ensure_discovery_tables(db, commit=True)
+        except Exception:
+            pass
+        try:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS site_url_health (
                     source      TEXT PRIMARY KEY,
@@ -21411,20 +21417,51 @@ def _render_email_scan_page(suggestions=None, already_count=0, provider_triggere
 
 
 def _store_suggestions(uid: str, suggestions: list, db):
-    """Upsert scan results into email_suggestions table."""
-    now = datetime.now(timezone.utc).isoformat()
-    for s in suggestions:
-        try:
-            db.execute("""
-                INSERT INTO email_suggestions(user_id,site_key,display_name,category,email_count,sender_domain,created_at)
-                VALUES(?,?,?,?,?,?,?)
-                ON CONFLICT(user_id,site_key) DO UPDATE SET
-                  email_count=excluded.email_count, dismissed=0, added=0
-            """, (uid, s["site_key"], s["display_name"], s["category"],
-                  s["email_count"], s.get("sender",""), now))
-        except Exception:
-            pass
-    db.commit()
+    """Compatibility wrapper — prefer ``_process_discovery_scan``."""
+    _process_discovery_scan(
+        uid,
+        suggestions,
+        db,
+        source_type="email_sender",
+        source_ref=None,
+        auto_enroll=False,
+    )
+
+
+def _process_discovery_scan(
+    uid: str,
+    suggestions: list,
+    db,
+    *,
+    source_type: str,
+    source_ref: str | None,
+    auto_enroll: bool = True,
+):
+    """Reconcile discovery facts and optionally auto-enroll (Milestone 7)."""
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
+    from mighty.discovery_metrics import (
+        compute_discovery_metrics,
+        persist_discovery_metric_snapshot,
+    )
+    from mighty.discovery_pipeline import process_email_scan
+
+    result = process_email_scan(
+        db,
+        uid,
+        suggestions,
+        source_type=source_type,
+        source_ref=source_ref,
+        auto_enroll_providers=CUSTOMER_VISIBLE_PROVIDERS,
+        register_fn=_register_account_source if auto_enroll else None,
+        auto_enroll=auto_enroll,
+        now=datetime.now(timezone.utc),
+    )
+    try:
+        snap = compute_discovery_metrics(db, now=datetime.now(timezone.utc))
+        persist_discovery_metric_snapshot(db, snap)
+    except Exception as _dm:
+        print(f"[Mighty] discovery metrics: {_dm}", flush=True)
+    return result
 
 
 @app.route("/email-scan")
@@ -21528,26 +21565,34 @@ def email_gmail_callback():
 
     _refresh_dashboard_email_subjects_bg(uid, provider="gmail")
 
-    # Run the scan
+    # Run the scan — do not pre-filter enrolled sites; discovery pipeline classifies.
     acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
     connected = {r["source"] for r in acts if not r["source"].startswith("_")}
     try:
-        suggestions = scan_gmail(access_token, already_connected=connected)
+        suggestions = scan_gmail(access_token, already_connected=set())
     except Exception as e:
         suggestions = []
 
     already_count = sum(1 for s in suggestions if s["site_key"] in connected)
     from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS as _CVP
-    visible = [s for s in suggestions if s["site_key"] not in connected and s["site_key"] in _CVP]
-    _store_suggestions(uid, visible, db)
+    scan_result = _process_discovery_scan(
+        uid,
+        suggestions,
+        db,
+        source_type="gmail_sender",
+        source_ref="gmail",
+        auto_enroll=True,
+    )
+    visible = [
+        s
+        for s in suggestions
+        if s["site_key"] not in connected and s["site_key"] in _CVP
+    ]
+    # Drop providers that were just auto-enrolled from the picker.
+    enrolled_now = set(scan_result.auto_enrolled) | set(scan_result.already_enrolled)
+    visible = [s for s in visible if s["site_key"] not in enrolled_now]
 
-    if any(s["site_key"] == "amex" for s in visible):
-        db.execute(
-            "UPDATE email_suggestions SET added=1 WHERE user_id=? AND site_key='amex'",
-            (uid,),
-        )
-        db.commit()
-        _register_account_source(uid, "amex", db)
+    if "amex" in scan_result.auto_enrolled:
         return redirect("/credentials?connect=amex")
 
     return _render_email_scan_page(suggestions=visible, already_count=already_count)
@@ -21631,14 +21676,30 @@ def email_outlook_callback():
     acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
     connected = {r["source"] for r in acts if not r["source"].startswith("_")}
     try:
-        suggestions = scan_outlook(access_token, already_connected=connected)
+        suggestions = scan_outlook(access_token, already_connected=set())
     except Exception:
         suggestions = []
 
     already_count = sum(1 for s in suggestions if s["site_key"] in connected)
     from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS as _CVP
-    visible = [s for s in suggestions if s["site_key"] not in connected and s["site_key"] in _CVP]
-    _store_suggestions(uid, visible, db)
+    scan_result = _process_discovery_scan(
+        uid,
+        suggestions,
+        db,
+        source_type="outlook_sender",
+        source_ref="outlook",
+        auto_enroll=True,
+    )
+    enrolled_now = set(scan_result.auto_enrolled) | set(scan_result.already_enrolled)
+    visible = [
+        s
+        for s in suggestions
+        if s["site_key"] not in connected
+        and s["site_key"] not in enrolled_now
+        and s["site_key"] in _CVP
+    ]
+    if "amex" in scan_result.auto_enrolled:
+        return redirect("/credentials?connect=amex")
 
     return _render_email_scan_page(suggestions=visible, already_count=already_count)
 
@@ -21678,22 +21739,34 @@ def api_email_scan_imap():
     connected = {r["source"] for r in acts if not r["source"].startswith("_")}
 
     try:
-        suggestions = scan_imap(host, port, username, password,
-                                already_connected=connected, use_ssl=use_ssl)
+        suggestions = scan_imap(
+            host, port, username, password,
+            already_connected=set(), use_ssl=use_ssl,
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
     from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
-    already_count = 0  # scan_imap already filters
+    scan_result = _process_discovery_scan(
+        uid,
+        suggestions,
+        db,
+        source_type="imap_sender",
+        source_ref="imap",
+        auto_enroll=True,
+    )
+    enrolled_now = set(scan_result.auto_enrolled) | set(scan_result.already_enrolled) | connected
     visible = [
         s for s in suggestions
         if s.get("site_key") in CUSTOMER_VISIBLE_PROVIDERS
+        and s.get("site_key") not in enrolled_now
     ]
-    _store_suggestions(uid, visible, db)
+    already_count = sum(1 for s in suggestions if s.get("site_key") in connected)
 
     return jsonify({
         "suggestions": visible,
         "already_connected_count": already_count,
+        "auto_enrolled": scan_result.auto_enrolled,
         "total": len(visible),
     })
 
@@ -21726,8 +21799,9 @@ def api_email_suggestions_dismiss():
     site_key = data.get("site_key", "")
     db  = get_db()
     uid = session["user_id"]
-    db.execute("UPDATE email_suggestions SET dismissed=1 WHERE user_id=? AND site_key=?", (uid, site_key))
-    db.commit()
+    from mighty.discovery_store import mark_dismissed
+
+    mark_dismissed(db, uid, site_key, now=datetime.now(timezone.utc))
     return jsonify({"ok": True})
 
 
@@ -21735,6 +21809,7 @@ def api_email_suggestions_dismiss():
 @require_login
 def api_email_suggestions_add():
     from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
+    from mighty.discovery_enrollment import enroll_from_discovery
 
     check_csrf()
     data = request.get_json(force=True) or {}
@@ -21743,9 +21818,25 @@ def api_email_suggestions_add():
         return jsonify({"error": "provider not available"}), 400
     db  = get_db()
     uid = session["user_id"]
-    db.execute("UPDATE email_suggestions SET added=1 WHERE user_id=? AND site_key=?", (uid, site_key))
-    db.commit()
-    return jsonify({"ok": True})
+    result = enroll_from_discovery(
+        db,
+        uid,
+        site_key,
+        register_fn=_register_account_source,
+        now=datetime.now(timezone.utc),
+        require_eligible=False,
+    )
+    if result.skipped and not result.already_enrolled:
+        # Ensure enrollment even without a prior discovery fact (manual Add).
+        _register_account_source(uid, site_key, db)
+        from mighty.discovery_store import mark_enrolled
+
+        mark_enrolled(db, uid, site_key, now=datetime.now(timezone.utc))
+    return jsonify({
+        "ok": True,
+        "enrolled": result.enrolled or result.already_enrolled,
+        "reason": result.reason,
+    })
 
 
 # ── Amex connection state machine ─────────────────────────────────────────────
