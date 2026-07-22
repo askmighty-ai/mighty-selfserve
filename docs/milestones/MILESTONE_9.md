@@ -16,7 +16,7 @@ Build a unified freshness and change-intelligence capability that transforms ref
 
 | PR | Theme |
 |----|--------|
-| *(this PR)* | Design note, freshness/change modules, snapshot wire-up, API bridge, tests, living report |
+| [#152](https://github.com/askmighty-ai/mighty-selfserve/pull/152) | Design note, freshness/change modules, snapshot wire-up, API bridge, tests, living report |
 
 ## Architecture changes
 
