@@ -49,4 +49,5 @@ Update this section as decisions are made; do not wait until milestone close.
 | 4 | Intelligent Attention | Complete | [MILESTONE_4.md](MILESTONE_4.md) |
 | 5 | Autonomous Attention | Complete | [MILESTONE_5.md](MILESTONE_5.md) |
 | OS | Engineering Operating System | Complete | [MILESTONE_OS.md](MILESTONE_OS.md) |
-| 6 | Autonomous Recovery | In progress | [MILESTONE_6.md](MILESTONE_6.md) |
+| 6 | Autonomous Recovery | Complete | [MILESTONE_6.md](MILESTONE_6.md) |
+| 7 | Automatic Account Discovery and Enrollment | Pending | Create at kickoff |

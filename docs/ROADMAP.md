@@ -42,13 +42,14 @@ Target production flow (Attention + Recovery):
 
 ```text
 Failure / access facts
-  → Recovery Planner (deterministic capabilities)
+  → Recovery Supervisor → Planner (deterministic capabilities)
   → Recovery lifecycle (attempt history + outcome)
-  → on exhaustion / human-only → AuthTruth / signals
-  → compile_attention_candidates (gather only)
+  → on exhaustion / human-only → escalated gate
+  → compile_attention_candidates (gather only; auth/trust/degraded gated)
   → compose_attention (overlays + ranking)
   → AttentionState → AttentionView → Home / Worker / …
   → AttentionDelivery · AttentionSupervisor · attention_metrics
+  → recovery_metrics (supervisor heartbeat)
 ```
 
 ---
@@ -70,7 +71,7 @@ Failure / access facts
 
 | Milestone | Capability | User outcome | Status | Record |
 |-----------|------------|--------------|--------|--------|
-| 6 | Autonomous Recovery | When something breaks, Mighty tries every safe recovery path before asking for help | In progress | [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) |
+| 6 | Autonomous Recovery | When something breaks, Mighty tries every safe recovery path before asking for help | Complete | [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) |
 | 7 | Automatic Account Discovery and Enrollment | Accounts appear from the user’s existing digital life without bulk “Add account” rituals | Pending | — |
 | 8 | Natural-Session Coverage | Mighty captures and maintains sessions through normal browsing, not sync marathons | Pending | — |
 | 9 | Freshness and Change Intelligence | Users know what changed and that data is current — without status-dashboard noise | Pending | — |
@@ -84,14 +85,11 @@ RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_A
 
 ## Current milestone
 
-**Milestone 6 — Autonomous Recovery**
+**None (planning).** Milestone 6 — Autonomous Recovery is complete.
 
 | Field | Value |
 |-------|-------|
-| **Status** | In progress |
-| **Design note** | [ATTENTION_AUTONOMOUS_RECOVERY.md](ATTENTION_AUTONOMOUS_RECOVERY.md) |
-| **Living report** | [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) |
-| **Last completed** | OS — [milestones/MILESTONE_OS.md](milestones/MILESTONE_OS.md) |
+| **Last completed** | M6 — [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) |
 | **Next** | Milestone 7 — Automatic Account Discovery and Enrollment |
 
 ---

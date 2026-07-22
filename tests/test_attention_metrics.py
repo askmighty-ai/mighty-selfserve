@@ -39,6 +39,7 @@ from mighty.provider_session_state import (
     ensure_provider_session_state_tables,
     upsert_provider_session_state,
 )
+from tests.recovery_test_helpers import escalate_recovery
 from mighty.runtime_access_state import (
     ensure_runtime_access_state_tables,
     upsert_runtime_access_state,
@@ -127,6 +128,7 @@ class TestAttentionMetrics:
                 confidence="high",
             ),
         )
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         later = FIXED_NOW + timedelta(minutes=5)
         snap = compute_attention_metrics(db, now=later, user_ids=[USER_ID])
         assert snap.push_eligible_blockers == 1
@@ -149,6 +151,7 @@ class TestAttentionMetrics:
                 confidence="high",
             ),
         )
+        escalate_recovery(db, USER_ID, "amex", root_cause="login", now=FIXED_NOW)
         from mighty.attention_engine import read_attention
 
         state = read_attention(db, USER_ID, now=FIXED_NOW)

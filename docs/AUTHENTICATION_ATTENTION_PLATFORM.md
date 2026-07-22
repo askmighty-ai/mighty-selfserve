@@ -585,6 +585,8 @@ ACCOUNT_STATE.md should be amended in a follow-on edit to demote `next_recommend
 
 **Milestone 5 (Autonomous Attention):** Complete — Runtime Trust producer, supervisor reopen + delivery retry, product metrics, cutover retirement criteria with opt-in legacy compare. Strengthens production readiness; does not redesign architecture. See [ATTENTION_AUTONOMOUS.md](ATTENTION_AUTONOMOUS.md) · [milestones/MILESTONE_5.md](milestones/MILESTONE_5.md).
 
+**Milestone 6 (Autonomous Recovery):** Complete — Recovery Planner + lifecycle above Access Manager; Attention auth/trust/access_degraded gated until escalation; recovery metrics. Extends the platform; does not redesign Attention ranking. See [ATTENTION_AUTONOMOUS_RECOVERY.md](ATTENTION_AUTONOMOUS_RECOVERY.md) · [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) · [RECOVERY_PLANNER.md](RECOVERY_PLANNER.md).
+
 Out of scope: credential storage as default path, multi-item push, household attention, Connector→AuthTruth.
 
 ---
