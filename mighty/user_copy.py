@@ -572,20 +572,32 @@ HOME_UPDATE_BODY = (
     "This usually takes a few seconds. You can leave this tab open or come back — "
     "Home will refresh when your data is ready."
 )
+HOME_UPDATING_CTA = "Updating…"
 
-HOME_ALL_CLEAR_HEADLINE = "Mighty is watching your accounts."
-HOME_ALL_CLEAR_FOR_NOW_HEADLINE = "Mighty is actively monitoring your financial accounts."
+HOME_ALL_CLEAR_HEADLINE = "You're good."
+HOME_ALL_CLEAR_FOR_NOW_HEADLINE = "Everything looks current."
 
 HOME_PRIORITY_WAITING = "Getting your first update."
-HOME_PRIORITY_LOGIN = "Needs your attention."
-HOME_PRIORITY_UPDATE = "Refreshing accounts."
-HOME_PRIORITY_ALL_CLEAR = "No action needed."
+HOME_PRIORITY_LOGIN = "One thing needs you."
+HOME_PRIORITY_UPDATE = "Almost there."
+HOME_PRIORITY_ALL_CLEAR = "You're good."
 HOME_PRIORITY_RECOMMENDATION = "1 thing worth your attention."
+
+# V1A briefing ledes — answer "Am I good?"
+HOME_BRIEFING_ANSWER_GOOD = "You're good."
+HOME_BRIEFING_ANSWER_ATTENTION = "One thing needs you."
+HOME_BRIEFING_ANSWER_OPPORTUNITY = "One thing worth your attention."
+HOME_BRIEFING_ALL_CLEAR_TITLE = "You're good."
+HOME_RECENT_WINS_LABEL = "Recent wins"
+HOME_OPS_LABEL = "Working quietly"
 
 HOME_FOOTER_WORKER = "Mighty runs in Chrome"
 HOME_FOOTER_LAST_CHECKED = "Last checked {time}"
 HOME_ACTIVITY_LINK = "{count} awaiting decision"
+HOME_HEALTH_LABEL = "Account health"
 HOME_HEALTH_STILL_SETTING_UP = "being verified"
+HOME_SECONDARY_LABEL = "Also worth a look"
+HOME_METRICS_LABEL = "Also"
 
 # ── Accounts maintenance page (/credentials) ─────────────────────────────────
 ACCOUNTS_PAGE_TITLE = "Accounts"
@@ -667,14 +679,39 @@ def home_all_clear_body(account_count: int, setup_incomplete_count: int = 0) -> 
         word = "account" if n == 1 else "accounts"
         return (
             f"Watching your connected accounts while {n} {word} "
-            f"{'is' if n == 1 else 'are'} being verified. {TOWER_ATTENTION_NONE}"
+            f"{'is' if n == 1 else 'are'} being verified."
         )
-    n = account_count
+    return home_briefing_all_clear_body(account_count)
+
+
+def home_briefing_all_clear_body(account_count: int) -> str:
+    n = max(0, int(account_count or 0))
+    if n <= 0:
+        return (
+            "Nothing needs you right now. Mighty will speak up when something matters."
+        )
     word = "account" if n == 1 else "accounts"
     return (
-        f"✓ {n} {word} connected\n"
-        f"{TOWER_ATTENTION_NONE}"
+        f"Mighty is watching {n} {word}. Nothing needs you right now — "
+        "we'll speak up when something matters."
     )
+
+
+def home_ops_refreshing(provider_name: str) -> str:
+    return f"Refreshing {provider_name}…"
+
+
+def home_ops_setting_up(count: int) -> str:
+    n = max(1, int(count))
+    word = "account" if n == 1 else "accounts"
+    return f"Setting up {n} {word}"
+
+
+def home_ops_needs_login(count: int) -> str:
+    n = max(1, int(count))
+    if n == 1:
+        return "1 account needs login"
+    return f"{n} accounts need login"
 
 
 def home_attention_headline(attention_count: int) -> str:

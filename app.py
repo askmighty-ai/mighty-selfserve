@@ -6474,13 +6474,54 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 /* Truth Dashboard (single-provider capability instrument) */
 .dash-truth-card .dash-brief-header{margin-bottom:8px}
 .dash-truth-subhead{margin:6px 0 0;font-size:14px;color:#57534e;line-height:1.45;max-width:40rem}
-.dash-attention{margin:0 0 18px;padding:16px 18px;border:1px solid #e7e5e4;border-radius:12px;background:#fafaf9}
+.dash-attention{margin:0 0 18px;padding:0;border:none;border-radius:0;background:transparent}
 .dash-attention-eyebrow{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e}
 .dash-attention-title{margin:0 0 8px;font-size:20px;font-weight:700;color:#1c1917;letter-spacing:-0.3px;line-height:1.25}
 .dash-attention-body{margin:0 0 14px;font-size:14px;color:#57534e;line-height:1.45;white-space:pre-line}
 .dash-attention-silence{margin:0;font-size:14px;color:#57534e;line-height:1.45}
 .dash-attention-cta{margin-top:2px}
 .dash-attention-cta-disabled{display:inline-flex;font-size:14px;font-weight:600;color:#a8a29e}
+/* Home V1A — daily executive briefing */
+.home-briefing .home-stack{display:flex;flex-direction:column;gap:0;max-width:520px}
+.home-briefing .home-header{margin:0 0 36px}
+.home-briefing .home-greeting{font-size:28px;font-weight:600;letter-spacing:-0.04em;line-height:1.15}
+.home-briefing .home-meta{margin-top:8px}
+.home-briefing .home-answer{margin:18px 0 0;font-size:22px;font-weight:550;color:#1c1917;letter-spacing:-0.03em;line-height:1.25}
+.home-briefing .home-primary{margin:0 0 40px}
+.home-card{display:block}
+.home-card--featured{padding:0;border:none;border-radius:0;background:transparent;box-shadow:none}
+.home-card--featured[data-tone="interrupt"] .home-card-title{color:#1c1917}
+.home-card--featured[data-tone="opportunity"] .home-card-title{color:#1c1917}
+.home-card-title{margin:0 0 12px;font-size:26px;font-weight:650;color:#1c1917;line-height:1.2;letter-spacing:-0.035em;max-width:24ch}
+.home-card-body{margin:0 0 22px;font-size:16px;color:#57534e;line-height:1.6;max-width:42ch}
+.home-card-body-lines{list-style:none;margin:0 0 22px;padding:0;display:flex;flex-direction:column;gap:8px}
+.home-card-body-line{font-size:16px;color:#57534e;line-height:1.55}
+.home-card-actions{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px}
+.home-card-cta--primary{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;color:#fff;background:#1c1917;border-radius:10px;text-decoration:none;transition:background .12s}
+.home-card-cta--primary:hover{background:#292524;color:#fff;text-decoration:none}
+.home-card-cta--disabled{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;color:#a8a29e;background:#f5f5f4;border-radius:10px}
+.home-card-secondary-link{font-size:13px;font-weight:500;color:#78716c;text-decoration:none}
+.home-card-secondary-link:hover{color:#1c1917;text-decoration:none}
+.home-section-label{margin:0 0 14px;font-size:11px;font-weight:600;color:#a8a29e;text-transform:uppercase;letter-spacing:0.07em}
+.home-wins{margin:0 0 36px;padding-top:28px;border-top:0.5px solid rgba(0,0,0,0.06)}
+.home-wins-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:12px}
+.home-win{font-size:15px;color:#44403c;line-height:1.45;letter-spacing:-0.01em}
+.home-win::before{content:"·";margin-right:10px;color:#a8a29e}
+.home-win-link{color:inherit;text-decoration:none}
+.home-win-link:hover{color:#1c1917;text-decoration:underline}
+.home-ops{margin:0 0 8px}
+.home-ops-label{margin:0 0 8px;font-size:11px;font-weight:600;color:#d6d3d1;text-transform:uppercase;letter-spacing:0.07em}
+.home-ops-notes{font-size:13px;color:#a8a29e;line-height:1.5}
+.home-ops-note{color:#a8a29e;text-decoration:none}
+a.home-ops-note:hover{color:#78716c;text-decoration:underline}
+.home-footer{margin-top:40px;padding-top:20px;border-top:0.5px solid rgba(0,0,0,0.05);font-size:12px;color:#d6d3d1}
+.home-truth-debug{margin-top:36px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06)}
+.home-truth-debug summary{cursor:pointer;font-size:13px;font-weight:600;color:#a8a29e}
+@media(max-width:640px){
+.home-briefing .home-greeting{font-size:24px}
+.home-briefing .home-answer{font-size:20px}
+.home-card-title{font-size:22px}
+}
 .dash-truth-panel{margin-top:8px;padding:16px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
 .dash-truth-provider{margin:0 0 10px;font-size:20px;font-weight:650;color:#1c1917;letter-spacing:-0.02em}
 .dash-truth-headline{margin:0 0 12px;font-size:16px;font-weight:600;color:#1c1917;line-height:1.4}
@@ -10332,6 +10373,15 @@ def dashboard():
             and _home_result.capability.last_verified
         ):
             _truth_last_checked = _home_result.capability.last_verified
+        # Recent Wins — meaningful changes only (Freshness/Change owns scoring).
+        _recent_wins = []
+        try:
+            from mighty.change_store import change_alerts_from_store
+            _recent_wins = change_alerts_from_store(
+                get_db(), session["user_id"], limit=3,
+            )
+        except Exception:
+            _recent_wins = []
         return render_home_page(
             _home_result,
             first_name=_first_name,
@@ -10341,6 +10391,7 @@ def dashboard():
             extension_info=_extension_info,
             attention=_attention_view,
             use_attention=_use_attention,
+            recent_wins=_recent_wins,
         )
 
     hero_section_html = _render_home_hero()

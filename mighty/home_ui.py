@@ -1,12 +1,17 @@
 """
 mighty.home_ui
 ──────────────
-Render Mighty Home — Truth Dashboard (single-provider capability instrument).
+Render Mighty Home V1 — pure projection over Attention + enrollment context.
+
+Reusable card components share one visual language. Truth / Capability panels
+remain available for debug only (show_access_debug).
+
+See docs/HOME_V1.md and docs/HOME_EXPERIENCE.md.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from mighty.capability_state import (
     CapabilityState,
@@ -20,12 +25,21 @@ from mighty.capability_state import (
 from mighty.attention_view import AttentionView
 from mighty.customer_account_access import CustomerAccountAccessView
 from mighty.customer_local_time import format_customer_local_time
+from mighty.home_projection import (
+    HomeCard,
+    HomeOpsNote,
+    HomeProjection,
+    HomeWin,
+    attention_to_card,
+    project_home,
+)
 from mighty.home_state import HomeStateResult
 from mighty.truth_validation import (
     TruthEvidence,
     TruthPipelineStage,
     TruthValidation,
 )
+from mighty import user_copy
 
 
 def _ts_html(value: str | None) -> str:
@@ -550,12 +564,115 @@ def render_account_access_table(
     )
 
 
+def render_home_card(
+    card: HomeCard,
+    *,
+    escape: Callable[[Any], str],
+    featured: bool = False,
+) -> str:
+    """Reusable Home card — one visual language for interrupt, opportunity, calm."""
+    if featured:
+        return _render_featured_card(card, escape=escape)
+    return _render_secondary_card(card, escape=escape)
+
+
+def _body_paragraphs(body: str, escape: Callable[[Any], str]) -> str:
+    lines = [line.strip() for line in (body or "").split("\n") if line.strip()]
+    if not lines:
+        return ""
+    if len(lines) == 1:
+        return f'<p class="home-card-body">{escape(lines[0])}</p>'
+    items = "".join(f'<li class="home-card-body-line">{escape(line)}</li>' for line in lines)
+    return f'<ul class="home-card-body-lines">{items}</ul>'
+
+
+def _cta_html(card: HomeCard, *, escape: Callable[[Any], str], primary: bool) -> str:
+    if card.disabled_cta_label:
+        cls = "home-card-cta home-card-cta--disabled"
+        return (
+            f'<span class="{cls}" aria-disabled="true">'
+            f"{escape(card.disabled_cta_label)}</span>"
+        )
+    if not card.cta_label:
+        return ""
+    if not card.cta_url:
+        return (
+            f'<span class="home-card-cta home-card-cta--disabled">'
+            f"{escape(card.cta_label)}</span>"
+        )
+    external = card.cta_url.startswith("http")
+    target = ' target="_blank" rel="noopener noreferrer"' if external else ""
+    cls = "home-card-cta home-card-cta--primary" if primary else "home-card-cta home-card-cta--text"
+    return (
+        f'<a href="{escape(card.cta_url)}" class="{cls}"{target}>'
+        f"{escape(card.cta_label)}</a>"
+    )
+
+
+def _render_featured_card(card: HomeCard, *, escape: Callable[[Any], str]) -> str:
+    eyebrow = ""
+    if card.eyebrow:
+        eyebrow = f'<p class="home-card-eyebrow">{escape(card.eyebrow)}</p>'
+    secondary = ""
+    if card.secondary_label and card.secondary_url:
+        secondary = (
+            f'<a href="{escape(card.secondary_url)}" class="home-card-secondary-link">'
+            f"{escape(card.secondary_label)}</a>"
+        )
+    attrs = [
+        f'data-tone="{escape(card.tone)}"',
+        f'data-kind="{escape(card.kind)}"',
+    ]
+    if card.attention_id:
+        attrs.append(f'data-attention-id="{escape(card.attention_id)}"')
+    if card.attention_class:
+        attrs.append(f'data-attention-class="{escape(card.attention_class)}"')
+    title = ""
+    if card.title:
+        title = f'<h2 class="home-card-title">{escape(card.title)}</h2>'
+    return (
+        f'<article class="home-card home-card--featured" {" ".join(attrs)}>'
+        f"{eyebrow}"
+        f"{title}"
+        f"{_body_paragraphs(card.body, escape)}"
+        f'<div class="home-card-actions">'
+        f"{_cta_html(card, escape=escape, primary=True)}"
+        f"{secondary}"
+        f"</div>"
+        f"</article>"
+    )
+
+
+def _render_secondary_card(card: HomeCard, *, escape: Callable[[Any], str]) -> str:
+    href = card.cta_url or "#"
+    external = href.startswith("http")
+    target = ' target="_blank" rel="noopener noreferrer"' if external else ""
+    attrs = [
+        f'data-tone="{escape(card.tone)}"',
+        f'data-kind="{escape(card.kind)}"',
+    ]
+    if card.attention_id:
+        attrs.append(f'data-attention-id="{escape(card.attention_id)}"')
+    return (
+        f'<a href="{escape(href)}" class="home-card home-card--row" '
+        f'{" ".join(attrs)}{target}>'
+        f'<span class="home-card-row-body">'
+        f'<span class="home-card-row-title">{escape(card.title)}</span>'
+        f"</span>"
+        f'<span class="home-card-row-arrow" aria-hidden="true">'
+        f'<svg viewBox="0 0 16 16" fill="none"><path d="M6 3.5l4.5 4.5L6 12.5" '
+        f'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
+        f'stroke-linejoin="round"/></svg></span>'
+        f"</a>"
+    )
+
+
 def render_attention_panel(
     attention: AttentionView,
     *,
     escape: Callable[[Any], str],
 ) -> str:
-    """Render AttentionView primary — Home does not re-rank."""
+    """Compatibility renderer for AttentionView primary via HomeCard."""
     primary = attention.primary
     silence = attention.silence.value if attention.silence is not None else ""
     if primary is None:
@@ -567,53 +684,102 @@ def render_attention_panel(
             "awaiting_data": "Mighty is waiting on account data.",
         }.get(silence, "Nothing needs you right now.")
         return (
-            f'<section class="dash-attention" aria-label="Attention" '
+            f'<section class="dash-attention home-attention" aria-label="Attention" '
             f'data-silence="{escape(silence)}">'
             f'<p class="dash-attention-silence">{escape(label)}</p>'
             f"</section>"
         )
 
-    cta_html = ""
-    if primary.cta_label and primary.cta_url:
-        external = primary.cta_url.startswith("http")
-        target = ' target="_blank" rel="noopener"' if external else ""
-        cta_html = (
-            f'<a href="{escape(primary.cta_url)}" '
-            f'class="dash-brief-featured-cta dash-attention-cta"{target}>'
-            f"{escape(primary.cta_label)}</a>"
-        )
-    elif primary.cta_label:
-        cta_html = (
-            f'<span class="dash-attention-cta-disabled">'
-            f"{escape(primary.cta_label)}</span>"
-        )
-
+    card = attention_to_card(primary, kind="featured")
     return (
-        f'<section class="dash-attention" aria-label="Attention" '
+        f'<section class="dash-attention home-attention" aria-label="Attention" '
         f'data-attention-id="{escape(primary.attention_id)}" '
         f'data-attention-class="{escape(primary.attention_class.value)}" '
         f'data-interrupt="{"1" if attention.render_hints.interrupt else "0"}">'
-        f'<p class="dash-attention-eyebrow">Needs you</p>'
-        f'<h2 class="dash-attention-title">{escape(primary.title)}</h2>'
-        f'<p class="dash-attention-body">{escape(primary.body)}</p>'
-        f"{cta_html}"
+        f"{render_home_card(card, escape=escape, featured=True)}"
         f"</section>"
     )
 
 
-def render_home_page(
+def _render_recent_wins(
+    wins: Sequence[HomeWin],
+    *,
+    escape: Callable[[Any], str],
+) -> str:
+    if not wins:
+        return ""
+    items: list[str] = []
+    for win in wins:
+        body = escape(win.message)
+        if win.href:
+            items.append(
+                f'<li class="home-win">'
+                f'<a href="{escape(win.href)}" class="home-win-link">{body}</a>'
+                f"</li>"
+            )
+        else:
+            items.append(f'<li class="home-win">{body}</li>')
+    return (
+        f'<section class="home-wins" aria-label="{escape(user_copy.HOME_RECENT_WINS_LABEL)}">'
+        f'<p class="home-section-label">{escape(user_copy.HOME_RECENT_WINS_LABEL)}</p>'
+        f'<ul class="home-wins-list">{"".join(items)}</ul>'
+        f"</section>"
+    )
+
+
+def _render_ops_strip(
+    notes: Sequence[HomeOpsNote],
+    *,
+    escape: Callable[[Any], str],
+) -> str:
+    if not notes:
+        return ""
+    parts: list[str] = []
+    for note in notes:
+        text = escape(note.text)
+        if note.href:
+            parts.append(
+                f'<a href="{escape(note.href)}" class="home-ops-note">{text}</a>'
+            )
+        else:
+            parts.append(f'<span class="home-ops-note">{text}</span>')
+    return (
+        f'<aside class="home-ops" aria-label="{escape(user_copy.HOME_OPS_LABEL)}">'
+        f'<p class="home-ops-label">{escape(user_copy.HOME_OPS_LABEL)}</p>'
+        f'<div class="home-ops-notes">{" · ".join(parts)}</div>'
+        f"</aside>"
+    )
+
+
+def _render_footer(last_checked: str, *, escape: Callable[[Any], str]) -> str:
+    parts = [escape(user_copy.HOME_FOOTER_WORKER)]
+    attrs = ""
+    if last_checked:
+        display = (
+            _ts_html(last_checked)
+            if "T" in str(last_checked)
+            else escape(str(last_checked))
+        )
+        checked_prefix = user_copy.HOME_FOOTER_LAST_CHECKED.split("{time}")[0]
+        parts.append(f"{escape(checked_prefix)}{display}")
+        attrs = (
+            f' id="dash-last-checked" data-last-checked="{escape(last_checked)}"'
+        )
+    return (
+        f'<footer class="home-footer dash-home-footer"{attrs}>'
+        f'{" · ".join(parts)}'
+        f"</footer>"
+    )
+
+
+def _render_truth_debug(
     result: HomeStateResult,
     *,
-    first_name: str,
-    today_label: str,
-    last_checked: str = "",
     escape: Callable[[Any], str],
-    extension_info: dict[str, Any] | None = None,
-    attention: AttentionView | None = None,
-    use_attention: bool = False,
+    extension_info: dict[str, Any] | None,
 ) -> str:
-    """Render Home: AttentionView for attention + Truth capability instrument."""
-    del first_name, today_label  # Greeting removed; diagnostic instrument only.
+    if not result.show_access_debug:
+        return ""
     capability = result.capability
     if capability is None:
         view = result.access_views[0] if result.access_views else None
@@ -629,45 +795,110 @@ def render_home_page(
                 else result.provider_open_url
             ),
         )
-
-    attention_html = ""
-    if use_attention and attention is not None:
-        attention_html = render_attention_panel(attention, escape=escape)
-
-    footer = ""
-    # Prefer explicit last_checked from the caller (Dashboard wires selected
-    # verification completed_at). Fall back to capability.last_verified.
-    # Never use browser reload / poll response time.
-    checked_at = last_checked or (
-        capability.last_verified if capability is not None else ""
-    )
-    if checked_at:
-        display = (
-            _ts_html(checked_at)
-            if "T" in str(checked_at)
-            else escape(str(checked_at))
-        )
-        footer = (
-            f'<footer class="dash-home-footer" id="dash-last-checked" '
-            f'data-last-checked="{escape(checked_at)}">'
-            f"Last checked: {display}"
-            f"</footer>"
-        )
-
     return (
-        f'<div class="dash-hero">'
-        f'<div class="dash-brief-card dash-brief-card--exec dash-truth-card">'
-        f'<div class="dash-brief-exec">'
-        f'<header class="dash-brief-header">'
-        f'<h1 class="dash-brief-greeting">Mighty</h1>'
-        f'<p class="dash-truth-subhead">Can Mighty see and extract authenticated American Express account data?</p>'
-        f"</header>"
-        f"{attention_html}"
-        f'<section class="dash-brief-primary" aria-label="Capability status">'
+        f'<details class="home-truth-debug">'
+        f"<summary>Capability debug</summary>"
+        f'<section class="dash-truth" aria-label="Capability debug">'
         f"{render_capability_panel(capability, escape=escape, extension_info=extension_info)}"
         f"</section>"
-        f"{footer}"
+        f"</details>"
+    )
+
+
+def render_home_projection(
+    projection: HomeProjection,
+    *,
+    escape: Callable[[Any], str],
+    result: HomeStateResult | None = None,
+    extension_info: dict[str, Any] | None = None,
+) -> str:
+    """Render Home V1A daily briefing — one story, wins, quiet ops."""
+    safe_name = escape(projection.first_name)
+    answer = ""
+    if projection.answer:
+        answer = (
+            f'<p class="home-answer" data-answer="{escape(projection.story_kind)}">'
+            f"{escape(projection.answer)}</p>"
+        )
+    featured = ""
+    if projection.featured is not None:
+        featured = (
+            f'<section class="home-primary" aria-label="Today">'
+            f"{render_home_card(projection.featured, escape=escape, featured=True)}"
+            f"</section>"
+        )
+    truth = ""
+    if result is not None and projection.show_truth_debug:
+        truth = _render_truth_debug(result, escape=escape, extension_info=extension_info)
+
+    silence_attr = (
+        f' data-silence="{escape(projection.attention_silence)}"'
+        if projection.attention_silence
+        else ""
+    )
+    return (
+        f'<div class="dash-hero home-v1 home-briefing" '
+        f'data-enrollment="{escape(projection.enrollment_state.value)}" '
+        f'data-story="{escape(projection.story_kind)}" '
+        f'data-interrupt="{"1" if projection.attention_interrupt else "0"}"'
+        f"{silence_attr}>"
+        f'<div class="dash-brief-card dash-brief-card--exec home-shell">'
+        f'<div class="dash-brief-exec home-stack">'
+        f'<header class="dash-brief-header home-header">'
+        f'<h1 class="dash-brief-greeting home-greeting" id="hero-greeting">'
+        f"Hello, {safe_name}</h1>"
+        f'<div class="dash-brief-meta home-meta">'
+        f'<time class="dash-brief-today-date">{escape(projection.today_label)}</time>'
+        f"</div>"
+        f"{answer}"
+        f"</header>"
+        f"{featured}"
+        f"{_render_recent_wins(projection.recent_wins, escape=escape)}"
+        f"{_render_ops_strip(projection.ops_notes, escape=escape)}"
+        f"{truth}"
+        f"{_render_footer(projection.last_checked, escape=escape)}"
         f"</div>"
         f"</div>"
+        f"<script>"
+        f"(function(){{"
+        f'  var h=new Date().getHours();'
+        f'  var g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";'
+        f'  var el=document.getElementById("hero-greeting");'
+        f'  if(el) el.textContent=g+", {safe_name}";'
+        f"}})();"
+        f"</script>"
         f"</div>"
+    )
+
+
+def render_home_page(
+    result: HomeStateResult,
+    *,
+    first_name: str,
+    today_label: str,
+    last_checked: str = "",
+    escape: Callable[[Any], str],
+    extension_info: dict[str, Any] | None = None,
+    attention: AttentionView | None = None,
+    use_attention: bool = False,
+    recent_wins: Sequence[Any] | None = None,
+) -> str:
+    """Render Home V1A briefing from existing platform projections."""
+    checked = last_checked
+    if not checked and result.capability is not None and result.capability.last_verified:
+        checked = result.capability.last_verified
+    projection = project_home(
+        result,
+        first_name=first_name,
+        today_label=today_label,
+        last_checked=checked,
+        attention=attention,
+        use_attention=use_attention,
+        recent_wins=recent_wins,
+    )
+    return render_home_projection(
+        projection,
+        escape=escape,
+        result=result,
+        extension_info=extension_info,
     )

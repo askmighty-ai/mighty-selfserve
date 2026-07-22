@@ -1,12 +1,15 @@
 """
 mighty.home_state
 ─────────────────
-Prepare Home capability / enrollment context for rendering.
+Prepare Home enrollment / operational context for rendering.
 
-Attention ranking and hero selection are owned by the Attention Platform
-(AttentionState → AttentionView). This module must not re-rank attention.
+Attention ranking and interrupt hero selection are owned by the Attention
+Platform (AttentionState → AttentionView). This module must not re-rank
+attention. Home V1 composes this result with AttentionView in
+``home_projection``.
 
-See docs/HOME_EXPERIENCE.md and docs/ATTENTION_PLATFORM_ADOPTION.md.
+See docs/HOME_V1.md, docs/HOME_EXPERIENCE.md, and
+docs/ATTENTION_PLATFORM_ADOPTION.md.
 """
 
 from __future__ import annotations
@@ -372,10 +375,8 @@ def resolve_home_state(
         kwargs.setdefault("extracted_items", list(extracted_items or []))
         kwargs.setdefault("session_confidence", session_confidence)
         kwargs.setdefault("provider_open_url", provider_open_url)
-        # Truth Dashboard presentation — hide multi-provider chrome.
-        kwargs["show_health"] = False
-        kwargs["show_metrics"] = False
-        kwargs["secondary_recommendations"] = []
+        # Attention owns opportunity ranking — do not project Actions as Home recs.
+        kwargs.setdefault("secondary_recommendations", [])
         return HomeStateResult(**kwargs)
 
     if enrolled == 0:
@@ -446,17 +447,14 @@ def resolve_home_state(
         )
 
     if updating_name:
-        headline = tower.hero_headline()
-        body_lines = [line for line in tower.hero_lines() if not line.startswith("Current activity:")]
-        body_lines.append("Current activity: Refreshing account")
-        body = "\n".join(body_lines)
+        headline = user_copy.home_update_headline(updating_name)
         return _result(
             state=HomeState.UPDATE,
             priority_summary=user_copy.HOME_PRIORITY_UPDATE,
             featured=HomeFeatured(
                 headline=headline,
-                body=body,
-                disabled_cta_label=None,
+                body=user_copy.HOME_UPDATE_BODY,
+                disabled_cta_label=user_copy.HOME_UPDATING_CTA,
                 secondary_label=user_copy.HOME_VIEW_ACCOUNTS_LABEL,
                 secondary_url="/credentials",
             ),
@@ -473,14 +471,18 @@ def resolve_home_state(
     cta_url = "/credentials"
     if enrolled == 1 and accounts[0].status == UP_TO_DATE:
         cta_label = user_copy.home_view_provider_cta(accounts[0].display_name)
-    body_lines = tower.hero_lines()
+        cta_url = (
+            open_urls.get(accounts[0].source)
+            or accounts[0].user_action_url
+            or "/credentials"
+        )
     return _attach_update_context(
         _result(
             state=HomeState.ALL_CLEAR,
             priority_summary=user_copy.HOME_PRIORITY_ALL_CLEAR,
             featured=HomeFeatured(
-                headline=tower.hero_headline(),
-                body="\n".join(body_lines) if body_lines else user_copy.TOWER_ATTENTION_NONE,
+                headline=user_copy.HOME_ALL_CLEAR_HEADLINE,
+                body=user_copy.home_all_clear_body(enrolled),
                 cta_label=cta_label,
                 cta_url=cta_url,
             ),

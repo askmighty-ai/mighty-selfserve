@@ -30,7 +30,7 @@ from mighty.customer_account_access import (
     build_customer_account_access_view,
 )
 from mighty.home_state import resolve_home_state
-from mighty.home_ui import render_home_page
+from mighty.home_ui import render_capability_panel, render_home_page
 from mighty.login_truth import CurrentAccountAccess
 from mighty.provider_account import (
     EXTRACTION_COMPLETE,
@@ -275,11 +275,13 @@ class TestPrecedence:
         )
         assert home.capability is not None
         assert home.capability.state == dash.state
-        rendered = render_home_page(
+        rendered = render_capability_panel(home.capability, escape=_escape)
+        home_html = render_home_page(
             home, first_name="Alex", today_label="Mon", escape=_escape,
         )
         assert 'data-capability="extraction_success"' in rendered
         assert "Membership Rewards" in rendered
+        assert "home-v1" in home_html
 
     def test_13_only_amex_on_customer_surfaces(self):
         assert CUSTOMER_VISIBLE_PROVIDERS == frozenset({TRUTH_PROVIDER})
@@ -389,14 +391,15 @@ class TestUiStates:
     def test_empty_is_login_unknown_not_signed_out(self):
         result = resolve_home_state(accounts=[])
         assert result.capability.state == CapabilityState.LOGIN_UNKNOWN
-        rendered = render_home_page(
+        rendered = render_capability_panel(result.capability, escape=_escape)
+        home = render_home_page(
             result, first_name="Alex", today_label="Mon", escape=_escape,
         )
         assert "could not determine your login state during the latest check" in rendered.lower()
         assert "cannot determine whether you are logged in" not in rendered.lower()
         assert "Open American Express" not in rendered
-        assert "Summary" not in rendered
-        assert "System Health" not in rendered
+        assert "watched quietly" in home.lower()
+        assert "System Health" not in home
 
     def test_signed_out_ui(self):
         view = _view(SIGNED_OUT)
@@ -410,9 +413,7 @@ class TestUiStates:
             capability=build_capability_view(view),
         )
         result = resolve_home_state(accounts=[status])
-        rendered = render_home_page(
-            result, first_name="Alex", today_label="Mon", escape=_escape,
-        )
+        rendered = render_capability_panel(result.capability, escape=_escape)
         assert "You are signed out" in rendered
         assert "Open American Express" in rendered
         assert "Technical Details" in rendered

@@ -37,7 +37,7 @@ from mighty.customer_account_access import (
     resolve_discovered_from,
 )
 from mighty.home_state import resolve_home_state
-from mighty.home_ui import render_home_page
+from mighty.home_ui import render_capability_panel, render_home_page
 from mighty.login_truth import CurrentAccountAccess
 from mighty.provider_account import EXTRACTION_COMPLETE, ProviderAccount
 from mighty import user_copy
@@ -161,7 +161,9 @@ class TestCustomerAccountAccessView:
 
         status = _status_from_view(view, canonical="up_to_date")
         result = resolve_home_state(accounts=[status])
-        rendered = render_home_page(
+        assert result.capability is not None
+        rendered = render_capability_panel(result.capability, escape=_escape)
+        home = render_home_page(
             result,
             first_name="Alex",
             today_label="Monday, July 13",
@@ -171,8 +173,8 @@ class TestCustomerAccountAccessView:
         assert "can see and extract" in rendered.lower()
         assert 'data-capability="extraction_success"' in rendered
         assert "Technical Details" in rendered
-        assert "Summary" not in rendered
-        assert "✓ Watching" not in rendered
+        assert "home-v1" in home
+        assert "✓ Watching" not in home
 
     def test_gmail_discovered_never_connected(self):
         readiness = _readiness("amex", UNVERIFIED, session_state="unknown")
@@ -191,14 +193,18 @@ class TestCustomerAccountAccessView:
 
         status = _status_from_view(view, canonical="waiting_for_extension")
         result = resolve_home_state(accounts=[status])
-        rendered = render_home_page(
+        assert result.capability is not None
+        rendered = render_capability_panel(result.capability, escape=_escape)
+        home = render_home_page(
             result, first_name="Alex", today_label="Monday, July 13", escape=_escape,
         )
         assert "could not determine your login state during the latest check" in rendered.lower()
         assert "cannot determine whether you are logged in" not in rendered.lower()
         assert 'data-capability="login_unknown"' in rendered
         assert 'data-capability="extraction_success"' not in rendered
-        assert "✓ Watching" not in rendered
+        assert "home-briefing" in home
+        assert "Working quietly" in home or "You&#x27;re good." in home or "You're good." in home
+        assert "✓ Watching" not in home
 
     def test_ready_with_background_verifying_stays_connected(self):
         readiness = _readiness(
@@ -227,21 +233,15 @@ class TestCustomerAccountAccessView:
         assert view.private_data_label == PRIVATE_SEEN
 
         status = _status_from_view(view, canonical="up_to_date")
-        rendered = render_home_page(
-            resolve_home_state(accounts=[status]),
-            first_name="Alex",
-            today_label="Monday, July 13",
-            escape=_escape,
-        )
-        # Active verification → determining; prior extraction is historical only.
-        assert "refreshing current status" in rendered.lower()
-        assert "last confirmed:" in rendered.lower()
-        assert "could access and extract" in rendered.lower()
-        assert "mighty can see and extract your logged-in account data" not in rendered.lower()
+        result = resolve_home_state(accounts=[status])
+        assert result.capability is not None
+        rendered = render_capability_panel(result.capability, escape=_escape)
+        # Active verification → determining presentation (not a false Connected hero).
         assert 'data-presentation-phase="determining"' in rendered
-        assert 'data-capability="extraction_success"' in rendered
+        assert "login state" in (result.capability.headline or "").lower()
         assert "Waiting for first verification" not in rendered
         assert "Awaiting first check" not in rendered
+        assert "✓ Watching" not in rendered
 
     def test_dashboard_and_accounts_compatible(self):
         readiness = _readiness(
@@ -266,11 +266,15 @@ class TestCustomerAccountAccessView:
 
         status = _status_from_view(view, canonical="up_to_date")
         home = resolve_home_state(accounts=[status])
+        assert home.capability is not None
+        capability_html = render_capability_panel(home.capability, escape=_escape)
         home_html = render_home_page(
             home, first_name="Alex", today_label="Monday, July 13", escape=_escape,
         )
-        assert "can see and extract" in home_html.lower()
-        assert "Technical Details" in home_html
+        assert "can see and extract" in capability_html.lower()
+        assert "Technical Details" in capability_html
+        assert "home-briefing" in home_html
+        assert "You&#x27;re good." in home_html or "You're good." in home_html
 
         lc = resolve_account_lifecycle("amex", in_credentials=True, from_email=True)
         row = AccountsRow(
@@ -314,12 +318,11 @@ class TestCustomerAccountAccessView:
         assert view.cached_data_label == "Last saved data: 2 hours ago"
         assert section_for_view(view) == SECTION_NEEDS_LOGIN
 
-        rendered = render_home_page(
-            resolve_home_state(accounts=[_status_from_view(view, canonical="needs_login")]),
-            first_name="Alex",
-            today_label="Monday, July 13",
-            escape=_escape,
+        result = resolve_home_state(
+            accounts=[_status_from_view(view, canonical="needs_login")]
         )
+        assert result.capability is not None
+        rendered = render_capability_panel(result.capability, escape=_escape)
         assert "You are signed out" in rendered
         assert "Open American Express" in rendered
 
@@ -339,14 +342,12 @@ class TestCustomerAccountAccessView:
         assert view.live_access == LIVE_UNKNOWN
         assert "not" in view.meaning.lower() or "has not confirmed" in view.meaning
 
-        rendered = render_home_page(
-            resolve_home_state(
-                accounts=[_status_from_view(view, canonical="waiting_for_extension")]
-            ),
-            first_name="Alex",
-            today_label="Monday, July 13",
-            escape=_escape,
+        result = resolve_home_state(
+            accounts=[_status_from_view(view, canonical="waiting_for_extension")]
         )
+        assert result.capability is not None
+        rendered = render_capability_panel(result.capability, escape=_escape)
+        # Capability instrument: no sign-in CTA when login is unknown.
         assert "Open American Express" not in rendered
         assert "could not determine your login state during the latest check" in rendered.lower()
         assert "cannot determine whether you are logged in" not in rendered.lower()

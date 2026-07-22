@@ -135,7 +135,7 @@ Capabilities and technical items deliberately **not** committed as numbered prod
 | Full Provider Runtime Control Center restore | Thin `runtime_access_state` shipped for AuthTruth/Trust; full CC separate |
 | Opportunity sources beyond `action_items` | M10 shipped `account_opportunities`; Attention loader bridge still parking-lot |
 | First-class product analytics event table | Supporting observability; not a product milestone |
-| Weekly digest / Daily Brief surfaces | Product Architecture horizon |
+| Weekly digest email | Product Architecture horizon; in-app Daily Brief shipped in Home V1 ([HOME_V1.md](HOME_V1.md)) |
 | Mobile-complete auth CTAs for browser_session | Capability-aware; phone may not complete login |
 | Runtime focus CTA bridge | Supporting Autonomous Recovery / Runtime auth; not standalone milestone |
 | Hard-delete cutover flags after soak | Operational work after retirement criteria pass |
