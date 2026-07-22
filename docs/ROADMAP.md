@@ -36,6 +36,7 @@ Mighty separates **discovery**, **enrollment**, **access truth**, **recovery**, 
 | **Freshness / Change** | Data currency + meaningful snapshot diffs (`account_changes`); facts for History/Briefs — not Attention ranking |
 | **Value Intelligence** | Durable opportunity facts from snapshots (`account_opportunities`); computes value — not Attention ranking |
 | **Trusted Agent Auth** | Durable Actions + authorization policy + immutable receipts; Activity history; Attention interrupts only |
+| **User Policy** | Durable user intent for privacy, approval, execution, monitoring; consumed by Authorization — not Attention ranking |
 | **Attention** | Product policy: compile → overlays → rank → `AttentionState` → `AttentionView` → surfaces / delivery |
 
 One write plane for auth. One recovery lifecycle owner. One compiler gather path for attention. One ranking table. One analytics owner per human moment.
@@ -83,7 +84,7 @@ Failure / access facts
 | 9 | Freshness and Change Intelligence | Users know what changed and that data is current — without status-dashboard noise | Complete | [milestones/MILESTONE_9.md](milestones/MILESTONE_9.md) |
 | 10 | Value Intelligence | Mighty surfaces value at risk and opportunities worth acting on | Complete | [milestones/MILESTONE_10.md](milestones/MILESTONE_10.md) |
 | 11 | Trusted Agent Authorization | Agents act only with verified, inspectable human approval | Complete | [milestones/MILESTONE_11.md](milestones/MILESTONE_11.md) |
-| 12 | Trust, Privacy, and Control | Users understand and control what Mighty can see and do | Pending | — |
+| 12 | Trust, Privacy, and Control | Users understand and control what Mighty can see and do | Complete | [milestones/MILESTONE_12.md](milestones/MILESTONE_12.md) |
 
 RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) Part XIII. Living reports under `docs/milestones/` are authoritative for what shipped.
 
@@ -91,12 +92,12 @@ RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_A
 
 ## Current milestone
 
-**None (planning).** Milestone 11 — Trusted Agent Authorization is complete.
+**None (planning).** Milestone 12 — Trust, Privacy, and User Governance is complete. Capability roadmap M6–M12 delivered.
 
 | Field | Value |
 |-------|-------|
-| **Last completed** | M11 — [milestones/MILESTONE_11.md](milestones/MILESTONE_11.md) |
-| **Next** | Milestone 12 — Trust, Privacy, and Control |
+| **Last completed** | M12 — [milestones/MILESTONE_12.md](milestones/MILESTONE_12.md) |
+| **Next** | Post-roadmap evolution (see M12 recommendations / parking lot) |
 
 ---
 
