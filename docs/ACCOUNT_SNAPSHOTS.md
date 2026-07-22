@@ -1,7 +1,7 @@
 # Canonical Account Snapshots
 
-**Status:** Implemented (PR #94)  
-**Related:** [PRODUCT_ACCOUNT_STATE.md](PRODUCT_ACCOUNT_STATE.md) · [ACCOUNT_STATE.md](ACCOUNT_STATE.md) · [ACCESS_FLOW.md](ACCESS_FLOW.md)
+**Status:** Implemented (PR #94); Change Intelligence on diffs (Milestone 9)  
+**Related:** [PRODUCT_ACCOUNT_STATE.md](PRODUCT_ACCOUNT_STATE.md) · [ACCOUNT_STATE.md](ACCOUNT_STATE.md) · [ACCESS_FLOW.md](ACCESS_FLOW.md) · [FRESHNESS_CHANGE.md](FRESHNESS_CHANGE.md)
 
 ---
 
@@ -118,7 +118,10 @@ Table: `account_snapshots` (append-only).
 
 - Insert only — never `UPDATE` an existing snapshot row.
 - Newest successful row is active.
-- Older rows remain queryable (foundation for future change detection).
+- Older rows remain queryable.
+- On each successful persist, Milestone 9 diffs previous→new into
+  `account_changes` (meaningful deltas + fingerprint dedupe). See
+  [FRESHNESS_CHANGE.md](FRESHNESS_CHANGE.md).
 
 ---
 
