@@ -583,17 +583,19 @@ HOME_PRIORITY_UPDATE = "Almost there."
 HOME_PRIORITY_ALL_CLEAR = "You're good."
 HOME_PRIORITY_RECOMMENDATION = "1 thing worth your attention."
 
-# V1A briefing ledes — answer "Am I good?"
+# V1B briefing — answer "Am I good?"
 HOME_BRIEFING_ANSWER_GOOD = "You're good."
-HOME_BRIEFING_ANSWER_ATTENTION = "One thing needs you."
-HOME_BRIEFING_ANSWER_OPPORTUNITY = "One thing worth your attention."
+HOME_BRIEFING_ANSWER_ATTENTION = "One thing needs your attention."
+HOME_BRIEFING_ANSWER_OPPORTUNITY = "Something is worth your attention."
 HOME_BRIEFING_ALL_CLEAR_TITLE = "You're good."
 HOME_RECENT_WINS_LABEL = "Recent wins"
 HOME_OPS_LABEL = "Working quietly"
+HOME_FRESHNESS_PREFIX = "Last verified "
+HOME_ACCOUNTS_SOFT_LINK = "Accounts"
 
 HOME_FOOTER_WORKER = "Mighty runs in Chrome"
 HOME_FOOTER_LAST_CHECKED = "Last checked {time}"
-HOME_ACTIVITY_LINK = "{count} awaiting decision"
+HOME_ACTIVITY_LINK = "{count} awaiting your decision"
 HOME_HEALTH_LABEL = "Account health"
 HOME_HEALTH_STILL_SETTING_UP = "being verified"
 HOME_SECONDARY_LABEL = "Also worth a look"
@@ -684,34 +686,38 @@ def home_all_clear_body(account_count: int, setup_incomplete_count: int = 0) -> 
     return home_briefing_all_clear_body(account_count)
 
 
-def home_briefing_all_clear_body(account_count: int) -> str:
-    n = max(0, int(account_count or 0))
-    if n <= 0:
-        return (
-            "Nothing needs you right now. Mighty will speak up when something matters."
-        )
-    word = "account" if n == 1 else "accounts"
+def home_briefing_all_clear_body(account_count: int = 0) -> str:
+    """Outcome-oriented all-clear copy — no account counts or system jargon."""
+    del account_count  # Counts belong on Accounts, not the briefing.
     return (
-        f"Mighty is watching {n} {word}. Nothing needs you right now — "
-        "we'll speak up when something matters."
+        "Nothing needs your attention right now.\n"
+        "We'll let you know if anything changes."
     )
 
 
 def home_ops_refreshing(provider_name: str) -> str:
-    return f"Refreshing {provider_name}…"
+    return f"Updating {provider_name}"
 
 
 def home_ops_setting_up(count: int) -> str:
-    n = max(1, int(count))
-    word = "account" if n == 1 else "accounts"
-    return f"Setting up {n} {word}"
+    del count
+    return "Getting an account ready"
+
+
+def home_ops_setting_up_provider(provider_name: str) -> str:
+    return f"Setting up {provider_name}"
 
 
 def home_ops_needs_login(count: int) -> str:
-    n = max(1, int(count))
-    if n == 1:
-        return "1 account needs login"
-    return f"{n} accounts need login"
+    del count
+    return "A sign-in is needed"
+
+
+def home_freshness_label(when: str) -> str:
+    text = (when or "").strip()
+    if not text:
+        return ""
+    return f"{HOME_FRESHNESS_PREFIX}{text}"
 
 
 def home_attention_headline(attention_count: int) -> str:

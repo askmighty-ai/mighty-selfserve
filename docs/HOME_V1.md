@@ -1,6 +1,6 @@
-# Home V1A — Daily Executive Briefing
+# Home V1B — Daily Executive Briefing
 
-**Status:** Implemented (V1A)  
+**Status:** Implemented (V1B — UX refinement of V1A)  
 **Product design:** [HOME_EXPERIENCE.md](HOME_EXPERIENCE.md)  
 **Architecture:** [PRODUCT_ARCHITECTURE.md](PRODUCT_ARCHITECTURE.md) · [ENGINEERING_CHARTER.md](ENGINEERING_CHARTER.md)  
 **Related:** [ATTENTION_VIEW.md](ATTENTION_VIEW.md) · [FRESHNESS_CHANGE.md](FRESHNESS_CHANGE.md)
@@ -76,3 +76,9 @@ Opportunities appear on Home **only** when Attention has already selected them a
 - **Decision:** Project `change_alerts_from_store` (meaningful changes only).  
 - **Why:** Freshness/Change already owns meaningful deltas; Home must not invent win scoring.  
 - **Impact:** Empty wins section is omitted — silence is correct when nothing material happened.
+
+### AD-HOME-5: V1B status-first hierarchy (UX only)
+
+- **Decision:** Dominant status line (“You’re good.” / needs attention / worth attention); outcome copy without account counts; no primary CTA when all clear; subtle freshness; whisper-weight ops.  
+- **Why:** Five-second “Am I good?” read; calm confidence over dashboard density.  
+- **Impact:** No ownership or ranking changes — presentation and copy only.

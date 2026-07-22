@@ -1,4 +1,4 @@
-"""Tests for Home V1A daily briefing rendering."""
+"""Tests for Home V1B daily briefing rendering."""
 
 import html
 from datetime import datetime, timezone
@@ -126,44 +126,35 @@ class TestHomeBriefingUi:
         )
         assert "Your accounts, watched quietly." in rendered
         assert "Connect Gmail" in rendered
-        assert "home-briefing" in rendered
-        assert "Account health" not in rendered
-        assert "can see and extract" not in rendered.lower()
+        assert "home-v1b" in rendered
 
-    def test_all_clear_is_sparse_briefing(self):
+    def test_all_clear_status_first_no_primary_cta(self):
         view = build_customer_account_access_view(
             provider="amex",
             display_name="American Express",
             readiness=_readiness("amex", READY),
             discovered_from=DISCOVERED_MANUAL,
         )
-        result = resolve_home_state(
-            accounts=[_status_from_view(view)],
-            extracted_items=[
-                {"label": "Membership Rewards", "value": "125,000"},
-            ],
-            session_confidence="high",
-            benefit_count=1,
-            tracked_value_label="$40",
-        )
+        result = resolve_home_state(accounts=[_status_from_view(view)])
         rendered = render_home_page(
             result,
-            first_name="Alex",
+            first_name="Ryan",
             today_label="Friday, July 3",
-            last_checked="2h ago",
+            last_checked="2 minutes ago",
             escape=_escape,
-            recent_wins=[{"message": "Membership Rewards updated", "source": "amex"}],
         )
         assert "You&#x27;re good." in rendered or "You're good." in rendered
-        assert 'data-story="all_clear"' in rendered
-        assert "Recent wins" in rendered
-        assert "Membership Rewards updated" in rendered
-        assert "Account health" not in rendered
-        assert "Also worth a look" not in rendered
-        assert "Mighty runs in Chrome" in rendered
-        assert "Membership Rewards" in rendered  # win line
-        assert "Technical Details" not in rendered
-        assert 'data-capability=' not in rendered
+        assert "Nothing needs your attention right now." in rendered
+        assert (
+            "We'll let you know if anything changes." in rendered
+            or "We&#x27;ll let you know if anything changes." in rendered
+        )
+        assert "Mighty is watching" not in rendered
+        assert "View accounts" not in rendered
+        assert "home-card-cta--primary" not in rendered
+        assert "Last verified" in rendered
+        assert "2 minutes ago" in rendered
+        assert 'class="home-answer"' in rendered
 
     def test_attention_interrupt_owns_featured_story(self):
         view = build_customer_account_access_view(
@@ -186,20 +177,19 @@ class TestHomeBriefingUi:
         )
         rendered = render_home_page(
             result,
-            first_name="Alex",
+            first_name="Ryan",
             today_label="Friday, July 3",
             escape=_escape,
             attention=attention,
             use_attention=True,
         )
+        assert "One thing needs your attention." in rendered
         assert attention.primary is not None
         assert attention.primary.title in rendered
-        assert "One thing needs you." in rendered
-        assert 'data-story="attention"' in rendered
         assert "https://amex.test/login" in rendered
-        assert "Also worth a look" not in rendered
+        assert "home-card-cta--primary" in rendered
 
-    def test_waiting_ops_strip_not_hero(self):
+    def test_waiting_ops_is_whisper_note(self):
         accounts = [
             AccountStatus(
                 source="amex",
@@ -216,13 +206,13 @@ class TestHomeBriefingUi:
         ]
         result = resolve_home_state(accounts=accounts)
         rendered = render_home_page(
-            result, first_name="Alex", today_label="Friday, July 3", escape=_escape,
+            result, first_name="Ryan", today_label="Friday, July 3", escape=_escape,
         )
         assert "You're good." in rendered or "You&#x27;re good." in rendered
         assert "Working quietly" in rendered
-        assert "Setting up" in rendered
-        assert "Mighty is tracking American Express." not in rendered
-        assert "home-waiting-rows" not in rendered
+        assert "Setting up American Express" in rendered
+        assert "home-ops-list" in rendered
+        assert "View accounts" not in rendered
 
     def test_truth_debug_only_when_flagged(self):
         view = build_customer_account_access_view(

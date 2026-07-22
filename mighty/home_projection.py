@@ -176,30 +176,16 @@ def _compose_story(
 
 
 def _all_clear_story(result: HomeStateResult) -> HomeCard:
-    featured = result.featured
     # Title stays empty — the briefing answer ("You're good.") is the headline.
-    health = result.health
-    watched = (
-        result.metrics_accounts
-        or health.up_to_date
-        + health.waiting
-        + health.needs_login
-        + health.needs_attention
-    )
-    body = user_copy.home_briefing_all_clear_body(watched)
-    cta_label = featured.cta_label if featured else user_copy.HOME_VIEW_ACCOUNTS_LABEL
-    cta_url = featured.cta_url if featured else "/credentials"
-    if result.state in (HomeState.WAITING, HomeState.UPDATE):
-        # Soft depth path only — ops strip carries the operational detail.
-        cta_label = user_copy.HOME_VIEW_ACCOUNTS_LABEL
-        cta_url = "/credentials"
+    # No primary CTA when all is well — depth lives on Accounts if needed.
+    del result
     return HomeCard(
         kind="story",
         title="",
-        body=body,
+        body=user_copy.home_briefing_all_clear_body(),
         tone="calm",
-        cta_label=cta_label,
-        cta_url=cta_url,
+        cta_label=None,
+        cta_url=None,
     )
 
 
@@ -231,11 +217,18 @@ def _compose_ops(
             )
         )
     elif result.state == HomeState.WAITING:
-        waiting = result.health.waiting or len(result.waiting_rows)
-        if waiting:
+        if result.waiting_rows:
+            name = result.waiting_rows[0].display_name
             notes.append(
                 HomeOpsNote(
-                    text=user_copy.home_ops_setting_up(waiting),
+                    text=user_copy.home_ops_setting_up_provider(name),
+                    href="/credentials?filter=waiting",
+                )
+            )
+        elif result.health.waiting:
+            notes.append(
+                HomeOpsNote(
+                    text=user_copy.home_ops_setting_up(result.health.waiting),
                     href="/credentials?filter=waiting",
                 )
             )

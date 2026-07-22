@@ -88,7 +88,7 @@ class TestHomeBriefingProjection:
         assert projection.story_kind == "attention"
         assert projection.featured is not None
         assert projection.featured.attention_id == attention.primary.attention_id
-        assert projection.answer == "One thing needs you."
+        assert projection.answer == "One thing needs your attention."
         assert projection.secondary == ()
 
     def test_waiting_does_not_own_hero(self):
@@ -101,7 +101,8 @@ class TestHomeBriefingProjection:
         assert projection.answer == "You're good."
         assert projection.featured is not None
         assert projection.featured.title == ""
-        assert any("Setting up" in n.text for n in projection.ops_notes)
+        assert projection.featured.cta_label is None
+        assert any("American Express" in n.text for n in projection.ops_notes)
 
     def test_recent_wins_projected_without_ranking(self):
         result = resolve_home_state(accounts=[_acct("amex", "American Express", "up_to_date")])

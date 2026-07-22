@@ -86,6 +86,14 @@ def he(s):
     """HTML-escape a value for safe insertion into HTML."""
     return html.escape(str(s)) if s is not None else ""
 
+def _default_database_path() -> str:
+    """Railway uses /app/data; local/dev uses a workspace SQLite file."""
+    railway_path = "/app/data/mighty.db"
+    if os.path.isdir("/app") and os.access("/app", os.W_OK):
+        return railway_path
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "mighty.db")
+
+
 app = Flask(__name__)
 from werkzeug.middleware.proxy_fix import ProxyFix
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
@@ -94,7 +102,7 @@ if not _secret_key:
     if os.environ.get("RAILWAY_ENVIRONMENT") == "production":
         raise RuntimeError("SECRET_KEY environment variable must be set in production")
     _dev_key_dir = os.path.dirname(os.path.abspath(
-        os.environ.get("DATABASE_PATH", "/app/data/mighty.db")
+        os.environ.get("DATABASE_PATH", _default_database_path())
     )) or "."
     _dev_key_path = os.path.join(_dev_key_dir, ".mighty_secret_key")
     try:
@@ -236,7 +244,7 @@ def _account_debug_panel_html(info: dict) -> str:
 _SYNC_HOWTO_HTML = user_copy.how_updates_html()
 
 
-DATABASE        = os.environ.get("DATABASE_PATH", "/app/data/mighty.db")
+DATABASE        = os.environ.get("DATABASE_PATH", _default_database_path())
 PORT            = int(os.environ.get("PORT", 5004))
 TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
 POSTMARK_API_KEY = os.environ.get("POSTMARK_API_KEY", "")
@@ -6481,46 +6489,48 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .dash-attention-silence{margin:0;font-size:14px;color:#57534e;line-height:1.45}
 .dash-attention-cta{margin-top:2px}
 .dash-attention-cta-disabled{display:inline-flex;font-size:14px;font-weight:600;color:#a8a29e}
-/* Home V1A — daily executive briefing */
-.home-briefing .home-stack{display:flex;flex-direction:column;gap:0;max-width:520px}
-.home-briefing .home-header{margin:0 0 36px}
-.home-briefing .home-greeting{font-size:28px;font-weight:600;letter-spacing:-0.04em;line-height:1.15}
-.home-briefing .home-meta{margin-top:8px}
-.home-briefing .home-answer{margin:18px 0 0;font-size:22px;font-weight:550;color:#1c1917;letter-spacing:-0.03em;line-height:1.25}
-.home-briefing .home-primary{margin:0 0 40px}
+/* Home V1B — status-first executive briefing */
+.home-briefing .home-stack{display:flex;flex-direction:column;gap:0;max-width:480px}
+.home-briefing .home-header{margin:0 0 8px}
+.home-briefing .home-greeting{margin:0;font-size:18px;font-weight:500;letter-spacing:-0.02em;line-height:1.3;color:#78716c}
+.home-briefing .home-meta{margin-top:4px}
+.home-briefing .home-meta .dash-brief-today-date{font-size:13px;color:#a8a29e}
+.home-briefing .home-answer{margin:28px 0 0;font-size:40px;font-weight:650;color:#1c1917;letter-spacing:-0.045em;line-height:1.12;max-width:14ch}
+.home-briefing .home-primary{margin:18px 0 48px}
 .home-card{display:block}
 .home-card--featured{padding:0;border:none;border-radius:0;background:transparent;box-shadow:none}
-.home-card--featured[data-tone="interrupt"] .home-card-title{color:#1c1917}
-.home-card--featured[data-tone="opportunity"] .home-card-title{color:#1c1917}
-.home-card-title{margin:0 0 12px;font-size:26px;font-weight:650;color:#1c1917;line-height:1.2;letter-spacing:-0.035em;max-width:24ch}
-.home-card-body{margin:0 0 22px;font-size:16px;color:#57534e;line-height:1.6;max-width:42ch}
-.home-card-body-lines{list-style:none;margin:0 0 22px;padding:0;display:flex;flex-direction:column;gap:8px}
-.home-card-body-line{font-size:16px;color:#57534e;line-height:1.55}
-.home-card-actions{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px}
+.home-card-title{margin:0 0 10px;font-size:17px;font-weight:550;color:#44403c;line-height:1.35;letter-spacing:-0.02em;max-width:36ch}
+.home-card-body{margin:0;font-size:16px;font-weight:400;color:#78716c;line-height:1.65;max-width:38ch}
+.home-card-body-lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.home-card-body-line{font-size:16px;color:#78716c;line-height:1.6}
+.home-card-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;margin-top:22px}
 .home-card-cta--primary{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;color:#fff;background:#1c1917;border-radius:10px;text-decoration:none;transition:background .12s}
 .home-card-cta--primary:hover{background:#292524;color:#fff;text-decoration:none}
 .home-card-cta--disabled{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;color:#a8a29e;background:#f5f5f4;border-radius:10px}
-.home-card-secondary-link{font-size:13px;font-weight:500;color:#78716c;text-decoration:none}
-.home-card-secondary-link:hover{color:#1c1917;text-decoration:none}
-.home-section-label{margin:0 0 14px;font-size:11px;font-weight:600;color:#a8a29e;text-transform:uppercase;letter-spacing:0.07em}
-.home-wins{margin:0 0 36px;padding-top:28px;border-top:0.5px solid rgba(0,0,0,0.06)}
-.home-wins-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:12px}
-.home-win{font-size:15px;color:#44403c;line-height:1.45;letter-spacing:-0.01em}
-.home-win::before{content:"·";margin-right:10px;color:#a8a29e}
+.home-card-secondary-link,.home-card-cta--text{font-size:13px;font-weight:500;color:#a8a29e;text-decoration:none}
+.home-card-secondary-link:hover,.home-card-cta--text:hover{color:#78716c;text-decoration:none}
+.home-freshness{margin:20px 0 0;font-size:12px;font-weight:450;color:#c4c0bb;letter-spacing:0.01em}
+.home-section-label{margin:0 0 12px;font-size:11px;font-weight:600;color:#d6d3d1;text-transform:uppercase;letter-spacing:0.07em}
+.home-wins{margin:0 0 40px;padding-top:28px;border-top:0.5px solid rgba(0,0,0,0.05)}
+.home-wins-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.home-win{font-size:14px;color:#a8a29e;line-height:1.45}
+.home-win::before{content:"·";margin-right:10px;color:#d6d3d1}
 .home-win-link{color:inherit;text-decoration:none}
-.home-win-link:hover{color:#1c1917;text-decoration:underline}
-.home-ops{margin:0 0 8px}
-.home-ops-label{margin:0 0 8px;font-size:11px;font-weight:600;color:#d6d3d1;text-transform:uppercase;letter-spacing:0.07em}
-.home-ops-notes{font-size:13px;color:#a8a29e;line-height:1.5}
-.home-ops-note{color:#a8a29e;text-decoration:none}
-a.home-ops-note:hover{color:#78716c;text-decoration:underline}
-.home-footer{margin-top:40px;padding-top:20px;border-top:0.5px solid rgba(0,0,0,0.05);font-size:12px;color:#d6d3d1}
+.home-win-link:hover{color:#78716c;text-decoration:underline}
+.home-ops{margin:0 0 4px;opacity:0.72}
+.home-ops-label{margin:0 0 6px;font-size:11px;font-weight:500;color:#d6d3d1;letter-spacing:0.02em;text-transform:none}
+.home-ops-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.home-ops-item{font-size:12px;color:#d6d3d1;line-height:1.4}
+.home-ops-item::before{content:"•";margin-right:8px;color:#e7e5e4}
+.home-ops-note{color:#d6d3d1;text-decoration:none}
+a.home-ops-note:hover{color:#a8a29e;text-decoration:underline}
+.home-footer{margin-top:48px;padding-top:0;border-top:none;font-size:11px;color:#e7e5e4}
 .home-truth-debug{margin-top:36px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06)}
 .home-truth-debug summary{cursor:pointer;font-size:13px;font-weight:600;color:#a8a29e}
 @media(max-width:640px){
-.home-briefing .home-greeting{font-size:24px}
-.home-briefing .home-answer{font-size:20px}
-.home-card-title{font-size:22px}
+.home-briefing .home-greeting{font-size:16px}
+.home-briefing .home-answer{font-size:32px;margin-top:22px}
+.home-card-title{font-size:16px}
 }
 .dash-truth-panel{margin-top:8px;padding:16px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
 .dash-truth-provider{margin:0 0 10px;font-size:20px;font-weight:650;color:#1c1917;letter-spacing:-0.02em}

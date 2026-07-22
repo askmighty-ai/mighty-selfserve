@@ -602,7 +602,11 @@ def _cta_html(card: HomeCard, *, escape: Callable[[Any], str], primary: bool) ->
         )
     external = card.cta_url.startswith("http")
     target = ' target="_blank" rel="noopener noreferrer"' if external else ""
-    cls = "home-card-cta home-card-cta--primary" if primary else "home-card-cta home-card-cta--text"
+    cls = (
+        "home-card-cta home-card-cta--primary"
+        if primary
+        else "home-card-cta home-card-cta--text home-card-secondary-link"
+    )
     return (
         f'<a href="{escape(card.cta_url)}" class="{cls}"{target}>'
         f"{escape(card.cta_label)}</a>"
@@ -629,16 +633,20 @@ def _render_featured_card(card: HomeCard, *, escape: Callable[[Any], str]) -> st
         attrs.append(f'data-attention-class="{escape(card.attention_class)}"')
     title = ""
     if card.title:
-        title = f'<h2 class="home-card-title">{escape(card.title)}</h2>'
+        # Story detail sits under the dominant status line — not a second hero.
+        title = f'<p class="home-card-title">{escape(card.title)}</p>'
+    # Primary filled CTA only when the user must act; calm stays CTA-free.
+    use_primary = card.tone in ("interrupt", "opportunity")
+    cta = _cta_html(card, escape=escape, primary=use_primary)
+    actions = ""
+    if cta or secondary:
+        actions = f'<div class="home-card-actions">{cta}{secondary}</div>'
     return (
         f'<article class="home-card home-card--featured" {" ".join(attrs)}>'
         f"{eyebrow}"
         f"{title}"
         f"{_body_paragraphs(card.body, escape)}"
-        f'<div class="home-card-actions">'
-        f"{_cta_html(card, escape=escape, primary=True)}"
-        f"{secondary}"
-        f"</div>"
+        f"{actions}"
         f"</article>"
     )
 
@@ -734,40 +742,43 @@ def _render_ops_strip(
 ) -> str:
     if not notes:
         return ""
-    parts: list[str] = []
+    items: list[str] = []
     for note in notes:
         text = escape(note.text)
         if note.href:
-            parts.append(
-                f'<a href="{escape(note.href)}" class="home-ops-note">{text}</a>'
-            )
+            body = f'<a href="{escape(note.href)}" class="home-ops-note">{text}</a>'
         else:
-            parts.append(f'<span class="home-ops-note">{text}</span>')
+            body = f'<span class="home-ops-note">{text}</span>'
+        items.append(f'<li class="home-ops-item">{body}</li>')
     return (
         f'<aside class="home-ops" aria-label="{escape(user_copy.HOME_OPS_LABEL)}">'
         f'<p class="home-ops-label">{escape(user_copy.HOME_OPS_LABEL)}</p>'
-        f'<div class="home-ops-notes">{" · ".join(parts)}</div>'
+        f'<ul class="home-ops-list">{"".join(items)}</ul>'
         f"</aside>"
     )
 
 
-def _render_footer(last_checked: str, *, escape: Callable[[Any], str]) -> str:
-    parts = [escape(user_copy.HOME_FOOTER_WORKER)]
-    attrs = ""
-    if last_checked:
-        display = (
-            _ts_html(last_checked)
-            if "T" in str(last_checked)
-            else escape(str(last_checked))
-        )
-        checked_prefix = user_copy.HOME_FOOTER_LAST_CHECKED.split("{time}")[0]
-        parts.append(f"{escape(checked_prefix)}{display}")
-        attrs = (
-            f' id="dash-last-checked" data-last-checked="{escape(last_checked)}"'
-        )
+def _render_freshness(last_checked: str, *, escape: Callable[[Any], str]) -> str:
+    if not last_checked:
+        return ""
+    display = (
+        _ts_html(last_checked)
+        if "T" in str(last_checked)
+        else escape(str(last_checked))
+    )
+    label = escape(user_copy.HOME_FRESHNESS_PREFIX)
     return (
-        f'<footer class="home-footer dash-home-footer"{attrs}>'
-        f'{" · ".join(parts)}'
+        f'<p class="home-freshness" id="dash-last-checked" '
+        f'data-last-checked="{escape(last_checked)}">'
+        f"{label}{display}"
+        f"</p>"
+    )
+
+
+def _render_footer(*, escape: Callable[[Any], str]) -> str:
+    return (
+        f'<footer class="home-footer dash-home-footer">'
+        f"{escape(user_copy.HOME_FOOTER_WORKER)}"
         f"</footer>"
     )
 
@@ -812,19 +823,26 @@ def render_home_projection(
     result: HomeStateResult | None = None,
     extension_info: dict[str, Any] | None = None,
 ) -> str:
-    """Render Home V1A daily briefing — one story, wins, quiet ops."""
+    """Render Home V1B daily briefing — status-first, calm hierarchy."""
     safe_name = escape(projection.first_name)
     answer = ""
     if projection.answer:
         answer = (
-            f'<p class="home-answer" data-answer="{escape(projection.story_kind)}">'
-            f"{escape(projection.answer)}</p>"
+            f'<h2 class="home-answer" data-answer="{escape(projection.story_kind)}">'
+            f"{escape(projection.answer)}</h2>"
         )
     featured = ""
     if projection.featured is not None:
         featured = (
             f'<section class="home-primary" aria-label="Today">'
             f"{render_home_card(projection.featured, escape=escape, featured=True)}"
+            f"{_render_freshness(projection.last_checked, escape=escape)}"
+            f"</section>"
+        )
+    elif projection.last_checked:
+        featured = (
+            f'<section class="home-primary" aria-label="Today">'
+            f"{_render_freshness(projection.last_checked, escape=escape)}"
             f"</section>"
         )
     truth = ""
@@ -837,7 +855,7 @@ def render_home_projection(
         else ""
     )
     return (
-        f'<div class="dash-hero home-v1 home-briefing" '
+        f'<div class="dash-hero home-v1 home-briefing home-v1b" '
         f'data-enrollment="{escape(projection.enrollment_state.value)}" '
         f'data-story="{escape(projection.story_kind)}" '
         f'data-interrupt="{"1" if projection.attention_interrupt else "0"}"'
@@ -845,8 +863,8 @@ def render_home_projection(
         f'<div class="dash-brief-card dash-brief-card--exec home-shell">'
         f'<div class="dash-brief-exec home-stack">'
         f'<header class="dash-brief-header home-header">'
-        f'<h1 class="dash-brief-greeting home-greeting" id="hero-greeting">'
-        f"Hello, {safe_name}</h1>"
+        f'<p class="dash-brief-greeting home-greeting" id="hero-greeting">'
+        f"Hello, {safe_name}</p>"
         f'<div class="dash-brief-meta home-meta">'
         f'<time class="dash-brief-today-date">{escape(projection.today_label)}</time>'
         f"</div>"
@@ -856,7 +874,7 @@ def render_home_projection(
         f"{_render_recent_wins(projection.recent_wins, escape=escape)}"
         f"{_render_ops_strip(projection.ops_notes, escape=escape)}"
         f"{truth}"
-        f"{_render_footer(projection.last_checked, escape=escape)}"
+        f"{_render_footer(escape=escape)}"
         f"</div>"
         f"</div>"
         f"<script>"
