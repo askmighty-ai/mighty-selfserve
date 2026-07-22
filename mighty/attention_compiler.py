@@ -267,13 +267,17 @@ def compile_access_degraded_attention(truth: AuthTruth) -> AttentionItem | None:
 def compile_authorize_attention(row: AuthorizeRow) -> AttentionItem | None:
     """Compile one AuthorizeRow into an optional agent_authorization item.
 
-    Only ``status=pending`` emits. Terminal statuses (approved, denied, expired,
-    …) return ``None`` so the candidate disappears without Store upserts
-    (RFC D5 / Part XIV scenario 5).
+    Emits for ``pending`` / ``awaiting_authorization`` / ``proposed``.
+    Terminal statuses return ``None`` so the candidate disappears without
+    Store upserts (RFC D5 / Part XIV scenario 5).
     """
     if not isinstance(row, AuthorizeRow):
         raise AuthorizeRowValidationError("row must be an AuthorizeRow")
-    if row.status != AUTHORIZE_STATUS_PENDING:
+    if row.status not in {
+        AUTHORIZE_STATUS_PENDING,
+        "awaiting_authorization",
+        "proposed",
+    }:
         return None
 
     return AttentionItem(

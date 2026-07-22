@@ -40,12 +40,12 @@ def load_authorize_rows(
     db: Any,
     user_id: str,
     *,
-    statuses: Sequence[str] = ("pending",),
+    statuses: Sequence[str] = ("pending", "awaiting_authorization"),
 ) -> list[AuthorizeRow]:
     """Load authorize-store rows as ``AuthorizeRow`` compiler inputs.
 
-    Defaults to pending actions only. Terminal rows are omitted here; the
-    compiler would also emit ``None`` for non-pending statuses.
+    Defaults to awaiting-authorization actions (legacy ``pending`` + M11
+    ``awaiting_authorization``). Terminal rows are omitted here.
     """
     uid = str(user_id or "").strip()
     if not uid:
@@ -55,31 +55,60 @@ def load_authorize_rows(
         return []
     placeholders = ",".join("?" for _ in wanted)
     try:
+        # Match legacy status and/or M11 lifecycle_state.
         rows = db.execute(
             f"""
-            SELECT id, user_id, status, created_at, expires_at
+            SELECT id, user_id, status, created_at, expires_at, provider,
+                   lifecycle_state
             FROM actions
-            WHERE user_id = ? AND lower(status) IN ({placeholders})
+            WHERE user_id = ?
+              AND (
+                lower(status) IN ({placeholders})
+                OR lower(COALESCE(lifecycle_state, '')) IN ({placeholders})
+              )
             ORDER BY created_at ASC, id ASC
             """,
-            (uid, *wanted),
+            (uid, *wanted, *wanted),
         ).fetchall()
     except Exception:
-        # Table may be absent in minimal fixtures.
-        return []
+        try:
+            rows = db.execute(
+                f"""
+                SELECT id, user_id, status, created_at, expires_at
+                FROM actions
+                WHERE user_id = ? AND lower(status) IN ({placeholders})
+                ORDER BY created_at ASC, id ASC
+                """,
+                (uid, *wanted),
+            ).fetchall()
+        except Exception:
+            return []
 
     result: list[AuthorizeRow] = []
     for row in rows:
         mapping = _row_mapping(row)
         try:
+            lifecycle = str(mapping.get("lifecycle_state") or "").strip().lower()
+            status = str(mapping.get("status") or "").strip().lower()
+            # Present as pending so Attention compiler emits interruption.
+            emit_status = "pending"
+            if lifecycle and lifecycle not in {
+                "pending",
+                "awaiting_authorization",
+                "proposed",
+            }:
+                emit_status = lifecycle
+            elif status and status not in {"pending", "awaiting_authorization"}:
+                emit_status = status
+            provider = mapping.get("provider")
             result.append(
                 AuthorizeRow(
                     action_id=str(mapping.get("id") or ""),
                     user_id=str(mapping.get("user_id") or uid),
-                    status=str(mapping.get("status") or ""),
+                    status=emit_status,
                     created_at=_optional_str(mapping.get("created_at")),
                     expires_at=_optional_str(mapping.get("expires_at")),
-                    provider=None,
+                    provider=str(provider).lower() if provider else None,
                 )
             )
         except Exception:

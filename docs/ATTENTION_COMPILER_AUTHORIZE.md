@@ -22,7 +22,8 @@ Given identical pending rows, identical `AttentionItem` values (or `None`) must 
 | Layer | Owns | Does not own |
 |-------|------|--------------|
 | **compile_authorize_attention (this PR)** | Pending row → `agent_authorization` mapping; deterministic ids | Approving/denying actions, ranking, overlays |
-| **Authorize store (`actions`)** | Pending / approved / denied facts | AttentionItem creation |
+| **Authorize store (`actions`)** | Pending / approved / denied facts (+ M11 lifecycle) | AttentionItem creation |
+| **Trusted Agent Authorization** | Propose / decide / execute / receipts | Attention ranking |
 | **AttentionStore** | Snooze / dismiss / in_flight overlays | Creating authorize candidates |
 | **Auth compiler (PR 2B)** | AuthTruth → auth_blocker | Authorize rows |
 
