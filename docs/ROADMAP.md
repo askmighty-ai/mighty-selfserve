@@ -33,6 +33,7 @@ Mighty separates **discovery**, **enrollment**, **access truth**, **recovery**, 
 | **Recovery** | Deterministic planner + lifecycle that attempts safe autonomous repair before human interrupt |
 | **Natural Session** | Passive browse / ensure-due freshness decisions; executes only through PAM; defers to Recovery |
 | **AccountState** | Per-account mirror for Accounts/detail; does **not** own discovery or the cross-account hero |
+| **Freshness / Change** | Data currency + meaningful snapshot diffs (`account_changes`); facts for History/Briefs — not Attention ranking |
 | **Attention** | Product policy: compile → overlays → rank → `AttentionState` → `AttentionView` → surfaces / delivery |
 
 One write plane for auth. One recovery lifecycle owner. One compiler gather path for attention. One ranking table. One analytics owner per human moment.
@@ -77,7 +78,7 @@ Failure / access facts
 | 6 | Autonomous Recovery | When something breaks, Mighty tries every safe recovery path before asking for help | Complete | [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) |
 | 7 | Automatic Account Discovery and Enrollment | Accounts appear from the user’s existing digital life without bulk “Add account” rituals | Complete | [milestones/MILESTONE_7.md](milestones/MILESTONE_7.md) |
 | 8 | Natural-Session Coverage | Mighty captures and maintains sessions through normal browsing, not sync marathons | Complete | [milestones/MILESTONE_8.md](milestones/MILESTONE_8.md) |
-| 9 | Freshness and Change Intelligence | Users know what changed and that data is current — without status-dashboard noise | Pending | — |
+| 9 | Freshness and Change Intelligence | Users know what changed and that data is current — without status-dashboard noise | Complete | [milestones/MILESTONE_9.md](milestones/MILESTONE_9.md) |
 | 10 | Value Intelligence | Mighty surfaces value at risk and opportunities worth acting on | Pending | — |
 | 11 | Trusted Agent Authorization | Agents act only with verified, inspectable human approval | Pending | — |
 | 12 | Trust, Privacy, and Control | Users understand and control what Mighty can see and do | Pending | — |
@@ -88,12 +89,12 @@ RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_A
 
 ## Current milestone
 
-**None (planning).** Milestone 8 — Natural-Session Coverage is complete.
+**None (planning).** Milestone 9 — Freshness and Change Intelligence is complete.
 
 | Field | Value |
 |-------|-------|
-| **Last completed** | M8 — [milestones/MILESTONE_8.md](milestones/MILESTONE_8.md) |
-| **Next** | Milestone 9 — Freshness and Change Intelligence |
+| **Last completed** | M9 — [milestones/MILESTONE_9.md](milestones/MILESTONE_9.md) |
+| **Next** | Milestone 10 — Value Intelligence |
 
 ---
 

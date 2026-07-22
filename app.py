@@ -9146,11 +9146,19 @@ def _get_reminders(uid: str) -> list:
 
 
 def _get_change_alerts(uid: str) -> list[dict]:
-    """Generate smart alerts from field_history: value drops, balance changes, new credits."""
+    """Meaningful change alerts — prefer Milestone 9 change store, else field_history."""
     alerts = []
     try:
         db = get_db()
-        # Get recent changes in the last 30 days
+        try:
+            from mighty.change_store import change_alerts_from_store
+
+            store_alerts = change_alerts_from_store(db, uid, limit=50)
+            if store_alerts:
+                return store_alerts
+        except Exception:
+            pass
+        # Legacy fallback: field_history heuristics (discovery path).
         rows = db.execute(
             "SELECT source, field_label, old_value, new_value, changed_at "
             "FROM field_history WHERE user_id=? AND changed_at >= datetime('now','-30 days') "
@@ -18478,9 +18486,54 @@ def api_debug_provenance(source):
 @app.route("/api/field-history/<source>")
 @require_login
 def api_field_history(source):
-    """Return recent field value changes for an account (last 30 days)."""
+    """Return recent field value changes for an account (last 30 days).
+
+    Prefers Milestone 9 ``account_changes`` (snapshot diffs); falls back to
+    legacy ``field_history``.
+    """
     uid = session["user_id"]
-    rows = get_db().execute(
+    db = get_db()
+    try:
+        from mighty.change_store import list_account_changes
+
+        events = list_account_changes(
+            db, uid, source, limit=50, meaningful_only=False
+        )
+        if events:
+            changes = []
+            for event in events:
+                if event.outcome == "refreshed_no_meaningful_change" and not event.fields:
+                    continue
+                for field in event.fields:
+                    changes.append(
+                        {
+                            "field_label": field.get("field_label"),
+                            "old_value": field.get("old_value"),
+                            "new_value": field.get("new_value"),
+                            "changed_at": event.created_at,
+                            "outcome": event.outcome,
+                            "summary": event.summary,
+                        }
+                    )
+            if changes:
+                return jsonify(
+                    {
+                        "source": source,
+                        "changes": changes,
+                        "summaries": [
+                            {
+                                "outcome": e.outcome,
+                                "summary": e.summary,
+                                "changed_at": e.created_at,
+                            }
+                            for e in events
+                            if e.summary
+                        ],
+                    }
+                )
+    except Exception:
+        pass
+    rows = db.execute(
         "SELECT field_label, old_value, new_value, changed_at FROM field_history "
         "WHERE user_id=? AND source=? ORDER BY changed_at DESC LIMIT 50",
         (uid, source)

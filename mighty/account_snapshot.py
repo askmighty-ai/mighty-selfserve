@@ -517,7 +517,18 @@ def create_account_snapshot_from_extraction(
     )
     if snapshot is None:
         return None
-    return persist_account_snapshot(db, snapshot)
+    # Milestone 9 — capture previous successful snapshot before append.
+    prev = get_latest_successful_snapshot(db, user_id, provider)
+    persisted = persist_account_snapshot(db, snapshot)
+    try:
+        from mighty.freshness_change import safe_observe_snapshot_refresh
+
+        safe_observe_snapshot_refresh(db, prev=prev, new=persisted)
+    except Exception:
+        # Failure isolation: snapshot persist must succeed even if change
+        # intelligence fails. safe_observe already swallows; this is belt/suspenders.
+        pass
+    return persisted
 
 
 def get_snapshot_by_id(db: Any, snapshot_id: str) -> AccountSnapshot | None:
