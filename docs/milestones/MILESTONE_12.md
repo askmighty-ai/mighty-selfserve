@@ -16,7 +16,7 @@ Build a unified governance layer that exposes durable user intent, privacy prefe
 
 | PR | Theme |
 |----|--------|
-| *(this PR)* | User Policy model/store/evaluation, Authorization integration, Settings bridge, API, tests, living report |
+| [#158](https://github.com/askmighty-ai/mighty-selfserve/pull/158) | User Policy model/store/evaluation, Authorization integration, Settings bridge, API, tests, living report |
 
 ## Architecture changes
 
