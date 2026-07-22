@@ -6,6 +6,8 @@
 
 This document is the living product and architecture roadmap for engineering milestones. Update it when a milestone starts, completes, or when parking-lot items are promoted.
 
+Milestones are **capability-led**: each delivers a user-visible capability. Supporting work (internal dashboards, test reconciliation, flag deletion, isolated metrics) belongs inside the capability milestone it supports, or as focused operational work — not as standalone product milestones.
+
 ---
 
 ## Product vision
@@ -20,35 +22,40 @@ Canonical product north star: [PRODUCT_MANIFESTO.md](PRODUCT_MANIFESTO.md). Long
 
 ## Architecture vision
 
-Mighty separates **access truth** from **attention**:
+Mighty separates **access truth**, **recovery**, and **attention**:
 
 | Layer | Role |
 |-------|------|
 | **Access writers** | Access Manager (extension / PSS) and Provider Runtime (`AccessState`, `needs_human`) |
 | **AuthTruth** | Pure projection of primary access-method evidence — not a second auth write store |
+| **Recovery** | Deterministic planner + lifecycle that attempts safe autonomous repair before human interrupt |
 | **AccountState** | Per-account mirror for Accounts/detail; does **not** own the cross-account hero |
 | **Attention** | Product policy: compile → overlays → rank → `AttentionState` → `AttentionView` → surfaces / delivery |
 
-One write plane for auth. One compiler gather path for attention. One ranking table. One analytics owner per human moment.
+One write plane for auth. One recovery lifecycle owner. One compiler gather path for attention. One ranking table. One analytics owner per human moment.
 
-Normative architecture: [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md).
+Recovery does **not** rank user attention. Attention does **not** decide recovery strategy. User interruption is the final capability, not the default.
 
-Target production flow (Attention):
+Normative Attention architecture: [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md).
+
+Target production flow (Attention + Recovery):
 
 ```text
-AuthTruth · Authorize · Trust · Worker · Benefit · AccountState
+Failure / access facts
+  → Recovery Planner (deterministic capabilities)
+  → Recovery lifecycle (attempt history + outcome)
+  → on exhaustion / human-only → AuthTruth / signals
   → compile_attention_candidates (gather only)
   → compose_attention (overlays + ranking)
-  → AttentionState
-  → AttentionView(surface) → Home / Worker / …
-  → AttentionDelivery (primary push + receipts)
-  → AttentionSupervisor (timeout / GC / reopen)
-  → attention_metrics (supervisor heartbeat)
+  → AttentionState → AttentionView → Home / Worker / …
+  → AttentionDelivery · AttentionSupervisor · attention_metrics
 ```
 
 ---
 
 ## Milestone roadmap
+
+### Completed foundations
 
 | Milestone | Title | Status | Record |
 |-----------|-------|--------|--------|
@@ -57,33 +64,32 @@ AuthTruth · Authorize · Trust · Worker · Benefit · AccountState
 | 3 | Platform Adoption | Complete | [ATTENTION_PLATFORM_ADOPTION.md](ATTENTION_PLATFORM_ADOPTION.md) |
 | 4 | Intelligent Attention | Complete | [milestones/MILESTONE_4.md](milestones/MILESTONE_4.md) |
 | 5 | Autonomous Attention | Complete | [milestones/MILESTONE_5.md](milestones/MILESTONE_5.md) |
-| OS | Engineering Operating System | Complete | This roadmap + charter + contributing |
-| 6 | *(not started)* | Pending | Create `milestones/MILESTONE_6.md` at kickoff |
+| OS | Engineering Operating System | Complete | [milestones/MILESTONE_OS.md](milestones/MILESTONE_OS.md) |
 
-RFC phase mapping (P0–P5) lives in [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) Part XIII. Engineering milestones are the delivery vehicle; living reports under `docs/milestones/` are authoritative for what shipped.
+### Capability roadmap
+
+| Milestone | Capability | User outcome | Status | Record |
+|-----------|------------|--------------|--------|--------|
+| 6 | Autonomous Recovery | When something breaks, Mighty tries every safe recovery path before asking for help | Pending | Create `milestones/MILESTONE_6.md` at kickoff |
+| 7 | Automatic Account Discovery and Enrollment | Accounts appear from the user’s existing digital life without bulk “Add account” rituals | Pending | — |
+| 8 | Natural-Session Coverage | Mighty captures and maintains sessions through normal browsing, not sync marathons | Pending | — |
+| 9 | Freshness and Change Intelligence | Users know what changed and that data is current — without status-dashboard noise | Pending | — |
+| 10 | Value Intelligence | Mighty surfaces value at risk and opportunities worth acting on | Pending | — |
+| 11 | Trusted Agent Authorization | Agents act only with verified, inspectable human approval | Pending | — |
+| 12 | Trust, Privacy, and Control | Users understand and control what Mighty can see and do | Pending | — |
+
+RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) Part XIII. Living reports under `docs/milestones/` are authoritative for what shipped.
 
 ---
 
 ## Current milestone
 
-**None (planning).** Engineering Operating System is complete. Milestone 6 has not started.
+**None (planning).** Capability roadmap adopted. Milestone 6 kickoff follows this update.
 
 | Field | Value |
 |-------|-------|
 | **Last completed** | OS — [milestones/MILESTONE_OS.md](milestones/MILESTONE_OS.md) |
-| **Next** | Milestone 6 — scope TBD at kickoff from candidates below |
-| **Gate cleared** | Canonical OS docs on `main`; M6 implementation may begin after kickoff design note |
-
-### Milestone 6 candidates (from M5)
-
-Promote or defer at M6 kickoff; do not treat as committed scope until the M6 design note lands.
-
-1. Runtime focus CTA bridge after Runtime API auth exists  
-2. Hard-delete cutover flags after soak criteria pass ([ATTENTION_CUTOVER_RETIREMENT.md](ATTENTION_CUTOVER_RETIREMENT.md))  
-3. Admin metrics dashboard over `attention_metric_snapshot`  
-4. Unexpected-human-minutes time series  
-5. Reconcile/expand AuthTruth tests against the thin Runtime store  
-6. Activity surface filter for authorize items  
+| **Next** | Milestone 6 — Autonomous Recovery |
 
 ---
 
@@ -94,22 +100,23 @@ Promote or defer at M6 kickoff; do not treat as committed scope until the M6 des
 - `AttentionState` is the single source of truth for attention decisions  
 - `AttentionView` is presentation-only; consumers do not re-rank or invent policy  
 - One projection / one compiler gather path per domain; engine composes without business policy  
-- Attention failures never block Home, Worker, or sync  
+- One owner for recovery lifecycle state; recovery policy is deterministic and independently testable  
+- Attention failures and recovery failures never block Home, Worker, account reads, or unrelated sync  
 - Prefer deletion of obsolete parallel paths over permanent dual stacks  
 
 ### Per milestone
 
-Defined in the milestone design note and living report. At minimum: objective met, tests green, docs updated, invariants preserved, Architecture Decisions recorded (M6+).
+Defined in the milestone design note and living report. At minimum: user capability delivered, tests green, docs updated, invariants preserved, Architecture Decisions recorded (M6+).
 
-### Cutover retirement (open operational goal)
+### Operational work (not product milestones)
 
-Objective criteria in [ATTENTION_CUTOVER_RETIREMENT.md](ATTENTION_CUTOVER_RETIREMENT.md). Flags may be hard-deleted only after soak criteria pass.
+Cutover flag deletion, AuthTruth test reconciliation, admin metrics dashboards, and similar supporting tasks ship inside the capability milestone they support (or as focused ops PRs). Criteria for Attention cutover retirement: [ATTENTION_CUTOVER_RETIREMENT.md](ATTENTION_CUTOVER_RETIREMENT.md).
 
 ---
 
 ## Parking lot
 
-Capabilities deliberately **not** committed to the next milestone. Promote via roadmap update + design note when ready.
+Capabilities and technical items deliberately **not** committed as numbered product milestones. Promote via roadmap update + design note when ready.
 
 | Item | Notes |
 |------|-------|
@@ -118,16 +125,19 @@ Capabilities deliberately **not** committed to the next milestone. Promote via r
 | Credential storage as default auth path | Explicit non-goal |
 | Connector → AuthTruth dependency | Forbidden by RFC; Connectors use Runtime session APIs |
 | Full Provider Runtime Control Center restore | Thin `runtime_access_state` shipped for AuthTruth/Trust; full CC separate |
-| Opportunity sources beyond `action_items` | Partnerships / richer generators |
-| First-class product analytics event table | Logs + receipts + metric snapshots today |
-| Weekly digest / Daily Brief surfaces | Product Architecture horizon; not Attention core |
+| Opportunity sources beyond `action_items` | Belongs under Value Intelligence (M10) when promoted |
+| First-class product analytics event table | Supporting observability; not a product milestone |
+| Weekly digest / Daily Brief surfaces | Product Architecture horizon |
 | Mobile-complete auth CTAs for browser_session | Capability-aware; phone may not complete login |
+| Runtime focus CTA bridge | Supporting Autonomous Recovery / Runtime auth; not standalone milestone |
+| Hard-delete cutover flags after soak | Operational work after retirement criteria pass |
 
 ---
 
 ## How to update this document
 
 1. At milestone kickoff: set **Current milestone**, link the living report and design note.  
-2. As scope changes: update candidates vs parking lot; record Architecture Decisions in the living report.  
+2. As scope changes: update parking lot; record Architecture Decisions in the living report.  
 3. At milestone completion: mark status Complete, point to the living report, set Current → next milestone or “none / planning”.  
-4. Do not duplicate full PR lists here — those belong in `docs/milestones/MILESTONE_<N>.md`.
+4. Do not duplicate full PR lists here — those belong in `docs/milestones/MILESTONE_<N>.md`.  
+5. Do not invent new product milestones for dashboards, flag cleanup, or isolated metrics.
