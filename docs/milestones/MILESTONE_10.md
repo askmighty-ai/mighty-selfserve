@@ -16,7 +16,7 @@ Build a provider-independent Value Intelligence pipeline that converts normalize
 
 | PR | Theme |
 |----|--------|
-| *(this PR)* | Design note, value policy/store/coordinator/metrics, snapshot wire-up, tests, living report |
+| [#154](https://github.com/askmighty-ai/mighty-selfserve/pull/154) | Design note, value policy/store/coordinator/metrics, snapshot wire-up, tests, living report |
 
 ## Architecture changes
 
