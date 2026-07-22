@@ -70,7 +70,7 @@ Failure / access facts
 
 | Milestone | Capability | User outcome | Status | Record |
 |-----------|------------|--------------|--------|--------|
-| 6 | Autonomous Recovery | When something breaks, Mighty tries every safe recovery path before asking for help | Pending | Create `milestones/MILESTONE_6.md` at kickoff |
+| 6 | Autonomous Recovery | When something breaks, Mighty tries every safe recovery path before asking for help | In progress | [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) |
 | 7 | Automatic Account Discovery and Enrollment | Accounts appear from the user’s existing digital life without bulk “Add account” rituals | Pending | — |
 | 8 | Natural-Session Coverage | Mighty captures and maintains sessions through normal browsing, not sync marathons | Pending | — |
 | 9 | Freshness and Change Intelligence | Users know what changed and that data is current — without status-dashboard noise | Pending | — |
@@ -84,12 +84,15 @@ RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_A
 
 ## Current milestone
 
-**None (planning).** Capability roadmap adopted. Milestone 6 kickoff follows this update.
+**Milestone 6 — Autonomous Recovery**
 
 | Field | Value |
 |-------|-------|
+| **Status** | In progress |
+| **Design note** | [ATTENTION_AUTONOMOUS_RECOVERY.md](ATTENTION_AUTONOMOUS_RECOVERY.md) |
+| **Living report** | [milestones/MILESTONE_6.md](milestones/MILESTONE_6.md) |
 | **Last completed** | OS — [milestones/MILESTONE_OS.md](milestones/MILESTONE_OS.md) |
-| **Next** | Milestone 6 — Autonomous Recovery |
+| **Next** | Milestone 7 — Automatic Account Discovery and Enrollment |
 
 ---
 
