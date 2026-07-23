@@ -15,32 +15,36 @@ from mighty.activity_projection import (
 ACTIVITY_CSS = """
 .activity-page{flex:1;overflow-y:auto;padding:28px 32px 64px;background:#eee9e2}
 .activity-shell{max-width:640px;margin:0 auto}
-.activity-header{margin:0 0 28px}
+.activity-header{margin:0 0 32px}
 .activity-kicker{margin:0;font-size:13px;font-weight:400;color:#a8a29e;letter-spacing:0}
 .activity-title{margin:8px 0 0;font-size:40px;font-weight:650;color:#1c1917;letter-spacing:-0.045em;line-height:1.12}
-.activity-subtitle{margin:10px 0 0;font-size:16px;color:#78716c;line-height:1.55;max-width:36ch}
-.activity-day{margin:0 0 28px}
-.activity-day-label{margin:0 0 12px;font-size:11px;font-weight:600;color:#d6d3d1;text-transform:uppercase;letter-spacing:0.07em}
-.activity-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
-.activity-item{background:#fff;border:0.5px solid rgba(0,0,0,0.07);border-radius:12px;padding:16px 18px;box-shadow:0 1px 1px rgba(0,0,0,0.02)}
-.activity-item[data-category="needs_approval"]{border-color:rgba(28,25,23,0.14);background:linear-gradient(180deg,#fffdf8 0%,#fff 55%)}
+.activity-subtitle{margin:10px 0 0;font-size:16px;color:#78716c;line-height:1.55;max-width:34ch}
+.activity-day{margin:0 0 32px}
+.activity-day-label{margin:0 0 14px;font-size:11px;font-weight:600;color:#d6d3d1;text-transform:uppercase;letter-spacing:0.07em}
+.activity-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:16px}
+.activity-item{background:#fff;border:0.5px solid rgba(0,0,0,0.07);border-radius:12px;padding:18px 18px;box-shadow:0 1px 1px rgba(0,0,0,0.02)}
+.activity-item[data-category="needs_approval"]{border-color:rgba(180,83,9,0.28);border-left:3px solid #b45309;background:linear-gradient(180deg,#fffbeb 0%,#ffffff 62%);box-shadow:0 1px 2px rgba(28,25,23,0.04)}
+.activity-item[data-category="needs_approval"] .activity-item-title{font-weight:600;color:#1c1917}
+.activity-item[data-category="completed"],
+.activity-item[data-category="in_progress"],
+.activity-item[data-category="could_not_complete"]{border-color:rgba(0,0,0,0.06)}
 .activity-item-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .activity-item-title{margin:0;font-size:16px;font-weight:550;color:#1c1917;letter-spacing:-0.02em;line-height:1.35}
 .activity-item-meta{margin:6px 0 0;font-size:13px;color:#a8a29e;line-height:1.4}
 .activity-item-meta span+span::before{content:"·";margin:0 7px;color:#d6d3d1}
 .activity-status{flex-shrink:0;font-size:11px;font-weight:600;color:#78716c;background:#f5f5f4;border-radius:999px;padding:4px 10px;white-space:nowrap}
-.activity-status[data-category="needs_approval"]{color:#92400e;background:#fff7ed}
-.activity-status[data-category="completed"]{color:#166534;background:#f0fdf4}
-.activity-status[data-category="could_not_complete"]{color:#57534e;background:#f5f5f4}
-.activity-status[data-category="in_progress"]{color:#1d4ed8;background:#eff6ff}
+.activity-status[data-category="needs_approval"]{color:#9a3412;background:#ffedd5}
+.activity-status[data-category="completed"]{color:#57534e;background:#f5f5f4}
+.activity-status[data-category="could_not_complete"]{color:#78716c;background:#f5f5f4}
+.activity-status[data-category="in_progress"]{color:#57534e;background:#f5f5f4}
 .activity-item-body{margin:10px 0 0;font-size:15px;color:#78716c;line-height:1.55;max-width:42ch}
-.activity-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:14px}
+.activity-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:16px}
 .activity-btn{appearance:none;border:none;border-radius:10px;padding:10px 16px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer}
-.activity-btn-approve{background:#1c1917;color:#fff}
+.activity-btn-approve{background:#1c1917;color:#fff;padding:12px 22px;font-size:14px;font-weight:650;box-shadow:0 1px 2px rgba(28,25,23,0.2)}
 .activity-btn-approve:hover{background:#292524}
 .activity-btn-deny{background:#fff;color:#57534e;border:0.5px solid rgba(0,0,0,0.12)}
 .activity-btn-deny:hover{background:#fafaf9}
-.activity-details{margin-top:12px;border-top:0.5px solid rgba(0,0,0,0.05);padding-top:10px}
+.activity-details{margin-top:14px;border-top:0.5px solid rgba(0,0,0,0.05);padding-top:10px}
 .activity-details summary{cursor:pointer;font-size:13px;font-weight:500;color:#a8a29e;list-style:none}
 .activity-details summary::-webkit-details-marker{display:none}
 .activity-details summary:hover{color:#78716c}
@@ -51,9 +55,9 @@ ACTIVITY_CSS = """
 .activity-detail-val{color:#44403c}
 .activity-attempt{margin-top:8px;padding:10px 12px;background:#fafaf9;border-radius:8px}
 .activity-attempt-title{margin:0 0 4px;font-size:12px;font-weight:600;color:#78716c}
-.activity-empty{padding:48px 8px 24px;max-width:36ch}
+.activity-empty{padding:56px 8px 28px;max-width:34ch}
 .activity-empty-title{margin:0;font-size:22px;font-weight:600;color:#1c1917;letter-spacing:-0.03em}
-.activity-empty-body{margin:10px 0 0;font-size:15px;color:#78716c;line-height:1.55}
+.activity-empty-body{margin:12px 0 0;font-size:15px;color:#a8a29e;line-height:1.6}
 .activity-error{margin:0 0 18px;padding:12px 14px;border-radius:10px;background:#fff7ed;color:#9a3412;font-size:13px}
 .activity-load-more{margin:8px 0 0;display:flex;justify-content:center}
 .activity-load-more button{appearance:none;border:0.5px solid rgba(0,0,0,0.12);background:#fff;border-radius:10px;padding:10px 16px;font-size:13px;font-weight:600;color:#57534e;cursor:pointer;font-family:inherit}
@@ -82,10 +86,9 @@ def render_activity_main(
     if not projection.items and not projection.next_cursor:
         body = (
             f'<div class="activity-empty">'
-            f'<h2 class="activity-empty-title">Nothing here yet</h2>'
+            f'<h2 class="activity-empty-title">All quiet</h2>'
             f'<p class="activity-empty-body">'
-            f"When Mighty completes work for you—or needs your approval—"
-            f"it will show up here."
+            f"Approvals and completed work will show up here."
             f"</p></div>"
         )
     else:
@@ -106,7 +109,7 @@ def render_activity_main(
         f'<header class="activity-header">'
         f'<p class="activity-kicker">Activity</p>'
         f'<h1 class="activity-title">Activity</h1>'
-        f'<p class="activity-subtitle">What Mighty did, and what needs you.</p>'
+        f'<p class="activity-subtitle">Approvals and completed work.</p>'
         f'</header>'
         f'<div id="activity-timeline" data-csrf="{escape(csrf_token)}">'
         f"{body}"
@@ -213,7 +216,7 @@ def _render_details(item: ActivityItem, *, escape: Callable[[Any], str]) -> str:
 
     return (
         f'<details class="activity-details">'
-        f"<summary>Details</summary>"
+        f"<summary>What happened</summary>"
         f'<div class="activity-detail-grid">{"".join(rows)}{attempts}</div>'
         f"</details>"
     )

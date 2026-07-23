@@ -341,15 +341,24 @@ def _explanation(
 ) -> str:
     lifecycle = _lifecycle(action)
     if category == CATEGORY_NEEDS_APPROVAL:
-        return "Waiting for your approval before Mighty continues."
+        return "Needs your approval to continue."
     if category == CATEGORY_IN_PROGRESS:
         if lifecycle == STATE_EXECUTING:
-            return "Mighty is working on this now."
-        return "Approved — Mighty is ready to continue."
+            return "In progress now."
+        return "Approved and ready to continue."
     if category == CATEGORY_COMPLETED:
-        if action.outcome and str(action.outcome).lower() not in {"completed", "ok", "success"}:
-            return f"Finished. { _soften_outcome(action.outcome) }"
-        return "Finished successfully."
+        phrase = _customer_phrase(action.outcome)
+        if phrase and str(action.outcome or "").strip().lower() not in {
+            "completed",
+            "ok",
+            "success",
+            "failed",
+        }:
+            return _ensure_sentence(phrase)
+        label = str(action.label or "").strip()
+        if label:
+            return _ensure_sentence(f"{label} is complete")
+        return "This is complete."
     # could_not_complete — precise, no false system-failure implication.
     # Prefer canonical lifecycle over legacy status (cancelled maps to legacy denied).
     if lifecycle == STATE_DENIED:
@@ -359,13 +368,14 @@ def _explanation(
     if lifecycle == STATE_EXPIRED:
         return "The approval window ended before a decision was made."
     if lifecycle == STATE_FAILED:
-        if action.outcome and str(action.outcome).lower() not in {"failed"}:
-            return f"Mighty couldn’t finish this. {_soften_outcome(action.outcome)}"
+        phrase = _customer_phrase(action.outcome)
+        if phrase and str(action.outcome or "").strip().lower() not in {"failed"}:
+            return _ensure_sentence(f"Couldn’t finish — {phrase}")
         if latest and latest.detail:
-            msg = _readable_detail_message(latest.detail)
+            msg = _customer_phrase(_readable_detail_message(latest.detail) or "")
             if msg:
-                return f"Mighty couldn’t finish this. {msg}"
-        return "Mighty couldn’t finish this."
+                return _ensure_sentence(f"Couldn’t finish — {msg}")
+        return "Couldn’t finish this."
     if action.status == "timeout":
         return "The approval window ended before a decision was made."
     if action.status == "denied":
@@ -389,7 +399,14 @@ def _detail(
                 break
 
     happened = explanation
-    outcome_detail = _clean_text(action.outcome)
+    outcome_detail = _customer_phrase(action.outcome)
+    if outcome_detail and str(action.outcome or "").strip().lower() in {
+        "completed",
+        "ok",
+        "success",
+        "failed",
+    }:
+        outcome_detail = None
     fields = _normalize_fields(action.fields)
     history = tuple(_receipt_summary(r) for r in receipts)
 
@@ -483,7 +500,7 @@ def _stringify_field(value: Any) -> str:
 def _readable_detail_message(detail: Mapping[str, Any]) -> str | None:
     for key in ("message", "error", "summary", "reason"):
         if key in detail and key not in _FORBIDDEN_DETAIL_KEYS:
-            text = _clean_text(detail.get(key))
+            text = _customer_phrase(detail.get(key))
             if text and not _looks_internal(text):
                 return text
     return None
@@ -492,6 +509,10 @@ def _readable_detail_message(detail: Mapping[str, Any]) -> str | None:
 def _looks_internal(text: str) -> bool:
     lower = text.lower()
     if any(tok in lower for tok in ("hash", "fingerprint", "sqlite", "traceback")):
+        return True
+    if "_" in text and text.lower() == text and any(
+        tok in text.lower() for tok in ("provider_", "capability_", "auth_", "exec_")
+    ):
         return True
     if len(text) >= 40 and all(c in "0123456789abcdef" for c in text.lower()):
         return True
@@ -507,11 +528,53 @@ def _clean_text(value: Any) -> str | None:
     return text
 
 
-def _soften_outcome(value: Any) -> str:
-    text = str(value or "").strip()
+_CUSTOMER_OUTCOME_PHRASES = {
+    "provider_unavailable": "The account wasn’t available",
+    "temporary_glitch": "Something went wrong temporarily",
+    "not_authorized": "It wasn’t authorized",
+    "timeout": "It took too long",
+    "timed_out": "It took too long",
+    "network_error": "The connection failed",
+    "rate_limited": "Too many attempts — try again later",
+    "cancelled": "Cancelled",
+    "canceled": "Cancelled",
+    "denied": "Declined",
+    "expired": "Expired",
+}
+
+
+def _customer_phrase(value: Any) -> str | None:
+    """Translate implementation tokens into customer language."""
+    if value is None:
+        return None
+    text = str(value).strip()
     if not text:
+        return None
+    key = text.lower().replace(" ", "_").replace("-", "_")
+    if key in _CUSTOMER_OUTCOME_PHRASES:
+        return _CUSTOMER_OUTCOME_PHRASES[key]
+    if _looks_internal(text):
+        return None
+    if "_" in text:
+        words = " ".join(part for part in text.replace("_", " ").split() if part)
+        if not words:
+            return None
+        return words[0].upper() + words[1:]
+    return text
+
+
+def _soften_outcome(value: Any) -> str:
+    phrase = _customer_phrase(value)
+    return phrase or ""
+
+
+def _ensure_sentence(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
         return ""
-    return text[0].upper() + text[1:] if len(text) > 1 else text.upper()
+    if cleaned[-1] in ".!?":
+        return cleaned
+    return f"{cleaned}."
 
 
 def _parse_ts(value: str | None) -> datetime:

@@ -4,7 +4,7 @@ Logged-in `/activity` captures at approximately 1440×900 viewport. Review these
 
 | File | State | What it shows |
 |------|--------|----------------|
-| `empty.png` | Empty | Calm empty state when the user has no Activity items. |
+| `empty.png` | Empty | Calm “All quiet” empty state when the user has no Activity items. |
 | `needs-approval.png` | Needs approval | Pending agent action with Approve / Deny controls. |
 | `in-progress.png` | In progress | Authorized / executing work in the timeline. |
 | `completed.png` | Completed | Finished work with readable details / receipt provenance. |

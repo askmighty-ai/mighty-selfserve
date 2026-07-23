@@ -144,6 +144,10 @@ def test_category_mapping_and_wording(db):
     assert "cancel" in by_id["a6"].explanation.lower()
     assert by_id["a7"].category == CATEGORY_COULD_NOT_COMPLETE
     assert "couldn’t finish" in by_id["a7"].explanation.lower() or "couldn't finish" in by_id["a7"].explanation.lower()
+    assert "provider_unavailable" not in by_id["a7"].explanation.lower()
+    assert "wasn’t available" in by_id["a7"].explanation.lower() or "wasn't available" in by_id["a7"].explanation.lower()
+    assert "Finished successfully" not in by_id["a3"].explanation
+    assert "complete" in by_id["a3"].explanation.lower()
     assert denied.action_id == "a4"
 
 
@@ -365,7 +369,8 @@ def test_empty_state_ui():
         has_historical=False,
     )
     html = render_activity_main(proj, escape=lambda x: str(x), csrf_token="x")
-    assert "Nothing here yet" in html
+    assert "All quiet" in html
+    assert "Approvals and completed work" in html
 
 
 @pytest.fixture()
