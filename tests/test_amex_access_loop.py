@@ -14,6 +14,7 @@ from mighty.user_copy import (
     ACCOUNT_STATE_LABELS,
     ACCOUNT_STATE_NEEDS_SIGN_IN,
     ACCOUNT_STATE_READY,
+    ACCOUNT_STATE_UNKNOWN,
     ACCOUNT_STATE_UPDATING,
 )
 
@@ -172,24 +173,30 @@ def test_account_center_shows_checking_or_connected_after_connect(client):
 
     r = _post_amex_connected(client, api_key)
     assert r.status_code == 200
+    body = r.get_json()
+    assert body.get("pss_written") is False
+    assert body.get("verification_enqueued") is True
 
     with mighty.app.app_context():
         state = load_account_state(mighty.get_db(), uid, "amex")
         label = status_label(state)
-        assert label in {
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY],
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
-        }
+        # Connection FSM may show connected/updating; auth truth awaits decide_amex.
+        assert label != ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN]
 
     r = client.get("/account-center")
     assert r.status_code == 200
     html = r.get_data(as_text=True)
     assert ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN] not in html
+    # Passive connected enqueues verification — Checking / Unable to verify / Connected
+    # are all acceptable until decide_amex terminalizes.
     assert any(
         text in html
         for text in (
             ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY],
             ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
+            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UNKNOWN],
+            "Checking",
+            "Unable to verify",
         )
     )
 

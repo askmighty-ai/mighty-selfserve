@@ -2667,7 +2667,13 @@ async function _fetchExtensionAccounts(apiKey) {
   }
 }
 
-/** Probe Amex with session cookies — true only when logged-in account content is present. */
+/** Probe Amex with session cookies — true only when logged-in account content is present.
+ *
+ * LEGACY ACCESS PATH — DO NOT EXTEND / DO NOT CALL FROM PRODUCT PATH
+ * Local HTML fetch classifier. Must not decide AuthenticationState or write PSS.
+ * Production auth: runSessionVerification → provider_access_probe →
+ * decide_amex_verification_session (server).
+ */
 async function _probeAmexLoggedIn() {
   const entry = ACCOUNT_ENTRY.amex;
   const cfg = SITE_LOGIN_CONFIG.amex;
@@ -2765,34 +2771,31 @@ async function _postAmexConnected(apiKey) {
 
 /** Update provider connection state via the extension adapter (session probe).
  *
- * LEGACY ACCESS PATH — DO NOT EXTEND
- * Scheduled for redirect/removal in Phase 2/3.
+ * LEGACY ACCESS PATH — DO NOT EXTEND / DISABLED ON PRODUCT PATH (Phase 1 Fix 3)
+ * Local `_probeAmexLoggedIn` must not decide AuthenticationState or write PSS.
  * Production re-verify owns: session_verification → runSessionVerification →
- * provider_access_probe → provider_session_state (via Provider Access Manager).
+ * provider_access_probe → decide_amex_verification_session → PAM → PSS.
+ *
+ * This function is retained as a no-op stub so call sites remain stable until
+ * Phase 2/3 deletion. Callers should use ensure-due / Check now instead.
  */
 async function probeAmexConnectionState(apiKey, accounts) {
   if (!apiKey || !Array.isArray(accounts)) return;
-  const navigationBlocked = await shouldDeferAutomaticProviderNavigation(apiKey);
   const amex = accounts.find(a => a.source === 'amex');
   if (!amex) return;
-
-  const status = amex.connection_status;
-  const loggedIn = await _probeAmexLoggedIn();
-
-  if (status === 'connected') {
-    if (!loggedIn) await _postAmexNeedsLogin(apiKey);
-    else if (!amex.is_synced && !navigationBlocked) await runAmexExtraction(apiKey, accounts);
-    return;
-  }
-
-  if (!['waiting_for_extension', 'needs_login'].includes(status)) return;
-
-  if (loggedIn) {
-    await _postAmexConnected(apiKey);
-    const refreshed = await _fetchExtensionAccounts(apiKey);
-    if (!navigationBlocked) await runAmexExtraction(apiKey, refreshed);
-  } else if (status === 'waiting_for_extension') {
-    await _postAmexNeedsLogin(apiKey);
+  console.log(
+    '[Mighty] probeAmexConnectionState skipped — canonical auth path only',
+    '(runSessionVerification / decide_amex_verification_session)',
+  );
+  // Optionally nudge a scheduled recheck; never write connected/needs_login here.
+  try {
+    await fetch(`${MIGHTY_URL}/api/extension/session-verification/ensure-due`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Mighty-Key': apiKey },
+      body: JSON.stringify({ trigger_source: 'provider_page_observed' }),
+    });
+  } catch (e) {
+    console.warn('[Mighty] ensure-due after legacy probe stub failed:', e.message);
   }
 }
 
@@ -4469,22 +4472,16 @@ async function runSessionVerification(apiKey, provider, verificationId, entryUrl
 }
 
 function _isAmexAccessCycleAuthenticated(payload, probeData) {
-  // Prefer server verification_decision when present (explicit evidence path).
+  // Phase 1 Fix 3: server verification_decision is the ONLY auth gate for
+  // extraction dispatch. Local signed_in_detected / auth_state must not decide.
   const decision = probeData.verification_decision || payload.verification_decision || '';
   if (decision === 'connected') return true;
   if (decision === 'signed_out' || decision === 'inconclusive') return false;
-
-  const authState = probeData.auth_state || payload.auth_state || '';
-  if (authState === 'authenticated_no_private_data' || authState === 'private_data_visible') {
-    return true;
-  }
-  if (probeData.extraction_required === true || probeData.access_cycle_lifecycle === 'session_verified') {
-    return true;
-  }
-  if (payload.signed_in_detected === true && payload.failure_reason !== 'login_required') {
-    // Prefer server classification when present; fall back to local signed-in signal.
-    if (!authState || authState === 'unknown') return !!payload.signed_in_detected;
-  }
+  // Missing server decision → do not invent SIGNED_IN; wait / treat as unknown.
+  console.warn(
+    '[Mighty] Amex extraction skipped — missing server verification_decision',
+    decision || '(empty)',
+  );
   return false;
 }
 
