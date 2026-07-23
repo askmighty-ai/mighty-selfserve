@@ -216,7 +216,7 @@ def _render_details(item: ActivityItem, *, escape: Callable[[Any], str]) -> str:
 
     return (
         f'<details class="activity-details">'
-        f"<summary>What happened</summary>"
+        f"<summary>View details</summary>"
         f'<div class="activity-detail-grid">{"".join(rows)}{attempts}</div>'
         f"</details>"
     )

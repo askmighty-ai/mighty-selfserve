@@ -341,10 +341,10 @@ def _explanation(
 ) -> str:
     lifecycle = _lifecycle(action)
     if category == CATEGORY_NEEDS_APPROVAL:
-        return "Needs your approval to continue."
+        return "Your approval is needed before Mighty can continue."
     if category == CATEGORY_IN_PROGRESS:
         if lifecycle == STATE_EXECUTING:
-            return "In progress now."
+            return "We’re working on this now."
         return "Approved and ready to continue."
     if category == CATEGORY_COMPLETED:
         phrase = _customer_phrase(action.outcome)
@@ -355,10 +355,7 @@ def _explanation(
             "failed",
         }:
             return _ensure_sentence(phrase)
-        label = str(action.label or "").strip()
-        if label:
-            return _ensure_sentence(f"{label} is complete")
-        return "This is complete."
+        return "Mighty finished this."
     # could_not_complete — precise, no false system-failure implication.
     # Prefer canonical lifecycle over legacy status (cancelled maps to legacy denied).
     if lifecycle == STATE_DENIED:

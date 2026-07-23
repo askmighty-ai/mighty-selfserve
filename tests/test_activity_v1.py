@@ -146,9 +146,23 @@ def test_category_mapping_and_wording(db):
     assert "couldn’t finish" in by_id["a7"].explanation.lower() or "couldn't finish" in by_id["a7"].explanation.lower()
     assert "provider_unavailable" not in by_id["a7"].explanation.lower()
     assert "wasn’t available" in by_id["a7"].explanation.lower() or "wasn't available" in by_id["a7"].explanation.lower()
-    assert "Finished successfully" not in by_id["a3"].explanation
-    assert "complete" in by_id["a3"].explanation.lower()
+    assert "is complete" not in by_id["a3"].explanation.lower()
+    assert "finished" in by_id["a3"].explanation.lower()
+    assert "your approval is needed" in by_id["a1"].explanation.lower()
+    assert "ready to continue" in by_id["a2"].explanation.lower()
     assert denied.action_id == "a4"
+
+
+def test_executing_copy(db):
+    _action(
+        db,
+        lifecycle=STATE_EXECUTING,
+        label="Running",
+        action_id="ex1",
+        decided_at=_iso(NOW),
+    )
+    proj = project_activity(db, "u1")
+    assert "working on this now" in proj.items[0].explanation.lower()
 
 
 def test_receipt_merged_not_duplicated(db):
