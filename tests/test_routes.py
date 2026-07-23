@@ -43,6 +43,8 @@ NAV_GET_ROUTES = [
     "/dashboard",
     "/credentials",
     "/settings",
+    "/activity",
+    "/api/activity",
     "/email-scan",
     "/extension-setup",
     "/onboarding",

@@ -2173,7 +2173,13 @@ def _log_privacy_event(uid: str, event_type: str, source: str = None, domain: st
         pass
 
 
-def _sidebar_parts(active: str, email: str, csrf: str) -> tuple[str, str, str]:
+def _sidebar_parts(
+    active: str,
+    email: str,
+    csrf: str,
+    *,
+    show_activity: bool = False,
+) -> tuple[str, str, str]:
     """Shared sidebar fragments: (desktop aside, mobile drawer, full combined)."""
     def _nav(href, label, icon_svg, page_key):
         cls = "sidebar-link sidebar-link-active" if active == page_key else "sidebar-link"
@@ -2181,12 +2187,17 @@ def _sidebar_parts(active: str, email: str, csrf: str) -> tuple[str, str, str]:
     icon_dash = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>'
     icon_scan = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>'
     icon_acct = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>'
+    icon_activity = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>'
     icon_sett = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>'
     av = (email[0] if email else "?").upper()
+    _activity_link = (
+        _nav('/activity', 'Activity', icon_activity, 'activity') if show_activity else ""
+    )
     _nav_links = (
         _nav('/dashboard', 'Dashboard', icon_dash, 'dashboard')
         + _nav('/email-scan', 'Find accounts', icon_scan, 'email-scan')
         + _nav('/credentials', 'Accounts', icon_acct, 'accounts')
+        + _activity_link
         + _nav('/settings', 'Settings', icon_sett, 'settings')
     )
     _logout_form = (
@@ -2234,7 +2245,13 @@ def _sidebar_parts(active: str, email: str, csrf: str) -> tuple[str, str, str]:
         '<a href="/credentials" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
         'border-radius:8px;text-decoration:none;color:#d1d5db;font-size:14px;font-weight:500">'
         + icon_acct + ' Accounts</a>'
-        '<a href="/settings" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
+        + (
+            '<a href="/activity" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
+            'border-radius:8px;text-decoration:none;color:#d1d5db;font-size:14px;font-weight:500">'
+            + icon_activity + ' Activity</a>'
+            if show_activity else ""
+        )
+        + '<a href="/settings" style="display:flex;align-items:center;gap:10px;padding:10px 12px;'
         'border-radius:8px;text-decoration:none;color:#d1d5db;font-size:14px;font-weight:500">'
         + icon_sett + ' Settings</a>'
         '</nav>'
@@ -2274,9 +2291,19 @@ def _sidebar_parts(active: str, email: str, csrf: str) -> tuple[str, str, str]:
     return desktop, mobile, desktop + mobile
 
 
-def _sidebar_html(active: str, email: str, csrf: str) -> str:
+def _sidebar_html(active: str, email: str, csrf: str, *, show_activity: bool = False) -> str:
     """Generate the shared left sidebar HTML — icon + label, 140px."""
-    return _sidebar_parts(active, email, csrf)[2]
+    return _sidebar_parts(active, email, csrf, show_activity=show_activity)[2]
+
+
+def _show_activity_nav(db, user_id: str) -> bool:
+    """Activity nav only when pending or historical projected items exist."""
+    try:
+        from mighty.activity_projection import activity_nav_visible
+
+        return bool(activity_nav_visible(db, user_id))
+    except Exception:
+        return False
 
 # ── Per-user data encryption ───────────────────────────────────────────────────
 # Key is derived from SECRET_KEY + user_id so each user's data uses a distinct key.
@@ -11454,7 +11481,10 @@ function dismissOnboarding() {{
 </script>"""
 
     _csrf = get_csrf_token()
-    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('dashboard', user["email"], _csrf)
+    _show_activity = _show_activity_nav(db, uid)
+    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
+        'dashboard', user["email"], _csrf, show_activity=_show_activity,
+    )
 
     demo_mode_banner = ""
     if demo_mode_active:
@@ -11572,7 +11602,10 @@ def settings():
     api_key_masked = key_prefix + "•" * max(0, len(raw_key) - 3)
     _csrf = get_csrf_token()
     notif_pref = user["notification_pref"] if user["notification_pref"] else "quiet"
-    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('settings', user["email"], _csrf)
+    _show_activity = _show_activity_nav(db, user["id"])
+    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
+        'settings', user["email"], _csrf, show_activity=_show_activity,
+    )
     _rt.finish()
     return (SETTINGS_HTML
             .replace("{_SIDEBAR_DESKTOP_}",        _sidebar_desktop)
@@ -11659,40 +11692,37 @@ def extension_setup():
 @app.route("/settings/export-csv")
 @require_login
 def export_csv():
-    db      = get_db()
+    from mighty.activity_projection import export_activity_rows
+
+    db = get_db()
     user_id = session["user_id"]
-    rows    = db.execute(
-        "SELECT created_at, action_type, label, fields, status, outcome, decided_at "
-        "FROM actions WHERE user_id=? ORDER BY created_at DESC",
-        (user_id,)
-    ).fetchall()
+    export_rows = export_activity_rows(
+        db,
+        user_id,
+        provider_display_names=_provider_display_names(),
+    )
     si = io.StringIO()
     writer = csv.writer(si)
-    writer.writerow(["Date", "Action Type", "Description", "Details", "Status", "Outcome", "Decided At"])
-    for row in rows:
-        try:
-            fields_raw = json.loads(row["fields"]) if row["fields"] else []
-            if isinstance(fields_raw, list):
-                details = "; ".join(
-                    "{}: {}".format(pair[0], pair[1])
-                    for pair in fields_raw
-                    if isinstance(pair, (list, tuple)) and len(pair) >= 2
-                )
-            elif isinstance(fields_raw, dict):
-                details = "; ".join("{}: {}".format(k, v) for k, v in fields_raw.items())
-            else:
-                details = ""
-        except Exception:
-            details = ""
-        writer.writerow([
-            row["created_at"],
-            row["action_type"],
-            row["label"],
-            details,
-            row["status"],
-            row["outcome"] or "",
-            row["decided_at"] or "",
-        ])
+    headers = [
+        "Date",
+        "Status",
+        "Description",
+        "Explanation",
+        "Account",
+        "Details",
+        "Requested At",
+        "Decided At",
+        "Why",
+        "Outcome",
+        "Attempt",
+        "Attempt Result",
+        "Attempt Why",
+        "Attempt At",
+        "Authorization",
+    ]
+    writer.writerow(headers)
+    for row in export_rows:
+        writer.writerow([row.get(h, "") for h in headers])
     output = si.getvalue()
     filename = "mighty-activity-{}.csv".format(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     resp = make_response(output)
@@ -11703,10 +11733,12 @@ def export_csv():
 @app.route("/settings/delete-activity", methods=["POST"])
 @require_login
 def delete_activity():
+    from mighty.activity_projection import delete_activity_data
+
     check_csrf()
     uid = session["user_id"]
     db = get_db()
-    db.execute("DELETE FROM actions WHERE user_id=?", (uid,))
+    delete_activity_data(db, uid, commit=False)
     db.execute("DELETE FROM action_items WHERE user_id=?", (uid,))
     db.execute("DELETE FROM field_history WHERE user_id=?", (uid,))
     db.execute("DELETE FROM field_candidates WHERE user_id=?", (uid,))
@@ -11824,6 +11856,104 @@ def download_mcp():
     resp.headers["Content-Disposition"] = "attachment; filename=mighty_mcp.py"
     resp.headers["Content-Type"] = "text/x-python"
     return resp
+
+@app.route("/activity")
+@require_login
+def activity_page():
+    """Customer Activity V1 — projection over actions + receipts."""
+    from mighty.activity_projection import DEFAULT_PAGE_SIZE, project_activity
+    from mighty.activity_ui import ACTIVITY_CSS, render_activity_main
+
+    db = get_db()
+    uid = session["user_id"]
+    user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if not user:
+        session.clear()
+        return redirect("/login")
+    csrf = get_csrf_token()
+    cursor = (request.args.get("cursor") or "").strip() or None
+    try:
+        projection = project_activity(
+            db,
+            uid,
+            limit=DEFAULT_PAGE_SIZE,
+            cursor=cursor,
+            provider_display_names=_provider_display_names(),
+        )
+        error = None
+    except Exception as exc:
+        print(f"[Mighty] activity_page error: {exc}", flush=True)
+        from mighty.activity_projection import ActivityProjection
+
+        projection = ActivityProjection(
+            generated_at="",
+            items=(),
+            next_cursor=None,
+            has_pending=False,
+            has_historical=False,
+        )
+        error = "We couldn’t load Activity right now. Try again in a moment."
+
+    # On /activity itself, keep the nav item visible so the active page is labeled.
+    sidebar_desktop, sidebar_mobile, _ = _sidebar_parts(
+        "activity", user["email"], csrf, show_activity=True,
+    )
+    main = render_activity_main(
+        projection, escape=he, csrf_token=csrf, error=error,
+    )
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<title>Activity — Mighty</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+{BASE_CSS}
+.main-content{{height:100vh;overflow:hidden;display:flex;flex-direction:column}}
+{ACTIVITY_CSS}
+#mighty-toast{{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c1917;color:#fff;font-size:13px;font-weight:500;padding:10px 18px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.18);z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.2s}}
+#mighty-toast.show{{opacity:1}}
+#mighty-toast.hide{{opacity:0}}
+</style>
+</head>
+<body>
+<div class="app-shell">
+{sidebar_desktop}
+<div class="main-content">
+{main}
+</div>
+</div>
+{sidebar_mobile}
+</body>
+</html>"""
+    return html
+
+
+@app.route("/api/activity")
+@require_login
+def api_activity():
+    """JSON Activity projection for the signed-in user."""
+    from mighty.activity_projection import DEFAULT_PAGE_SIZE, project_activity
+
+    limit_raw = request.args.get("limit")
+    try:
+        limit = int(limit_raw) if limit_raw else DEFAULT_PAGE_SIZE
+    except (TypeError, ValueError):
+        limit = DEFAULT_PAGE_SIZE
+    cursor = (request.args.get("cursor") or "").strip() or None
+    projection = project_activity(
+        get_db(),
+        session["user_id"],
+        limit=limit,
+        cursor=cursor,
+        provider_display_names=_provider_display_names(),
+    )
+    return jsonify(projection.to_dict())
+
 
 @app.route("/dashboard/decide/<action_id>", methods=["POST"])
 @require_login
@@ -15412,7 +15542,10 @@ def _build_credentials_page(
     access_view_by_source = access_view_by_source or {}
     active_filter = normalize_filter(filter_key)
     csrf = get_csrf_token()
-    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts('accounts', user["email"], csrf)
+    _show_activity = _show_activity_nav(get_db(), user["id"])
+    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
+        'accounts', user["email"], csrf, show_activity=_show_activity,
+    )
     _cred_styles = BASE_CSS + _CREDENTIALS_PAGE_CSS
 
     from mighty.accounts_ui import apply_access_view_to_row
@@ -16330,7 +16463,10 @@ def _load_user_account_states(uid: str, db):
 def _build_account_center_page(user, states) -> str:
     """Account Connection Center — login status from provider_session_state."""
     csrf = get_csrf_token()
-    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts("account-center", user["email"], csrf)
+    _show_activity = _show_activity_nav(get_db(), user["id"])
+    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
+        "account-center", user["email"], csrf, show_activity=_show_activity,
+    )
     _styles = BASE_CSS + ACCOUNT_CENTER_CSS
     _site_meta = {k: (icon, color) for k, _n, icon, color, _cat in SUPPORTED_SITES}
     from mighty.session_access import load_session_access_by_provider
@@ -21596,8 +21732,9 @@ def _render_email_scan_page(suggestions=None, already_count=0, provider_triggere
     uid = session["user_id"]
     user = db.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
     csrf = get_csrf_token()
+    _show_activity = _show_activity_nav(db, uid)
     _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
-        "email-scan", user["email"] if user else "", csrf,
+        "email-scan", user["email"] if user else "", csrf, show_activity=_show_activity,
     )
 
     # Already-connected site keys
