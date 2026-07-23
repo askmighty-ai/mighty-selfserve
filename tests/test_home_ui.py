@@ -186,6 +186,9 @@ class TestHomeBriefingUi:
         assert "One thing needs your attention." in rendered
         assert attention.primary is not None
         assert attention.primary.title in rendered
+        assert "only step we can&#x27;t complete for you" in rendered or (
+            "only step we can't complete for you" in rendered
+        )
         assert "https://amex.test/login" in rendered
         assert "home-card-cta--primary" in rendered
 

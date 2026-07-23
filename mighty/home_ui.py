@@ -761,16 +761,16 @@ def _render_ops_strip(
 def _render_freshness(last_checked: str, *, escape: Callable[[Any], str]) -> str:
     if not last_checked:
         return ""
-    display = (
-        _ts_html(last_checked)
-        if "T" in str(last_checked)
-        else escape(str(last_checked))
-    )
-    label = escape(user_copy.HOME_FRESHNESS_PREFIX)
+    raw = str(last_checked)
+    if "T" in raw:
+        # Absolute timestamps keep the verified prefix + local <time>.
+        line = f"{escape(user_copy.HOME_FRESHNESS_PREFIX)}{_ts_html(raw)}"
+    else:
+        line = escape(user_copy.home_freshness_label(raw))
     return (
         f'<p class="home-freshness" id="dash-last-checked" '
         f'data-last-checked="{escape(last_checked)}">'
-        f"{label}{display}"
+        f"{line}"
         f"</p>"
     )
 

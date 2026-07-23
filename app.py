@@ -2137,8 +2137,12 @@ def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
         return ("No data", "#9ca3af", "—")
     try:
         import datetime as _dt
-        age_h = (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(
-            synced_at.rstrip("Z"))).total_seconds() / 3600
+        parsed = _dt.datetime.fromisoformat(synced_at.rstrip("Z"))
+        if parsed.tzinfo is not None:
+            now = _dt.datetime.now(_dt.timezone.utc)
+            age_h = (now - parsed.astimezone(_dt.timezone.utc)).total_seconds() / 3600
+        else:
+            age_h = (_dt.datetime.utcnow() - parsed).total_seconds() / 3600
         if age_h < 1:
             return ("Just now", "#22c55e", "✓")
         elif age_h < 2:
@@ -6492,9 +6496,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 /* Home V1B — status-first executive briefing */
 .home-briefing .home-stack{display:flex;flex-direction:column;gap:0;max-width:480px}
 .home-briefing .home-header{margin:0 0 8px}
-.home-briefing .home-greeting{margin:0;font-size:18px;font-weight:500;letter-spacing:-0.02em;line-height:1.3;color:#78716c}
-.home-briefing .home-meta{margin-top:4px}
-.home-briefing .home-meta .dash-brief-today-date{font-size:13px;color:#a8a29e}
+.home-briefing .home-greeting{margin:0;font-size:13px;font-weight:400;letter-spacing:0;line-height:1.35;color:#a8a29e}
+.home-briefing .home-meta{margin-top:2px}
+.home-briefing .home-meta .dash-brief-today-date{font-size:12px;color:#c4c0bb}
 .home-briefing .home-answer{margin:28px 0 0;font-size:40px;font-weight:650;color:#1c1917;letter-spacing:-0.045em;line-height:1.12;max-width:14ch}
 .home-briefing .home-primary{margin:18px 0 48px}
 .home-card{display:block}
@@ -6509,7 +6513,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .home-card-cta--disabled{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;color:#a8a29e;background:#f5f5f4;border-radius:10px}
 .home-card-secondary-link,.home-card-cta--text{font-size:13px;font-weight:500;color:#a8a29e;text-decoration:none}
 .home-card-secondary-link:hover,.home-card-cta--text:hover{color:#78716c;text-decoration:none}
-.home-freshness{margin:20px 0 0;font-size:12px;font-weight:450;color:#c4c0bb;letter-spacing:0.01em}
+.home-freshness{margin:14px 0 0;font-size:12px;font-weight:400;color:#c4c0bb;letter-spacing:0.01em}
 .home-section-label{margin:0 0 12px;font-size:11px;font-weight:600;color:#d6d3d1;text-transform:uppercase;letter-spacing:0.07em}
 .home-wins{margin:0 0 40px;padding-top:28px;border-top:0.5px solid rgba(0,0,0,0.05)}
 .home-wins-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
@@ -6517,18 +6521,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .home-win::before{content:"·";margin-right:10px;color:#d6d3d1}
 .home-win-link{color:inherit;text-decoration:none}
 .home-win-link:hover{color:#78716c;text-decoration:underline}
-.home-ops{margin:0 0 4px;opacity:0.72}
-.home-ops-label{margin:0 0 6px;font-size:11px;font-weight:500;color:#d6d3d1;letter-spacing:0.02em;text-transform:none}
-.home-ops-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
-.home-ops-item{font-size:12px;color:#d6d3d1;line-height:1.4}
-.home-ops-item::before{content:"•";margin-right:8px;color:#e7e5e4}
+.home-ops{margin:0 0 4px;opacity:0.5}
+.home-ops-label{margin:0 0 3px;font-size:10px;font-weight:400;color:#d6d3d1;letter-spacing:0.01em;text-transform:none}
+.home-ops-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.home-ops-item{font-size:11px;color:#d6d3d1;line-height:1.35}
+.home-ops-item::before{content:"·";margin-right:6px;color:#e7e5e4}
 .home-ops-note{color:#d6d3d1;text-decoration:none}
 a.home-ops-note:hover{color:#a8a29e;text-decoration:underline}
 .home-footer{margin-top:48px;padding-top:0;border-top:none;font-size:11px;color:#e7e5e4}
 .home-truth-debug{margin-top:36px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06)}
 .home-truth-debug summary{cursor:pointer;font-size:13px;font-weight:600;color:#a8a29e}
 @media(max-width:640px){
-.home-briefing .home-greeting{font-size:16px}
+.home-briefing .home-greeting{font-size:12px}
 .home-briefing .home-answer{font-size:32px;margin-top:22px}
 .home-card-title{font-size:16px}
 }

@@ -320,6 +320,18 @@ def _provider_name(provider: str | None, names: Mapping[str, str]) -> str:
     return names.get(key) or provider.replace("_", " ").title()
 
 
+def _benefit_topic(item: AttentionItem) -> str | None:
+    """Humanize benefit fingerprint field_key for concrete opportunity copy."""
+    fingerprint = (item.fingerprint or "").strip()
+    if not fingerprint.startswith("benefit:"):
+        return None
+    parts = fingerprint.split(":", 2)
+    if len(parts) < 3:
+        return None
+    topic = parts[2].replace("_", " ").strip()
+    return topic or None
+
+
 def _copy_for(item: AttentionItem, provider_name: str) -> tuple[str, str, str | None]:
     cls = item.attention_class
     reason = item.reason.code
@@ -328,18 +340,21 @@ def _copy_for(item: AttentionItem, provider_name: str) -> tuple[str, str, str | 
         title = user_copy.home_login_headline(provider_name)
         if reason == "mfa":
             body = (
-                f"Complete the sign-in challenge for {provider_name} in Chrome. "
-                "Mighty never sees or stores your password."
+                f"This is the only step we can't complete for you. "
+                f"Finish the {provider_name} sign-in challenge, and we'll take care of the rest."
             )
             cta = f"Continue {provider_name} login"
         elif reason == "captcha":
             body = (
-                f"Complete the security check for {provider_name} in Chrome, "
-                "then keep the account page open briefly."
+                f"This is the only step we can't complete for you. "
+                f"Complete the {provider_name} security check, and we'll take care of the rest."
             )
             cta = f"Open {provider_name}"
         elif reason == "consent":
-            body = f"Approve access for {provider_name} so Mighty can continue."
+            body = (
+                f"This is the only step we can't complete for you. "
+                f"Approve access for {provider_name}, and we'll take care of the rest."
+            )
             cta = f"Open {provider_name}"
         else:
             body = user_copy.home_login_body(provider_name)
@@ -407,17 +422,19 @@ def _copy_for(item: AttentionItem, provider_name: str) -> tuple[str, str, str | 
         )
 
     if cls == AttentionClass.VALUE_AT_RISK:
+        topic = _benefit_topic(item)
         return (
-            f"Time-sensitive value on {provider_name}",
-            f"Review this {provider_name} item before the value is lost.",
-            "Review",
+            user_copy.home_value_at_risk_headline(provider_name, topic),
+            user_copy.home_value_at_risk_body(provider_name, topic),
+            "Review benefit",
         )
 
     if cls == AttentionClass.OPPORTUNITY:
+        topic = _benefit_topic(item)
         return (
-            f"Something worth a look on {provider_name}",
-            "Optional — only if you want to act on it.",
-            "View",
+            user_copy.home_opportunity_headline(provider_name, topic),
+            user_copy.home_opportunity_body(provider_name, topic),
+            "See the benefit",
         )
 
     if cls == AttentionClass.DATA_GAP:

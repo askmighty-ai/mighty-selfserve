@@ -79,6 +79,6 @@ Opportunities appear on Home **only** when Attention has already selected them a
 
 ### AD-HOME-5: V1B status-first hierarchy (UX only)
 
-- **Decision:** Dominant status line (“You’re good.” / needs attention / worth attention); outcome copy without account counts; no primary CTA when all clear; subtle freshness; whisper-weight ops.  
+- **Decision:** Dominant status line (“You’re good.” / needs attention / value waiting); quiet greeting; outcome copy without account counts; no primary CTA when all clear; subtle freshness beneath the story; metadata-weight ops; attention copy emphasizes delegation; opportunity copy is benefit-concrete.  
 - **Why:** Five-second “Am I good?” read; calm confidence over dashboard density.  
 - **Impact:** No ownership or ranking changes — presentation and copy only.

@@ -586,11 +586,12 @@ HOME_PRIORITY_RECOMMENDATION = "1 thing worth your attention."
 # V1B briefing — answer "Am I good?"
 HOME_BRIEFING_ANSWER_GOOD = "You're good."
 HOME_BRIEFING_ANSWER_ATTENTION = "One thing needs your attention."
-HOME_BRIEFING_ANSWER_OPPORTUNITY = "Something is worth your attention."
+HOME_BRIEFING_ANSWER_OPPORTUNITY = "There's value waiting for you."
 HOME_BRIEFING_ALL_CLEAR_TITLE = "You're good."
 HOME_RECENT_WINS_LABEL = "Recent wins"
 HOME_OPS_LABEL = "Working quietly"
 HOME_FRESHNESS_PREFIX = "Last verified "
+HOME_FRESHNESS_UPDATED_PREFIX = "Updated "
 HOME_ACCOUNTS_SOFT_LINK = "Accounts"
 
 HOME_FOOTER_WORKER = "Mighty runs in Chrome"
@@ -641,15 +642,15 @@ def home_waiting_headline(count: int, provider_name: str | None = None) -> str:
 
 def home_login_headline(provider_name: str, *, plural: bool = False, count: int = 1) -> str:
     if plural or count > 1:
-        return f"{count} accounts need login."
-    return f"{provider_name} needs login."
+        return f"{count} accounts need a sign-in."
+    return f"Sign in to {provider_name}."
 
 
 def home_login_body(provider_name: str) -> str:
+    del provider_name  # Provider is named in the title / CTA.
     return (
-        f"Sign in to {provider_name} in Chrome — the only manual step. "
-        "After you log in, keep your account page open for a few seconds so the worker "
-        "can verify your session. Mighty never sees or stores your password."
+        "This is the only step we can't complete for you. "
+        "Once you sign in, we'll take care of the rest."
     )
 
 
@@ -714,10 +715,52 @@ def home_ops_needs_login(count: int) -> str:
 
 
 def home_freshness_label(when: str) -> str:
+    """Subtle story freshness — e.g. 'Updated just now' / 'Last verified 2 minutes ago'."""
     text = (when or "").strip()
     if not text:
         return ""
+    lowered = text.lower()
+    if lowered.startswith("updated ") or lowered.startswith("last verified "):
+        return text
+    if lowered in {"just now", "a moment ago", "moments ago"}:
+        return f"{HOME_FRESHNESS_UPDATED_PREFIX}{lowered}"
     return f"{HOME_FRESHNESS_PREFIX}{text}"
+
+
+def home_opportunity_headline(provider_name: str, topic: str | None = None) -> str:
+    if topic:
+        return f"{topic[0].upper() + topic[1:]} available on {provider_name}"
+    return f"Value waiting on {provider_name}"
+
+
+def home_opportunity_body(provider_name: str, topic: str | None = None) -> str:
+    if topic:
+        return (
+            f"Claiming this {topic} on {provider_name} could put real value "
+            "back in your pocket. Open it when you're ready — we'll keep handling the rest."
+        )
+    return (
+        f"We found something on {provider_name} that could put money or perks "
+        "back in your pocket. Review it when you're ready — we'll keep handling the rest."
+    )
+
+
+def home_value_at_risk_headline(provider_name: str, topic: str | None = None) -> str:
+    if topic:
+        return f"{topic[0].upper() + topic[1:]} on {provider_name} won't wait"
+    return f"Time-sensitive value on {provider_name}"
+
+
+def home_value_at_risk_body(provider_name: str, topic: str | None = None) -> str:
+    if topic:
+        return (
+            f"This {topic} on {provider_name} may expire soon. "
+            "Review it now and we'll take care of the follow-through."
+        )
+    return (
+        f"There's value on {provider_name} that may expire soon. "
+        "Review it now and we'll take care of the follow-through."
+    )
 
 
 def home_attention_headline(attention_count: int) -> str:
