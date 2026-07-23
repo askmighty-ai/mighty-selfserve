@@ -213,5 +213,6 @@ class TestHomeAttentionRender:
             attention=attn.view,
             use_attention=True,
         )
-        assert "dash-attention" in html
-        assert 'aria-label="Capability status"' in html
+        assert "home-briefing" in html
+        # Empty enrollment still owns hero when no accounts.
+        assert "watched quietly" in html.lower()

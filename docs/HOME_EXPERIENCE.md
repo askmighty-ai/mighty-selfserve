@@ -545,4 +545,4 @@ See [PRODUCT_MANIFESTO.md](PRODUCT_MANIFESTO.md) for the full anti-pattern list.
 | UX_PRINCIPLES.md | Not in repo — principles inlined from manifesto |
 | MAGIC_MOMENTS.md | Not in repo — magic moment defined in First-time user journey |
 
-This document is product design only. No implementation spec.
+Implementation: [HOME_V1.md](HOME_V1.md) — Home V1A daily executive briefing (pure projection over Attention, enrollment ops, and meaningful changes).

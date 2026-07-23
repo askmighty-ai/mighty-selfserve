@@ -279,7 +279,7 @@ The attention inbox. Answer *Am I good?* and *Do I need to do anything?* in five
 - Up to two secondary recommendation rows (Recommendation state only)
 - Footer reassurance ("Mighty runs in Chrome · Last checked …")
 
-See [HOME_EXPERIENCE.md](HOME_EXPERIENCE.md) for the six Home states.
+See [HOME_EXPERIENCE.md](HOME_EXPERIENCE.md) for the six Home states and [HOME_V1.md](HOME_V1.md) for the pure-projection implementation.
 
 **Explicitly does NOT belong here**
 

@@ -1,10 +1,22 @@
-"""Tests for Truth Dashboard home page rendering (PR #97)."""
+"""Tests for Home V1B daily briefing rendering."""
 
 import html
 from datetime import datetime, timezone
 
 from mighty.account_readiness import AccountReadiness, READY, SIGNED_OUT
 from mighty.account_status import AccountStatus
+from mighty.attention import (
+    ATTENTION_ITEM_SCHEMA_VERSION,
+    AttentionClass,
+    AttentionCtaKey,
+    AttentionItem,
+    AttentionReason,
+    AttentionSourceKind,
+    AttentionUrgency,
+    REASON_LOGIN,
+)
+from mighty.attention_state import ATTENTION_STATE_SCHEMA_VERSION, AttentionState
+from mighty.attention_view import build_attention_view
 from mighty.capability_state import CapabilityState
 from mighty.customer_account_access import (
     DISCOVERED_MANUAL,
@@ -82,8 +94,29 @@ def _status_from_view(view, *, canonical: str | None = None) -> AccountStatus:
     )
 
 
-class TestTruthDashboardHomeUi:
-    def test_empty_shows_amex_login_unknown(self):
+def _attention_item(**overrides) -> AttentionItem:
+    payload = {
+        "schema_version": ATTENTION_ITEM_SCHEMA_VERSION,
+        "attention_id": "att_user1_auth_blocker_amex_needs_human",
+        "user_id": "user-1",
+        "attention_class": AttentionClass.AUTH_BLOCKER,
+        "urgency": AttentionUrgency.BLOCKER,
+        "provider": "amex",
+        "fingerprint": "auth:amex:needs_human",
+        "reason": AttentionReason(code=REASON_LOGIN),
+        "cta_key": AttentionCtaKey.START_PROVIDER_LOGIN,
+        "source_kind": AttentionSourceKind.AUTH,
+        "source_ref": "auth_truth:user-1:amex",
+        "observed_at": "2026-07-21T11:00:00+00:00",
+        "becomes_stale_at": None,
+        "interruption_expected": True,
+    }
+    payload.update(overrides)
+    return AttentionItem(**payload)
+
+
+class TestHomeBriefingUi:
+    def test_empty_shows_product_onboarding(self):
         result = resolve_home_state(accounts=[])
         rendered = render_home_page(
             result,
@@ -91,15 +124,100 @@ class TestTruthDashboardHomeUi:
             today_label="Friday, July 3",
             escape=_escape,
         )
-        assert "American Express" in rendered
-        assert "could not determine your login state during the latest check" in rendered.lower()
-        assert "cannot determine whether you are logged in" not in rendered.lower()
-        assert "Open American Express" not in rendered
-        assert "Summary" not in rendered
-        assert "System Health" not in rendered
-        assert "Connect Gmail" not in rendered
+        assert "Your accounts, watched quietly." in rendered
+        assert "Connect Gmail" in rendered
+        assert "home-v1b" in rendered
 
-    def test_ready_shows_capability_success(self):
+    def test_all_clear_status_first_no_primary_cta(self):
+        view = build_customer_account_access_view(
+            provider="amex",
+            display_name="American Express",
+            readiness=_readiness("amex", READY),
+            discovered_from=DISCOVERED_MANUAL,
+        )
+        result = resolve_home_state(accounts=[_status_from_view(view)])
+        rendered = render_home_page(
+            result,
+            first_name="Ryan",
+            today_label="Friday, July 3",
+            last_checked="2 minutes ago",
+            escape=_escape,
+        )
+        assert "You&#x27;re good." in rendered or "You're good." in rendered
+        assert "Nothing needs your attention right now." in rendered
+        assert (
+            "We'll let you know if anything changes." in rendered
+            or "We&#x27;ll let you know if anything changes." in rendered
+        )
+        assert "Mighty is watching" not in rendered
+        assert "View accounts" not in rendered
+        assert "home-card-cta--primary" not in rendered
+        assert "Last verified" in rendered
+        assert "2 minutes ago" in rendered
+        assert 'class="home-answer"' in rendered
+
+    def test_attention_interrupt_owns_featured_story(self):
+        view = build_customer_account_access_view(
+            provider="amex",
+            display_name="American Express",
+            readiness=_readiness("amex", READY),
+            discovered_from=DISCOVERED_MANUAL,
+        )
+        result = resolve_home_state(accounts=[_status_from_view(view)])
+        state = AttentionState(
+            schema_version=ATTENTION_STATE_SCHEMA_VERSION,
+            primary=_attention_item(),
+            remaining=(),
+            silence=None,
+        )
+        attention = build_attention_view(
+            state,
+            surface="home",
+            provider_open_urls={"amex": "https://amex.test/login"},
+        )
+        rendered = render_home_page(
+            result,
+            first_name="Ryan",
+            today_label="Friday, July 3",
+            escape=_escape,
+            attention=attention,
+            use_attention=True,
+        )
+        assert "One thing needs your attention." in rendered
+        assert attention.primary is not None
+        assert attention.primary.title in rendered
+        assert "only step we can&#x27;t complete for you" in rendered or (
+            "only step we can't complete for you" in rendered
+        )
+        assert "https://amex.test/login" in rendered
+        assert "home-card-cta--primary" in rendered
+
+    def test_waiting_ops_is_whisper_note(self):
+        accounts = [
+            AccountStatus(
+                source="amex",
+                display_name="American Express",
+                status="waiting_for_extension",
+                presentation_key="updating",
+                presentation_label="Waiting",
+                last_successful_sync_at=None,
+                current_attempt_at=None,
+                last_error=None,
+                user_action_label=None,
+                user_action_url=None,
+            )
+        ]
+        result = resolve_home_state(accounts=accounts)
+        rendered = render_home_page(
+            result, first_name="Ryan", today_label="Friday, July 3", escape=_escape,
+        )
+        assert "You're good." in rendered or "You&#x27;re good." in rendered
+        assert "Working quietly" in rendered
+        assert "Setting up American Express" in rendered
+        assert "home-ops-list" in rendered
+        assert "View accounts" not in rendered
+
+    def test_truth_debug_only_when_flagged(self):
         view = build_customer_account_access_view(
             provider="amex",
             display_name="American Express",
@@ -108,74 +226,16 @@ class TestTruthDashboardHomeUi:
         )
         result = resolve_home_state(
             accounts=[_status_from_view(view)],
-            extracted_items=[
-                {"label": "Membership Rewards", "value": "125,000"},
-                {"label": "Statement balance", "value": "$42.00"},
-            ],
+            show_access_debug=True,
+            extracted_items=[{"label": "Membership Rewards", "value": "125,000"}],
             session_confidence="high",
         )
         rendered = render_home_page(
             result,
             first_name="Alex",
             today_label="Friday, July 3",
-            last_checked="2h ago",
             escape=_escape,
         )
+        assert "Capability debug" in rendered
         assert result.capability is not None
         assert result.capability.state == CapabilityState.EXTRACTION_SUCCESS
-        assert "can see and extract" in rendered.lower()
-        assert "Membership Rewards" in rendered
-        assert "Statement balance" in rendered
-        assert "Confidence: High" in rendered
-        assert "Technical Details" in rendered
-        assert "Truth Timeline" in rendered
-        assert "Summary" not in rendered
-        assert "System Health" not in rendered
-        assert "Last checked: 2h ago" in rendered
-
-    def test_hides_non_amex_providers(self):
-        amex = build_customer_account_access_view(
-            provider="amex",
-            display_name="American Express",
-            readiness=_readiness("amex", READY),
-            discovered_from=DISCOVERED_MANUAL,
-        )
-        delta = AccountStatus(
-            source="delta",
-            display_name="Delta",
-            status="up_to_date",
-            presentation_key="ready",
-            presentation_label="Connected",
-            last_successful_sync_at=None,
-            current_attempt_at=None,
-            last_error=None,
-            user_action_label=None,
-            user_action_url=None,
-        )
-        result = resolve_home_state(accounts=[_status_from_view(amex), delta])
-        rendered = render_home_page(
-            result, first_name="Alex", today_label="Friday, July 3", escape=_escape,
-        )
-        assert "American Express" in rendered
-        assert "Delta" not in rendered
-        assert len(result.access_views) == 1
-
-    def test_signed_out_cta(self):
-        view = build_customer_account_access_view(
-            provider="amex",
-            display_name="American Express",
-            readiness=_readiness("amex", SIGNED_OUT),
-            discovered_from=DISCOVERED_MANUAL,
-            user_action_text="Sign in",
-            user_action_url="https://www.americanexpress.com/en-us/account/login",
-        )
-        result = resolve_home_state(
-            accounts=[_status_from_view(view, canonical="needs_login")],
-        )
-        rendered = render_home_page(
-            result, first_name="Alex", today_label="Friday, July 3", escape=_escape,
-        )
-        assert "You are signed out" in rendered
-        assert "Open American Express" in rendered
-        assert "Please sign in to American Express" in rendered
-        assert "Needs you" not in rendered

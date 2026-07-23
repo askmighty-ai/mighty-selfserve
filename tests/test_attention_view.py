@@ -173,8 +173,28 @@ class TestCopyAndCta:
     def test_login_copy(self):
         title, body, cta = resolve_attention_copy(_item())
         assert "American Express" in title
-        assert "Chrome" in body
+        assert "Sign in to American Express." in title
+        assert "only step we can't complete for you" in body
+        assert "we'll take care of the rest" in body
         assert cta == "Log in to American Express"
+
+    def test_opportunity_copy_is_benefit_concrete(self):
+        item = _item(
+            attention_id="att_user1_opportunity_amex_dining_credit",
+            attention_class=AttentionClass.OPPORTUNITY,
+            urgency=AttentionUrgency.OPPORTUNITY,
+            fingerprint="benefit:amex:dining_credit",
+            reason=AttentionReason(code="opportunity"),
+            cta_key=AttentionCtaKey.OPEN_ACCOUNT_DETAIL,
+            source_kind=AttentionSourceKind.BENEFIT,
+            source_ref="action_item:1",
+            interruption_expected=False,
+        )
+        title, body, cta = resolve_attention_copy(item)
+        assert "Dining credit available on American Express" in title
+        assert "Something worth a look" not in title
+        assert "put real value" in body
+        assert cta == "See the benefit"
 
     def test_cta_urls(self):
         assert resolve_attention_cta_url(

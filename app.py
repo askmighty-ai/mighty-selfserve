@@ -86,6 +86,14 @@ def he(s):
     """HTML-escape a value for safe insertion into HTML."""
     return html.escape(str(s)) if s is not None else ""
 
+def _default_database_path() -> str:
+    """Railway uses /app/data; local/dev uses a workspace SQLite file."""
+    railway_path = "/app/data/mighty.db"
+    if os.path.isdir("/app") and os.access("/app", os.W_OK):
+        return railway_path
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "mighty.db")
+
+
 app = Flask(__name__)
 from werkzeug.middleware.proxy_fix import ProxyFix
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
@@ -94,7 +102,7 @@ if not _secret_key:
     if os.environ.get("RAILWAY_ENVIRONMENT") == "production":
         raise RuntimeError("SECRET_KEY environment variable must be set in production")
     _dev_key_dir = os.path.dirname(os.path.abspath(
-        os.environ.get("DATABASE_PATH", "/app/data/mighty.db")
+        os.environ.get("DATABASE_PATH", _default_database_path())
     )) or "."
     _dev_key_path = os.path.join(_dev_key_dir, ".mighty_secret_key")
     try:
@@ -236,7 +244,7 @@ def _account_debug_panel_html(info: dict) -> str:
 _SYNC_HOWTO_HTML = user_copy.how_updates_html()
 
 
-DATABASE        = os.environ.get("DATABASE_PATH", "/app/data/mighty.db")
+DATABASE        = os.environ.get("DATABASE_PATH", _default_database_path())
 PORT            = int(os.environ.get("PORT", 5004))
 TIMEOUT_SEC     = 300  # pending authorization expires after 5 minutes
 POSTMARK_API_KEY = os.environ.get("POSTMARK_API_KEY", "")
@@ -2129,8 +2137,12 @@ def _freshness_label(synced_at: str | None, sync_status: str = "ok") -> tuple:
         return ("No data", "#9ca3af", "—")
     try:
         import datetime as _dt
-        age_h = (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(
-            synced_at.rstrip("Z"))).total_seconds() / 3600
+        parsed = _dt.datetime.fromisoformat(synced_at.rstrip("Z"))
+        if parsed.tzinfo is not None:
+            now = _dt.datetime.now(_dt.timezone.utc)
+            age_h = (now - parsed.astimezone(_dt.timezone.utc)).total_seconds() / 3600
+        else:
+            age_h = (_dt.datetime.utcnow() - parsed).total_seconds() / 3600
         if age_h < 1:
             return ("Just now", "#22c55e", "✓")
         elif age_h < 2:
@@ -6474,13 +6486,56 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 /* Truth Dashboard (single-provider capability instrument) */
 .dash-truth-card .dash-brief-header{margin-bottom:8px}
 .dash-truth-subhead{margin:6px 0 0;font-size:14px;color:#57534e;line-height:1.45;max-width:40rem}
-.dash-attention{margin:0 0 18px;padding:16px 18px;border:1px solid #e7e5e4;border-radius:12px;background:#fafaf9}
+.dash-attention{margin:0 0 18px;padding:0;border:none;border-radius:0;background:transparent}
 .dash-attention-eyebrow{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e}
 .dash-attention-title{margin:0 0 8px;font-size:20px;font-weight:700;color:#1c1917;letter-spacing:-0.3px;line-height:1.25}
 .dash-attention-body{margin:0 0 14px;font-size:14px;color:#57534e;line-height:1.45;white-space:pre-line}
 .dash-attention-silence{margin:0;font-size:14px;color:#57534e;line-height:1.45}
 .dash-attention-cta{margin-top:2px}
 .dash-attention-cta-disabled{display:inline-flex;font-size:14px;font-weight:600;color:#a8a29e}
+/* Home V1B — status-first executive briefing */
+.home-briefing .home-stack{display:flex;flex-direction:column;gap:0;max-width:480px}
+.home-briefing .home-header{margin:0 0 8px}
+.home-briefing .home-greeting{margin:0;font-size:13px;font-weight:400;letter-spacing:0;line-height:1.35;color:#a8a29e}
+.home-briefing .home-meta{margin-top:2px}
+.home-briefing .home-meta .dash-brief-today-date{font-size:12px;color:#c4c0bb}
+.home-briefing .home-answer{margin:28px 0 0;font-size:40px;font-weight:650;color:#1c1917;letter-spacing:-0.045em;line-height:1.12;max-width:14ch}
+.home-briefing .home-primary{margin:18px 0 48px}
+.home-card{display:block}
+.home-card--featured{padding:0;border:none;border-radius:0;background:transparent;box-shadow:none}
+.home-card-title{margin:0 0 10px;font-size:17px;font-weight:550;color:#44403c;line-height:1.35;letter-spacing:-0.02em;max-width:36ch}
+.home-card-body{margin:0;font-size:16px;font-weight:400;color:#78716c;line-height:1.65;max-width:38ch}
+.home-card-body-lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.home-card-body-line{font-size:16px;color:#78716c;line-height:1.6}
+.home-card-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;margin-top:22px}
+.home-card-cta--primary{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;color:#fff;background:#1c1917;border-radius:10px;text-decoration:none;transition:background .12s}
+.home-card-cta--primary:hover{background:#292524;color:#fff;text-decoration:none}
+.home-card-cta--disabled{display:inline-flex;align-items:center;justify-content:center;padding:11px 18px;font-size:14px;font-weight:600;color:#a8a29e;background:#f5f5f4;border-radius:10px}
+.home-card-secondary-link,.home-card-cta--text{font-size:13px;font-weight:500;color:#a8a29e;text-decoration:none}
+.home-card-secondary-link:hover,.home-card-cta--text:hover{color:#78716c;text-decoration:none}
+.home-freshness{margin:14px 0 0;font-size:12px;font-weight:400;color:#c4c0bb;letter-spacing:0.01em}
+.home-section-label{margin:0 0 12px;font-size:11px;font-weight:600;color:#d6d3d1;text-transform:uppercase;letter-spacing:0.07em}
+.home-wins{margin:0 0 40px;padding-top:28px;border-top:0.5px solid rgba(0,0,0,0.05)}
+.home-wins-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.home-win{font-size:14px;color:#a8a29e;line-height:1.45}
+.home-win::before{content:"·";margin-right:10px;color:#d6d3d1}
+.home-win-link{color:inherit;text-decoration:none}
+.home-win-link:hover{color:#78716c;text-decoration:underline}
+.home-ops{margin:0 0 4px;opacity:0.5}
+.home-ops-label{margin:0 0 3px;font-size:10px;font-weight:400;color:#d6d3d1;letter-spacing:0.01em;text-transform:none}
+.home-ops-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.home-ops-item{font-size:11px;color:#d6d3d1;line-height:1.35}
+.home-ops-item::before{content:"·";margin-right:6px;color:#e7e5e4}
+.home-ops-note{color:#d6d3d1;text-decoration:none}
+a.home-ops-note:hover{color:#a8a29e;text-decoration:underline}
+.home-footer{margin-top:48px;padding-top:0;border-top:none;font-size:11px;color:#e7e5e4}
+.home-truth-debug{margin-top:36px;padding-top:16px;border-top:0.5px solid rgba(0,0,0,0.06)}
+.home-truth-debug summary{cursor:pointer;font-size:13px;font-weight:600;color:#a8a29e}
+@media(max-width:640px){
+.home-briefing .home-greeting{font-size:12px}
+.home-briefing .home-answer{font-size:32px;margin-top:22px}
+.home-card-title{font-size:16px}
+}
 .dash-truth-panel{margin-top:8px;padding:16px;border:0.5px solid rgba(0,0,0,0.08);border-radius:10px;background:#fff}
 .dash-truth-provider{margin:0 0 10px;font-size:20px;font-weight:650;color:#1c1917;letter-spacing:-0.02em}
 .dash-truth-headline{margin:0 0 12px;font-size:16px;font-weight:600;color:#1c1917;line-height:1.4}
@@ -10332,6 +10387,15 @@ def dashboard():
             and _home_result.capability.last_verified
         ):
             _truth_last_checked = _home_result.capability.last_verified
+        # Recent Wins — meaningful changes only (Freshness/Change owns scoring).
+        _recent_wins = []
+        try:
+            from mighty.change_store import change_alerts_from_store
+            _recent_wins = change_alerts_from_store(
+                get_db(), session["user_id"], limit=3,
+            )
+        except Exception:
+            _recent_wins = []
         return render_home_page(
             _home_result,
             first_name=_first_name,
@@ -10341,6 +10405,7 @@ def dashboard():
             extension_info=_extension_info,
             attention=_attention_view,
             use_attention=_use_attention,
+            recent_wins=_recent_wins,
         )
 
     hero_section_html = _render_home_hero()

@@ -69,8 +69,9 @@ class TestHomeStateNoAttentionRanking:
             updating_display_name="American Express",
         )
         assert result.state == HomeState.UPDATE
-        assert result.show_health is False
+        assert result.show_health is True
         assert result.secondary_recommendations == []
+        assert result.featured.disabled_cta_label == "Updating…"
 
     def test_waiting_when_no_fresh_data(self):
         accounts = [
@@ -107,7 +108,7 @@ class TestHomeStateNoAttentionRanking:
         result = resolve_home_state(accounts=accounts, actions=[])
         assert result.state == HomeState.ALL_CLEAR
         assert result.health.up_to_date == 2
-        assert result.show_health is False
+        assert result.show_health is True
 
     def test_health_buckets_still_counted(self):
         accounts = [

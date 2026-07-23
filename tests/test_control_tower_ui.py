@@ -1,6 +1,8 @@
-"""UI regression tests for Truth Dashboard capability presentation (PR #97).
+"""UI regression tests for Capability/Truth panels (debug instrument).
 
-Replaces Control Tower multi-provider UI expectations from PR #96.
+Home V1 is a pure projection surface; Truth Dashboard copy lives on
+``render_capability_panel`` and appears on Home only when
+``show_access_debug`` is enabled (see docs/HOME_V1.md).
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from mighty.customer_account_access import (
     build_customer_account_access_view,
 )
 from mighty.home_state import resolve_home_state
-from mighty.home_ui import render_home_page
+from mighty.home_ui import render_capability_panel, render_home_page
 from mighty.provider_account import EXTRACTION_COMPLETE, EXTRACTION_FAILED
 from mighty import user_copy
 
@@ -118,15 +120,13 @@ def _status_from_view(view: CustomerAccountAccessView, *, canonical: str | None 
     )
 
 
-def _render(accounts, **kwargs):
-    result = resolve_home_state(accounts=accounts, actions=[], **kwargs)
-    html_out = render_home_page(
-        result,
-        first_name="Jonathan",
-        today_label="Monday, July 13",
-        escape=_escape,
-    )
-    return result, html_out
+def _resolve(accounts, **kwargs):
+    return resolve_home_state(accounts=accounts, actions=[], **kwargs)
+
+
+def _render_capability(result):
+    assert result.capability is not None
+    return render_capability_panel(result.capability, escape=_escape)
 
 
 def _without_tech(rendered: str) -> str:
@@ -141,18 +141,17 @@ def _without_tech(rendered: str) -> str:
 class TestTruthDashboardStates:
     def test_extraction_success(self):
         view = _view_from_readiness("American Express", _readiness("amex", READY))
-        result, rendered = _render(
+        result = _resolve(
             [_status_from_view(view)],
             extracted_items=[{"label": "Membership Rewards", "value": "50,000"}],
             session_confidence="high",
         )
+        rendered = _render_capability(result)
         assert result.capability.state == CapabilityState.EXTRACTION_SUCCESS
         assert "can see and extract" in rendered.lower()
         assert "Membership Rewards" in rendered
         assert "Confidence: High" in rendered
         assert "Technical Details" in rendered
-        assert "Summary" not in rendered
-        assert "System Health" not in rendered
 
     def test_signed_out(self):
         view = _view_from_readiness(
@@ -161,7 +160,8 @@ class TestTruthDashboardStates:
             user_action_text="Sign in",
             user_action_url="https://example.com/login",
         )
-        result, rendered = _render([_status_from_view(view, canonical="needs_login")])
+        result = _resolve([_status_from_view(view, canonical="needs_login")])
+        rendered = _render_capability(result)
         assert result.capability.state == CapabilityState.SIGNED_OUT
         assert "You are signed out" in rendered
         assert "Open American Express" in rendered
@@ -173,10 +173,11 @@ class TestTruthDashboardStates:
             _readiness("amex", UNVERIFIED, session_state="connected"),
             extraction_status=EXTRACTION_FAILED,
         )
-        result, rendered = _render(
+        result = _resolve(
             [_status_from_view(view, canonical="unverified")],
             extraction_status=EXTRACTION_FAILED,
         )
+        rendered = _render_capability(result)
         assert result.capability.state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
         assert "could not extract" in rendered.lower()
         assert "No customer action required." in rendered
@@ -187,11 +188,12 @@ class TestTruthDashboardStates:
             "American Express",
             _readiness("amex", UNVERIFIED, session_state="connected"),
         )
-        result, rendered = _render(
+        result = _resolve(
             [_status_from_view(view, canonical="unverified")],
             extraction_status=EXTRACTION_COMPLETE,
             extracted_items=[],
         )
+        rendered = _render_capability(result)
         assert result.capability.state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
         assert "cannot see your account information" in rendered.lower()
 
@@ -201,21 +203,22 @@ class TestTruthDashboardStates:
             _readiness("amex", CHECKING, session_state="checking"),
             verification_lifecycle="running",
         )
-        result, rendered = _render([_status_from_view(view, canonical="checking")])
+        result = _resolve([_status_from_view(view, canonical="checking")])
+        rendered = _render_capability(result)
         assert result.capability.state == CapabilityState.LOGIN_UNKNOWN
-        # First-ever in-flight: determining, not a completed conclusion.
-        assert "determining your login state" in rendered.lower()
+        headline = (result.capability.primary_headline or result.capability.headline or "").lower()
+        assert "login state" in headline
         assert "cannot determine whether you are logged in" not in rendered.lower()
         assert "could not determine your login state during the latest check" not in rendered.lower()
-        assert result.capability.headline == "Determining your login state…"
         assert result.capability.presentation_phase == "determining"
         assert not any(
             "in progress" in e.text.lower() for e in result.capability.evidence
         )
         assert result.capability.is_refreshing is True
 
+
 class TestTruthDashboardPresentation:
-    def test_hides_multi_provider_noise(self):
+    def test_capability_access_views_remain_amex_only(self):
         accounts = [
             _status_from_view(_view_from_readiness("American Express", _readiness("amex", READY))),
             _status_from_view(
@@ -235,14 +238,16 @@ class TestTruthDashboardPresentation:
                 canonical="needs_login",
             ),
         ]
-        result, rendered = _render(accounts)
-        assert "American Express" in rendered
-        assert "Delta" not in rendered
-        assert "United" not in rendered
-        assert "Summary" not in rendered
-        assert "System Health" not in rendered
-        assert "Needs you" not in rendered
+        result = _resolve(accounts)
         assert len(result.access_views) == 1
+        assert result.access_views[0].provider == "amex"
+        # Home V1 health may mention portfolio counts; capability stays Amex-scoped.
+        home = render_home_page(
+            result, first_name="Jonathan", today_label="Monday, July 13", escape=_escape,
+        )
+        assert "home-v1" in home
+        assert "System Health" not in home
+        assert "Capability debug" not in home
 
     def test_no_discovery_jargon_outside_tech_details(self):
         view = _view_from_readiness(
@@ -250,7 +255,8 @@ class TestTruthDashboardPresentation:
             _readiness("amex", READY),
             discovered_from=DISCOVERED_MANUAL,
         )
-        _, rendered = _render([_status_from_view(view)])
+        result = _resolve([_status_from_view(view)])
+        rendered = _render_capability(result)
         visible = _without_tech(rendered)
         assert "Discovered from" not in visible
         assert "Live access" not in visible
@@ -260,3 +266,17 @@ class TestTruthDashboardPresentation:
         assert "Verification" in rendered
         assert "Extraction" in rendered
         assert "Snapshot" in rendered
+
+    def test_home_debug_surfaces_capability_panel(self):
+        view = _view_from_readiness("American Express", _readiness("amex", READY))
+        result = _resolve(
+            [_status_from_view(view)],
+            show_access_debug=True,
+            extracted_items=[{"label": "Membership Rewards", "value": "50,000"}],
+            session_confidence="high",
+        )
+        home = render_home_page(
+            result, first_name="Jonathan", today_label="Monday, July 13", escape=_escape,
+        )
+        assert "Capability debug" in home
+        assert "can see and extract" in home.lower()
