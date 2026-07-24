@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Create your Mighty account</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="container">
+      <div class="mkt-header">
+        <a class="brand" href="01-landing.html">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Mighty
+        </a>
+        <nav class="header-links">
+          <a href="01-landing.html">Back</a>
+          <a href="02-create-account.html">Sign in</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="center-stage">
+      <div class="auth-card card card-pad-lg rise">
+        <div class="step-rail" aria-label="Progress">
+          <span class="is-active">1</span>
+          <span>2</span>
+          <span>3</span>
+          <span style="width:auto;border:0;background:transparent;color:var(--muted);font-weight:500;">Create account</span>
+        </div>
+
+        <h1 class="display display-md">Create your Mighty account</h1>
+        <p class="lede" style="margin-top: 0.65rem; font-size: 1rem;">
+          Start with an email and password. You’ll connect Gmail and Chrome later —
+          with a clear explanation first.
+        </p>
+
+        <form class="form-stack" style="margin-top: 1.5rem;" action="03-welcome.html" method="get">
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="new-password" placeholder="At least 10 characters" required />
+            <p class="helper">Used only to sign into Mighty — not your airlines, hotels, or cards.</p>
+          </div>
+          <button class="btn btn-primary btn-block btn-lg" type="submit">Create account</button>
+        </form>
+
+        <div class="reassure">
+          <strong>Nothing is connected yet.</strong>
+          Creating an account does not grant mailbox or browser access. You can leave anytime.
+        </div>
+
+        <p class="small muted" style="margin: 1.25rem 0 0; text-align: center;">
+          Already have an account? <a href="02-create-account.html">Sign in</a>
+          · <a href="#">Privacy</a> · <a href="#">Terms</a>
+        </p>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
