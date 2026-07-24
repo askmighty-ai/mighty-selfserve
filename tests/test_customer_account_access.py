@@ -203,7 +203,8 @@ class TestCustomerAccountAccessView:
         assert 'data-capability="login_unknown"' in rendered
         assert 'data-capability="extraction_success"' not in rendered
         assert "home-briefing" in home
-        assert "Working quietly" in home or "You&#x27;re good." in home or "You're good." in home
+        assert "Getting your first update." in home
+        assert "You're good." not in home and "You&#x27;re good." not in home
         assert "✓ Watching" not in home
 
     def test_ready_with_background_verifying_stays_connected(self):

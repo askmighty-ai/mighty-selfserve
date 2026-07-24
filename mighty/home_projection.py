@@ -31,7 +31,7 @@ HomeCardKind = Literal[
     "enrollment",
     "story",
 ]
-HomeStoryKind = Literal["attention", "opportunity", "all_clear", "empty"]
+HomeStoryKind = Literal["attention", "opportunity", "all_clear", "empty", "handoff"]
 
 
 @dataclass(frozen=True)
@@ -171,7 +171,15 @@ def _compose_story(
         )
         return card, kind
 
-    # Waiting / Update never own the hero — calm briefing instead.
+    # First-data handoff: WAITING owns the hero when Attention is silent.
+    # Do not say "You're good" while enrollment setup is incomplete (D1).
+    if result.state == HomeState.WAITING:
+        return (
+            _from_featured(result.featured, tone="progress", kind="enrollment"),
+            "handoff",
+        )
+
+    # Update with existing data may stay calm; ops strip carries refresh notes.
     return _all_clear_story(result), "all_clear"
 
 
@@ -200,6 +208,8 @@ def _compose_answer(
         return user_copy.HOME_BRIEFING_ANSWER_ATTENTION
     if story_kind == "opportunity":
         return user_copy.HOME_BRIEFING_ANSWER_OPPORTUNITY
+    if story_kind == "handoff":
+        return user_copy.HOME_BRIEFING_ANSWER_HANDOFF
     return user_copy.HOME_BRIEFING_ANSWER_GOOD
 
 
@@ -216,7 +226,8 @@ def _compose_ops(
                 text=user_copy.home_ops_refreshing(result.updating_display_name),
             )
         )
-    elif result.state == HomeState.WAITING:
+    elif result.state == HomeState.WAITING and story_kind != "handoff":
+        # Handoff story already carries confirmation — avoid duplicate ops CTA.
         if result.waiting_rows:
             name = result.waiting_rows[0].display_name
             notes.append(

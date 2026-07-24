@@ -32,11 +32,13 @@ def test_extension_popup_background_copy():
     html = POPUP_HTML.read_text()
     js = POPUP_JS.read_text()
     assert "Working in the background" in html
-    assert "Open Account Center" in html
+    assert "Open Accounts" in html
     assert "Working in the background" in js
-    assert "Open Account Center" in js
+    assert "Open Accounts" in js
     assert "Keeping your accounts up to date" in html
     assert "status_keeping_updated" in js
+    assert "Account Center" not in html
+    assert "Account Center" not in js
 
 
 def test_popup_js_has_single_cta_label_declaration():
@@ -46,7 +48,8 @@ def test_popup_js_has_single_cta_label_declaration():
     assert len(decls) == 1, f"expected one ctaLabel declaration, found {len(decls)}"
     assert "loop.open_account_center" in js or "loop && loop.open_account_center" in js
     assert "worker.open_account_center" in js
-    assert "/account-center" in js
+    assert "/credentials" in js
+    assert "/account-center" not in js
 
 
 def test_popup_js_parses_successfully():

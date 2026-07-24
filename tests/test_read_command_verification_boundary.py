@@ -638,7 +638,7 @@ def test_worker_watching_does_not_imply_checking(client):
         _seed_stale_amex(mighty.get_db(), uid)
 
     html = client.get("/dashboard").data.decode("utf-8")
-    assert "Worker: Watching" in html
+    assert "Mighty in Chrome" in html
     assert "Checking your login state" not in html or 'data-refreshing="1"' not in html
     # Without an active verification row, Checking must not be forced by worker badge alone.
     with mighty.app.app_context():

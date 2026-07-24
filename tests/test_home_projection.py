@@ -91,18 +91,19 @@ class TestHomeBriefingProjection:
         assert projection.answer == "One thing needs your attention."
         assert projection.secondary == ()
 
-    def test_waiting_does_not_own_hero(self):
+    def test_waiting_owns_handoff_hero_when_attention_silent(self):
         result = resolve_home_state(
             accounts=[_acct("amex", "American Express", "waiting_for_extension")],
         )
         assert result.state == HomeState.WAITING
         projection = project_home(result, first_name="Pat", today_label="Tue")
-        assert projection.story_kind == "all_clear"
-        assert projection.answer == "You're good."
+        assert projection.story_kind == "handoff"
+        assert projection.answer == "Getting your first update."
         assert projection.featured is not None
-        assert projection.featured.title == ""
-        assert projection.featured.cta_label is None
-        assert any("American Express" in n.text for n in projection.ops_notes)
+        assert "American Express" in projection.featured.title
+        assert projection.featured.cta_label is not None
+        assert "You're good." not in projection.answer
+        assert projection.ops_notes == ()
 
     def test_recent_wins_projected_without_ranking(self):
         result = resolve_home_state(accounts=[_acct("amex", "American Express", "up_to_date")])

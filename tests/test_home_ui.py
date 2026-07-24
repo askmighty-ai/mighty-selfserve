@@ -192,7 +192,7 @@ class TestHomeBriefingUi:
         assert "https://amex.test/login" in rendered
         assert "home-card-cta--primary" in rendered
 
-    def test_waiting_ops_is_whisper_note(self):
+    def test_waiting_handoff_confirmation_not_all_clear(self):
         accounts = [
             AccountStatus(
                 source="amex",
@@ -211,11 +211,11 @@ class TestHomeBriefingUi:
         rendered = render_home_page(
             result, first_name="Ryan", today_label="Friday, July 3", escape=_escape,
         )
-        assert "You're good." in rendered or "You&#x27;re good." in rendered
-        assert "Working quietly" in rendered
-        assert "Setting up American Express" in rendered
-        assert "home-ops-list" in rendered
-        assert "View accounts" not in rendered
+        assert "You're good." not in rendered and "You&#x27;re good." not in rendered
+        assert "Getting your first update." in rendered
+        assert "beginning to manage" in rendered
+        assert "Visit American Express" in rendered
+        assert "home-card-cta--primary" in rendered
 
     def test_truth_debug_only_when_flagged(self):
         view = build_customer_account_access_view(

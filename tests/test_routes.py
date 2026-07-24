@@ -171,7 +171,7 @@ def test_gmail_callback_redirects_to_amex_connect(client, monkeypatch):
 
     r = client.get("/email/gmail/callback?code=abc&state=state123", follow_redirects=False)
     assert r.status_code == 302
-    assert r.headers["Location"].endswith("/credentials?connect=amex")
+    assert r.headers["Location"].endswith("/dashboard")
 
     with mighty.app.app_context():
         db = mighty.get_db()

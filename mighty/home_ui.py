@@ -635,8 +635,11 @@ def _render_featured_card(card: HomeCard, *, escape: Callable[[Any], str]) -> st
     if card.title:
         # Story detail sits under the dominant status line — not a second hero.
         title = f'<p class="home-card-title">{escape(card.title)}</p>'
-    # Primary filled CTA only when the user must act; calm stays CTA-free.
-    use_primary = card.tone in ("interrupt", "opportunity")
+    # Primary filled CTA when the user must act. Calm all-clear stays CTA-free.
+    # Enrollment / first-data handoff CTAs are also primary (one clear next step).
+    use_primary = card.tone in ("interrupt", "opportunity") or (
+        card.kind == "enrollment" and bool(card.cta_label and card.cta_url)
+    )
     cta = _cta_html(card, escape=escape, primary=use_primary)
     actions = ""
     if cta or secondary:

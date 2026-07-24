@@ -1,34 +1,36 @@
 """
 mighty.user_copy
 ────────────────
-Canonical user-facing copy for Mighty's dashboard ↔ Chrome worker interaction.
+Canonical user-facing copy for Mighty's Home ↔ Mighty in Chrome interaction.
 
 Interaction model:
-  • Mighty runs continuously in Chrome (the worker).
-  • The dashboard is the control center — view, add accounts, see changes.
-  • Login is the only manual step. Everything else is automatic.
+  • Mighty in Chrome watches accounts while you browse.
+  • Home answers whether anything needs you; Accounts is for repair.
+  • Sign-in is the only manual step. Everything else is automatic.
 """
 
 from __future__ import annotations
 
 # ── Roles ─────────────────────────────────────────────────────────────────────
-ROLE_DASHBOARD = "Control center"
-ROLE_EXTENSION = "Worker"
-ROLE_DASHBOARD_DESC = "View accounts, add providers, and see what's changed."
-ROLE_EXTENSION_DESC = "Runs continuously in Chrome and updates accounts automatically."
+ROLE_DASHBOARD = "Home"
+ROLE_EXTENSION = "Mighty in Chrome"
+ROLE_DASHBOARD_DESC = "See what needs you, what Mighty is doing, and what is done."
+ROLE_EXTENSION_DESC = "Runs in Chrome and updates accounts while you browse."
 
 # ── Taglines ──────────────────────────────────────────────────────────────────
 INTERACTION_TAGLINE = (
-    "Mighty runs in Chrome. The dashboard is your control center. "
-    "Login is the only manual step."
+    "Mighty runs in Chrome. Home shows what needs you. "
+    "Sign-in is the only manual step."
 )
-AUTO_UPDATE_TAGLINE = "Mighty runs continuously in Chrome."
-EXTENSION_UPDATE_LINE = "The worker updates accounts when you visit provider sites."
-DASHBOARD_ROLE_LINE = "The dashboard is your control center — it shows results, never logs in."
-MANUAL_STEP_LINE = "Login is the only thing you do manually. Everything else is automatic."
-NEEDS_LOGIN_EXPLAINER = "Needs login means: open the provider in Chrome and sign in."
+AUTO_UPDATE_TAGLINE = "Mighty runs in Chrome while you browse."
+EXTENSION_UPDATE_LINE = (
+    "Mighty in Chrome updates accounts when you visit provider sites."
+)
+DASHBOARD_ROLE_LINE = "Home shows results — it never logs into provider sites for you."
+MANUAL_STEP_LINE = "Sign-in is the only thing you do manually. Everything else is automatic."
+NEEDS_LOGIN_EXPLAINER = "Sign in required means: open the provider in Chrome and sign in."
 
-# ── Account Access Loop (Account Center + extension popup) ───────────────────
+# ── Account Access Loop (Accounts + Mighty in Chrome popup) ───────────────────
 # Session/login presentation comes from provider_session_state (via session_access).
 ACCOUNT_STATE_NEEDS_SIGN_IN = "needs_sign_in"
 ACCOUNT_STATE_UPDATING = "updating"
@@ -82,7 +84,7 @@ ACTIVITY_LABELS: dict[str, str] = {
     ACTIVITY_UPDATING: "Updating…",
     ACTIVITY_UPDATED: "Updated",
     ACTIVITY_NEEDS_LOGIN: "Needs login",
-    ACTIVITY_WAITING: "Waiting for worker",
+    ACTIVITY_WAITING: "Waiting for Mighty in Chrome",
     ACTIVITY_ERROR: "Update error",
 }
 
@@ -187,21 +189,21 @@ def access_discovered_from(source: str) -> str:
     return f"{ACCESS_DISCOVERED_FROM_PREFIX} {source}"
 
 
-# ── Worker popup copy ─────────────────────────────────────────────────────────
+# ── Mighty in Chrome popup copy ───────────────────────────────────────────────
 WORKER_NAME = "Mighty"
 WORKER_SUBTITLE_RUNNING = ACTIVITY_LABELS[ACTIVITY_WATCHING]
 WORKER_SUBTITLE_UPDATING = "Updating accounts"
 WORKER_SUBTITLE_NOT_CONFIGURED = "Not configured"
 WORKER_SETUP_NEEDED = "Setup needed"
-WORKER_SETUP_DETAIL = "Open your control center to connect the worker."
+WORKER_SETUP_DETAIL = "Open Accounts to finish setting up Mighty in Chrome."
 WORKER_SETUP_BOX = (
-    "Visit your Mighty dashboard in Chrome — the worker configures itself automatically."
+    "Open the setup page in Chrome — Mighty in Chrome configures itself automatically."
 )
-WORKER_OPEN_ACCOUNT_CENTER = "Open Account Center"
+WORKER_OPEN_ACCOUNT_CENTER = "Open Accounts"
 WORKER_OPEN_DASHBOARD = WORKER_OPEN_ACCOUNT_CENTER
 WORKER_SUBTITLE_BACKGROUND = "Working in the background"
 WORKER_STATUS_KEEPING_UPDATED = "Keeping your accounts up to date"
-WORKER_STATUS_OPEN_ACCOUNT_CENTER = "Open Account Center to manage connections"
+WORKER_STATUS_OPEN_ACCOUNT_CENTER = "Open Accounts to manage connections"
 WORKER_NOT_UPDATED_YET = "Not updated yet"
 WORKER_ACCESS_LOOP_UPDATING = "Mighty is updating your accounts"
 WORKER_FIRST_UPDATE_SOON = "First update soon"
@@ -211,45 +213,46 @@ WORKER_NEXT_UPDATE_PREFIX = "Next update in"
 WORKER_ACCOUNTS_UPDATED = "{n} account{s} updated"
 WORKER_ACCOUNTS_UPDATED_PARTIAL = "{ok} of {total} accounts updated"
 
-# ── Extension / worker setup ────────────────────────────────────────────────────
-EXT_PRODUCT_NAME = "Mighty Worker"
-EXT_SETUP_LINK = "Set up worker"
-EXT_SETUP_TITLE = "Connect Mighty Worker"
+# ── Mighty in Chrome setup (Chrome extension install / troubleshooting) ───────
+EXT_PRODUCT_NAME = "Mighty in Chrome"
+EXT_SETUP_LINK = "Set up Mighty in Chrome"
+EXT_SETUP_TITLE = "Connect Mighty in Chrome"
 EXT_SETUP_BODY = (
-    "The worker reads this page to configure itself automatically. "
+    "The Chrome extension reads this page to configure itself automatically. "
     "You can close this tab once it confirms."
 )
-EXT_SETUP_WAITING = "Waiting for worker…"
-EXT_SETUP_SUCCESS = "Worker connected — you can close this tab"
+EXT_SETUP_WAITING = "Waiting for Mighty in Chrome…"
+EXT_SETUP_SUCCESS = "Mighty in Chrome is connected — you can close this tab"
 EXT_SETUP_NOT_DETECTED = (
-    "Worker not detected — install Mighty in Chrome, enable it, then reload this page."
+    "Chrome extension not detected — install Mighty in Chrome, enable it, "
+    "then reload this page."
 )
-EXT_NOT_DETECTED_SHORT = "Worker not detected."
-EXT_INSTALL_TOAST = "Install the Mighty worker in Chrome to update your accounts."
-MOBILE_WORKER_TOAST = "Use desktop Chrome with the Mighty worker to update your accounts."
+EXT_NOT_DETECTED_SHORT = "Mighty in Chrome not detected."
+EXT_INSTALL_TOAST = "Install Mighty in Chrome to update your accounts."
+MOBILE_WORKER_TOAST = "Use desktop Chrome with Mighty in Chrome to update your accounts."
 
 # ── How updates work (Accounts page) ──────────────────────────────────────────
 HOW_UPDATES_TITLE = "How Mighty works"
 HOW_UPDATES_ITEMS: tuple[tuple[str, str], ...] = (
     (
-        "Control center",
-        "Your dashboard shows balances, perks, and expiry dates. "
-        "Add accounts and see what's changed — it never logs into provider sites.",
+        "Home",
+        "Home shows what needs you and what Mighty has finished. "
+        "It never logs into provider sites for you.",
     ),
     (
-        "Worker in Chrome",
-        "Mighty runs continuously in Chrome. When you visit a provider site while logged in, "
-        "the worker captures account data and sends it to your control center.",
+        "Mighty in Chrome",
+        "When you visit a provider site while signed in, "
+        "Mighty in Chrome captures account data for Accounts and Home.",
     ),
     (
         "Automatic updates",
-        "The worker checks your accounts on a schedule and whenever you visit provider sites. "
+        "Mighty checks your accounts while you browse provider sites. "
         "No manual sync needed.",
     ),
     (
-        "Login only when needed",
-        "If a provider session expires, open the provider in Chrome and sign in. "
-        "The worker picks up your session on its next visit.",
+        "Sign in only when needed",
+        "If access expires, open the provider in Chrome and sign in. "
+        "Mighty in Chrome picks up your next visit.",
     ),
 )
 
@@ -264,26 +267,30 @@ CONNECT_STEP_2 = (
     "— this is the only manual step"
 )
 CONNECT_STEP_3 = (
-    "The worker <strong>automatically captures your data</strong> — nothing else for you to do"
+    "Mighty in Chrome <strong>automatically captures your data</strong> — "
+    "nothing else for you to do"
 )
-CONNECT_WAITING = "Waiting for the worker to verify your session…"
+CONNECT_WAITING = "Waiting for Mighty in Chrome to verify access…"
 CONNECT_WAITING_SUB = (
-    "Stay on your account page after logging in — usually takes 5–15 seconds"
+    "Stay on your account page after signing in — usually takes 5–15 seconds"
 )
-CONNECT_TROUBLE_TITLE = "The worker didn't detect your login. Try these:"
-CONNECT_TROUBLE_EXT = "Make sure the <a href=\"/extension-setup\" target=\"_blank\" style=\"color:#b91c1c;font-weight:500\">Mighty worker is installed</a>"
+CONNECT_TROUBLE_TITLE = "Mighty in Chrome didn't detect your sign-in. Try these:"
+CONNECT_TROUBLE_EXT = (
+    "Make sure the <a href=\"/extension-setup\" target=\"_blank\" "
+    "style=\"color:#b91c1c;font-weight:500\">Chrome extension is installed</a>"
+)
 CONNECT_MODAL_INTRO = (
-    "Make sure you're <strong>logged into <span id=\"modal-ext-site-name\"></span></strong> in Chrome, "
-    "then click the button below. The worker captures your account data automatically."
+    "Make sure you're <strong>signed into <span id=\"modal-ext-site-name\"></span></strong> in Chrome, "
+    "then click the button below. Mighty in Chrome captures your account data automatically."
 )
-CONNECT_MODAL_WAITING = "Waiting for worker…"
+CONNECT_MODAL_WAITING = "Waiting for Mighty in Chrome…"
 CONNECT_MODAL_WAITING_SUB = (
-    "Open your provider site in Chrome while logged in. "
-    "The worker verifies your session — visiting the domain alone is not enough."
+    "Open your provider site in Chrome while signed in. "
+    "Mighty in Chrome verifies access — visiting the domain alone is not enough."
 )
 CONNECT_MODAL_NEEDS_LOGIN = (
-    "Sign in required. Log in to your provider in Chrome, "
-    "then keep this tab open while the worker verifies your session."
+    "Sign in required. Sign in to your provider in Chrome, "
+    "then keep this tab open while Mighty in Chrome verifies access."
 )
 
 # ── Lifecycle state labels ────────────────────────────────────────────────────
@@ -300,13 +307,13 @@ LIFECYCLE_DESCRIPTIONS: dict[str, str] = {
     "discovered": "Found from your email — not yet added to Mighty.",
     "added": "Added to Mighty — open the provider in Chrome to get started.",
     "waiting_for_extension": (
-        "Install the Mighty worker in Chrome and open your provider site."
+        "Set up Mighty in Chrome and open your provider site."
     ),
     "needs_login": "Sign in to your provider in Chrome — the only manual step.",
     "connected": (
-        "Session verified — visit your account page so the worker can capture data."
+        "Access verified — visit your account page so Mighty in Chrome can capture data."
     ),
-    "synced": "Account data captured and stored in your control center.",
+    "synced": "Account data is ready in Accounts and Home.",
 }
 
 # ── Connection state labels (Amex + generic) ──────────────────────────────────
@@ -319,7 +326,7 @@ CONNECTION_LABELS: dict[str, str] = {
 
 CONNECTION_STATUS_LINES: dict[str, str] = {
     "connecting": "Setting up…",
-    "waiting_for_extension": "Worker verifying session…",
+    "waiting_for_extension": "Mighty in Chrome is verifying access…",
     "needs_login": STATUS_LABEL_NEEDS_LOGIN,
     "connected": "Connected — awaiting data",
 }
@@ -327,10 +334,14 @@ CONNECTION_STATUS_LINES: dict[str, str] = {
 CONNECTION_SUBCOPY: dict[str, str] = {
     "connecting": "Setting up your account…",
     "waiting_for_extension": (
-        "Waiting for worker — install Mighty in Chrome and open the provider while logged in."
+        "Waiting for Mighty in Chrome — set it up and open the provider while signed in."
     ),
-    "needs_login": "Needs login — sign in in Chrome so the worker can verify your session.",
-    "connected": "Connected — session verified. The worker will capture data on your next visit.",
+    "needs_login": (
+        "Sign in required — sign in in Chrome so Mighty can verify access."
+    ),
+    "connected": (
+        "Connected — access verified. Mighty in Chrome will capture data on your next visit."
+    ),
 }
 
 # ── Primary CTAs ──────────────────────────────────────────────────────────────
@@ -340,7 +351,7 @@ CTA_LOG_IN = "Log in"
 CTA_LOG_IN_TO_PROVIDER = "Log in to provider"
 CTA_VIEW_ACCOUNT = "View account"
 CTA_RETRY_UPDATE = "Retry update"
-CTA_SET_UP_WORKER = "Set up worker →"
+CTA_SET_UP_WORKER = "Set up Mighty in Chrome"
 
 LIFECYCLE_CTAS: dict[str, str] = {
     "discovered": CTA_ADD_TO_MIGHTY,
@@ -351,11 +362,11 @@ LIFECYCLE_CTAS: dict[str, str] = {
     "synced": CTA_VIEW_ACCOUNT,
 }
 
-SECONDARY_CTA_EXTENSION_RETRY = "Worker installed / Retry"
+SECONDARY_CTA_EXTENSION_RETRY = "Mighty in Chrome installed / Retry"
 
 # ── Source labels ─────────────────────────────────────────────────────────────
 SOURCE_FOUND_FROM_GMAIL = "Found from Gmail"
-SOURCE_EXTENSION = "Chrome worker"
+SOURCE_EXTENSION = "Mighty in Chrome"
 SOURCE_MANUALLY_ADDED = "Manually added"
 
 # ── Login-required display ────────────────────────────────────────────────────
@@ -365,7 +376,7 @@ NEEDS_LOGIN_ACTION_VALUE = "{name} — open the provider in Chrome and sign in"
 NEEDS_LOGIN_ACTION_CTA = CTA_LOG_IN_TO_PROVIDER
 NEEDS_LOGIN_ACTION_WHY = "Sign in to the provider in Chrome — the only manual step."
 NEEDS_LOGIN_BANNER_SUFFIX = (
-    "open each site in Chrome and sign in. The worker updates automatically."
+    "open each site in Chrome and sign in. Mighty in Chrome updates automatically."
 )
 NEEDS_LOGIN_ACCOUNT_HINT = "{name} — sign in in Chrome"
 
@@ -438,8 +449,8 @@ FAILURE_ACTIONS: dict[str, tuple[str, str]] = {
         "Will retry on the next automatic update.",
     ),
     "extension_missing": (
-        "Worker needed",
-        "Install the Mighty worker in Chrome, then visit your provider site.",
+        "Mighty in Chrome needed",
+        "Set up Mighty in Chrome, then visit your provider site.",
     ),
     "domain_unreachable": (
         "Site may have moved",
@@ -466,24 +477,24 @@ FAILURE_ICONS: dict[str, str] = {
 # ── Settings (advanced) ───────────────────────────────────────────────────────
 SETTINGS_UPDATES_ADVANCED_TITLE = "Updates (advanced)"
 SETTINGS_UPDATES_PRIMARY = (
-    "The Mighty worker runs in Chrome and updates accounts automatically "
-    "when you visit provider sites while logged in."
+    "Mighty in Chrome updates accounts automatically "
+    "when you visit provider sites while signed in."
 )
 SETTINGS_UPDATES_FALLBACK = (
     "Server-side retry re-runs Mighty's scraper for all connected accounts. "
-    "Use only if worker data looks stale — it may not work for sites that "
-    "require an active browser session."
+    "Use only if account data looks stale — it may not work for sites that "
+    "require an active browser visit."
 )
 SETTINGS_RETRY_UPDATE_BTN = CTA_RETRY_UPDATE
 SETTINGS_RETRY_RUNNING = "Running…"
-SETTINGS_RETRY_STARTED = "Update started — check your control center in a few minutes."
+SETTINGS_RETRY_STARTED = "Update started — check Home in a few minutes."
 SETTINGS_RETRY_FAILED = "Update failed or already running."
 
 # ── Connect modal ─────────────────────────────────────────────────────────────
 MODAL_ADD_ACCOUNT = "Add an account"
 MODAL_OPEN_IN_CHROME = "Open in Chrome →"
 MODAL_CONNECTED_NO_FIELDS = (
-    "Session verified. Visit your account page — the worker will capture your data."
+    "Access verified. Visit your account page — Mighty in Chrome will capture your data."
 )
 
 # ── Onboarding ────────────────────────────────────────────────────────────────
@@ -494,12 +505,12 @@ ONBOARDING_BODY = (
     "<strong>Raw page text is never shared</strong> and is discarded after extraction."
 )
 ONBOARDING_CHROME_LINE = (
-    "Use <strong>desktop Chrome</strong> — the worker runs continuously and updates accounts automatically. "
-    "The dashboard is your control center."
+    "Use <strong>desktop Chrome</strong> — Mighty in Chrome updates accounts while you browse. "
+    "Home shows what needs you."
 )
 SIGNUP_SUB = (
     "You'll be connected in about 5 minutes. "
-    "Account syncing requires desktop Chrome with the Mighty worker."
+    "Account updates use desktop Chrome with Mighty in Chrome."
 )
 
 # ── Daily brief / actions ─────────────────────────────────────────────────────
@@ -554,15 +565,27 @@ HOME_EMPTY_BODY = (
     "while you browse in Chrome. You sign in when asked — Mighty handles the rest."
 )
 HOME_EMPTY_WORKER_NOTE = (
-    "Use desktop Chrome with the Mighty worker installed. "
-    "The dashboard shows results; it never logs into provider sites for you."
+    "Use desktop Chrome with Mighty in Chrome when it is time to verify access. "
+    "Home shows results; it never logs into provider sites for you."
 )
 HOME_EMPTY_CTA = "Connect Gmail"
 HOME_EMPTY_SECONDARY = "Add an account manually"
 
 HOME_WAITING_BODY = (
-    "Visit your account page in Chrome while logged in — that's when the worker captures "
+    "Visit your account page in Chrome while signed in — Mighty in Chrome captures "
     "your balances and perks. Usually takes one visit; no sync button needed."
+)
+HOME_BRIEFING_ANSWER_HANDOFF = "Getting your first update."
+HOME_HANDOFF_NEEDS_CHROME_BODY = (
+    "Set up Mighty in Chrome so Mighty can verify access while you browse. "
+    "This is the only setup step left before your first update."
+)
+HOME_HANDOFF_NEEDS_VISIT_BODY = (
+    "Mighty is ready to verify access. Visit the provider in Chrome while signed in — "
+    "that is the only step you need to do."
+)
+HOME_HANDOFF_VERIFYING_BODY = (
+    "Mighty is verifying access now. You do not need to do anything else."
 )
 HOME_VIEW_WAITING_LABEL = "View all accounts"
 HOME_VIEW_NEEDS_LOGIN_LABEL = "View all accounts needing login"
@@ -636,8 +659,24 @@ def accounts_last_checked(relative_time: str) -> str:
 
 def home_waiting_headline(count: int, provider_name: str | None = None) -> str:
     if count == 1 and provider_name:
-        return f"Mighty is tracking {provider_name}."
-    return f"Mighty is tracking {count} account{'s' if count != 1 else ''}."
+        return f"Mighty is beginning to manage {provider_name}."
+    return (
+        f"Mighty is beginning to manage {count} "
+        f"account{'s' if count != 1 else ''}."
+    )
+
+
+def home_handoff_body(*, needs_chrome: bool = False, verifying: bool = False) -> str:
+    """Lightweight enrollment confirmation body — not a permanent Home section."""
+    if needs_chrome:
+        return HOME_HANDOFF_NEEDS_CHROME_BODY
+    if verifying:
+        return HOME_HANDOFF_VERIFYING_BODY
+    return HOME_HANDOFF_NEEDS_VISIT_BODY
+
+
+def home_visit_provider_cta(provider_name: str) -> str:
+    return f"Visit {provider_name}"
 
 
 def home_login_headline(provider_name: str, *, plural: bool = False, count: int = 1) -> str:

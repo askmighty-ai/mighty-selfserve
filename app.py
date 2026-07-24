@@ -6782,8 +6782,8 @@ a.home-ops-note:hover{color:#a8a29e;text-decoration:underline}
       {pending_count} awaiting decision
     </div>
     <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="{dash_global_last_updated_title}">{global_sync_label}</span>
-    <span id="worker-active-badge" style="display:none;font-size:11px;color:#059669;white-space:nowrap;padding:4px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0" title="Extension heartbeat is healthy — does not imply a verification is active">
-      Worker: Watching
+    <span id="worker-active-badge" style="display:none;font-size:11px;color:#059669;white-space:nowrap;padding:4px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0" title="Mighty in Chrome heartbeat is healthy — does not imply a verification is active">
+      Mighty in Chrome
     </span>
     <!-- Alpha: manual sync removed — extension is the primary sync mechanism. Server retry is in Settings. -->
     <a id="ext-install-link" href="/extension-setup" target="_blank"
@@ -10350,6 +10350,24 @@ def dashboard():
                 if _ha.source == _updating_source:
                     _updating_name = _ha.display_name
                     break
+        # Gmail-first: Mighty in Chrome is only required once accounts are enrolled.
+        # Attention SYSTEM owns the interrupt when AccountState + worker signal agree;
+        # this flag backs the Home handoff CTA when enrollment exists but the
+        # Chrome extension heartbeat is missing.
+        _worker_setup_needed = False
+        if _home_account_statuses:
+            try:
+                _ext_row = get_db().execute(
+                    "SELECT extension_version, extension_last_seen_at "
+                    "FROM users WHERE id=?",
+                    (session["user_id"],),
+                ).fetchone()
+                if _ext_row is not None:
+                    _ver = (_ext_row["extension_version"] or "").strip()
+                    _seen = (_ext_row["extension_last_seen_at"] or "").strip()
+                    _worker_setup_needed = not bool(_ver or _seen)
+            except Exception:
+                _worker_setup_needed = False
         _home_result = resolve_home_state(
             accounts=_home_account_statuses,
             actions=_dashboard_actions if build_dashboard_actions is not None else None,
@@ -10360,6 +10378,7 @@ def dashboard():
             benefit_count=len(_hero_candidates),
             tracked_value_label=_tracked_value_label,
             freshness_label=_last_checked,
+            worker_setup_needed=_worker_setup_needed,
             provider_open_urls=_home_provider_urls,
             show_access_debug=_is_dev_debug(user),
             extracted_items=_truth_extracted_items,
@@ -11458,8 +11477,8 @@ def dashboard():
     </p>
     <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;margin-bottom:20px">
       <div style="font-size:13px;color:#374151;display:flex;flex-direction:column;gap:8px">
-        <div>&#128187; <strong>Worker:</strong> {user_copy.ROLE_EXTENSION_DESC}</div>
-        <div>&#128202; <strong>Control center:</strong> {user_copy.ROLE_DASHBOARD_DESC}</div>
+        <div>&#128187; <strong>Mighty in Chrome:</strong> {user_copy.ROLE_EXTENSION_DESC}</div>
+        <div>&#128202; <strong>Home:</strong> {user_copy.ROLE_DASHBOARD_DESC}</div>
         <div>&#128274; <strong>Manual step:</strong> {user_copy.MANUAL_STEP_LINE}</div>
       </div>
     </div>
@@ -16533,15 +16552,14 @@ def _build_account_center_page(user, states) -> str:
 @app.route("/account-center")
 @require_login
 def account_center_page():
-    user = get_db().execute(
-        "SELECT * FROM users WHERE id=?", (session["user_id"],),
-    ).fetchone()
-    if not user:
-        session.clear()
-        return redirect("/login")
-    db = get_db()
-    states = _load_user_account_states(user["id"], db)
-    return _build_account_center_page(user, states)
+    """Legacy Account Center — redirect to Accounts (/credentials).
+
+    Preserves backward-compatible deep links from older extension builds.
+    """
+    filt = (request.args.get("filter") or "").strip()
+    if filt in ("all", "needs_attention", "waiting", "up_to_date", "needs_login"):
+        return redirect(f"/credentials?filter={filt}")
+    return redirect("/credentials")
 
 
 @app.route("/api/extension/poll/<source>")
@@ -21988,8 +22006,9 @@ def email_gmail_callback():
     enrolled_now = set(scan_result.auto_enrolled) | set(scan_result.already_enrolled)
     visible = [s for s in visible if s["site_key"] not in enrolled_now]
 
-    if "amex" in scan_result.auto_enrolled:
-        return redirect("/credentials?connect=amex")
+    # First-data handoff: land on Home (not the connect modal).
+    if scan_result.auto_enrolled:
+        return redirect("/dashboard")
 
     return _render_email_scan_page(suggestions=visible, already_count=already_count)
 
@@ -22094,8 +22113,9 @@ def email_outlook_callback():
         and s["site_key"] not in enrolled_now
         and s["site_key"] in _CVP
     ]
-    if "amex" in scan_result.auto_enrolled:
-        return redirect("/credentials?connect=amex")
+    # First-data handoff: land on Home (not the connect modal).
+    if scan_result.auto_enrolled:
+        return redirect("/dashboard")
 
     return _render_email_scan_page(suggestions=visible, already_count=already_count)
 

@@ -404,13 +404,25 @@ def resolve_home_state(
     if not has_fresh_data:
         wait_acct = _pick_waiting_account(accounts)
         n = enrolled
-        headline = user_copy.home_waiting_headline(n, wait_acct.display_name if n == 1 and wait_acct else None)
-        body = user_copy.HOME_WAITING_BODY
+        headline = user_copy.home_waiting_headline(
+            n, wait_acct.display_name if n == 1 and wait_acct else None,
+        )
+        verifying = bool(
+            updating_name
+            or any(a.status in (UPDATING, CHECKING) for a in accounts)
+        )
+        body = user_copy.home_handoff_body(
+            needs_chrome=worker_setup_needed,
+            verifying=verifying and not worker_setup_needed,
+        )
         if worker_setup_needed:
-            cta_label = user_copy.CTA_SET_UP_WORKER.rstrip(" →")
+            cta_label = user_copy.CTA_SET_UP_WORKER
             cta_url = "/extension-setup"
+        elif verifying:
+            cta_label = None
+            cta_url = None
         elif wait_acct:
-            cta_label = user_copy.home_open_provider_cta(wait_acct.display_name)
+            cta_label = user_copy.home_visit_provider_cta(wait_acct.display_name)
             open_urls = provider_open_urls or {}
             cta_url = (
                 open_urls.get(wait_acct.source)
