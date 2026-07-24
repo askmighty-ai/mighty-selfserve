@@ -1,8 +1,8 @@
 # Product Flow V1
 
-**Status:** Review document — defines the customer journey; does not implement it.  
+**Status:** Decisions finalized — journey definition + approved product decisions for Accounts + First-Data Handoff V1.  
 **Audience:** Product, engineering, design  
-**Related:** [PRODUCT_MANIFESTO.md](PRODUCT_MANIFESTO.md) · [PRODUCT_ARCHITECTURE.md](PRODUCT_ARCHITECTURE.md) · [HOME_EXPERIENCE.md](HOME_EXPERIENCE.md) · [HOME_V1.md](HOME_V1.md) · [ACCOUNT_DISCOVERY.md](ACCOUNT_DISCOVERY.md) · [ACCESS_FLOW.md](ACCESS_FLOW.md) · [ATTENTION_AUTONOMOUS_RECOVERY.md](ATTENTION_AUTONOMOUS_RECOVERY.md) · [ACTIVITY_V1_IMPLEMENTATION_PLAN.md](ACTIVITY_V1_IMPLEMENTATION_PLAN.md) · [ROADMAP.md](ROADMAP.md)
+**Related:** [PRODUCT_MANIFESTO.md](PRODUCT_MANIFESTO.md) · [PRODUCT_ARCHITECTURE.md](PRODUCT_ARCHITECTURE.md) · [HOME_EXPERIENCE.md](HOME_EXPERIENCE.md) · [HOME_V1.md](HOME_V1.md) · [ACCOUNT_DISCOVERY.md](ACCOUNT_DISCOVERY.md) · [ACCESS_FLOW.md](ACCESS_FLOW.md) · [ATTENTION_AUTONOMOUS_RECOVERY.md](ATTENTION_AUTONOMOUS_RECOVERY.md) · [ACTIVITY_V1_IMPLEMENTATION_PLAN.md](ACTIVITY_V1_IMPLEMENTATION_PLAN.md) · [ACCOUNTS_HANDOFF_V1_PLAN.md](ACCOUNTS_HANDOFF_V1_PLAN.md) · [ROADMAP.md](ROADMAP.md)
 
 ---
 
@@ -55,7 +55,7 @@ Interrupt loops (authorization, access failure, recovery, required sign-in, new 
 | Accounts (`/credentials`) | What does Mighty know and manage? | Portfolio audit, repair, manual add, discovery entry |
 | Attention | Interrupt ranking | Compile → rank → `AttentionView` only |
 | Recovery | Silent repair | Planner + store + supervisor before human ask |
-| Chrome extension | Is Mighty working while I browse? | Ambient capture; glance popup — not a destination |
+| Mighty in Chrome | Is Mighty working while I browse? | Ambient capture; glance popup — not a destination |
 
 ---
 
@@ -337,7 +337,7 @@ At least one enrolled watched account exists (or user explicitly chose manual-on
 
 ### Gaps
 
-- **No dedicated enrollment confirmation moment** after auto-enroll (toast / Home story / Accounts highlight). Users can miss that Mighty already enrolled accounts and re-enter Find accounts.
+- Lightweight Home enrollment confirmation (approved D1) is not yet implemented — see [ACCOUNTS_HANDOFF_V1_PLAN.md](ACCOUNTS_HANDOFF_V1_PLAN.md).
 - Manual Amex connect modal (`/credentials?connect=…`, `/api/connect/amex*`) still feels like a parallel enrollment ritual beside Gmail auto-enroll.
 
 ---
@@ -841,12 +841,13 @@ Recommendations only — **do not redesign global navigation in this document’
 | Moment | Single owner of primary CTA |
 |--------|----------------------------|
 | Empty portfolio | Home → Connect Gmail |
-| Extension missing | Home (or Settings link) → extension setup |
-| Waiting for first visit | Home ops / Attention → Open provider |
-| Login required | Attention → Sign in in Chrome |
+| Mighty in Chrome missing (when required) | Home / Attention → Set up Mighty in Chrome |
+| Waiting for first visit | Home ops / Attention → Visit [Provider] |
+| Login required | Attention → Sign in |
 | Agent approval | Attention → Activity (or token page) |
 | Repair audit | Accounts only |
 | History / receipt | Activity only |
+| Ambiguous discoveries | Find accounts / Accounts only (no interrupt; D4) |
 
 ---
 
@@ -918,65 +919,85 @@ Ranked by impact on completing a coherent end-to-end journey.
 
 # Recommended next vertical slice
 
+**Status: Approved** — implement as [ACCOUNTS_HANDOFF_V1_PLAN.md](ACCOUNTS_HANDOFF_V1_PLAN.md).
+
 **Unify Accounts + first-data handoff (gaps 1 and 2 as one vertical):**
 
-Make `/credentials` (Accounts) the only customer repair/connection list; redirect `/account-center` and point the Chrome extension popup at Accounts or Home; then enforce a single post-enrollment primary CTA path on Home from “extension needed” → “visit provider” → first verification, without Find accounts or connect modals competing as co-equal primaries.
+Make `/credentials` (Accounts) the only customer repair/connection list; redirect `/account-center` and point Mighty in Chrome at Accounts or Home; then enforce a single post-enrollment primary CTA path on Home from “Mighty in Chrome needed” → “visit provider” → first verification, without Find accounts or connect modals competing as co-equal primaries.
 
-**Why this slice (firm):**
-
-| Criterion | Fit |
-|-----------|-----|
-| User impact | Removes the worst dead end between enrollment and first value |
-| Reuse | Home V1B, Attention, Accounts UI, PAM, natural session, discovery waiting stubs |
-| End-to-end journey | Connects stages 2–7 into one completable path into Home |
-| Largest dead end | Dual Account Center vs Accounts + scattered first-use CTAs |
-| Wrong-screen risk | Avoids building Account detail or a new wizard before the spine works |
-
-Do **not** implement Account detail, nav IA redesign beyond CTA targets/labels needed for this slice, or Activity expansions in this slice.
+Apply approved decisions D1–D5. Do **not** implement Account Detail, full global nav redesign, or Activity expansions in this slice.
 
 ---
 
-# Product decisions
+# Product decisions (approved)
 
-Only decisions that genuinely need CEO/Product input (repository + manifesto/architecture already resolve the rest).
+Status: **Approved** for Accounts + First-Data Handoff V1. These supersede the prior recommendations.
 
-## D1 — Enrollment confirmation explicitness
+## D1 — Enrollment confirmation
 
-- **Issue:** After auto-enroll, should Mighty show an explicit “We found and are watching: …” confirmation, or is Home Waiting + Accounts list enough?
-- **Recommendation:** Show a **lightweight confirmation on Home** (Waiting story / ops) listing enrolled providers by name — not a separate wizard step and not a checkbox wall.
-- **Consequence:** Users trust discovery immediately; Find accounts becomes optional audit, not the place they hunt for proof of enrollment.
+**Approved:** Use a **lightweight Home confirmation** after enrollment rather than a separate mandatory confirmation screen.
 
-## D2 — Extension before vs after Gmail
+The confirmation must communicate:
 
-- **Issue:** Is Connect Gmail always the first Empty CTA, with extension setup only when blocking verification — or should first-run require Chrome extension before mailbox connect?
-- **Recommendation:** Keep **Gmail first** (manifesto zero-bulk onboarding); promote extension only when it is the blocker for first data (Attention / Home ops).
-- **Consequence:** Faster path to a watched-account list; some users briefly see Waiting before extension install — acceptable if CTA ordering is strict (gap 2).
+- which account Mighty is beginning to manage,
+- what Mighty is doing next,
+- whether the user needs to do anything.
 
-## D3 — Customer name for the Chrome extension
+It must **not** become a permanent Home section or require an unnecessary acknowledgement.
 
-- **Issue:** Manifesto still uses “Worker” as an internal role name while also listing “worker” as jargon to avoid in primary UI. What should customers see?
-- **Recommendation:** Customer-facing **“Mighty in Chrome”** / **“Chrome extension”**; reserve Worker for engineering docs only.
-- **Consequence:** Copy and setup screens need a one-time rename; extension store listing should match.
+## D2 — Connection order
+
+**Approved:** Use **Gmail first** for discovery.
+
+Introduce **Mighty in Chrome** only when browser access is required for verification, account access, or continued management.
+
+Do **not** require extension installation before Gmail discovery unless the current flow technically cannot proceed without it.
+
+## D3 — Customer terminology
+
+**Approved:** Use **“Mighty in Chrome”** as the primary customer-facing name.
+
+Use **“Chrome extension”** only in:
+
+- installation instructions,
+- troubleshooting,
+- browser-store or technical contexts.
+
+Avoid switching casually between: extension, browser agent, Chrome helper, connector, worker.
+
+Engineering docs may still say Worker; customer UI must not.
 
 ## D4 — Ambiguous discoveries
 
-- **Issue:** When Gmail finds providers outside the auto-enroll set, should Home mention them, or only Find accounts?
-- **Recommendation:** Keep ambiguous items **only on Find accounts / Accounts** — no Attention spam (per M7). Optionally a single quiet Home ops note: “N more accounts you can add.”
-- **Consequence:** Preserves calm Home; may slow coverage growth until auto-enroll set expands.
+**Approved:** Keep ambiguous or low-confidence discoveries inside **Find accounts / Accounts**.
 
-## D5 — Account detail timing vs depth ambition
+Do **not** interrupt the user for them.
 
-- **Issue:** Ship a minimal truthful detail drill-in now, or wait until after the first-data handoff slice?
-- **Recommendation:** **Wait** until after the recommended vertical slice (gap 5 stays fifth). Depth without a working first-data path increases isolated-screen risk.
-- **Consequence:** Short-term “What’s in this account?” remains partially answered via Accounts rows and Home wins only.
+A quiet Home note is allowed only when:
+
+- the discovery is materially useful,
+- the user can resolve it,
+- and it is selected through existing **Attention** ownership.
+
+## D5 — Account detail
+
+**Approved:** **Defer** Account Detail work until the Accounts + First-Data Handoff V1 vertical slice is complete.
+
+Do **not** begin Account Detail implementation in that slice.
+
+---
+
+## Next implementation
+
+See [ACCOUNTS_HANDOFF_V1_PLAN.md](ACCOUNTS_HANDOFF_V1_PLAN.md) for the vertical slice that resolves gaps 1 and 2 under these decisions.
 
 ---
 
 ## Out of scope for this document
 
-- Implementing any of the gaps or the recommended slice
 - Global navigation redesign beyond recorded recommendations
-- New milestones numbering / roadmap edits (update Roadmap when a slice starts)
+- Account Detail implementation (deferred per D5)
+- New milestones numbering / roadmap edits (update Roadmap when the slice starts)
 - Mobile IA overhaul
 
 ---
@@ -985,6 +1006,6 @@ Only decisions that genuinely need CEO/Product input (repository + manifesto/arc
 
 | Field | Value |
 |-------|-------|
-| Version | V1 |
-| Nature | Journey definition + audit |
-| Implementation | None in this change |
+| Version | V1 (decisions finalized) |
+| Nature | Journey definition + approved product decisions |
+| Implementation | Deferred to Accounts + First-Data Handoff V1 |
