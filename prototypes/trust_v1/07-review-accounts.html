@@ -6,7 +6,7 @@
   <title>Review discovered accounts — Mighty</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body data-proto="review">
   <div class="shell">
     <header class="container">
       <div class="mkt-header">
@@ -18,7 +18,7 @@
     </header>
 
     <main class="center-stage">
-      <div class="onboard-card wide card card-pad-lg rise">
+      <div class="onboard-card wide surface surface-pad-lg rise">
         <p class="eyebrow">Discovery complete · Your choice</p>
         <h1 class="display display-md">Confirm what Mighty should watch</h1>
         <p class="lede" style="margin-top: 0.65rem; font-size: 1.02rem;">
@@ -26,16 +26,13 @@
           Found does not mean logged in — balances appear after verification.
         </p>
 
-        <div class="note-bar" style="margin-top: 1.25rem;">
-          Matched from known program senders in your mail — not by reading unrelated personal messages as a product feature.
-        </div>
-
+        <p class="tier-label">Confidently matched</p>
         <div class="account-list">
           <label class="account-row">
             <div class="provider-badge amex" aria-hidden="true">AX</div>
             <div>
               <h3>American Express</h3>
-              <p>High confidence · Membership statement sender matched</p>
+              <p>Membership statement sender matched</p>
             </div>
             <span class="toggle">
               <input type="checkbox" checked aria-label="Watch American Express" />
@@ -46,7 +43,7 @@
             <div class="provider-badge delta" aria-hidden="true">DL</div>
             <div>
               <h3>Delta SkyMiles</h3>
-              <p>High confidence · SkyMiles program mail matched</p>
+              <p>SkyMiles program mail matched</p>
             </div>
             <span class="toggle">
               <input type="checkbox" checked aria-label="Watch Delta SkyMiles" />
@@ -57,18 +54,22 @@
             <div class="provider-badge marriott" aria-hidden="true">MB</div>
             <div>
               <h3>Marriott Bonvoy</h3>
-              <p>High confidence · Bonvoy account mail matched</p>
+              <p>Bonvoy account mail matched</p>
             </div>
             <span class="toggle">
               <input type="checkbox" checked aria-label="Watch Marriott Bonvoy" />
               <span></span>
             </span>
           </label>
-          <label class="account-row">
+        </div>
+
+        <p class="tier-label">Uncertain — add only if this is yours</p>
+        <div class="account-list">
+          <label class="account-row is-uncertain">
             <div class="provider-badge united" aria-hidden="true">UA</div>
             <div>
               <h3>United MileagePlus</h3>
-              <p>Optional · Lower confidence match — add only if this is yours</p>
+              <p>Lower confidence match · left off by default</p>
             </div>
             <span class="toggle">
               <input type="checkbox" aria-label="Watch United MileagePlus" />
@@ -77,15 +78,16 @@
           </label>
         </div>
 
+        <div class="consequence">
+          <strong>If you continue:</strong> Mighty will start watching the accounts you selected.
+          You’ll take one more step in Chrome for the first update. You can change this anytime on Accounts.
+        </div>
+
         <a class="btn btn-primary btn-lg" href="08-home-waiting.html">Start watching these accounts</a>
         <a class="btn btn-ghost" href="08-home-waiting.html" style="margin-left: 0.35rem;">I’ll add accounts later</a>
-
-        <p class="small muted" style="margin-top: 1rem;">
-          You can change this anytime on Accounts. Watching means Mighty will track these —
-          it does not sign in for you.
-        </p>
       </div>
     </main>
   </div>
+  <script src="prototype.js"></script>
 </body>
 </html>

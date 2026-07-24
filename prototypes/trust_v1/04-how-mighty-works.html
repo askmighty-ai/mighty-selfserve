@@ -18,7 +18,7 @@
     </header>
 
     <main class="center-stage">
-      <div class="onboard-card wide card card-pad-lg rise">
+      <div class="onboard-card wide surface surface-pad-lg rise">
         <div class="step-rail" aria-label="Progress">
           <span class="is-done">✓</span>
           <span class="is-done">✓</span>
@@ -32,53 +32,36 @@
           and only asks you to sign in when necessary. You stay in control.
         </p>
 
-        <div class="principles">
-          <article class="principle">
-            <div class="principle-icon" aria-hidden="true">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h14" stroke-linecap="round"/></svg>
-            </div>
-            <div>
-              <h3>What Mighty does</h3>
-              <p>Watches accounts you already have and speaks up only when something needs you.</p>
-            </div>
+        <div class="triad" aria-label="Roles and limits">
+          <article class="triad-card">
+            <h3>What Mighty does</h3>
+            <ul>
+              <li>Finds accounts from known program mail</li>
+              <li>Watches what you choose to keep</li>
+              <li>Speaks up only when something needs you</li>
+            </ul>
           </article>
-          <article class="principle">
-            <div class="principle-icon" aria-hidden="true">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3"/><path d="M5 20c1.5-3.5 4-5 7-5s5.5 1.5 7 5" stroke-linecap="round"/></svg>
-            </div>
-            <div>
-              <h3>What you’ll do</h3>
-              <p>Connect Gmail once. Later, sign into providers yourself when asked. Use desktop Chrome when verification needs the browser.</p>
-            </div>
+          <article class="triad-card">
+            <h3>What you do</h3>
+            <ul>
+              <li>Connect Gmail once</li>
+              <li>Confirm what to watch</li>
+              <li>Sign into providers yourself when asked</li>
+            </ul>
           </article>
-          <article class="principle">
-            <div class="principle-icon" aria-hidden="true">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4z" stroke-linejoin="round"/></svg>
-            </div>
-            <div>
-              <h3>What happens next</h3>
-              <p>After Gmail, Mighty scans for known programs and shows what it found for your review — nothing is watched until you confirm.</p>
-            </div>
+          <article class="triad-card never">
+            <h3>What Mighty never does</h3>
+            <ul>
+              <li>Send email as you</li>
+              <li>Store provider passwords for discovery</li>
+              <li>Sign into providers as you</li>
+            </ul>
           </article>
         </div>
 
-        <div class="limits">
-          <div class="limit-box">
-            <h4>What we use Gmail for</h4>
-            <ul>
-              <li>Finding loyalty and card relationships from program mail</li>
-              <li>Matching known sender domains — not inventing accounts</li>
-            </ul>
-          </div>
-          <div class="limit-box wont">
-            <h4>What we will not do</h4>
-            <ul>
-              <li>Send email as you</li>
-              <li>Ask you to store provider passwords in Mighty for discovery</li>
-              <li>Sign into providers as you — you remain the operator</li>
-            </ul>
-          </div>
-        </div>
+        <p class="next-line">
+          <strong>What happens next:</strong> After Gmail, Mighty scans for known programs and shows what it found for your review — nothing is watched until you confirm.
+        </p>
 
         <div class="cluster">
           <a class="btn btn-primary btn-lg" href="05-connect-gmail.html">Connect Gmail</a>
