@@ -74,6 +74,11 @@ try:
 except ImportError:
     _demo_mode = None
 
+try:
+    from mighty import research_home as _research_home
+except ImportError:
+    _research_home = None
+
 from mighty import user_copy
 
 import bcrypt as _bcrypt
@@ -5321,6 +5326,11 @@ def _redirect_to_login():
 
 def _session_user_row():
     """Return the logged-in user row, or None if session is missing/invalid."""
+    # Staging research preview: ephemeral session identity (never a users row).
+    if _research_home is not None and _research_home.is_research_session(session):
+        if _research_home.is_active_research_session(session):
+            return _research_home.synthetic_user_row()
+        return None
     uid = session.get("user_id")
     if not uid:
         return None
@@ -8648,6 +8658,88 @@ def logout():
     session.clear()
     return redirect("/")
 
+
+@app.route("/research/home")
+def research_home_entry():
+    """Staging-only moderated Home V2 entry — no credentials, no customer records."""
+    if _research_home is None or not _research_home.research_home_allowed():
+        return (
+            "<!DOCTYPE html><title>Not found</title>"
+            "<body style='font-family:sans-serif;padding:40px'>"
+            "<h1>Not found</h1>"
+            "<p>Research preview is unavailable in this environment.</p>"
+            "</body>"
+        ), 404
+    state = _research_home.normalize_state(request.args.get("state"))
+    if state is None:
+        return (
+            "<!DOCTYPE html><title>Invalid state</title>"
+            "<body style='font-family:sans-serif;padding:40px'>"
+            "<h1>Invalid research state</h1>"
+            "<p>Use state=healthy, state=attention, or state=opportunity.</p>"
+            "</body>"
+        ), 400
+    users_before = 0
+    try:
+        users_before = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    except Exception:
+        users_before = 0
+    _research_home.begin_research_session(session, state=state)
+    # Guardrail: research entry must never insert a users row.
+    try:
+        users_after = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+        if users_after != users_before:
+            session.clear()
+            return ("Research preview refused to create customer records.", 500)
+        if _research_home.count_research_customer_rows(get_db()) != 0:
+            session.clear()
+            return ("Research preview must not persist customer identities.", 500)
+    except Exception:
+        pass
+    return redirect("/dashboard")
+
+
+@app.route("/research/stub/<path:action>")
+def research_stub_action(action: str):
+    """Safe stub for outbound / mutating CTAs inside a research session."""
+    if _research_home is None or not _research_home.is_active_research_session(session):
+        return redirect("/login")
+    return _research_home.stub_response_body(action or "action")
+
+
+@app.before_request
+def _guard_research_session_mutations():
+    """Block outbound and mutating surfaces during a research preview session."""
+    if _research_home is None:
+        return None
+    if not _research_home.is_research_session(session):
+        return None
+    if not _research_home.is_active_research_session(session):
+        session.clear()
+        return redirect("/login")
+    path = request.path or "/"
+    if _research_home.research_request_allowed(path, request.method):
+        return None
+    # Dashboard JS may poll APIs — return empty JSON, never real data or side effects.
+    if path.startswith("/api/") and request.method in ("GET", "HEAD"):
+        return jsonify({
+            "research_preview": True,
+            "disabled": True,
+            "accounts": [],
+            "items": [],
+            "reminders": [],
+            "pending": [],
+        })
+    if request.method in ("GET", "HEAD"):
+        action = path.strip("/").replace("/", "-") or "action"
+        return _research_home.stub_response_body(action), 200
+    return jsonify({
+        "error": "disabled_in_research_preview",
+        "message": "This action is disabled in the moderated research preview.",
+        "research_preview": True,
+    }), 403
+
+
 @app.route("/openapi-chatgpt.json")
 def openapi_spec_chatgpt():
     """Minimal single-action schema for ChatGPT Custom GPTs.
@@ -9366,6 +9458,28 @@ def _coverage_score(source: str, field_count: int) -> dict:
 @require_login
 def dashboard():
     _rt = _RouteTimer("/dashboard")
+    # Guarded staging research Home — fictional session, no customer DB row.
+    if _research_home is not None and _research_home.is_active_research_session(session):
+        # ?state= is ignored outside /research/home entry (and here if present).
+        state = _research_home.research_state(session)
+        hero = _research_home.build_research_home_html(state, escape=he)
+        indicator = _research_home.render_research_indicator()
+        _csrf = get_csrf_token()
+        _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
+            "dashboard",
+            _research_home.RESEARCH_SIDEBAR_LABEL,
+            _csrf,
+            show_activity=False,
+        )
+        _rt.finish()
+        return _research_home.fill_dashboard_html(
+            DASHBOARD_HTML,
+            hero_html=hero,
+            indicator_html=indicator,
+            sidebar_desktop=_sidebar_desktop,
+            sidebar_mobile=_sidebar_mobile,
+            csrf=_csrf,
+        )
     expire_pending()
     if _demo_mode is not None:
         _demo_mode.handle_demo_query_param(request, session)
