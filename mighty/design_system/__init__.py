@@ -33,6 +33,7 @@ from mighty.design_system.components import (
     render_trust_card,
 )
 from mighty.design_system.icons import ICONS, render_icon
+from mighty.design_system.showcase import render_showcase_page
 from mighty.design_system.tokens import (
     COLORS,
     CONTROL_SIZES,
@@ -75,6 +76,7 @@ __all__ = [
     "render_progress_stepper",
     "render_quiet_field",
     "render_section",
+    "render_showcase_page",
     "render_status_badge",
     "render_switch",
     "render_text_field",

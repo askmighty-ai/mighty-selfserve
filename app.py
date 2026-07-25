@@ -23112,6 +23112,18 @@ def api_admin_amex_verification_timeline():
     return jsonify(report)
 
 
+@app.route("/admin/design-system")
+@require_admin
+def admin_design_system_showcase():
+    """Admin-only Storybook-style showcase for the production design system.
+
+    Opt-in foundation preview only — does not alter customer-facing pages.
+    """
+    from mighty.design_system import render_showcase_page
+
+    return render_showcase_page()
+
+
 @app.route("/admin/pipeline-runs")
 @require_admin
 def admin_pipeline_runs_page():
