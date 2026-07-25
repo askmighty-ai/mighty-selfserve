@@ -617,6 +617,19 @@ HOME_FRESHNESS_PREFIX = "Last verified "
 HOME_FRESHNESS_UPDATED_PREFIX = "Updated "
 HOME_ACCOUNTS_SOFT_LINK = "Accounts"
 
+# Home V2 — Living Calm regions
+HOME_V2_EVIDENCE_LABEL = "Evidence"
+HOME_V2_ACTIVITY_LABEL = "Activity"
+HOME_V2_ACTIVITY_EMPTY = "No recent changes — Mighty is watching quietly."
+HOME_V2_WORKING_QUIETLY = "Working quietly"
+HOME_V2_NEEDS_YOU = "Needs you"
+HOME_V2_VALUE_WAITING = "Value waiting"
+HOME_V2_GETTING_READY = "Getting ready"
+HOME_EVIDENCE_GMAIL_CONNECTED = "Gmail connected"
+HOME_EVIDENCE_GMAIL_NEEDED = "Gmail not connected"
+HOME_EVIDENCE_CHROME_ACTIVE = "Chrome active"
+HOME_EVIDENCE_CHROME_NEEDED = "Set up Mighty in Chrome"
+
 HOME_FOOTER_WORKER = "Mighty runs in Chrome"
 HOME_FOOTER_LAST_CHECKED = "Last checked {time}"
 HOME_ACTIVITY_LINK = "{count} awaiting your decision"
@@ -733,6 +746,22 @@ def home_briefing_all_clear_body(account_count: int = 0) -> str:
         "Nothing needs your attention right now.\n"
         "We'll let you know if anything changes."
     )
+
+
+def home_v2_healthy_body() -> str:
+    """Living Calm healthy lede — permission to leave."""
+    return (
+        "Mighty verified your accounts and will watch quietly from here. "
+        "Nothing needs your attention right now."
+    )
+
+
+def home_evidence_watching(count: int) -> str:
+    if count <= 0:
+        return "No accounts watched yet"
+    if count == 1:
+        return "Watching 1 account"
+    return f"Watching {count} accounts"
 
 
 def home_ops_refreshing(provider_name: str) -> str:
