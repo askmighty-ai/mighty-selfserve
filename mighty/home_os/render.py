@@ -392,6 +392,7 @@ def _render_repair_modal(
         "to restore access. This staging preview uses a safe simulated completion — "
         "no live provider password is collected here."
     )
+    fail_label = "Sign-in didn't work"
     actions = (
         f'<form method="post" action="/home/work/{esc(work_id)}/complete" '
         f'data-simulation="{esc(SIMULATION_MODE)}">'
@@ -400,7 +401,7 @@ def _render_repair_modal(
         f"</form>"
         f'<form method="post" action="/home/work/{esc(work_id)}/fail">'
         f'<input type="hidden" name="_csrf" value="{esc(csrf_token)}"/>'
-        f'{render_button("Sign-in didn\'t work", variant="secondary", type="submit")}'
+        f'{render_button(fail_label, variant="secondary", type="submit")}'
         f"</form>"
         f'<form method="post" action="/home/work/{esc(work_id)}/cancel">'
         f'<input type="hidden" name="_csrf" value="{esc(csrf_token)}"/>'
