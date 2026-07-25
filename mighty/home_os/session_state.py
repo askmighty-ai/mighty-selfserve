@@ -6,12 +6,12 @@ HomeState is always re-projected via mighty.workitem.project_home.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
 
-from mighty.home_os.gate import SESSION_FLAG
+from mighty.home_os.gate import SESSION_FLAG, SESSION_MODE_KEY
 from mighty.home_os.marriott_scenario import initial_canonical_models
 from mighty.workitem.coverage import CoverageItem
 from mighty.workitem.model import WorkItem
@@ -24,7 +24,9 @@ HOME_OS_DISPLAY_NAME = "Jordan"
 HOME_OS_LABEL = "Home OS Preview"
 
 SESSION_STATE_KEY = "home_os_slice"
+SESSION_OVERLAYS_KEY = "home_os_overlays"
 SESSION_STARTED_AT = "home_os_started_at"
+SESSION_SIM_TAGS_KEY = "home_os_simulation_tags"
 
 
 class RepairPhase(str, Enum):
@@ -35,6 +37,49 @@ class RepairPhase(str, Enum):
     FAILED = "failed"
     SUCCEEDED = "succeeded"
     EXPIRED = "expired"
+
+
+@dataclass
+class SessionOverlays:
+    """Session-local repair UI + temporary completions (not a ledger)."""
+
+    repair_phase: RepairPhase = RepairPhase.IDLE
+    repair_message: str = ""
+    repair_work_item_id: str | None = None
+    completed_work_item_ids: tuple[str, ...] = ()
+    extra_proof: tuple[ProofItem, ...] = ()
+    coverage_auth_overrides: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repair_phase": self.repair_phase.value,
+            "repair_message": self.repair_message,
+            "repair_work_item_id": self.repair_work_item_id,
+            "completed_work_item_ids": list(self.completed_work_item_ids),
+            "extra_proof": [p.to_dict() for p in self.extra_proof],
+            "coverage_auth_overrides": dict(self.coverage_auth_overrides),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> SessionOverlays:
+        if not payload:
+            return cls()
+        return cls(
+            repair_phase=RepairPhase(
+                str(payload.get("repair_phase") or RepairPhase.IDLE.value)
+            ),
+            repair_message=str(payload.get("repair_message") or ""),
+            repair_work_item_id=payload.get("repair_work_item_id"),
+            completed_work_item_ids=tuple(
+                payload.get("completed_work_item_ids") or ()
+            ),
+            extra_proof=tuple(
+                ProofItem.from_dict(p) for p in (payload.get("extra_proof") or [])
+            ),
+            coverage_auth_overrides=dict(
+                payload.get("coverage_auth_overrides") or {}
+            ),
+        )
 
 
 @dataclass
@@ -145,12 +190,24 @@ def begin_home_os_session(session: Any, *, as_of: datetime | None = None) -> Hom
     state = new_slice_state(as_of=as_of)
     session.clear()
     session[SESSION_FLAG] = True
+    session[SESSION_MODE_KEY] = "ephemeral"
     session[SESSION_STARTED_AT] = state.seeded_at
     session[SESSION_STATE_KEY] = state.to_session_dict()
+    session[SESSION_OVERLAYS_KEY] = SessionOverlays().to_dict()
+    session[SESSION_SIM_TAGS_KEY] = ["ephemeral_marriott_scenario"]
     session["user_id"] = HOME_OS_USER_ID
     session["demo_mode"] = True
     session.permanent = False
     return state
+
+
+def enable_home_os_for_authenticated_user(session: Any) -> None:
+    """Mark Home OS mode without clearing the real user session."""
+    session[SESSION_FLAG] = True
+    session[SESSION_MODE_KEY] = "authenticated"
+    if SESSION_OVERLAYS_KEY not in session:
+        session[SESSION_OVERLAYS_KEY] = SessionOverlays().to_dict()
+    session.permanent = True
 
 
 def load_slice_state(session: Mapping[str, Any] | None) -> HomeOsSliceState | None:
@@ -164,6 +221,30 @@ def load_slice_state(session: Mapping[str, Any] | None) -> HomeOsSliceState | No
 
 def save_slice_state(session: Any, state: HomeOsSliceState) -> None:
     session[SESSION_STATE_KEY] = state.to_session_dict()
+
+
+def load_session_overlays(session: Mapping[str, Any] | None) -> SessionOverlays:
+    if not session:
+        return SessionOverlays()
+    raw = session.get(SESSION_OVERLAYS_KEY)
+    if not isinstance(raw, dict):
+        return SessionOverlays()
+    return SessionOverlays.from_dict(raw)
+
+
+def save_session_overlays(session: Any, overlays: SessionOverlays) -> None:
+    session[SESSION_OVERLAYS_KEY] = overlays.to_dict()
+
+
+def save_simulation_tags(session: Any, tags: tuple[str, ...]) -> None:
+    session[SESSION_SIM_TAGS_KEY] = list(tags)
+
+
+def load_simulation_tags(session: Mapping[str, Any] | None) -> tuple[str, ...]:
+    if not session:
+        return ()
+    raw = session.get(SESSION_SIM_TAGS_KEY) or ()
+    return tuple(str(t) for t in raw)
 
 
 def synthetic_user_row() -> Mapping[str, Any]:

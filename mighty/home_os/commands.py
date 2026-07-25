@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from mighty.home_os.marriott_scenario import (
     SIMULATION_MODE,
@@ -21,10 +22,20 @@ from mighty.home_os.marriott_scenario import (
     build_marriott_coverage,
 )
 from mighty.home_os.session_state import HomeOsSliceState, RepairPhase
+from mighty.workitem.coverage import (
+    AuthPosture,
+    CoverageHealth,
+    CoverageItem,
+    VerificationState,
+)
 from mighty.workitem.lifecycle import WorkItemLifecycle
 from mighty.workitem.model import WorkItem, WorkItemState
 from mighty.workitem.projection import project_home
 from mighty.workitem.home_state import HomeState
+from mighty.workitem.proof import ProofItem
+
+if TYPE_CHECKING:
+    pass
 
 
 class CommandError(ValueError):
@@ -35,6 +46,7 @@ class CommandError(ValueError):
 class CommandResult:
     state: HomeOsSliceState
     home: HomeState
+    proof: ProofItem | None = None
 
 
 def project_slice(slice_state: HomeOsSliceState, *, as_of: datetime) -> HomeState:
@@ -69,6 +81,76 @@ def _replace_coverage_marriott(slice_state: HomeOsSliceState, *, signed_out: boo
     new_row = build_marriott_coverage(signed_out=signed_out)
     others = [c for c in slice_state.coverage if c.provider != new_row.provider]
     slice_state.coverage = others + [new_row]
+
+
+def _provider_label(item: WorkItem) -> str:
+    if item.provider == "marriott":
+        return "Marriott"
+    if item.provider:
+        return item.provider.replace("_", " ").title()
+    return "This account"
+
+
+def _set_coverage_signed_in(
+    slice_state: HomeOsSliceState, *, provider: str | None
+) -> None:
+    if not provider:
+        return
+    if provider == "marriott" and not any(
+        c.provider == "marriott" for c in slice_state.coverage
+    ):
+        _replace_coverage_marriott(slice_state, signed_out=False)
+        return
+    updated: list = []
+    for row in slice_state.coverage:
+        if row.provider != provider:
+            updated.append(row)
+            continue
+        updated.append(
+            CoverageItem(
+                provider=row.provider,
+                status=row.status,
+                health=CoverageHealth.HEALTHY,
+                capabilities=row.capabilities,
+                verification=VerificationState.VERIFIED,
+                discovery=row.discovery,
+                authentication=AuthPosture.VALID,
+                monitoring="active",
+                display_name=row.display_name,
+            )
+        )
+    slice_state.coverage = updated
+
+
+def _set_coverage_signed_out(
+    slice_state: HomeOsSliceState, *, provider: str | None
+) -> None:
+    if not provider:
+        return
+    if provider == "marriott" and not any(
+        c.provider == "marriott" for c in slice_state.coverage
+    ):
+        _replace_coverage_marriott(slice_state, signed_out=True)
+        return
+    updated: list = []
+    for row in slice_state.coverage:
+        if row.provider != provider:
+            updated.append(row)
+            continue
+        updated.append(
+            CoverageItem(
+                provider=row.provider,
+                status=row.status,
+                health=CoverageHealth.BLOCKED,
+                capabilities=row.capabilities,
+                verification=VerificationState.FAILED,
+                discovery=row.discovery,
+                authentication=AuthPosture.MISSING,
+                monitoring="paused_until_sign_in",
+                display_name=row.display_name,
+            )
+        )
+    slice_state.coverage = updated
 
 
 def apply_expiration_if_needed(
@@ -145,10 +227,11 @@ def start_repair(
         item = life.expand(item, as_of=as_of)
         _replace_item(slice_state, item)
 
+    label = _provider_label(item)
     slice_state.repair_phase = RepairPhase.IN_PROGRESS
     slice_state.repair_message = (
-        "Confirm the staged Marriott sign-in to restore Mighty’s access. "
-        f"({SIMULATION_MODE}: no live Marriott credentials are used.)"
+        f"Confirm the staged {label} sign-in to restore Mighty’s access. "
+        f"({SIMULATION_MODE}: no live provider credentials are used.)"
     )
     return CommandResult(state=slice_state, home=project_slice(slice_state, as_of=as_of))
 
@@ -159,12 +242,11 @@ def complete_repair(
     work_item_id: str,
     as_of: datetime,
 ) -> CommandResult:
-    """Simulated successful repair → lifecycle complete + Proof + coverage."""
+    """Staged successful repair → lifecycle complete + Proof + coverage.
+
+    Live provider authentication is not invoked (see HOME_OS_SIMULATION_GAPS).
+    """
     as_of = _aware(as_of)
-    if not slice_state.simulation:
-        raise CommandError(
-            "Live Marriott authentication is not available in this slice."
-        )
     item = _find_work_item(slice_state, work_item_id)
     if item.state in (
         WorkItemState.COMPLETED,
@@ -173,6 +255,7 @@ def complete_repair(
     ):
         raise CommandError("This work item is already resolved.")
 
+    provider_label = _provider_label(item)
     life = WorkItemLifecycle()
     if item.state is WorkItemState.VISIBLE:
         item = life.expand(item, as_of=as_of)
@@ -180,32 +263,43 @@ def complete_repair(
         item,
         as_of=as_of,
         earn_proof=True,
-        proof_summary="Marriott access restored — Mighty can watch it again",
+        proof_summary=f"{provider_label} access restored — Mighty can watch it again",
         proof_id=None,
         outcome_class="access_restored",
         impact="high",
     )
-    # Prefer scenario proof identity for stable copy; bind via lifecycle result.
-    proof = result.proof or build_access_restored_proof(
-        as_of=as_of, work_item_id=work_item_id
-    )
-    if result.work_item.proof_reference != proof.id and result.proof is not None:
-        proof = result.proof
+    proof = result.proof
+    if proof is None and item.provider == "marriott":
+        proof = build_access_restored_proof(as_of=as_of, work_item_id=work_item_id)
+    elif proof is None:
+        proof = ProofItem(
+            id=f"proof:access_restored:{work_item_id}:{int(as_of.timestamp())}",
+            outcome_at=as_of,
+            summary=f"{provider_label} access restored — Mighty can watch it again",
+            provider=item.provider,
+            outcome_class="access_restored",
+            work_item_id=work_item_id,
+            impact="high",
+        )
 
     _replace_item(slice_state, result.work_item)
     if proof is not None and all(p.id != proof.id for p in slice_state.proof):
         slice_state.proof = [proof, *slice_state.proof]
-    _replace_coverage_marriott(slice_state, signed_out=False)
+    _set_coverage_signed_in(slice_state, provider=item.provider)
     slice_state.repair_phase = RepairPhase.SUCCEEDED
     slice_state.repair_message = (
-        "Marriott is signed in again. Mighty can watch it from Home."
+        f"{provider_label} is signed in again. Mighty can watch it from Home."
     )
-    # Archive after proof so it leaves effective queue cleanly.
+    slice_state.simulation = True  # staged completion marker
     if result.work_item.state is WorkItemState.PROOF:
         archived = life.archive(result.work_item, as_of=as_of, reason="proof_bound")
         _replace_item(slice_state, archived)
 
-    return CommandResult(state=slice_state, home=project_slice(slice_state, as_of=as_of))
+    return CommandResult(
+        state=slice_state,
+        home=project_slice(slice_state, as_of=as_of),
+        proof=proof,
+    )
 
 
 def fail_repair(
@@ -214,7 +308,7 @@ def fail_repair(
     work_item_id: str,
     as_of: datetime,
 ) -> CommandResult:
-    """Simulated failure — WorkItem remains actionable on Home."""
+    """Staged failure — WorkItem remains actionable on Home."""
     as_of = _aware(as_of)
     item = _find_work_item(slice_state, work_item_id)
     if item.state in (
@@ -224,16 +318,17 @@ def fail_repair(
     ):
         raise CommandError("This work item is already resolved.")
 
+    provider_label = _provider_label(item)
     life = WorkItemLifecycle()
     if item.state is WorkItemState.VISIBLE:
         item = life.expand(item, as_of=as_of)
         _replace_item(slice_state, item)
 
-    _replace_coverage_marriott(slice_state, signed_out=True)
+    _set_coverage_signed_out(slice_state, provider=item.provider)
     slice_state.repair_phase = RepairPhase.FAILED
     slice_state.repair_message = (
-        "Marriott sign-in did not finish. Mighty still cannot see Marriott. "
-        "Try signing in again from Home when you are ready."
+        f"{provider_label} sign-in did not finish. Mighty still cannot see "
+        f"{provider_label}. Try signing in again from Home when you are ready."
     )
     return CommandResult(state=slice_state, home=project_slice(slice_state, as_of=as_of))
 
