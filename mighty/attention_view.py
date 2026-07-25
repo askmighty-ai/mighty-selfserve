@@ -386,14 +386,14 @@ def _copy_for(item: AttentionItem, provider_name: str) -> tuple[str, str, str | 
     if cls == AttentionClass.SYSTEM:
         if reason == "worker_unreachable":
             return (
-                "Mighty's worker needs a refresh",
-                "Open Chrome with the Mighty extension so account watching can continue.",
-                "Open worker setup",
+                "Mighty in Chrome needs a refresh",
+                "Open Chrome with the Chrome extension so account watching can continue.",
+                "Open Mighty in Chrome setup",
             )
         return (
             "Mighty needs a quick setup step",
-            "Finish worker setup so Mighty can keep watching your accounts.",
-            "Set up worker",
+            "Set up Mighty in Chrome so Mighty can keep watching your accounts.",
+            "Set up Mighty in Chrome",
         )
 
     if cls == AttentionClass.TRUST:

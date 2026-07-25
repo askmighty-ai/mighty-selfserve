@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visual hierarchy · Living Calm V1</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div class="container app-header-inner">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Mighty
+        </a>
+        <nav class="app-nav" aria-label="Prototype">
+          <a href="quiet-field.html">Field</a>
+          <a href="personality.html">Personality</a>
+          <a class="is-active" href="hierarchy.html">Hierarchy</a>
+        </nav>
+        <span class="status-pill">Four levels</span>
+      </div>
+    </header>
+
+    <main class="container" style="padding: 3rem 0 4rem;">
+      <p class="eyebrow">Visual hierarchy</p>
+      <h1 class="display display-lg" style="margin-top: 0.65rem;">Four levels. One winner.</h1>
+      <p class="lede" style="margin-top: 0.9rem;">
+        Polished UIs still fail when everything is equally important. Named levels make competition
+        a reviewable defect — not a vibe disagreement.
+      </p>
+
+      <div class="levels rise">
+        <article class="level" data-level="1">
+          <div class="level-tag">L1</div>
+          <div>
+            <div class="level-sample">You’re good.</div>
+            <p><strong>Signal</strong> — the one answer. Display type. Owns the field’s emotional center. One primary action only when required.</p>
+          </div>
+        </article>
+        <article class="level" data-level="2">
+          <div class="level-tag">L2</div>
+          <div>
+            <div class="level-sample">Mighty verified your accounts and will watch quietly from here.</div>
+            <p><strong>Story</strong> — one short breath that makes the signal believable. Never a list.</p>
+          </div>
+        </article>
+        <article class="level" data-level="3">
+          <div class="level-tag">L3</div>
+          <div>
+            <div class="level-sample">Amex · Delta · Marriott — access verified this morning</div>
+            <p><strong>Evidence</strong> — light proof. Smaller type, lower contrast. Optional when silence is correct.</p>
+          </div>
+        </article>
+        <article class="level" data-level="4">
+          <div class="level-tag">L4</div>
+          <div>
+            <div class="level-sample">Home · Accounts · Activity &nbsp;·&nbsp; Working quietly &nbsp;·&nbsp; Last checked just now</div>
+            <p><strong>Chrome</strong> — orientation and footnotes. Must never narrate a second story.</p>
+          </div>
+        </article>
+      </div>
+
+      <h2>Applied — all clear Home sketch</h2>
+      <div class="hierarchy-demo" data-state="clear">
+        <p class="eyebrow">L4 chrome above (recessive)</p>
+        <p class="l1">You’re good.</p>
+        <p class="l2">Mighty verified your accounts and will watch quietly from here. Nothing needs your attention right now.</p>
+        <p class="l3">Recent work: Amex current · Delta current · Marriott current</p>
+        <div class="l4">
+          <span>Last checked just now</span>
+          <span>Mighty in Chrome is active</span>
+          <span>Working quietly</span>
+        </div>
+      </div>
+
+      <section class="decision">
+        <h2>Design decision — enforceability over taste</h2>
+        <p>
+          “Keep it calm” cannot fail a PR. “L3 used display type” can. Four levels — not three or five —
+          keep Story and Evidence distinct without inventing bureaucracy. See <code>docs/VISUAL_HIERARCHY.md</code>.
+        </p>
+      </section>
+
+      <a class="back-link" href="index.html">← Prototype hub</a>
+    </main>
+  </div>
+</body>
+</html>

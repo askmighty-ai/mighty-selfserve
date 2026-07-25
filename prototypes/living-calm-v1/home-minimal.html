@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Home · Minimal Calm · Living Calm V1</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell" data-bind-state>
+    <header class="app-header">
+      <div class="container-app app-header-inner">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Mighty
+        </a>
+        <nav class="app-nav" aria-label="Primary">
+          <a class="is-active" href="home-minimal.html">Home</a>
+          <a href="#accounts">Accounts</a>
+          <a href="#activity">Activity</a>
+        </nav>
+        <span class="status-pill">Minimal Calm</span>
+      </div>
+    </header>
+
+    <main class="container-narrow home-minimal rise" data-bind-state>
+      <div class="state-switch" aria-label="Prototype states">
+        <a href="?state=clear">All clear</a>
+        <a href="?state=attention">Attention</a>
+        <a href="?state=opportunity">Opportunity</a>
+      </div>
+
+      <div data-when="clear">
+        <p class="eyebrow">Friday morning</p>
+        <h1 class="display display-lg">You’re good.</h1>
+        <p class="lede">Nothing needs you. Mighty will watch quietly.</p>
+        <div class="home-actions">
+          <a class="btn btn-ghost" href="#accounts">View accounts</a>
+        </div>
+      </div>
+
+      <div data-when="attention" hidden>
+        <p class="eyebrow">Needs you</p>
+        <h1 class="display display-lg">Delta needs a sign-in.</h1>
+        <p class="lede">Open Delta in Chrome when you can — Mighty continues from there.</p>
+        <div class="home-actions">
+          <a class="btn btn-primary" href="#delta">Open Delta</a>
+          <a class="btn btn-ghost" href="#accounts">View accounts</a>
+        </div>
+      </div>
+
+      <div data-when="opportunity" hidden>
+        <p class="eyebrow">Worth your time</p>
+        <h1 class="display display-lg">A Marriott cert expires in 12 days.</h1>
+        <p class="lede">One free night is waiting — use it before it lapses.</p>
+        <div class="home-actions">
+          <a class="btn btn-primary" href="#marriott">Review cert</a>
+          <a class="btn btn-ghost" href="#accounts">View accounts</a>
+        </div>
+      </div>
+
+      <div class="meta-row">
+        <span>Last checked just now</span>
+        <span>Mighty in Chrome is active</span>
+      </div>
+
+      <div class="horizon-remnant" aria-hidden="true" title="Quiet Field remnant"></div>
+    </main>
+
+    <section class="container-narrow decision" style="margin-bottom: 3rem;">
+      <h2>Design decision — courage of emptiness</h2>
+      <p>
+        Minimal Calm hides L3 evidence on purpose. Memorability comes from refusing dashboard guilt.
+        A thin Quiet Field remnant remains so calm never reads as a blank SaaS page.
+        Tradeoff: some users may not believe work happened — that is the review question.
+      </p>
+    </section>
+  </div>
+  <script src="prototype.js"></script>
+</body>
+</html>

@@ -1,0 +1,137 @@
+/**
+ * Mighty Design System — Design Tokens
+ *
+ * Canonical production tokens from MIGHTY_VISUAL_SYSTEM_V1.md and
+ * MIGHTY_COMPONENT_LIBRARY.md. Scoped under .mds so existing production
+ * pages are unaffected until they opt in.
+ */
+
+.mds {
+  /* ——— Color: core palette ——— */
+  --mds-bg: #f3eee6;
+  --mds-bg-deep: #e7e0d4;
+  --mds-surface: #fffcf7;
+  --mds-surface-soft: #f7f1e8;
+  --mds-ink: #1c1915;
+  --mds-ink-soft: #3f3a33;
+  --mds-muted: #6f675c;
+  --mds-line: #e2d9cc;
+  --mds-line-strong: #cfc4b4;
+  --mds-pine: #1f5c4f;
+  --mds-pine-hover: #184a40;
+  --mds-pine-soft: #e3f0ec;
+  --mds-pine-ink: #163e36;
+  --mds-success: #2f6b45;
+  --mds-success-soft: #e5f2e9;
+  --mds-waiting: #9a6a1f;
+  --mds-waiting-soft: #f7edd8;
+  --mds-attention: #9b4a2e;
+  --mds-attention-soft: #f8e8e1;
+  --mds-danger: #8f2f2f;
+  --mds-danger-soft: #f7e6e6;
+  --mds-focus: rgba(31, 92, 79, 0.35);
+  --mds-field: #243b36;
+  --mds-field-mid: #2f5a4e;
+  --mds-field-glow: rgba(232, 214, 176, 0.22);
+  --mds-on-primary: #ffffff;
+  --mds-on-field: rgba(244, 239, 230, 0.92);
+
+  /* ——— Spacing ——— */
+  --mds-space-1: 4px;
+  --mds-space-2: 8px;
+  --mds-space-3: 12px;
+  --mds-space-4: 16px;
+  --mds-space-5: 24px;
+  --mds-space-6: 32px;
+  --mds-space-7: 48px;
+  --mds-space-8: 64px;
+
+  /* ——— Layout widths ——— */
+  --mds-width-marketing: 1080px;
+  --mds-width-onboarding: 720px;
+  --mds-width-onboarding-narrow: 520px;
+  --mds-width-app: 1120px;
+  --mds-width-lede: 38rem;
+  --mds-width-lede-tight: 34rem;
+  --mds-width-modal: 560px;
+  --mds-width-toast: 360px;
+
+  /* ——— Radii ——— */
+  --mds-radius-xs: 10px;
+  --mds-radius-sm: 12px;
+  --mds-radius: 14px;
+  --mds-radius-lg: 22px;
+  --mds-radius-pill: 999px;
+  --mds-radius-monogram: 11px;
+  --mds-radius-brand: 8px;
+
+  /* ——— Shadows ——— */
+  --mds-shadow-sm: 0 1px 2px rgba(28, 25, 21, 0.04), 0 10px 28px rgba(28, 25, 21, 0.05);
+  --mds-shadow-md: 0 2px 6px rgba(28, 25, 21, 0.05), 0 18px 40px rgba(28, 25, 21, 0.08);
+  --mds-shadow-primary: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 8px 18px rgba(31, 92, 79, 0.18);
+
+  /* ——— Typography families ——— */
+  --mds-font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --mds-font-ui: "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
+
+  /* ——— Type ramp ——— */
+  --mds-text-display-xl: clamp(2.75rem, 5vw, 3.9rem);
+  --mds-text-display-lg: clamp(2.1rem, 3.4vw, 2.85rem);
+  --mds-text-display-md: clamp(1.7rem, 2.5vw, 2.2rem);
+  --mds-text-title: 1.75rem;
+  --mds-text-heading: 1.1rem;
+  --mds-text-body: 1.0625rem;
+  --mds-text-body-sm: 0.95rem;
+  --mds-text-label: 0.88rem;
+  --mds-text-meta: 0.84rem;
+  --mds-text-button: 0.97rem;
+  --mds-text-button-lg: 1.02rem;
+  --mds-text-button-sm: 0.88rem;
+  --mds-text-badge: 0.78rem;
+  --mds-text-eyebrow: 0.76rem;
+
+  --mds-leading-display: 1.1;
+  --mds-leading-body: 1.55;
+  --mds-leading-tight: 1.3;
+  --mds-tracking-display: -0.02em;
+  --mds-tracking-eyebrow: 0.06em;
+
+  --mds-weight-regular: 400;
+  --mds-weight-medium: 500;
+  --mds-weight-semibold: 600;
+  --mds-weight-bold: 650;
+  --mds-weight-heavy: 700;
+
+  /* ——— Motion ——— */
+  --mds-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --mds-duration-fast: 180ms;
+  --mds-duration: 280ms;
+  --mds-duration-slow: 420ms;
+  --mds-duration-ambient: 5500ms;
+
+  /* ——— Control sizes ——— */
+  --mds-control-height-sm: 38px;
+  --mds-control-height: 46px;
+  --mds-control-height-lg: 52px;
+  --mds-touch-min: 44px;
+  --mds-icon-size: 24px;
+  --mds-icon-size-sm: 16px;
+  --mds-monogram-size: 40px;
+  --mds-focus-ring-width: 3px;
+  --mds-focus-ring-offset: 2px;
+
+  /* ——— Semantic aliases ——— */
+  --mds-color-bg: var(--mds-bg);
+  --mds-color-surface: var(--mds-surface);
+  --mds-color-text: var(--mds-ink);
+  --mds-color-text-secondary: var(--mds-ink-soft);
+  --mds-color-text-muted: var(--mds-muted);
+  --mds-color-border: var(--mds-line);
+  --mds-color-action: var(--mds-pine);
+  --mds-color-action-hover: var(--mds-pine-hover);
+  --mds-color-trust: var(--mds-pine-soft);
+  --mds-color-success: var(--mds-success);
+  --mds-color-waiting: var(--mds-waiting);
+  --mds-color-attention: var(--mds-attention);
+  --mds-color-danger: var(--mds-danger);
+}

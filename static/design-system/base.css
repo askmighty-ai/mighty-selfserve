@@ -1,0 +1,206 @@
+/**
+ * Mighty Design System — Base
+ * Typography utilities, focus, layout helpers. Opt-in via .mds root.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap");
+
+.mds,
+.mds *,
+.mds *::before,
+.mds *::after {
+  box-sizing: border-box;
+}
+
+.mds {
+  font-family: var(--mds-font-ui);
+  color: var(--mds-ink);
+  line-height: var(--mds-leading-body);
+  font-size: 1rem;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.mds-atmosphere {
+  background:
+    radial-gradient(900px 480px at 12% -8%, rgba(31, 92, 79, 0.07), transparent 55%),
+    radial-gradient(700px 420px at 96% 0%, rgba(154, 106, 31, 0.06), transparent 50%),
+    linear-gradient(180deg, #f7f3ec 0%, var(--mds-bg) 42%, var(--mds-bg-deep) 100%);
+  min-height: 100%;
+}
+
+.mds a:not([class]) {
+  color: var(--mds-pine);
+  text-decoration: none;
+}
+
+.mds a:not([class]):hover,
+.mds a:not([class]):focus-visible {
+  color: var(--mds-pine-hover);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.mds :focus-visible {
+  outline: var(--mds-focus-ring-width) solid var(--mds-focus);
+  outline-offset: var(--mds-focus-ring-offset);
+}
+
+.mds .mds-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mds .mds-skip-link {
+  position: absolute;
+  left: var(--mds-space-4);
+  top: 0;
+  z-index: 100;
+  transform: translateY(-120%);
+  padding: var(--mds-space-2) var(--mds-space-4);
+  background: var(--mds-pine);
+  color: var(--mds-on-primary);
+  border-radius: var(--mds-radius-xs);
+  font-weight: var(--mds-weight-semibold);
+  text-decoration: none;
+}
+
+.mds .mds-skip-link:focus {
+  transform: translateY(var(--mds-space-4));
+  outline: var(--mds-focus-ring-width) solid var(--mds-focus);
+  outline-offset: var(--mds-focus-ring-offset);
+}
+
+/* Typography */
+.mds-display {
+  font-family: var(--mds-font-display);
+  font-weight: var(--mds-weight-semibold);
+  letter-spacing: var(--mds-tracking-display);
+  line-height: var(--mds-leading-display);
+  color: var(--mds-ink);
+  margin: 0;
+}
+
+.mds-display-xl { font-size: var(--mds-text-display-xl); line-height: 1.08; }
+.mds-display-lg { font-size: var(--mds-text-display-lg); line-height: 1.12; }
+.mds-display-md { font-size: var(--mds-text-display-md); line-height: 1.15; }
+
+.mds-title {
+  font-family: var(--mds-font-display);
+  font-size: var(--mds-text-title);
+  font-weight: var(--mds-weight-semibold);
+  letter-spacing: var(--mds-tracking-display);
+  line-height: 1.2;
+  margin: 0;
+}
+
+.mds-heading {
+  font-family: var(--mds-font-ui);
+  font-size: var(--mds-text-heading);
+  font-weight: var(--mds-weight-bold);
+  line-height: var(--mds-leading-tight);
+  margin: 0;
+  color: var(--mds-ink);
+}
+
+.mds-body {
+  font-size: var(--mds-text-body);
+  font-weight: var(--mds-weight-regular);
+  line-height: var(--mds-leading-body);
+  color: var(--mds-ink-soft);
+  max-width: var(--mds-width-lede);
+  margin: 0;
+}
+
+.mds-body-sm {
+  font-size: var(--mds-text-body-sm);
+  line-height: 1.5;
+  color: var(--mds-ink-soft);
+  margin: 0;
+}
+
+.mds-label {
+  font-size: var(--mds-text-label);
+  font-weight: var(--mds-weight-semibold);
+  line-height: 1.35;
+  color: var(--mds-ink-soft);
+}
+
+.mds-meta {
+  font-size: var(--mds-text-meta);
+  font-weight: var(--mds-weight-medium);
+  line-height: 1.4;
+  color: var(--mds-muted);
+}
+
+.mds-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  font-size: var(--mds-text-eyebrow);
+  font-weight: var(--mds-weight-bold);
+  letter-spacing: var(--mds-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--mds-pine-ink);
+}
+
+.mds-muted { color: var(--mds-muted); }
+
+/* Layout */
+.mds-container {
+  width: min(100% - 2.5rem, var(--mds-width-marketing));
+  margin-inline: auto;
+}
+
+.mds-container-narrow {
+  width: min(100% - 2.5rem, var(--mds-width-onboarding-narrow));
+  margin-inline: auto;
+}
+
+.mds-container-onboard {
+  width: min(100% - 2.5rem, var(--mds-width-onboarding));
+  margin-inline: auto;
+}
+
+.mds-container-app {
+  width: min(100% - 2.5rem, var(--mds-width-app));
+  margin-inline: auto;
+}
+
+.mds-stack-sm > * + * { margin-top: 0.75rem; }
+.mds-stack-md > * + * { margin-top: 1.25rem; }
+.mds-stack-lg > * + * { margin-top: var(--mds-space-6); }
+
+.mds-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+}
+
+.mds-cluster-between { justify-content: space-between; }
+
+.mds-divider {
+  height: 1px;
+  background: var(--mds-line);
+  border: 0;
+  margin: 1.25rem 0;
+}
+
+@media (max-width: 720px) {
+  .mds-container,
+  .mds-container-narrow,
+  .mds-container-onboard,
+  .mds-container-app {
+    width: min(100% - 2.5rem, 100%);
+    padding-inline: 0;
+  }
+}
