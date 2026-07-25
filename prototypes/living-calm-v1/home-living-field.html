@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Home · Living Quiet Field · Living Calm V1</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="field-page">
+  <div class="shell home-living" data-bind-state>
+    <header class="app-header app-header-field">
+      <div class="container-app app-header-inner">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Mighty
+        </a>
+        <nav class="app-nav" aria-label="Primary">
+          <a class="is-active" href="home-living-field.html">Home</a>
+          <a href="#accounts">Accounts</a>
+          <a href="#activity">Activity</a>
+        </nav>
+        <span class="status-pill">Living Quiet Field</span>
+      </div>
+    </header>
+
+    <section class="quiet-field">
+      <div class="field-horizon" aria-hidden="true"></div>
+      <div class="field-points" aria-hidden="true">
+        <span class="field-point" style="left:16%;top:46%"></span>
+        <span class="field-point" style="left:28%;top:60%"></span>
+        <span class="field-point" style="left:40%;top:50%"></span>
+        <span class="field-point" data-point="signal" style="left:54%;top:57%"></span>
+        <span class="field-point" style="left:66%;top:44%"></span>
+        <span class="field-point" style="left:78%;top:58%"></span>
+        <span class="field-point" style="left:88%;top:49%"></span>
+      </div>
+
+      <div class="field-content rise">
+        <div class="state-switch" aria-label="Prototype states">
+          <a href="?state=clear">All clear</a>
+          <a href="?state=attention">Attention</a>
+          <a href="?state=opportunity">Opportunity</a>
+        </div>
+
+        <div data-when="clear">
+          <p class="eyebrow"><span class="live-dot" aria-hidden="true"></span>Working quietly</p>
+          <h1 class="display display-xl">You’re good.</h1>
+          <p class="lede">
+            Your accounts rest in the field. Mighty verified them and will keep watch —
+            without asking for your attention.
+          </p>
+          <div class="home-actions">
+            <a class="btn btn-field" href="#accounts">View accounts</a>
+          </div>
+        </div>
+
+        <div data-when="attention" hidden>
+          <p class="eyebrow">One signal</p>
+          <h1 class="display display-xl">Delta needs a sign-in.</h1>
+          <p class="lede">
+            A single point rises. Everything else stays calm. Open Delta in Chrome —
+            Mighty continues from your session.
+          </p>
+          <div class="home-actions">
+            <a class="btn btn-field-primary" href="#delta">Open Delta</a>
+            <a class="btn btn-field" href="#accounts">View accounts</a>
+          </div>
+        </div>
+
+        <div data-when="opportunity" hidden>
+          <p class="eyebrow">Value waiting</p>
+          <h1 class="display display-xl">A night is about to lapse.</h1>
+          <p class="lede">
+            Marriott free-night cert — 12 days left. One soft lift in the field; no countdown theater.
+          </p>
+          <div class="home-actions">
+            <a class="btn btn-field-primary" href="#marriott">Review cert</a>
+            <a class="btn btn-field" href="#accounts">View accounts</a>
+          </div>
+        </div>
+
+        <div class="point-legend" aria-hidden="true">
+          <span>Amex</span>
+          <span>Delta</span>
+          <span>Marriott</span>
+          <span>Others resting</span>
+        </div>
+
+        <div class="meta-row">
+          <span>Last checked just now</span>
+          <span>Watching quietly · Chrome active</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="container decision" style="margin: 1.5rem auto 3rem; color: var(--ink);">
+      <h2>Design decision — field as Home, not wallpaper</h2>
+      <p>
+        Full-bleed Quiet Field rejects inset hero cards so the metaphor cannot be dismissed as marketing.
+        Account points are L3 evidence; motion encodes state only. Risk: ops-minded users may want rows —
+        that is why Operational Calm exists as a sibling, not a compromise inside this concept.
+      </p>
+    </section>
+  </div>
+  <script src="prototype.js"></script>
+</body>
+</html>
