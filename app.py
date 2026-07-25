@@ -6383,6 +6383,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/design-system/mighty-ds.css">
 <style>
 """ + BASE_CSS + """
 .main-content{height:100vh;overflow:hidden;display:flex;flex-direction:column}
@@ -6409,8 +6410,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10)}
 /* Page body — single column: intelligence strip at top, accounts below */
 .page-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:0}
-.insight-panel{width:100%;padding:24px 32px 8px;background:#ffffff;flex-shrink:0}
-.insight-inner{max-width:1600px;margin:0 auto}
+.insight-panel{width:100%;padding:24px 32px 8px;background:transparent;flex-shrink:0}
+.insight-inner{max-width:720px;margin:0 auto}
+.insight-panel:has(.home-v2){background:transparent;padding:8px 24px 32px}
 /* Dashboard hero — Executive Daily Brief */
 .dash-hero{margin-bottom:0}
 .dash-brief-card{background:transparent;border:none;border-radius:0;padding:8px 0 12px;box-shadow:none}
@@ -10442,6 +10444,22 @@ def dashboard():
             )
         except Exception:
             _recent_wins = []
+        _gmail_connected = None
+        try:
+            _gmail_row = get_db().execute(
+                "SELECT 1 FROM email_connections "
+                "WHERE user_id=? AND provider='gmail' LIMIT 1",
+                (session["user_id"],),
+            ).fetchone()
+            _gmail_connected = _gmail_row is not None
+        except Exception:
+            _gmail_connected = None
+        _chrome_active = not _worker_setup_needed if _home_account_statuses else None
+        if _extension_info is not None:
+            _chrome_active = bool(
+                _extension_info.get("extension_version")
+                or _extension_info.get("extension_last_seen_at")
+            )
         return render_home_page(
             _home_result,
             first_name=_first_name,
@@ -10452,6 +10470,8 @@ def dashboard():
             attention=_attention_view,
             use_attention=_use_attention,
             recent_wins=_recent_wins,
+            gmail_connected=_gmail_connected,
+            chrome_active=_chrome_active,
         )
 
     hero_section_html = _render_home_hero()
