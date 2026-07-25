@@ -12,8 +12,12 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 SESSION_FLAG = "home_os_auth_repair"
 SESSION_MODE_KEY = "home_os_mode"  # "ephemeral" | "authenticated"
+SESSION_SCENARIO_KEY = "home_os_scenario"  # "marriott" | "future_preview"
 
 LEGACY_DASHBOARD_PATH = "/dashboard/legacy"
+
+SCENARIO_MARRIOTT = "marriott"
+SCENARIO_FUTURE_PREVIEW = "future_preview"
 
 
 def _env_truthy(name: str) -> bool:
@@ -91,3 +95,20 @@ def home_os_session_mode(session: Mapping[str, Any] | None) -> str:
     if uid and not uid.startswith("home-os-") and uid != "research-preview-session":
         return "authenticated"
     return "ephemeral"
+
+
+def home_os_session_scenario(session: Mapping[str, Any] | None) -> str:
+    """Which ephemeral seed scenario is active (marriott vs future preview)."""
+    if not session:
+        return SCENARIO_MARRIOTT
+    scenario = str(session.get(SESSION_SCENARIO_KEY) or "").strip().lower()
+    if scenario in (SCENARIO_MARRIOTT, SCENARIO_FUTURE_PREVIEW):
+        return scenario
+    return SCENARIO_MARRIOTT
+
+
+def is_future_preview_session(session: Mapping[str, Any] | None) -> bool:
+    return (
+        is_home_os_session(session)
+        and home_os_session_scenario(session) == SCENARIO_FUTURE_PREVIEW
+    )

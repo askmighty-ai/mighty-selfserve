@@ -21,19 +21,23 @@ from mighty.home_os.compose import (
     SIM_AUTH_REPAIR_COMPLETION,
     compose_for_authenticated_user,
     compose_for_ephemeral,
+    compose_for_future_preview,
     slice_from_compose,
 )
+from mighty.home_os.future_preview import PERSONA_USER_ID, preview_as_of
 from mighty.home_os.gate import (
     home_os_allowed,
     home_os_is_default_landing,
     home_os_session_mode,
     is_active_home_os_session,
+    is_future_preview_session,
 )
 from mighty.home_os.render import render_home_os_page
 from mighty.home_os.session_state import (
     HOME_OS_USER_ID,
     RepairPhase,
     SessionOverlays,
+    begin_future_preview_session,
     begin_home_os_session,
     enable_home_os_for_authenticated_user,
     load_session_overlays,
@@ -62,6 +66,24 @@ def handle_research_entry(session: Any) -> tuple[str, int] | None:
     return None
 
 
+def handle_future_preview_entry(
+    session: Any,
+    *,
+    state: str | None = "full",
+    include_interrupt: bool = False,
+) -> tuple[str, int] | None:
+    """Begin review-only Future Preview session. Returns error body, or None."""
+    if not home_os_allowed():
+        return unavailable_html(), 404
+    begin_future_preview_session(
+        session,
+        as_of=preview_as_of(),
+        state=state,
+        include_interrupt=include_interrupt,
+    )
+    return None
+
+
 def _display_name_from_user(user: Any) -> str:
     if user is None:
         return "there"
@@ -87,6 +109,8 @@ def _is_real_user_id(user_id: str | None) -> bool:
         return False
     if uid == HOME_OS_USER_ID:
         return False
+    if uid == PERSONA_USER_ID:
+        return False
     if uid == "research-preview-session":
         return False
     return True
@@ -103,7 +127,9 @@ def handle_home_get(
     if not home_os_allowed():
         return unavailable_html(), 404
 
-    now = as_of or datetime.now(timezone.utc)
+    future = is_future_preview_session(session)
+    # Future Preview always projects against the fixed scenario clock.
+    now = as_of or (preview_as_of() if future else datetime.now(timezone.utc))
     user_id = session.get("user_id") if session is not None else None
 
     if _is_real_user_id(user_id) and db is not None:
@@ -122,16 +148,23 @@ def handle_home_get(
     else:
         if not is_active_home_os_session(session):
             begin_home_os_session(session, as_of=now)
+            future = False
         overlays = load_session_overlays(session)
         # Ephemeral: prefer stored slice (commands mutate it), else seed.
         slice_state = load_slice_state(session)
         if slice_state is None:
-            compose = compose_for_ephemeral(as_of=now)
+            if is_future_preview_session(session):
+                compose = compose_for_future_preview(as_of=preview_as_of())
+            else:
+                compose = compose_for_ephemeral(as_of=now)
             slice_state = slice_from_compose(compose, overlays=overlays)
             save_slice_state(session, slice_state)
             save_simulation_tags(session, compose.simulation_tags)
-        apply_expiration_if_needed(slice_state, as_of=now)
+        if not is_future_preview_session(session):
+            apply_expiration_if_needed(slice_state, as_of=now)
         save_slice_state(session, slice_state)
+        if is_future_preview_session(session):
+            now = as_of or preview_as_of()
 
     csrf_token = csrf_token_factory()
     home = project_slice(slice_state, as_of=now)
@@ -166,6 +199,10 @@ def handle_work_command(
     csrf_checker()
     if not home_os_allowed():
         return unavailable_html(), 404
+
+    # Future Preview is review-only — never mutate the deterministic seed.
+    if is_future_preview_session(session):
+        return ("redirect:/home", 302)
 
     now = as_of or datetime.now(timezone.utc)
     user_id = session.get("user_id") if session is not None else None

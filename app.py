@@ -5355,7 +5355,7 @@ def _session_user_row():
             if not _home_os_gate.is_active_home_os_session(session):
                 return None
             if _home_os_gate.home_os_session_mode(session) == "ephemeral":
-                return _home_os_session.synthetic_user_row()
+                return _home_os_session.synthetic_user_row(session)
     uid = session.get("user_id")
     if not uid:
         return None
@@ -8744,6 +8744,45 @@ def research_home_os_entry():
     except Exception:
         users_before = 0
     err = _home_os_routes.handle_research_entry(session)
+    if err is not None:
+        return err
+    try:
+        users_after = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+        if users_after != users_before:
+            session.clear()
+            return ("Home OS preview refused to create customer records.", 500)
+    except Exception:
+        pass
+    return redirect("/home")
+
+
+@app.route("/research/home-os/future")
+def research_home_os_future_preview():
+    """Staging/research entry for deterministic Home OS Future Preview.
+
+    Query params:
+      - state=full|attention|opportunity|all-clear
+      - interrupt=1 to include the optional Hilton soft Interrupt
+    """
+    if _home_os_routes is None:
+        return ("Home OS preview unavailable.", 404)
+    users_before = 0
+    try:
+        users_before = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    except Exception:
+        users_before = 0
+    state = (request.args.get("state") or "full").strip()
+    include_interrupt = (request.args.get("interrupt") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    err = _home_os_routes.handle_future_preview_entry(
+        session,
+        state=state,
+        include_interrupt=include_interrupt,
+    )
     if err is not None:
         return err
     try:

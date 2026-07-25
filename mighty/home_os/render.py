@@ -20,7 +20,7 @@ from mighty.home_os.marriott_scenario import PROVIDER_DISPLAY, SIMULATION_MODE
 from mighty.home_os.session_state import HomeOsSliceState, RepairPhase
 from mighty.workitem.coverage import AuthPosture, CoverageItem
 from mighty.workitem.home_state import HomeState, HomeStatusMode
-from mighty.workitem.model import WorkItem
+from mighty.workitem.model import WorkItem, WorkItemType
 from mighty.workitem.proof import ProofDisclosure
 
 
@@ -98,6 +98,7 @@ def render_home_os_page(
     if slice_state.repair_phase is RepairPhase.FAILED:
         data_state = "attention"
     tags_attr = " ".join(esc(t) for t in simulation_tags)
+    sim_marker = simulation_tags[0] if simulation_tags else SIMULATION_MODE
 
     body = (
         f'{_render_chrome(esc, first_name=first_name)}'
@@ -127,7 +128,7 @@ def render_home_os_page(
         "</head>\n"
         f'<body class="mds home-os" data-home-os="1" data-state="{esc(data_state)}" '
         f'data-repair-phase="{esc(slice_state.repair_phase.value)}" '
-        f'data-simulation="{esc(SIMULATION_MODE)}" '
+        f'data-simulation="{esc(sim_marker)}" '
         f'data-simulation-tags="{tags_attr}">\n'
         f"{body}\n"
         "</body>\n"
@@ -175,6 +176,8 @@ def _render_field(
         meta_bits.append(esc(today_label))
     if home.silence:
         meta_bits.append("Working quietly")
+    elif home.status is HomeStatusMode.VALUE_WAITING:
+        meta_bits.append("Value waiting")
     else:
         meta_bits.append("Needs you")
     meta = " · ".join(meta_bits)
@@ -247,17 +250,20 @@ def _render_work_queue(
         f"</form>"
     )
 
-    badge = render_status_badge("Needs sign-in", variant="attention")
+    badge_label, badge_variant = _work_badge(item)
+    badge = render_status_badge(badge_label, variant=badge_variant)
+    provider_label = _work_provider_label(item, slice_state)
+    region_title = _work_region_title(home)
     return (
         f'<section class="home-os__queue" data-region="work-queue" '
         f'aria-labelledby="home-os-work-title">'
         f'<header class="home-os__region-head">'
-        f'<h2 class="mds-meta" id="home-os-work-title">Needs you</h2>'
+        f'<h2 class="mds-meta" id="home-os-work-title">{esc(region_title)}</h2>'
         f"</header>"
         f'<article class="home-os__work" data-work-item-id="{esc(item.id)}" '
         f'data-work-type="{esc(item.type.value)}" data-expanded="true">'
         f'<div class="home-os__work-top">{badge}'
-        f'<p class="mds-meta">{esc(PROVIDER_DISPLAY)}</p></div>'
+        f'<p class="mds-meta">{esc(provider_label)}</p></div>'
         f'<h3 class="mds-heading">{esc(item.title)}</h3>'
         f'<p class="home-os__work-summary">{esc(item.summary)}</p>'
         f"{fail_note}"
@@ -269,6 +275,41 @@ def _render_work_queue(
         f"{forms}"
         f"</section>"
     )
+
+
+def _work_badge(item: WorkItem) -> tuple[str, str]:
+    if item.type is WorkItemType.APPROVAL:
+        return ("Needs approval", "attention")
+    if item.type is WorkItemType.OPPORTUNITY:
+        return ("Opportunity", "quiet")
+    if item.type is WorkItemType.SETUP:
+        return ("Setup", "attention")
+    if item.type is WorkItemType.INTERRUPT:
+        return ("Needs sign-in", "attention")
+    return ("Needs you", "attention")
+
+
+def _work_region_title(home: HomeState) -> str:
+    if home.status is HomeStatusMode.VALUE_WAITING:
+        return "Value waiting"
+    if home.status is HomeStatusMode.SETUP_INCOMPLETE:
+        return "Setup"
+    return "Needs you"
+
+
+def _work_provider_label(item: WorkItem, slice_state: HomeOsSliceState) -> str:
+    facts = dict(item.evidence.facts) if item.evidence else {}
+    display = str(facts.get("display_name") or "").strip()
+    if display:
+        return display
+    if item.provider:
+        for row in slice_state.coverage:
+            if row.provider == item.provider and row.display_name:
+                return row.display_name
+        if item.provider == "marriott":
+            return PROVIDER_DISPLAY
+        return item.provider.replace("_", " ").title()
+    return ""
 
 
 def _render_proof(home: HomeState, *, esc: Escape) -> str:

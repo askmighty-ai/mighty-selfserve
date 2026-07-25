@@ -19,6 +19,13 @@ from mighty.home_os.adapters import (
     attention_items_to_work_items,
     change_alerts_to_proof,
 )
+from mighty.home_os.future_preview import (
+    PERSONA_DISPLAY_NAME as FUTURE_PREVIEW_DISPLAY_NAME,
+    SIMULATION_TAG as SIM_FUTURE_PREVIEW,
+    initial_canonical_models as future_preview_canonical_models,
+    normalize_preview_state,
+    preview_as_of,
+)
 from mighty.home_os.marriott_scenario import initial_canonical_models
 from mighty.home_os.session_state import (
     HOME_OS_DISPLAY_NAME,
@@ -33,6 +40,7 @@ from mighty.workitem.proof import ProofItem
 
 # Stable tags for docs/HOME_OS_SIMULATION_GAPS.md and tests.
 SIM_EPHEMERAL_SCENARIO = "ephemeral_marriott_scenario"
+SIM_FUTURE_PREVIEW_SCENARIO = SIM_FUTURE_PREVIEW
 SIM_AUTH_REPAIR_COMPLETION = "auth_repair_completion_simulated"
 SIM_SESSION_PROOF_OVERLAY = "session_local_proof_overlay"
 SIM_SESSION_COVERAGE_OVERRIDE = "session_local_coverage_override"
@@ -61,6 +69,29 @@ def compose_for_ephemeral(*, as_of: datetime) -> ComposeResult:
         display_name=HOME_OS_DISPLAY_NAME,
         simulation_tags=(SIM_EPHEMERAL_SCENARIO, SIM_AUTH_REPAIR_COMPLETION),
         source="ephemeral",
+        authenticated=False,
+    )
+
+
+def compose_for_future_preview(
+    *,
+    as_of: datetime | None = None,
+    state: str | None = "full",
+    include_interrupt: bool = False,
+) -> ComposeResult:
+    """Review-only Future Preview — deterministic operational household."""
+    clock = as_of or preview_as_of()
+    preview_state = normalize_preview_state(state)
+    models = future_preview_canonical_models(
+        as_of=clock,
+        state=preview_state,
+        include_interrupt=include_interrupt,
+    )
+    return ComposeResult(
+        models=models,
+        display_name=FUTURE_PREVIEW_DISPLAY_NAME,
+        simulation_tags=(SIM_FUTURE_PREVIEW_SCENARIO,),
+        source="future_preview",
         authenticated=False,
     )
 
@@ -155,7 +186,8 @@ def slice_from_compose(
         display_name=result.display_name,
         simulation=not result.authenticated
         or SIM_AUTH_REPAIR_COMPLETION in result.simulation_tags
-        or SIM_EPHEMERAL_SCENARIO in result.simulation_tags,
+        or SIM_EPHEMERAL_SCENARIO in result.simulation_tags
+        or SIM_FUTURE_PREVIEW_SCENARIO in result.simulation_tags,
         seeded_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
     )
 

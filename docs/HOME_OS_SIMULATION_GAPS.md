@@ -26,6 +26,7 @@ Authenticated staging users with a real `users` row consume these paths.
 | Tag | What is simulated | Why |
 |-----|-------------------|-----|
 | `ephemeral_marriott_scenario` | Full Marriott Interrupt + Coverage + seed Proof for `/research/home-os` preview sessions | No customer DB row; moderated demo still needs a coherent story |
+| `ephemeral_future_preview` | Deterministic fully-operational household for `/research/home-os/future` (Coverage, Proof, Approval, Opportunities) | Review-only evaluation of Home OS at scale; no customer DB row |
 | `auth_repair_completion_simulated` | Confirming primary repair action does not perform live provider authentication | Safe staging completion; live session capture not yet Home-centered |
 | `session_local_proof_overlay` | Proof earned from staged repair is held in session until real change events exist | Lifecycle Proof is earned in-engine but not yet written to `account_changes` |
 | `session_local_coverage_override` | Coverage auth flipped to signed-in after staged repair | Real AuthTruth / AccountState not mutated by Home OS commands yet |

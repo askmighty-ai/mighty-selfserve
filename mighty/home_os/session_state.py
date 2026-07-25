@@ -11,7 +11,21 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
 
-from mighty.home_os.gate import SESSION_FLAG, SESSION_MODE_KEY
+from mighty.home_os.future_preview import (
+    PERSONA_DISPLAY_NAME as FUTURE_PREVIEW_DISPLAY_NAME,
+    PERSONA_USER_ID as FUTURE_PREVIEW_USER_ID,
+    SIMULATION_TAG as FUTURE_PREVIEW_SIM_TAG,
+    initial_canonical_models as future_preview_canonical_models,
+    normalize_preview_state,
+    preview_as_of,
+)
+from mighty.home_os.gate import (
+    SCENARIO_FUTURE_PREVIEW,
+    SCENARIO_MARRIOTT,
+    SESSION_FLAG,
+    SESSION_MODE_KEY,
+    SESSION_SCENARIO_KEY,
+)
 from mighty.home_os.marriott_scenario import initial_canonical_models
 from mighty.workitem.coverage import CoverageItem
 from mighty.workitem.model import WorkItem
@@ -27,6 +41,7 @@ SESSION_STATE_KEY = "home_os_slice"
 SESSION_OVERLAYS_KEY = "home_os_overlays"
 SESSION_STARTED_AT = "home_os_started_at"
 SESSION_SIM_TAGS_KEY = "home_os_simulation_tags"
+SESSION_PREVIEW_STATE_KEY = "home_os_future_preview_state"
 
 
 class RepairPhase(str, Enum):
@@ -191,6 +206,7 @@ def begin_home_os_session(session: Any, *, as_of: datetime | None = None) -> Hom
     session.clear()
     session[SESSION_FLAG] = True
     session[SESSION_MODE_KEY] = "ephemeral"
+    session[SESSION_SCENARIO_KEY] = SCENARIO_MARRIOTT
     session[SESSION_STARTED_AT] = state.seeded_at
     session[SESSION_STATE_KEY] = state.to_session_dict()
     session[SESSION_OVERLAYS_KEY] = SessionOverlays().to_dict()
@@ -199,6 +215,63 @@ def begin_home_os_session(session: Any, *, as_of: datetime | None = None) -> Hom
     session["demo_mode"] = True
     session.permanent = False
     return state
+
+
+def new_future_preview_slice_state(
+    *,
+    as_of: datetime | None = None,
+    state: str | None = "full",
+    include_interrupt: bool = False,
+) -> HomeOsSliceState:
+    clock = as_of or preview_as_of()
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=timezone.utc)
+    preview_state = normalize_preview_state(state)
+    models = future_preview_canonical_models(
+        as_of=clock,
+        state=preview_state,
+        include_interrupt=include_interrupt,
+    )
+    return HomeOsSliceState(
+        work_items=list(models.work_items),
+        coverage=list(models.coverage),
+        proof=list(models.proof),
+        overlays=[],
+        repair_phase=RepairPhase.IDLE,
+        repair_message="",
+        display_name=FUTURE_PREVIEW_DISPLAY_NAME,
+        simulation=True,
+        seeded_at=clock.replace(microsecond=0).isoformat(),
+    )
+
+
+def begin_future_preview_session(
+    session: Any,
+    *,
+    as_of: datetime | None = None,
+    state: str | None = "full",
+    include_interrupt: bool = False,
+) -> HomeOsSliceState:
+    """Install review-only Future Preview session. Never writes a users row."""
+    slice_state = new_future_preview_slice_state(
+        as_of=as_of,
+        state=state,
+        include_interrupt=include_interrupt,
+    )
+    preview_state = normalize_preview_state(state)
+    session.clear()
+    session[SESSION_FLAG] = True
+    session[SESSION_MODE_KEY] = "ephemeral"
+    session[SESSION_SCENARIO_KEY] = SCENARIO_FUTURE_PREVIEW
+    session[SESSION_PREVIEW_STATE_KEY] = preview_state
+    session[SESSION_STARTED_AT] = slice_state.seeded_at
+    session[SESSION_STATE_KEY] = slice_state.to_session_dict()
+    session[SESSION_OVERLAYS_KEY] = SessionOverlays().to_dict()
+    session[SESSION_SIM_TAGS_KEY] = [FUTURE_PREVIEW_SIM_TAG]
+    session["user_id"] = FUTURE_PREVIEW_USER_ID
+    session["demo_mode"] = True
+    session.permanent = False
+    return slice_state
 
 
 def enable_home_os_for_authenticated_user(session: Any) -> None:
@@ -247,11 +320,16 @@ def load_simulation_tags(session: Mapping[str, Any] | None) -> tuple[str, ...]:
     return tuple(str(t) for t in raw)
 
 
-def synthetic_user_row() -> Mapping[str, Any]:
+def synthetic_user_row(session: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+    from mighty.home_os.gate import is_future_preview_session
+
+    future = is_future_preview_session(session) if session is not None else False
     return {
-        "id": HOME_OS_USER_ID,
-        "email": HOME_OS_LABEL,
-        "preferred_name": HOME_OS_DISPLAY_NAME,
+        "id": FUTURE_PREVIEW_USER_ID if future else HOME_OS_USER_ID,
+        "email": "Home OS Future Preview" if future else HOME_OS_LABEL,
+        "preferred_name": (
+            FUTURE_PREVIEW_DISPLAY_NAME if future else HOME_OS_DISPLAY_NAME
+        ),
         "api_key": "mk_home_os_preview_not_a_real_key",
         "password_hash": "",
         "created_at": "home-os-preview",
