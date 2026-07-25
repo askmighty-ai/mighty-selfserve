@@ -782,6 +782,13 @@ _HOME_V2_STYLES = """
   background:#d4b56a;
   box-shadow:0 0 0 7px rgba(212,181,106,0.18);
 }
+.home-v2__chrome{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:0.35rem 0.75rem;
+  margin-bottom:var(--mds-space-3);
+}
 .home-v2__greeting{
   margin:0;
   font-size:var(--mds-text-meta);
@@ -789,10 +796,17 @@ _HOME_V2_STYLES = """
   color:var(--mds-muted);
 }
 .home-v2__date{
-  margin:0.15rem 0 0;
+  margin:0;
   font-size:var(--mds-text-meta);
   color:var(--mds-muted);
 }
+.home-v2__badge{display:inline-flex}
+.home-v2__sr-freshness{
+  position:absolute;
+  width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+.home-v2__message{position:relative}
 .home-v2__message .mds-hero{gap:var(--mds-space-3)}
 .home-v2__message .mds-hero__title{max-width:16ch}
 .home-v2__message .mds-hero__lede{max-width:36ch}
@@ -1013,20 +1027,34 @@ def _render_primary_message(
     elif projection.visual_state == "opportunity":
         badge = render_status_badge("Opportunity", variant="review")
 
-    meta_bits = [
+    chrome = [
         f'<p class="home-v2__greeting" id="hero-greeting">Hello, {safe_name}</p>',
         f'<p class="home-v2__date"><time>{escape(projection.today_label)}</time></p>',
     ]
     if badge:
-        meta_bits.append(badge)
-    if projection.last_checked:
+        chrome.append(f'<div class="home-v2__badge">{badge}</div>')
+
+    meta_html = ""
+    if projection.last_checked and projection.visual_state != "healthy":
+        # Healthy already proves freshness in Evidence — avoid duplicating it under CTA.
         raw = str(projection.last_checked)
         if "T" in raw:
             fresh = f"{escape(user_copy.HOME_FRESHNESS_PREFIX)}{_ts_html(raw)}"
         else:
             fresh = escape(user_copy.home_freshness_label(raw))
-        meta_bits.append(
+        meta_html = (
             f'<p class="mds-meta" id="dash-last-checked" '
+            f'data-last-checked="{escape(projection.last_checked)}">{fresh}</p>'
+        )
+    elif projection.last_checked:
+        # Keep the element for tests / pollers even when Evidence shows the line.
+        raw = str(projection.last_checked)
+        if "T" in raw:
+            fresh = f"{escape(user_copy.HOME_FRESHNESS_PREFIX)}{_ts_html(raw)}"
+        else:
+            fresh = escape(user_copy.home_freshness_label(raw))
+        meta_html = (
+            f'<p class="mds-meta home-v2__sr-freshness" id="dash-last-checked" '
             f'data-last-checked="{escape(projection.last_checked)}">{fresh}</p>'
         )
 
@@ -1036,13 +1064,14 @@ def _render_primary_message(
         variant="home",
         eyebrow=_primary_eyebrow(projection),
         actions_html=_render_primary_actions(projection, escape=escape),
-        meta_html="".join(meta_bits),
+        meta_html=meta_html,
         state=hero_state,
         heading_level=1,
         class_name="home-v2__hero",
     )
     return (
         f'<section class="home-v2__message" aria-label="Primary message">'
+        f'<div class="home-v2__chrome" aria-label="Status">{"".join(chrome)}</div>'
         f"{hero}"
         f"</section>"
     )
