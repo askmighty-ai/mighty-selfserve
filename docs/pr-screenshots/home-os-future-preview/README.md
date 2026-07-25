@@ -1,6 +1,6 @@
 # Home OS Future Preview — PR screenshots
 
-Deterministic review-only scenario at `/research/home-os/future`.
+Deterministic review-only scenario. Canonical entry: `/research/home-os/future` (alias: `/home-os/future`).
 
 **Do not embed these images in chat.** Open files from the repository.
 

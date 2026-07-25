@@ -8760,7 +8760,7 @@ def research_home_os_entry():
 def research_home_os_future_preview():
     """Staging/research entry for deterministic Home OS Future Preview.
 
-    Query params:
+    Canonical review URL. Query params:
       - state=full|attention|opportunity|all-clear
       - interrupt=1 to include the optional Hilton soft Interrupt
     """
@@ -8793,6 +8793,16 @@ def research_home_os_future_preview():
     except Exception:
         pass
     return redirect("/home")
+
+
+@app.route("/home-os/future")
+def home_os_future_preview_alias():
+    """Convenience alias → canonical ``/research/home-os/future`` (query preserved)."""
+    target = "/research/home-os/future"
+    qs = request.query_string.decode("utf-8") if request.query_string else ""
+    if qs:
+        target = f"{target}?{qs}"
+    return redirect(target)
 
 
 @app.route("/home")

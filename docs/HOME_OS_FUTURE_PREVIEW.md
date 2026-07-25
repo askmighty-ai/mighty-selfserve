@@ -2,11 +2,25 @@
 
 **Status:** Review-only staging/research scenario  
 **Audience:** Product, design, engineering evaluating Home OS at full operation  
-**Entry:** `/research/home-os/future` (never available in production)
+**Canonical entry:** `/research/home-os/future` (never available in production)  
+**Alias:** `/home-os/future` → redirects to the canonical entry (query string preserved)
 
 Future Preview answers: *What does Home feel like when Mighty is already watching a real household?*
 
 It does **not** change production `/dashboard` behavior, authenticated Home OS compose, or the Marriott auth-repair slice.
+
+---
+
+## URL structure
+
+| Path | Role |
+|------|------|
+| `/research/home-os/future` | **Canonical** Future Preview seed entry (gated research) |
+| `/home-os/future` | Convenience alias → canonical entry |
+| `/home` | Home OS shell (projected page after entry) |
+| `/research/home-os` | Separate Marriott auth-repair research seed (not Future Preview) |
+
+Long-term: keep research seeds under `/research/...`, keep the live shell at `/home`, and treat `/home-os/*` only as short aliases — not a second product surface.
 
 ---
 

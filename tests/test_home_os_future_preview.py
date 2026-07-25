@@ -149,6 +149,16 @@ class TestHttpEntry:
         assert PERSONA_DISPLAY_NAME in html
         assert "Sat Jul 25" in html  # fixed clock chrome date
 
+    def test_home_os_future_alias_redirects_to_canonical(self, client):
+        resp = client.get(
+            "/home-os/future?state=opportunity",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith(
+            "/research/home-os/future?state=opportunity"
+        )
+
     def test_opportunity_state(self, client):
         client.get("/research/home-os/future?state=opportunity")
         home = client.get("/home")
