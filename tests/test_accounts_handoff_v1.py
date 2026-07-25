@@ -81,7 +81,8 @@ def test_handoff_confirmation_names_account_and_next_step():
     assert "American Express" in (projection.featured.title or "")
     assert projection.featured.cta_label == "Visit American Express"
     assert projection.featured.cta_url == "https://amex.test/"
-    assert projection.answer == user_copy.HOME_BRIEFING_ANSWER_HANDOFF
+    assert projection.answer == projection.featured.title
+    assert projection.visual_state == "handoff"
 
 
 def test_handoff_needs_mighty_in_chrome_when_flagged():

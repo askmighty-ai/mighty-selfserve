@@ -213,6 +213,6 @@ class TestHomeAttentionRender:
             attention=attn.view,
             use_attention=True,
         )
-        assert "home-briefing" in html
+        assert "home-v2" in html
         # Empty enrollment still owns hero when no accounts.
         assert "watched quietly" in html.lower()

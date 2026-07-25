@@ -1,4 +1,4 @@
-"""Tests for Home V1B daily briefing rendering."""
+"""Tests for Home V2 Living Calm rendering."""
 
 import html
 from datetime import datetime, timezone
@@ -115,7 +115,21 @@ def _attention_item(**overrides) -> AttentionItem:
     return AttentionItem(**payload)
 
 
-class TestHomeBriefingUi:
+def _opportunity_item() -> AttentionItem:
+    return _attention_item(
+        attention_id="att_user1_opportunity_marriott",
+        attention_class=AttentionClass.OPPORTUNITY,
+        urgency=AttentionUrgency.OPPORTUNITY,
+        provider="marriott",
+        fingerprint="opportunity:marriott:cert",
+        cta_key=AttentionCtaKey.OPEN_PROVIDER_SURFACE,
+        source_kind=AttentionSourceKind.BENEFIT,
+        source_ref="value:user-1:marriott",
+        interruption_expected=False,
+    )
+
+
+class TestHomeV2Ui:
     def test_empty_shows_product_onboarding(self):
         result = resolve_home_state(accounts=[])
         rendered = render_home_page(
@@ -126,9 +140,12 @@ class TestHomeBriefingUi:
         )
         assert "Your accounts, watched quietly." in rendered
         assert "Connect Gmail" in rendered
-        assert "home-v1b" in rendered
+        assert "home-v2" in rendered
+        assert 'data-state="empty"' in rendered
+        assert "mds-quiet-field" in rendered
+        assert "mds-btn--primary" in rendered
 
-    def test_all_clear_status_first_no_primary_cta(self):
+    def test_healthy_state_calm_earned_evidence(self):
         view = build_customer_account_access_view(
             provider="amex",
             display_name="American Express",
@@ -142,21 +159,24 @@ class TestHomeBriefingUi:
             today_label="Friday, July 3",
             last_checked="2 minutes ago",
             escape=_escape,
+            gmail_connected=True,
+            chrome_active=True,
         )
+        assert 'data-state="healthy"' in rendered
         assert "You&#x27;re good." in rendered or "You're good." in rendered
-        assert "Nothing needs your attention right now." in rendered
-        assert (
-            "We'll let you know if anything changes." in rendered
-            or "We&#x27;ll let you know if anything changes." in rendered
-        )
-        assert "Mighty is watching" not in rendered
-        assert "View accounts" not in rendered
-        assert "home-card-cta--primary" not in rendered
-        assert "Last verified" in rendered
-        assert "2 minutes ago" in rendered
-        assert 'class="home-answer"' in rendered
+        assert "watch quietly" in rendered.lower()
+        assert "Watching 1 account" in rendered
+        assert "Last verified 2 minutes ago" in rendered or "Updated 2 minutes ago" in rendered
+        assert "Gmail connected" in rendered
+        assert "Chrome active" in rendered
+        assert "Evidence" in rendered
+        assert "Activity" in rendered
+        assert "mds-btn--primary" not in rendered
+        assert "home-v2__field" in rendered
+        assert "home-v2__message" in rendered
+        assert "<table" not in rendered.lower()
 
-    def test_attention_interrupt_owns_featured_story(self):
+    def test_attention_required_owns_primary_action(self):
         view = build_customer_account_access_view(
             provider="amex",
             display_name="American Express",
@@ -182,17 +202,53 @@ class TestHomeBriefingUi:
             escape=_escape,
             attention=attention,
             use_attention=True,
+            gmail_connected=True,
+            chrome_active=True,
         )
-        assert "One thing needs your attention." in rendered
+        assert 'data-state="attention"' in rendered
         assert attention.primary is not None
         assert attention.primary.title in rendered
         assert "only step we can&#x27;t complete for you" in rendered or (
             "only step we can't complete for you" in rendered
         )
         assert "https://amex.test/login" in rendered
-        assert "home-card-cta--primary" in rendered
+        assert "mds-btn--primary" in rendered
+        assert 'mds-field-point is-signal' in rendered or "is-signal" in rendered
 
-    def test_waiting_handoff_confirmation_not_all_clear(self):
+    def test_opportunity_available_state(self):
+        view = build_customer_account_access_view(
+            provider="marriott",
+            display_name="Marriott Bonvoy",
+            readiness=_readiness("marriott", READY),
+            discovered_from=DISCOVERED_MANUAL,
+        )
+        result = resolve_home_state(accounts=[_status_from_view(view)])
+        state = AttentionState(
+            schema_version=ATTENTION_STATE_SCHEMA_VERSION,
+            primary=_opportunity_item(),
+            remaining=(),
+            silence=None,
+        )
+        attention = build_attention_view(
+            state,
+            surface="home",
+            provider_open_urls={"marriott": "https://marriott.test/cert"},
+        )
+        rendered = render_home_page(
+            result,
+            first_name="Ryan",
+            today_label="Friday, July 3",
+            escape=_escape,
+            attention=attention,
+            use_attention=True,
+        )
+        assert 'data-state="opportunity"' in rendered
+        assert attention.primary is not None
+        assert attention.primary.title in rendered
+        assert "mds-btn--primary" in rendered
+        assert "Value waiting" in rendered
+
+    def test_waiting_handoff_confirmation_not_healthy(self):
         accounts = [
             AccountStatus(
                 source="amex",
@@ -212,10 +268,31 @@ class TestHomeBriefingUi:
             result, first_name="Ryan", today_label="Friday, July 3", escape=_escape,
         )
         assert "You're good." not in rendered and "You&#x27;re good." not in rendered
-        assert "Getting your first update." in rendered
+        assert 'data-state="handoff"' in rendered
         assert "beginning to manage" in rendered
         assert "Visit American Express" in rendered
-        assert "home-card-cta--primary" in rendered
+        assert "mds-btn--primary" in rendered
+        assert "Getting ready" in rendered
+
+    def test_activity_preview_from_recent_wins(self):
+        view = build_customer_account_access_view(
+            provider="amex",
+            display_name="American Express",
+            readiness=_readiness("amex", READY),
+            discovered_from=DISCOVERED_MANUAL,
+        )
+        result = resolve_home_state(accounts=[_status_from_view(view)])
+        rendered = render_home_page(
+            result,
+            first_name="Ryan",
+            today_label="Friday, July 3",
+            escape=_escape,
+            recent_wins=[{"message": "Membership Rewards increased", "source": "amex"}],
+            gmail_connected=True,
+            chrome_active=True,
+        )
+        assert "Membership Rewards increased" in rendered
+        assert "home-v2__activity" in rendered
 
     def test_truth_debug_only_when_flagged(self):
         view = build_customer_account_access_view(

@@ -128,13 +128,12 @@ def test_truth_dashboard_emits_local_time_elements_not_raw_space_ts():
     assert result.capability is not None
     assert result.capability.state == CapabilityState.EXTRACTION_SUCCESS
     assert result.capability.last_verified == _FRESH_CONFIRMED_AT
+    # Home V2 surfaces verification time as calm evidence via <time>, not Truth chrome.
     assert f'class="{CUSTOMER_LOCAL_TIME_CLASS}"' in rendered
     assert f'datetime="{_FRESH_CONFIRMED_AT}"' in rendered
-    assert "Latest check completed:" in rendered
-    # Raw UTC-looking customer display must not appear as primary text.
+    assert "Last verified" in rendered
     assert f"Latest check completed: {_FRESH_CONFIRMED_AT.replace('T', ' ').rstrip('Z')}" not in rendered
-    assert "Truth Timeline" in rendered
-    assert rendered.count(CUSTOMER_LOCAL_TIME_CLASS) >= 2
+    assert rendered.count(CUSTOMER_LOCAL_TIME_CLASS) >= 1
 
 
 def test_js_syntax_check():
