@@ -5308,20 +5308,28 @@ def base_url():
         root = "https://" + root[len("http://"):]
     return root
 
+def _default_app_home_path() -> str:
+    """Post-login destination — Home OS when enabled as staging default."""
+    if _home_os_gate is not None and _home_os_gate.home_os_is_default_landing():
+        return "/home"
+    return "/dashboard"
+
+
 def _safe_redirect_path(url: str) -> str:
     """Return a same-origin relative path for post-login redirects."""
     from urllib.parse import urlparse
+    default = _default_app_home_path()
     if not url:
-        return "/dashboard"
+        return default
     try:
         parsed = urlparse(url)
         if parsed.netloc or not url.startswith("/"):
-            return "/dashboard"
+            return default
         if url.startswith("//") or url.startswith("/\\"):
-            return "/dashboard"
+            return default
         return url
     except Exception:
-        return "/dashboard"
+        return default
 
 def _path_for_login_next() -> str:
     """Full path + query for ?next= after login."""
@@ -5340,12 +5348,14 @@ def _session_user_row():
         if _research_home.is_active_research_session(session):
             return _research_home.synthetic_user_row()
         return None
-    # Home OS staging slice: ephemeral session identity (never a users row).
+    # Home OS ephemeral preview: synthetic identity (never a users row).
+    # Authenticated Home OS mode keeps the real users row.
     if _home_os_gate is not None and _home_os_session is not None:
         if _home_os_gate.is_home_os_session(session):
-            if _home_os_gate.is_active_home_os_session(session):
+            if not _home_os_gate.is_active_home_os_session(session):
+                return None
+            if _home_os_gate.home_os_session_mode(session) == "ephemeral":
                 return _home_os_session.synthetic_user_row()
-            return None
     uid = session.get("user_id")
     if not uid:
         return None
@@ -8564,7 +8574,7 @@ def logo_icon():
 @app.route("/")
 def landing():
     if "user_id" in session:
-        return redirect("/dashboard")
+        return redirect(_default_app_home_path())
     return LANDING_HTML
 
 def _render_signup_html(error: str = "") -> str:
@@ -8579,7 +8589,7 @@ def _render_signup_html(error: str = "") -> str:
 @app.route("/signup", methods=["GET"])
 def signup_page():
     if "user_id" in session:
-        return redirect("/dashboard")
+        return redirect(_default_app_home_path())
     return _render_signup_html()
 
 @app.route("/signup", methods=["POST"])
@@ -8607,7 +8617,7 @@ def signup():
     session.permanent  = True
     session["user_id"] = uid
     session["email"]   = email
-    return redirect("/dashboard")
+    return redirect(_default_app_home_path())
 
 @app.route("/enterprise-interest", methods=["POST"])
 def enterprise_interest():
@@ -8676,7 +8686,15 @@ def logout():
 
 @app.route("/research/home")
 def research_home_entry():
-    """Staging-only moderated Home V2 entry — no credentials, no customer records."""
+    """Staging research entry.
+
+    When Home OS is the default staging experience, this redirects to
+    ``/research/home-os`` so there is a single Status/Work/Coverage/Proof
+    concept. Legacy Living Calm research remains available only when Home OS
+    is not enabled.
+    """
+    if _home_os_gate is not None and _home_os_gate.home_os_is_default_landing():
+        return redirect("/research/home-os")
     if _research_home is None or not _research_home.research_home_allowed():
         return (
             "<!DOCTYPE html><title>Not found</title>"
@@ -8711,6 +8729,7 @@ def research_home_entry():
             return ("Research preview must not persist customer identities.", 500)
     except Exception:
         pass
+    # Legacy research Home V2 still lands on /dashboard when Home OS is off.
     return redirect("/dashboard")
 
 
@@ -8742,8 +8761,12 @@ def home_os_page():
     """Home OS shell — staging/demo only. Production /dashboard unchanged."""
     if _home_os_routes is None:
         return ("Home OS preview unavailable.", 404)
+    user = _session_user_row()
     body, status = _home_os_routes.handle_home_get(
-        session, csrf_token_factory=get_csrf_token
+        session,
+        csrf_token_factory=get_csrf_token,
+        db=get_db() if user and session.get("user_id") else None,
+        user_row=user,
     )
     return body, status
 
@@ -8753,11 +8776,14 @@ def home_os_work_command(work_item_id: str, action: str):
     """In-place Work Item commands for the Home OS staging slice."""
     if _home_os_routes is None:
         return ("Home OS preview unavailable.", 404)
+    user = _session_user_row()
     result, status = _home_os_routes.handle_work_command(
         session,
         work_item_id=work_item_id,
         action=action,
         csrf_checker=check_csrf,
+        db=get_db() if user and session.get("user_id") else None,
+        user_row=user,
     )
     if status == 302 and isinstance(result, str) and result.startswith("redirect:"):
         return redirect(result.split(":", 1)[1])
@@ -9522,8 +9548,28 @@ def _coverage_score(source: str, field_count: int) -> dict:
 @app.route("/dashboard")
 @require_login
 def dashboard():
-    _rt = _RouteTimer("/dashboard")
+    """Default app home.
+
+    When Home OS is the staging default, redirect here so there is one Status /
+    Work / Coverage / Proof surface. Legacy dashboard remains at
+    ``/dashboard/legacy`` for developers.
+    """
+    if (
+        _home_os_gate is not None
+        and _home_os_gate.home_os_is_default_landing()
+        and not request.args.get("legacy")
+    ):
+        return redirect("/home")
+    return dashboard_legacy()
+
+
+@app.route("/dashboard/legacy")
+@require_login
+def dashboard_legacy():
+    """Explicit legacy dashboard — developer/debug only when Home OS is default."""
+    _rt = _RouteTimer("/dashboard/legacy")
     # Guarded staging research Home — fictional session, no customer DB row.
+    # Only reachable when Home OS is not the default, or via this explicit route.
     if _research_home is not None and _research_home.is_active_research_session(session):
         # ?state= is ignored outside /research/home entry (and here if present).
         state = _research_home.research_state(session)

@@ -405,6 +405,8 @@ def render_research_indicator() -> str:
 # Paths research sessions may reach without stubbing.
 _RESEARCH_ALLOWED_PREFIXES = (
     "/dashboard",
+    "/dashboard/legacy",
+    "/home",
     "/research/",
     "/logout",
     "/static/",
@@ -442,7 +444,14 @@ def research_request_allowed(path: str, method: str) -> bool:
 
     if p.startswith(STUB_PATH_PREFIX):
         return True
-    if p in ("/dashboard", "/logout", "/health", "/api/csrf-token"):
+    if p in (
+        "/dashboard",
+        "/dashboard/legacy",
+        "/home",
+        "/logout",
+        "/health",
+        "/api/csrf-token",
+    ):
         return True
     if p.startswith("/static/") or p.startswith("/logo"):
         return True

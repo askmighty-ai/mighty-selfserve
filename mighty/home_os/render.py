@@ -82,6 +82,7 @@ def render_home_os_page(
     csrf_token: str,
     today_label: str = "",
     escape: Escape | None = None,
+    simulation_tags: tuple[str, ...] = (),
 ) -> str:
     """Full-page Home OS HTML — no legacy sidebar or destination rail."""
     esc = escape or _esc
@@ -96,10 +97,11 @@ def render_home_os_page(
         data_state = "calm"
     if slice_state.repair_phase is RepairPhase.FAILED:
         data_state = "attention"
+    tags_attr = " ".join(esc(t) for t in simulation_tags)
 
     body = (
         f'{_render_chrome(esc, first_name=first_name)}'
-        f'<main class="home-os__main" id="home-os-main">'
+        f'<main class="home-os__main" id="home-os-main" aria-busy="false">'
         f'{_render_field(home, eyebrow=eyebrow, title=title, lede=lede, today_label=today_label, esc=esc)}'
         f'{_render_work_queue(home, slice_state, csrf_token=csrf_token, esc=esc)}'
         f'{_render_proof(home, esc=esc)}'
@@ -125,7 +127,8 @@ def render_home_os_page(
         "</head>\n"
         f'<body class="mds home-os" data-home-os="1" data-state="{esc(data_state)}" '
         f'data-repair-phase="{esc(slice_state.repair_phase.value)}" '
-        f'data-simulation="{esc(SIMULATION_MODE)}">\n'
+        f'data-simulation="{esc(SIMULATION_MODE)}" '
+        f'data-simulation-tags="{tags_attr}">\n'
         f"{body}\n"
         "</body>\n"
         "</html>\n"
@@ -270,7 +273,15 @@ def _render_work_queue(
 
 def _render_proof(home: HomeState, *, esc: Escape) -> str:
     if not home.proof:
-        return ""
+        return (
+            '<section class="home-os__proof home-os__proof--empty" data-region="proof" '
+            'aria-labelledby="home-os-proof-title">'
+            '<header class="home-os__region-head">'
+            '<h2 class="mds-meta" id="home-os-proof-title">Recent proof</h2>'
+            "</header>"
+            '<p class="mds-meta home-os__empty">No recent proof yet — silence is correct.</p>'
+            "</section>"
+        )
     rows = "".join(_proof_row(row, esc=esc) for row in home.proof[:5])
     return (
         f'<section class="home-os__proof" data-region="proof" '
@@ -372,11 +383,14 @@ def _render_repair_modal(
             class_name="home-os__modal",
         )
 
-    title = "Restore Marriott access"
+    label = PROVIDER_DISPLAY
+    if item is not None and item.provider and item.provider != "marriott":
+        label = item.provider.replace("_", " ").title()
+    title = f"Restore {label} access"
     body = (
-        "You included Marriott so Mighty can watch it. Confirm the staged sign-in "
-        "to restore access. This preview uses a safe simulated completion — "
-        "no live Marriott password is collected here."
+        f"You included {label} so Mighty can watch it. Confirm the staged sign-in "
+        "to restore access. This staging preview uses a safe simulated completion — "
+        "no live provider password is collected here."
     )
     actions = (
         f'<form method="post" action="/home/work/{esc(work_id)}/complete" '
@@ -433,20 +447,24 @@ def _page_css() -> str:
   text-decoration:none;font-size:var(--mds-text-body-sm);font-weight:600;}
 .home-os__menu a:hover{background:var(--mds-surface-soft);}
 .home-os__main{max-width:720px;margin:0 auto;padding:0 var(--mds-space-5) var(--mds-space-8);
-  display:grid;gap:var(--mds-space-5);}
+  display:grid;gap:var(--mds-space-6);animation:home-os-enter var(--mds-duration) var(--mds-ease) both;}
+@keyframes home-os-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .home-os__status{position:relative;border-radius:var(--mds-radius-lg);overflow:hidden;
-  min-height:220px;isolation:isolate;}
+  min-height:240px;isolation:isolate;}
 .home-os__field{position:absolute;inset:0;border-radius:inherit;}
-.home-os__status-copy{position:relative;z-index:1;padding:var(--mds-space-6) var(--mds-space-5);
+.home-os__status-copy{position:relative;z-index:1;padding:var(--mds-space-6) var(--mds-space-5) var(--mds-space-5);
   color:#fff;}
 .home-os__status-copy .mds-eyebrow,.home-os__status-copy .mds-meta{color:rgba(255,255,255,.72);}
 .home-os__status-copy .mds-display{color:#fff;}
 .home-os__lede{margin:0.55rem 0 0;max-width:36ch;font-size:var(--mds-text-body);
   line-height:1.5;color:rgba(255,255,255,.88);}
 .home-os__region-head{margin-bottom:var(--mds-space-3);}
+.home-os__empty{margin:0;color:var(--mds-muted);}
 .home-os__work{background:var(--mds-surface);border:1px solid var(--mds-line);
   border-radius:var(--mds-radius-lg);padding:var(--mds-space-5);box-shadow:var(--mds-shadow-sm);
-  display:grid;gap:var(--mds-space-3);}
+  display:grid;gap:var(--mds-space-3);
+  animation:home-os-work-in var(--mds-duration-slow) var(--mds-ease) both;}
+@keyframes home-os-work-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .home-os__work-top{display:flex;align-items:center;justify-content:space-between;gap:12px;}
 .home-os__work-summary{margin:0;color:var(--mds-ink-soft);font-size:var(--mds-text-body);
   line-height:1.55;max-width:48ch;}
@@ -483,7 +501,8 @@ def _page_css() -> str:
   .home-os__work-actions .mds-btn{width:100%;}
 }
 @media (prefers-reduced-motion:reduce){
-  .home-os .mds-field-breathe,.home-os .mds-quiet-field{animation:none !important;}
+  .home-os .mds-field-breathe,.home-os .mds-quiet-field,
+  .home-os__main,.home-os__work{animation:none !important;}
 }
 """
 
