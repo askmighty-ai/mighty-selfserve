@@ -5,10 +5,10 @@ const DEFAULT_COPY = {
     name: 'Mighty',
     subtitle_background: 'Working in the background',
     status_keeping_updated: 'Keeping your accounts up to date',
-    status_open_account_center: 'Open Account Center to manage connections',
-    open_account_center: 'Open Account Center',
+    status_open_account_center: 'Open Accounts to manage connections',
+    open_account_center: 'Open Accounts',
     setup_needed: 'Setup needed',
-    setup_detail: 'Open Account Center to connect the worker.',
+    setup_detail: 'Open Accounts to finish setting up Mighty in Chrome.',
   },
 };
 
@@ -40,14 +40,15 @@ function applyStaticCopy() {
   const ctaLabel =
     (loop && loop.open_account_center) ||
     worker.open_account_center ||
-    'Open Account Center';
+    'Open Accounts';
   if (dashBtn) {
     dashBtn.textContent = ctaLabel;
-    dashBtn.href = MIGHTY_URL + '/account-center';
+    dashBtn.href = MIGHTY_URL + '/credentials';
   }
   if (setupBox) {
     setupBox.innerHTML =
-      'Visit your <a href="' + MIGHTY_URL + '/extension-setup" target="_blank">Account Center</a> to connect the worker.';
+      'Open <a href="' + MIGHTY_URL + '/extension-setup" target="_blank">Mighty in Chrome setup</a> ' +
+      'so the Chrome extension can configure itself.';
   }
 }
 
@@ -139,7 +140,7 @@ function renderAccessLoop(data) {
     setDot('amber');
     label.textContent = w().not_updated_yet || 'Not updated yet';
     headerSub.textContent = w().subtitle_running || 'Running in Chrome';
-    showDetail('Visit Account Center to connect accounts.');
+    showDetail('Open Accounts to connect accounts.');
     return;
   }
 
@@ -168,7 +169,7 @@ function render(data) {
   if (!data.api_key) {
     dot.className = 'status-dot amber';
     label.textContent = w().setup_needed || 'Setup needed';
-    detail.textContent = w().setup_detail || 'Open Account Center to connect the worker.';
+    detail.textContent = w().setup_detail || 'Open Accounts to finish setting up Mighty in Chrome.';
     detail.classList.remove('hidden');
     setupBox.classList.remove('hidden');
     return;
@@ -186,7 +187,7 @@ function render(data) {
   const worker = w();
   const needsAttention = _summaryNeedsUserAction(data.account_status);
   const statusLine = needsAttention
-    ? (worker.status_open_account_center || 'Open Account Center to manage connections')
+    ? (worker.status_open_account_center || 'Open Accounts to manage connections')
     : (worker.status_keeping_updated || 'Keeping your accounts up to date');
   showBackgroundStatus(statusLine);
 }

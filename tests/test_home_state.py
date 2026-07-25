@@ -80,7 +80,7 @@ class TestHomeStateNoAttentionRanking:
         result = resolve_home_state(accounts=accounts)
         assert result.state == HomeState.WAITING
         assert result.waiting_rows
-        assert "Open American Express" in (result.featured.cta_label or "")
+        assert "Visit American Express" in (result.featured.cta_label or "")
 
     def test_actions_do_not_produce_recommendation_ranking(self):
         accounts = [_acct("amex", "American Express", "up_to_date")]

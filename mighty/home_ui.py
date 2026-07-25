@@ -1,12 +1,12 @@
 """
 mighty.home_ui
 ──────────────
-Render Mighty Home V1 — pure projection over Attention + enrollment context.
+Render Mighty Home V2 (Living Calm) — pure projection over Attention +
+enrollment context, composed with the production design system.
 
-Reusable card components share one visual language. Truth / Capability panels
-remain available for debug only (show_access_debug).
+Truth / Capability panels remain available for debug only (show_access_debug).
 
-See docs/HOME_V1.md and docs/HOME_EXPERIENCE.md.
+See docs/HOME_V1.md, docs/LIVING_CALM_V1.md, docs/QUIET_FIELD_V2.md.
 """
 
 from __future__ import annotations
@@ -25,9 +25,15 @@ from mighty.capability_state import (
 from mighty.attention_view import AttentionView
 from mighty.customer_account_access import CustomerAccountAccessView
 from mighty.customer_local_time import format_customer_local_time
+from mighty.design_system.components import (
+    render_button,
+    render_hero,
+    render_section,
+    render_status_badge,
+)
 from mighty.home_projection import (
     HomeCard,
-    HomeOpsNote,
+    HomeEvidenceItem,
     HomeProjection,
     HomeWin,
     attention_to_card,
@@ -635,8 +641,11 @@ def _render_featured_card(card: HomeCard, *, escape: Callable[[Any], str]) -> st
     if card.title:
         # Story detail sits under the dominant status line — not a second hero.
         title = f'<p class="home-card-title">{escape(card.title)}</p>'
-    # Primary filled CTA only when the user must act; calm stays CTA-free.
-    use_primary = card.tone in ("interrupt", "opportunity")
+    # Primary filled CTA when the user must act. Calm all-clear stays CTA-free.
+    # Enrollment / first-data handoff CTAs are also primary (one clear next step).
+    use_primary = card.tone in ("interrupt", "opportunity") or (
+        card.kind == "enrollment" and bool(card.cta_label and card.cta_url)
+    )
     cta = _cta_html(card, escape=escape, primary=use_primary)
     actions = ""
     if cta or secondary:
@@ -709,80 +718,6 @@ def render_attention_panel(
     )
 
 
-def _render_recent_wins(
-    wins: Sequence[HomeWin],
-    *,
-    escape: Callable[[Any], str],
-) -> str:
-    if not wins:
-        return ""
-    items: list[str] = []
-    for win in wins:
-        body = escape(win.message)
-        if win.href:
-            items.append(
-                f'<li class="home-win">'
-                f'<a href="{escape(win.href)}" class="home-win-link">{body}</a>'
-                f"</li>"
-            )
-        else:
-            items.append(f'<li class="home-win">{body}</li>')
-    return (
-        f'<section class="home-wins" aria-label="{escape(user_copy.HOME_RECENT_WINS_LABEL)}">'
-        f'<p class="home-section-label">{escape(user_copy.HOME_RECENT_WINS_LABEL)}</p>'
-        f'<ul class="home-wins-list">{"".join(items)}</ul>'
-        f"</section>"
-    )
-
-
-def _render_ops_strip(
-    notes: Sequence[HomeOpsNote],
-    *,
-    escape: Callable[[Any], str],
-) -> str:
-    if not notes:
-        return ""
-    items: list[str] = []
-    for note in notes:
-        text = escape(note.text)
-        if note.href:
-            body = f'<a href="{escape(note.href)}" class="home-ops-note">{text}</a>'
-        else:
-            body = f'<span class="home-ops-note">{text}</span>'
-        items.append(f'<li class="home-ops-item">{body}</li>')
-    return (
-        f'<aside class="home-ops" aria-label="{escape(user_copy.HOME_OPS_LABEL)}">'
-        f'<p class="home-ops-label">{escape(user_copy.HOME_OPS_LABEL)}</p>'
-        f'<ul class="home-ops-list">{"".join(items)}</ul>'
-        f"</aside>"
-    )
-
-
-def _render_freshness(last_checked: str, *, escape: Callable[[Any], str]) -> str:
-    if not last_checked:
-        return ""
-    raw = str(last_checked)
-    if "T" in raw:
-        # Absolute timestamps keep the verified prefix + local <time>.
-        line = f"{escape(user_copy.HOME_FRESHNESS_PREFIX)}{_ts_html(raw)}"
-    else:
-        line = escape(user_copy.home_freshness_label(raw))
-    return (
-        f'<p class="home-freshness" id="dash-last-checked" '
-        f'data-last-checked="{escape(last_checked)}">'
-        f"{line}"
-        f"</p>"
-    )
-
-
-def _render_footer(*, escape: Callable[[Any], str]) -> str:
-    return (
-        f'<footer class="home-footer dash-home-footer">'
-        f"{escape(user_copy.HOME_FOOTER_WORKER)}"
-        f"</footer>"
-    )
-
-
 def _render_truth_debug(
     result: HomeStateResult,
     *,
@@ -807,12 +742,402 @@ def _render_truth_debug(
             ),
         )
     return (
-        f'<details class="home-truth-debug">'
+        f'<details class="home-v2__debug">'
         f"<summary>Capability debug</summary>"
         f'<section class="dash-truth" aria-label="Capability debug">'
         f"{render_capability_panel(capability, escape=escape, extension_info=extension_info)}"
         f"</section>"
         f"</details>"
+    )
+
+
+_HOME_V2_STYLES = """
+<style>
+.home-v2{
+  --home-v2-max:40rem;
+  display:flex;
+  flex-direction:column;
+  gap:var(--mds-space-6);
+  max-width:var(--home-v2-max);
+  margin:0 auto;
+  padding:var(--mds-space-5) 0 var(--mds-space-7);
+}
+.home-v2__field{
+  position:relative;
+  border-radius:var(--mds-radius-lg);
+  overflow:hidden;
+  min-height:11.5rem;
+}
+.home-v2__field .mds-quiet-field{
+  min-height:11.5rem;
+  border-radius:var(--mds-radius-lg);
+  box-shadow:none;
+}
+.home-v2__field .mds-quiet-field__status{display:none}
+.home-v2[data-state="healthy"] .mds-quiet-field{animation:none}
+.home-v2[data-state="attention"] .mds-field-point.is-signal{
+  background:#e8c27a;
+}
+.home-v2[data-state="opportunity"] .mds-field-point.is-signal{
+  background:#d4b56a;
+  box-shadow:0 0 0 7px rgba(212,181,106,0.18);
+}
+.home-v2__chrome{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:0.35rem 0.75rem;
+  margin-bottom:var(--mds-space-3);
+}
+.home-v2__greeting{
+  margin:0;
+  font-size:var(--mds-text-meta);
+  font-weight:var(--mds-weight-medium);
+  color:var(--mds-muted);
+}
+.home-v2__date{
+  margin:0;
+  font-size:var(--mds-text-meta);
+  color:var(--mds-muted);
+}
+.home-v2__badge{display:inline-flex}
+.home-v2__sr-freshness{
+  position:absolute;
+  width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+.home-v2__message{position:relative}
+.home-v2__message .mds-hero{gap:var(--mds-space-3)}
+.home-v2__message .mds-hero__title{max-width:16ch}
+.home-v2__message .mds-hero__lede{max-width:36ch}
+.home-v2__message .mds-hero__actions{margin-top:var(--mds-space-3)}
+.home-v2__message .mds-hero__meta{
+  border-top:none;
+  padding-top:0;
+  margin-top:var(--mds-space-2);
+}
+.home-v2__evidence-list,
+.home-v2__activity-list{
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:flex;
+  flex-direction:column;
+  gap:0.55rem;
+}
+.home-v2__evidence-item,
+.home-v2__activity-item{
+  display:flex;
+  align-items:baseline;
+  gap:0.55rem;
+  font-size:var(--mds-text-body-sm);
+  color:var(--mds-ink-soft);
+  line-height:1.45;
+}
+.home-v2__evidence-mark{
+  flex-shrink:0;
+  width:0.45rem;
+  height:0.45rem;
+  margin-top:0.4rem;
+  border-radius:999px;
+  background:var(--mds-line-strong);
+}
+.home-v2__evidence-item[data-ok="1"] .home-v2__evidence-mark{
+  background:var(--mds-success);
+}
+.home-v2__evidence-item[data-ok="0"] .home-v2__evidence-mark{
+  background:var(--mds-waiting);
+}
+.home-v2__activity-item a{
+  color:inherit;
+  text-decoration:none;
+}
+.home-v2__activity-item a:hover,
+.home-v2__activity-item a:focus-visible{
+  color:var(--mds-pine);
+  text-decoration:underline;
+}
+.home-v2__activity-empty{
+  margin:0;
+  font-size:var(--mds-text-body-sm);
+  color:var(--mds-muted);
+}
+.home-v2__region .mds-section__header{margin-bottom:var(--mds-space-3)}
+.home-v2__region .mds-heading{
+  font-size:var(--mds-text-meta);
+  font-weight:var(--mds-weight-semibold);
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  color:var(--mds-muted);
+}
+.home-v2__debug{
+  margin-top:var(--mds-space-4);
+  padding-top:var(--mds-space-4);
+  border-top:1px solid var(--mds-line);
+}
+.home-v2__debug summary{
+  cursor:pointer;
+  font-size:var(--mds-text-meta);
+  font-weight:var(--mds-weight-semibold);
+  color:var(--mds-muted);
+}
+@media (max-width:720px){
+  .home-v2{padding:var(--mds-space-4) 0 var(--mds-space-6);gap:var(--mds-space-5)}
+  .home-v2__field,.home-v2__field .mds-quiet-field{min-height:9.5rem}
+  .home-v2__message .mds-hero__title{font-size:clamp(1.85rem,7vw,2.4rem)}
+}
+@media (prefers-reduced-motion:reduce){
+  .home-v2 .mds-field-breathe,
+  .home-v2 .mds-field-point.is-signal{animation:none!important}
+}
+</style>
+"""
+
+
+def _field_point_count(watched_count: int) -> int:
+    if watched_count <= 0:
+        return 3
+    return max(3, min(8, watched_count))
+
+
+def _render_quiet_field_region(
+    projection: HomeProjection,
+    *,
+    escape: Callable[[Any], str],
+) -> str:
+    """Quiet Field atmosphere — decorative; answer lives in Primary Message."""
+    state = projection.visual_state
+    signal = state in ("attention", "opportunity")
+    ambient = state in ("healthy", "handoff", "empty")
+    breathe = " mds-field-breathe" if ambient else ""
+    n = _field_point_count(projection.watched_count)
+    points: list[str] = []
+    signal_index = min(3, n - 1)
+    for i in range(n):
+        is_signal = signal and i == signal_index
+        points.append(
+            f'<span class="mds-field-point{" is-signal" if is_signal else ""}"></span>'
+        )
+    meta = {
+        "healthy": user_copy.HOME_V2_WORKING_QUIETLY,
+        "attention": user_copy.HOME_V2_NEEDS_YOU,
+        "opportunity": user_copy.HOME_V2_VALUE_WAITING,
+        "empty": user_copy.HOME_V2_GETTING_READY,
+        "handoff": user_copy.HOME_V2_GETTING_READY,
+    }.get(state, user_copy.HOME_V2_WORKING_QUIETLY)
+    return (
+        f'<section class="home-v2__field" aria-hidden="true" '
+        f'data-field-state="{escape(state)}">'
+        f'<div class="mds-quiet-field{breathe}">'
+        f'<div class="mds-quiet-field__horizon"></div>'
+        f'<div class="mds-quiet-field__points">{"".join(points)}</div>'
+        f'<p class="mds-meta home-v2__field-meta" '
+        f'style="position:relative;z-index:1;margin:0;color:rgba(244,239,230,0.72)">'
+        f"{escape(meta)}</p>"
+        f"</div>"
+        f"</section>"
+    )
+
+
+def _primary_eyebrow(projection: HomeProjection) -> str:
+    state = projection.visual_state
+    if state == "healthy":
+        return user_copy.HOME_V2_WORKING_QUIETLY
+    if state == "attention":
+        return user_copy.HOME_V2_NEEDS_YOU
+    if state == "opportunity":
+        return user_copy.HOME_V2_VALUE_WAITING
+    if state in ("empty", "handoff"):
+        return user_copy.HOME_V2_GETTING_READY
+    return ""
+
+
+def _primary_title(projection: HomeProjection) -> str:
+    if projection.answer:
+        return projection.answer
+    if projection.featured and projection.featured.title:
+        return projection.featured.title
+    return user_copy.HOME_BRIEFING_ANSWER_GOOD
+
+
+def _primary_lede(projection: HomeProjection) -> str:
+    card = projection.featured
+    if card is None:
+        return ""
+    body = (card.body or "").strip()
+    if not body:
+        return ""
+    # Prefer a single paragraph in the hero lede.
+    return " ".join(line.strip() for line in body.split("\n") if line.strip())
+
+
+def _render_primary_actions(
+    projection: HomeProjection,
+    *,
+    escape: Callable[[Any], str],
+) -> str:
+    del escape
+    card = projection.featured
+    if card is None:
+        return ""
+    parts: list[str] = []
+    if card.disabled_cta_label:
+        parts.append(
+            render_button(
+                card.disabled_cta_label,
+                variant="secondary",
+                disabled=True,
+            )
+        )
+    elif card.cta_label and card.cta_url:
+        parts.append(
+            render_button(
+                card.cta_label,
+                variant="primary",
+                href=card.cta_url,
+            )
+        )
+    if card.secondary_label and card.secondary_url:
+        parts.append(
+            render_button(
+                card.secondary_label,
+                variant="ghost",
+                href=card.secondary_url,
+            )
+        )
+    return "".join(parts)
+
+
+def _render_primary_message(
+    projection: HomeProjection,
+    *,
+    escape: Callable[[Any], str],
+) -> str:
+    safe_name = escape(projection.first_name)
+    hero_state = (
+        "attention"
+        if projection.visual_state in ("attention", "opportunity")
+        else "default"
+    )
+    badge = ""
+    if projection.visual_state == "healthy":
+        badge = render_status_badge("All clear", variant="quiet")
+    elif projection.visual_state == "attention":
+        badge = render_status_badge("Attention", variant="attention")
+    elif projection.visual_state == "opportunity":
+        badge = render_status_badge("Opportunity", variant="review")
+
+    chrome = [
+        f'<p class="home-v2__greeting" id="hero-greeting">Hello, {safe_name}</p>',
+        f'<p class="home-v2__date"><time>{escape(projection.today_label)}</time></p>',
+    ]
+    if badge:
+        chrome.append(f'<div class="home-v2__badge">{badge}</div>')
+
+    meta_html = ""
+    if projection.last_checked and projection.visual_state != "healthy":
+        # Healthy already proves freshness in Evidence — avoid duplicating it under CTA.
+        raw = str(projection.last_checked)
+        if "T" in raw:
+            fresh = f"{escape(user_copy.HOME_FRESHNESS_PREFIX)}{_ts_html(raw)}"
+        else:
+            fresh = escape(user_copy.home_freshness_label(raw))
+        meta_html = (
+            f'<p class="mds-meta" id="dash-last-checked" '
+            f'data-last-checked="{escape(projection.last_checked)}">{fresh}</p>'
+        )
+    elif projection.last_checked:
+        # Keep the element for tests / pollers even when Evidence shows the line.
+        raw = str(projection.last_checked)
+        if "T" in raw:
+            fresh = f"{escape(user_copy.HOME_FRESHNESS_PREFIX)}{_ts_html(raw)}"
+        else:
+            fresh = escape(user_copy.home_freshness_label(raw))
+        meta_html = (
+            f'<p class="mds-meta home-v2__sr-freshness" id="dash-last-checked" '
+            f'data-last-checked="{escape(projection.last_checked)}">{fresh}</p>'
+        )
+
+    hero = render_hero(
+        title=_primary_title(projection),
+        lede=_primary_lede(projection),
+        variant="home",
+        eyebrow=_primary_eyebrow(projection),
+        actions_html=_render_primary_actions(projection, escape=escape),
+        meta_html=meta_html,
+        state=hero_state,
+        heading_level=1,
+        class_name="home-v2__hero",
+    )
+    return (
+        f'<section class="home-v2__message" aria-label="Primary message">'
+        f'<div class="home-v2__chrome" aria-label="Status">{"".join(chrome)}</div>'
+        f"{hero}"
+        f"</section>"
+    )
+
+
+def _render_evidence_region(
+    evidence: Sequence[HomeEvidenceItem],
+    *,
+    escape: Callable[[Any], str],
+) -> str:
+    if not evidence:
+        return ""
+    rows: list[str] = []
+    for item in evidence:
+        ok_attr = ""
+        if item.ok is True:
+            ok_attr = ' data-ok="1"'
+        elif item.ok is False:
+            ok_attr = ' data-ok="0"'
+        rows.append(
+            f'<li class="home-v2__evidence-item"{ok_attr}>'
+            f'<span class="home-v2__evidence-mark" aria-hidden="true"></span>'
+            f"<span>{escape(item.label)}</span>"
+            f"</li>"
+        )
+    content = f'<ul class="home-v2__evidence-list">{"".join(rows)}</ul>'
+    return render_section(
+        title=user_copy.HOME_V2_EVIDENCE_LABEL,
+        content=content,
+        variant="panel",
+        heading_level=2,
+        class_name="home-v2__region home-v2__evidence",
+    )
+
+
+def _render_activity_preview(
+    wins: Sequence[HomeWin],
+    *,
+    escape: Callable[[Any], str],
+    visual_state: str,
+) -> str:
+    if wins:
+        items: list[str] = []
+        for win in wins:
+            body = escape(win.message)
+            if win.href:
+                items.append(
+                    f'<li class="home-v2__activity-item">'
+                    f'<a href="{escape(win.href)}">{body}</a></li>'
+                )
+            else:
+                items.append(f'<li class="home-v2__activity-item">{body}</li>')
+        content = f'<ul class="home-v2__activity-list">{"".join(items)}</ul>'
+    elif visual_state == "healthy":
+        content = (
+            f'<p class="home-v2__activity-empty">'
+            f"{escape(user_copy.HOME_V2_ACTIVITY_EMPTY)}</p>"
+        )
+    else:
+        return ""
+    return render_section(
+        title=user_copy.HOME_V2_ACTIVITY_LABEL,
+        content=content,
+        variant="panel",
+        heading_level=2,
+        class_name="home-v2__region home-v2__activity",
     )
 
 
@@ -823,28 +1148,7 @@ def render_home_projection(
     result: HomeStateResult | None = None,
     extension_info: dict[str, Any] | None = None,
 ) -> str:
-    """Render Home V1B daily briefing — status-first, calm hierarchy."""
-    safe_name = escape(projection.first_name)
-    answer = ""
-    if projection.answer:
-        answer = (
-            f'<h2 class="home-answer" data-answer="{escape(projection.story_kind)}">'
-            f"{escape(projection.answer)}</h2>"
-        )
-    featured = ""
-    if projection.featured is not None:
-        featured = (
-            f'<section class="home-primary" aria-label="Today">'
-            f"{render_home_card(projection.featured, escape=escape, featured=True)}"
-            f"{_render_freshness(projection.last_checked, escape=escape)}"
-            f"</section>"
-        )
-    elif projection.last_checked:
-        featured = (
-            f'<section class="home-primary" aria-label="Today">'
-            f"{_render_freshness(projection.last_checked, escape=escape)}"
-            f"</section>"
-        )
+    """Render Home V2 Living Calm — Quiet Field, message, evidence, activity."""
     truth = ""
     if result is not None and projection.show_truth_debug:
         truth = _render_truth_debug(result, escape=escape, extension_info=extension_info)
@@ -854,29 +1158,20 @@ def render_home_projection(
         if projection.attention_silence
         else ""
     )
+    safe_name = escape(projection.first_name)
     return (
-        f'<div class="dash-hero home-v1 home-briefing home-v1b" '
+        f'{_HOME_V2_STYLES}'
+        f'<div class="mds mds-atmosphere dash-hero home-v2" '
+        f'data-state="{escape(projection.visual_state)}" '
         f'data-enrollment="{escape(projection.enrollment_state.value)}" '
         f'data-story="{escape(projection.story_kind)}" '
         f'data-interrupt="{"1" if projection.attention_interrupt else "0"}"'
         f"{silence_attr}>"
-        f'<div class="dash-brief-card dash-brief-card--exec home-shell">'
-        f'<div class="dash-brief-exec home-stack">'
-        f'<header class="dash-brief-header home-header">'
-        f'<p class="dash-brief-greeting home-greeting" id="hero-greeting">'
-        f"Hello, {safe_name}</p>"
-        f'<div class="dash-brief-meta home-meta">'
-        f'<time class="dash-brief-today-date">{escape(projection.today_label)}</time>'
-        f"</div>"
-        f"{answer}"
-        f"</header>"
-        f"{featured}"
-        f"{_render_recent_wins(projection.recent_wins, escape=escape)}"
-        f"{_render_ops_strip(projection.ops_notes, escape=escape)}"
+        f"{_render_quiet_field_region(projection, escape=escape)}"
+        f"{_render_primary_message(projection, escape=escape)}"
+        f"{_render_evidence_region(projection.evidence, escape=escape)}"
+        f"{_render_activity_preview(projection.activity_preview, escape=escape, visual_state=projection.visual_state)}"
         f"{truth}"
-        f"{_render_footer(escape=escape)}"
-        f"</div>"
-        f"</div>"
         f"<script>"
         f"(function(){{"
         f'  var h=new Date().getHours();'
@@ -900,11 +1195,19 @@ def render_home_page(
     attention: AttentionView | None = None,
     use_attention: bool = False,
     recent_wins: Sequence[Any] | None = None,
+    gmail_connected: bool | None = None,
+    chrome_active: bool | None = None,
 ) -> str:
-    """Render Home V1A briefing from existing platform projections."""
+    """Render Home V2 from existing platform projections."""
     checked = last_checked
     if not checked and result.capability is not None and result.capability.last_verified:
         checked = result.capability.last_verified
+    # Infer Chrome from extension heartbeat when caller omits the flag.
+    if chrome_active is None and extension_info is not None:
+        chrome_active = bool(
+            extension_info.get("extension_version")
+            or extension_info.get("extension_last_seen_at")
+        )
     projection = project_home(
         result,
         first_name=first_name,
@@ -913,6 +1216,8 @@ def render_home_page(
         attention=attention,
         use_attention=use_attention,
         recent_wins=recent_wins,
+        gmail_connected=gmail_connected,
+        chrome_active=chrome_active,
     )
     return render_home_projection(
         projection,

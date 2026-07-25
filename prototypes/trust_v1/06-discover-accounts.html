@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Looking for accounts — Mighty</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-proto="discover">
+  <div class="shell">
+    <header class="container">
+      <div class="mkt-header">
+        <a class="brand" href="01-landing.html">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Mighty
+        </a>
+        <span class="status-pill status-wait">Gmail connected</span>
+      </div>
+    </header>
+
+    <main class="center-stage">
+      <div class="discover-shell surface surface-pad-lg rise">
+        <div class="field-mini field-plane field-pulse" aria-hidden="true">
+          <div class="horizon"></div>
+          <div class="field-points">
+            <span class="field-point"></span>
+            <span class="field-point is-signal"></span>
+            <span class="field-point"></span>
+            <span class="field-point"></span>
+          </div>
+        </div>
+
+        <h1 class="display display-md">Looking for your accounts</h1>
+        <p class="lede" style="margin-top: 0.7rem; font-size: 1.02rem;">
+          Mighty is scanning your connected mail for known airlines, hotels, and card programs —
+          matching senders you would recognize, not inventing accounts.
+        </p>
+
+        <div class="scan-track" aria-live="polite">
+          <div class="scan-step is-done" data-scan-step="connected">
+            <span class="scan-mark" aria-hidden="true">✓</span>
+            <div>
+              <strong>Gmail connected</strong>
+              <div class="meta">Readonly discovery access is ready</div>
+            </div>
+          </div>
+          <div class="scan-step is-live" data-scan-step="checking">
+            <span class="scan-mark" aria-hidden="true">•</span>
+            <div>
+              <strong>Checking known account senders</strong>
+              <div class="meta">Airlines, hotels, and card programs Mighty recognizes</div>
+            </div>
+          </div>
+          <div class="scan-step is-upcoming" data-scan-step="matching">
+            <span class="scan-mark" aria-hidden="true"></span>
+            <div>
+              <strong>Matching programs</strong>
+              <div class="meta">Building candidate accounts for your review</div>
+            </div>
+          </div>
+          <div class="scan-step is-upcoming" data-scan-step="preparing">
+            <span class="scan-mark" aria-hidden="true"></span>
+            <div>
+              <strong>Preparing results</strong>
+              <div class="meta">You’ll choose what Mighty should watch</div>
+            </div>
+          </div>
+        </div>
+
+        <p class="small muted" style="margin-top: 1.5rem;">
+          This usually takes under a minute. You can leave and come back — progress continues.
+        </p>
+
+        <p style="margin-top: 1.25rem;">
+          <a class="btn btn-secondary" data-auto-advance href="07-review-accounts.html">View results</a>
+        </p>
+      </div>
+    </main>
+  </div>
+  <script src="prototype.js"></script>
+</body>
+</html>

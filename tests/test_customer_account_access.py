@@ -173,7 +173,7 @@ class TestCustomerAccountAccessView:
         assert "can see and extract" in rendered.lower()
         assert 'data-capability="extraction_success"' in rendered
         assert "Technical Details" in rendered
-        assert "home-v1" in home
+        assert "home-v2" in home
         assert "✓ Watching" not in home
 
     def test_gmail_discovered_never_connected(self):
@@ -202,8 +202,9 @@ class TestCustomerAccountAccessView:
         assert "cannot determine whether you are logged in" not in rendered.lower()
         assert 'data-capability="login_unknown"' in rendered
         assert 'data-capability="extraction_success"' not in rendered
-        assert "home-briefing" in home
-        assert "Working quietly" in home or "You&#x27;re good." in home or "You're good." in home
+        assert "home-v2" in home
+        assert "beginning to manage" in home
+        assert "You're good." not in home and "You&#x27;re good." not in home
         assert "✓ Watching" not in home
 
     def test_ready_with_background_verifying_stays_connected(self):
@@ -273,7 +274,7 @@ class TestCustomerAccountAccessView:
         )
         assert "can see and extract" in capability_html.lower()
         assert "Technical Details" in capability_html
-        assert "home-briefing" in home_html
+        assert "home-v2" in home_html
         assert "You&#x27;re good." in home_html or "You're good." in home_html
 
         lc = resolve_account_lifecycle("amex", in_credentials=True, from_email=True)

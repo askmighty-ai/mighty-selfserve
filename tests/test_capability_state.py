@@ -281,7 +281,7 @@ class TestPrecedence:
         )
         assert 'data-capability="extraction_success"' in rendered
         assert "Membership Rewards" in rendered
-        assert "home-v1" in home_html
+        assert "home-v2" in home_html
 
     def test_13_only_amex_on_customer_surfaces(self):
         assert CUSTOMER_VISIBLE_PROVIDERS == frozenset({TRUTH_PROVIDER})
