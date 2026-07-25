@@ -1,12 +1,12 @@
 """
 mighty.home_projection
 ──────────────────────
-Compose Home V1A daily briefing from existing platform projections.
+Compose Home V2 (Living Calm) from existing platform projections.
 
 Presentation composition only. Does not rank Attention, score opportunities,
 plan recovery, authorize agents, or invent enrollment / change policy.
 
-See docs/HOME_V1.md.
+See docs/HOME_V1.md, docs/LIVING_CALM_V1.md, docs/VISUAL_HIERARCHY.md.
 """
 
 from __future__ import annotations
@@ -31,12 +31,19 @@ HomeCardKind = Literal[
     "enrollment",
     "story",
 ]
-HomeStoryKind = Literal["attention", "opportunity", "all_clear", "empty"]
+HomeStoryKind = Literal["attention", "opportunity", "all_clear", "empty", "handoff"]
+HomeVisualState = Literal[
+    "healthy",
+    "attention",
+    "opportunity",
+    "empty",
+    "handoff",
+]
 
 
 @dataclass(frozen=True)
 class HomeCard:
-    """Reusable Home card DTO — visual language for the featured story."""
+    """Featured story DTO — primary message content for Home."""
 
     kind: HomeCardKind
     title: str
@@ -54,7 +61,7 @@ class HomeCard:
 
 @dataclass(frozen=True)
 class HomeWin:
-    """One Recent Win line — projected from meaningful account_changes."""
+    """One activity preview line — projected from meaningful account_changes."""
 
     message: str
     provider: str | None = None
@@ -70,21 +77,38 @@ class HomeOpsNote:
 
 
 @dataclass(frozen=True)
+class HomeEvidenceItem:
+    """Concise proof that the primary signal is earned (L3)."""
+
+    label: str
+    ok: bool | None = None
+
+
+@dataclass(frozen=True)
 class HomeProjection:
-    """Pure projection for Home V1A briefing."""
+    """Pure projection for Home V2 Living Calm."""
 
     enrollment_state: HomeState
     first_name: str
     today_label: str
     answer: str
     story_kind: HomeStoryKind
+    visual_state: HomeVisualState
     featured: HomeCard | None
+    evidence: tuple[HomeEvidenceItem, ...] = ()
     recent_wins: tuple[HomeWin, ...] = ()
     ops_notes: tuple[HomeOpsNote, ...] = ()
     last_checked: str = ""
+    watched_count: int = 0
+    gmail_connected: bool | None = None
+    chrome_active: bool | None = None
     attention_silence: str | None = None
     attention_interrupt: bool = False
     show_truth_debug: bool = False
+
+    @property
+    def activity_preview(self) -> tuple[HomeWin, ...]:
+        return self.recent_wins
 
     # Compatibility aliases for older call sites / tests
     @property
@@ -125,11 +149,14 @@ def project_home(
     attention: AttentionView | None = None,
     use_attention: bool = False,
     recent_wins: Sequence[Mapping[str, Any] | HomeWin] | None = None,
+    gmail_connected: bool | None = None,
+    chrome_active: bool | None = None,
 ) -> HomeProjection:
-    """Compose HomeProjection briefing from enrollment + Attention + wins."""
+    """Compose HomeProjection from enrollment + Attention + connection evidence."""
     attn = attention if use_attention else None
     featured, story_kind = _compose_story(result, attn)
-    answer = _compose_answer(result, attn, story_kind)
+    answer = _compose_answer(result, attn, story_kind, featured)
+    visual_state = _visual_state(story_kind)
     silence = (
         attn.silence.value
         if attn is not None and attn.silence is not None
@@ -137,6 +164,7 @@ def project_home(
     )
     interrupt = bool(attn is not None and attn.render_hints.interrupt)
     checked = last_checked or result.freshness_label
+    watched = _watched_count(result)
 
     return HomeProjection(
         enrollment_state=result.state,
@@ -144,13 +172,46 @@ def project_home(
         today_label=today_label,
         answer=answer,
         story_kind=story_kind,
+        visual_state=visual_state,
         featured=featured,
+        evidence=_compose_evidence(
+            result,
+            story_kind=story_kind,
+            last_checked=checked,
+            watched_count=watched,
+            gmail_connected=gmail_connected,
+            chrome_active=chrome_active,
+        ),
         recent_wins=_project_wins(recent_wins),
         ops_notes=_compose_ops(result, attn, story_kind),
         last_checked=checked,
+        watched_count=watched,
+        gmail_connected=gmail_connected,
+        chrome_active=chrome_active,
         attention_silence=silence,
         attention_interrupt=interrupt,
         show_truth_debug=bool(result.show_access_debug),
+    )
+
+
+def _visual_state(story_kind: HomeStoryKind) -> HomeVisualState:
+    if story_kind == "all_clear":
+        return "healthy"
+    if story_kind in ("attention", "opportunity", "empty", "handoff"):
+        return story_kind
+    return "healthy"
+
+
+def _watched_count(result: HomeStateResult) -> int:
+    connected = len(result.health.connected_names or [])
+    if connected:
+        return connected
+    # Fall back to portfolio size from health buckets when names are empty.
+    return (
+        result.health.up_to_date
+        + result.health.waiting
+        + result.health.needs_login
+        + result.health.needs_attention
     )
 
 
@@ -171,21 +232,29 @@ def _compose_story(
         )
         return card, kind
 
-    # Waiting / Update never own the hero — calm briefing instead.
+    # First-data handoff: WAITING owns the hero when Attention is silent.
+    # Do not say "You're good" while enrollment setup is incomplete (D1).
+    if result.state == HomeState.WAITING:
+        return (
+            _from_featured(result.featured, tone="progress", kind="enrollment"),
+            "handoff",
+        )
+
+    # Update with existing data may stay calm; evidence carries refresh notes.
     return _all_clear_story(result), "all_clear"
 
 
 def _all_clear_story(result: HomeStateResult) -> HomeCard:
-    # Title stays empty — the briefing answer ("You're good.") is the headline.
-    # No primary CTA when all is well — depth lives on Accounts if needed.
     del result
     return HomeCard(
         kind="story",
         title="",
-        body=user_copy.home_briefing_all_clear_body(),
+        body=user_copy.home_v2_healthy_body(),
         tone="calm",
         cta_label=None,
         cta_url=None,
+        secondary_label=user_copy.HOME_VIEW_ACCOUNTS_LABEL,
+        secondary_url="/credentials",
     )
 
 
@@ -193,14 +262,83 @@ def _compose_answer(
     result: HomeStateResult,
     attention: AttentionView | None,
     story_kind: HomeStoryKind,
+    featured: HomeCard | None,
 ) -> str:
+    del result, attention
     if story_kind == "empty":
-        return ""
+        return (featured.title if featured and featured.title else "")
     if story_kind == "attention":
+        # Living Calm L1: the concrete ask, not a meta status line.
+        if featured and featured.title:
+            return featured.title
         return user_copy.HOME_BRIEFING_ANSWER_ATTENTION
     if story_kind == "opportunity":
+        if featured and featured.title:
+            return featured.title
         return user_copy.HOME_BRIEFING_ANSWER_OPPORTUNITY
+    if story_kind == "handoff":
+        if featured and featured.title:
+            return featured.title
+        return user_copy.HOME_BRIEFING_ANSWER_HANDOFF
     return user_copy.HOME_BRIEFING_ANSWER_GOOD
+
+
+def _compose_evidence(
+    result: HomeStateResult,
+    *,
+    story_kind: HomeStoryKind,
+    last_checked: str,
+    watched_count: int,
+    gmail_connected: bool | None,
+    chrome_active: bool | None,
+) -> tuple[HomeEvidenceItem, ...]:
+    """Light L3 proof — calm on healthy; never a dashboard metric strip."""
+    items: list[HomeEvidenceItem] = []
+
+    if story_kind == "empty":
+        if gmail_connected is False:
+            items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_NEEDED, ok=False))
+        elif gmail_connected is True:
+            items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_CONNECTED, ok=True))
+        if chrome_active is True:
+            items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_CHROME_ACTIVE, ok=True))
+        return tuple(items)
+
+    if watched_count > 0:
+        items.append(
+            HomeEvidenceItem(
+                label=user_copy.home_evidence_watching(watched_count),
+                ok=True if story_kind == "all_clear" else None,
+            )
+        )
+
+    if last_checked:
+        items.append(
+            HomeEvidenceItem(
+                label=user_copy.home_freshness_label(last_checked),
+                ok=True if story_kind == "all_clear" else None,
+            )
+        )
+
+    if gmail_connected is True:
+        items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_CONNECTED, ok=True))
+    elif gmail_connected is False and story_kind in ("handoff", "all_clear"):
+        items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_NEEDED, ok=False))
+
+    if chrome_active is True:
+        items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_CHROME_ACTIVE, ok=True))
+    elif chrome_active is False:
+        items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_CHROME_NEEDED, ok=False))
+
+    if result.state == HomeState.UPDATE and result.updating_display_name:
+        items.append(
+            HomeEvidenceItem(
+                label=user_copy.home_ops_refreshing(result.updating_display_name),
+                ok=None,
+            )
+        )
+
+    return tuple(items[:4])
 
 
 def _compose_ops(
@@ -216,7 +354,7 @@ def _compose_ops(
                 text=user_copy.home_ops_refreshing(result.updating_display_name),
             )
         )
-    elif result.state == HomeState.WAITING:
+    elif result.state == HomeState.WAITING and story_kind != "handoff":
         if result.waiting_rows:
             name = result.waiting_rows[0].display_name
             notes.append(
@@ -233,7 +371,6 @@ def _compose_ops(
                 )
             )
 
-    # Login repair already featured as Attention story — don't duplicate.
     if (
         story_kind != "attention"
         and result.health.needs_login

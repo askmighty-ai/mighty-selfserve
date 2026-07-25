@@ -165,10 +165,15 @@ def test_account_center_shows_checking_or_connected_after_connect(client):
             waiting_label = status_label(waiting_state)
         assert waiting_label == ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING]
 
-    r = client.get("/account-center")
+    r = client.get("/account-center", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/credentials")
+    r = client.get("/credentials")
     assert r.status_code == 200
     html = r.get_data(as_text=True)
-    assert ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN] not in html
+    assert "American Express" in html or "Accounts" in html
+    # Row status must not claim sign-in while access is checking/updating.
+    assert 'acct-row-status">Sign in required' not in html
 
     r = _post_amex_connected(client, api_key)
     assert r.status_code == 200
@@ -181,17 +186,11 @@ def test_account_center_shows_checking_or_connected_after_connect(client):
             ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
         }
 
-    r = client.get("/account-center")
+    r = client.get("/credentials")
     assert r.status_code == 200
     html = r.get_data(as_text=True)
-    assert ACCOUNT_STATE_LABELS[ACCOUNT_STATE_NEEDS_SIGN_IN] not in html
-    assert any(
-        text in html
-        for text in (
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_READY],
-            ACCOUNT_STATE_LABELS[ACCOUNT_STATE_UPDATING],
-        )
-    )
+    assert "American Express" in html or "Accounts" in html
+    assert 'acct-row-status">Sign in required' not in html
 
 
 def test_refresh_queued_after_connection_verification(client):

@@ -86,23 +86,44 @@ class TestHomeBriefingProjection:
             use_attention=True,
         )
         assert projection.story_kind == "attention"
+        assert projection.visual_state == "attention"
         assert projection.featured is not None
         assert projection.featured.attention_id == attention.primary.attention_id
-        assert projection.answer == "One thing needs your attention."
+        assert projection.answer == attention.primary.title
         assert projection.secondary == ()
 
-    def test_waiting_does_not_own_hero(self):
+    def test_waiting_owns_handoff_hero_when_attention_silent(self):
         result = resolve_home_state(
             accounts=[_acct("amex", "American Express", "waiting_for_extension")],
         )
         assert result.state == HomeState.WAITING
         projection = project_home(result, first_name="Pat", today_label="Tue")
-        assert projection.story_kind == "all_clear"
-        assert projection.answer == "You're good."
+        assert projection.story_kind == "handoff"
+        assert projection.visual_state == "handoff"
         assert projection.featured is not None
-        assert projection.featured.title == ""
-        assert projection.featured.cta_label is None
-        assert any("American Express" in n.text for n in projection.ops_notes)
+        assert "American Express" in projection.featured.title
+        assert projection.answer == projection.featured.title
+        assert projection.featured.cta_label is not None
+        assert "You're good." not in projection.answer
+        assert projection.ops_notes == ()
+
+    def test_healthy_projects_evidence(self):
+        result = resolve_home_state(accounts=[_acct("amex", "American Express", "up_to_date")])
+        projection = project_home(
+            result,
+            first_name="Pat",
+            today_label="Tue",
+            last_checked="2 minutes ago",
+            gmail_connected=True,
+            chrome_active=True,
+        )
+        assert projection.visual_state == "healthy"
+        assert projection.answer == "You're good."
+        labels = [item.label for item in projection.evidence]
+        assert any("Watching" in label for label in labels)
+        assert any("Gmail connected" == label for label in labels)
+        assert any("Chrome active" == label for label in labels)
+        assert any("2 minutes ago" in label for label in labels)
 
     def test_recent_wins_projected_without_ranking(self):
         result = resolve_home_state(accounts=[_acct("amex", "American Express", "up_to_date")])
@@ -117,6 +138,7 @@ class TestHomeBriefingProjection:
         )
         assert len(projection.recent_wins) == 1
         assert projection.recent_wins[0].message == "Membership Rewards increased"
+        assert projection.activity_preview == projection.recent_wins
 
     def test_no_health_chip_section(self):
         result = resolve_home_state(

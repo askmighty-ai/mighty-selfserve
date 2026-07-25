@@ -49,7 +49,7 @@ def test_waiting_for_extension_needs_first_visit():
         account=_acct(sync_status="needs_first_visit"),
     )
     assert lc.state == WAITING_FOR_EXTENSION
-    assert lc.secondary_cta_label == "Worker installed / Retry"
+    assert lc.secondary_cta_label == "Mighty in Chrome installed / Retry"
 
 
 def test_waiting_for_extension_connection_status():

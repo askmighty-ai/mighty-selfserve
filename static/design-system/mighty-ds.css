@@ -1,0 +1,9 @@
+/**
+ * Mighty Design System — production bundle
+ * Opt-in: wrap UI in an element with class "mds".
+ */
+
+@import url("./tokens.css");
+@import url("./base.css");
+@import url("./motion.css");
+@import url("./components.css");

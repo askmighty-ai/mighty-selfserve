@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Home · Operational Calm · Living Calm V1</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell" data-bind-state>
+    <header class="app-header">
+      <div class="container-app app-header-inner">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Mighty
+        </a>
+        <nav class="app-nav" aria-label="Primary">
+          <a class="is-active" href="home-operational.html">Home</a>
+          <a href="#accounts">Accounts</a>
+          <a href="#activity">Activity</a>
+        </nav>
+        <span class="status-pill">Operational Calm</span>
+      </div>
+    </header>
+
+    <main class="container-app home-operational">
+      <div class="state-switch" aria-label="Prototype states">
+        <a href="?state=clear">All clear</a>
+        <a href="?state=attention">Attention</a>
+        <a href="?state=opportunity">Opportunity</a>
+      </div>
+
+      <section class="ops-hero rise">
+        <div data-when="clear">
+          <p class="eyebrow"><span class="live-dot" aria-hidden="true"></span>Friday morning</p>
+          <h1 class="display display-lg">You’re good.</h1>
+          <p class="lede">
+            Mighty verified your accounts and will watch quietly from here.
+            Nothing needs your attention right now.
+          </p>
+          <div class="home-actions">
+            <a class="btn btn-field" href="#accounts">View accounts</a>
+          </div>
+        </div>
+
+        <div data-when="attention" hidden>
+          <p class="eyebrow">Needs you</p>
+          <h1 class="display display-lg">Delta needs a sign-in.</h1>
+          <p class="lede">
+            Open Delta in Chrome when you can. Mighty will detect the session and continue —
+            you stay the operator.
+          </p>
+          <div class="home-actions">
+            <a class="btn btn-field-primary" href="#delta">Open Delta</a>
+            <a class="btn btn-field" href="#accounts">View accounts</a>
+          </div>
+        </div>
+
+        <div data-when="opportunity" hidden>
+          <p class="eyebrow">Worth your time</p>
+          <h1 class="display display-lg">Marriott cert expires in 12 days.</h1>
+          <p class="lede">
+            One free night is waiting. Benefit-concrete — no FOMO countdown, no secondary pitches.
+          </p>
+          <div class="home-actions">
+            <a class="btn btn-field-primary" href="#marriott">Review cert</a>
+            <a class="btn btn-field" href="#accounts">View accounts</a>
+          </div>
+        </div>
+
+        <div class="ops-strip" aria-label="Operational footnotes">
+          <span>Last checked just now</span>
+          <span>Chrome worker active</span>
+          <span>0 pending approvals</span>
+          <span data-when="clear">3 accounts current</span>
+          <span data-when="attention" hidden>1 needs sign-in · 2 current</span>
+          <span data-when="opportunity" hidden>1 benefit waiting · 2 current</span>
+        </div>
+      </section>
+
+      <section class="ops-panel rise rise-delay-1">
+        <h2>Most recent work</h2>
+        <div class="watched-list">
+          <div class="watched-item" data-when="attention" hidden>
+            <div class="watched-left">
+              <div class="provider-badge" aria-hidden="true">DL</div>
+              <div>
+                <strong>Delta SkyMiles</strong>
+                <span>Session expired · sign-in required</span>
+              </div>
+            </div>
+            <span class="tag tag-attention">Needs you</span>
+          </div>
+          <div class="watched-item" data-when="opportunity" hidden>
+            <div class="watched-left">
+              <div class="provider-badge" aria-hidden="true">MB</div>
+              <div>
+                <strong>Marriott Bonvoy</strong>
+                <span>Free-night cert · 12 days left</span>
+              </div>
+            </div>
+            <span class="tag tag-opportunity">Opportunity</span>
+          </div>
+          <div class="watched-item">
+            <div class="watched-left">
+              <div class="provider-badge" aria-hidden="true">AX</div>
+              <div>
+                <strong>American Express</strong>
+                <span>Access verified · Membership Rewards current</span>
+              </div>
+            </div>
+            <span class="tag">Current</span>
+          </div>
+          <div class="watched-item" data-when="clear">
+            <div class="watched-left">
+              <div class="provider-badge" aria-hidden="true">DL</div>
+              <div>
+                <strong>Delta SkyMiles</strong>
+                <span>Access verified · Miles balance updated</span>
+              </div>
+            </div>
+            <span class="tag">Current</span>
+          </div>
+          <div class="watched-item" data-when="clear">
+            <div class="watched-left">
+              <div class="provider-badge" aria-hidden="true">MB</div>
+              <div>
+                <strong>Marriott Bonvoy</strong>
+                <span>Access verified · Points balance updated</span>
+              </div>
+            </div>
+            <span class="tag">Current</span>
+          </div>
+          <div class="watched-item" data-when="attention" hidden>
+            <div class="watched-left">
+              <div class="provider-badge" aria-hidden="true">MB</div>
+              <div>
+                <strong>Marriott Bonvoy</strong>
+                <span>Access verified · Points balance updated</span>
+              </div>
+            </div>
+            <span class="tag">Current</span>
+          </div>
+          <div class="watched-item" data-when="opportunity" hidden>
+            <div class="watched-left">
+              <div class="provider-badge" aria-hidden="true">DL</div>
+              <div>
+                <strong>Delta SkyMiles</strong>
+                <span>Access verified · Miles balance updated</span>
+              </div>
+            </div>
+            <span class="tag">Current</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="decision" style="margin-top: 1.5rem;">
+        <h2>Design decision — proof without Control Tower</h2>
+        <p>
+          Operational Calm keeps L3 recent work visible for belief, but demotes ops to an L4 strip
+          inside the field band. Field is a header atmosphere — not full immersion — so facts stay
+          scannable. Risk: memorability may stall at Trust V1 levels if the band feels like a card.
+        </p>
+      </section>
+
+      <a class="back-link" href="index.html">← Prototype hub</a>
+    </main>
+  </div>
+  <script src="prototype.js"></script>
+</body>
+</html>

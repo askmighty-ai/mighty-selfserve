@@ -238,7 +238,7 @@ def test_extension_setup_embeds_api_key_meta(client):
     r = client.get("/extension-setup")
     assert r.status_code == 200
     assert b'name="mighty-api-key"' in r.data
-    assert b"Worker not detected" in r.data
+    assert b"Chrome extension not detected" in r.data or b"Mighty in Chrome not detected" in r.data
     assert b"should be configured now" not in r.data
 
 

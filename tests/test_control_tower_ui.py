@@ -245,7 +245,7 @@ class TestTruthDashboardPresentation:
         home = render_home_page(
             result, first_name="Jonathan", today_label="Monday, July 13", escape=_escape,
         )
-        assert "home-v1" in home
+        assert "home-v2" in home
         assert "System Health" not in home
         assert "Capability debug" not in home
 

@@ -74,6 +74,20 @@ try:
 except ImportError:
     _demo_mode = None
 
+try:
+    from mighty import research_home as _research_home
+except ImportError:
+    _research_home = None
+
+try:
+    from mighty.home_os import gate as _home_os_gate
+    from mighty.home_os import routes as _home_os_routes
+    from mighty.home_os import session_state as _home_os_session
+except ImportError:
+    _home_os_gate = None
+    _home_os_routes = None
+    _home_os_session = None
+
 from mighty import user_copy
 
 import bcrypt as _bcrypt
@@ -5294,20 +5308,28 @@ def base_url():
         root = "https://" + root[len("http://"):]
     return root
 
+def _default_app_home_path() -> str:
+    """Post-login destination — Home OS when enabled as staging default."""
+    if _home_os_gate is not None and _home_os_gate.home_os_is_default_landing():
+        return "/home"
+    return "/dashboard"
+
+
 def _safe_redirect_path(url: str) -> str:
     """Return a same-origin relative path for post-login redirects."""
     from urllib.parse import urlparse
+    default = _default_app_home_path()
     if not url:
-        return "/dashboard"
+        return default
     try:
         parsed = urlparse(url)
         if parsed.netloc or not url.startswith("/"):
-            return "/dashboard"
+            return default
         if url.startswith("//") or url.startswith("/\\"):
-            return "/dashboard"
+            return default
         return url
     except Exception:
-        return "/dashboard"
+        return default
 
 def _path_for_login_next() -> str:
     """Full path + query for ?next= after login."""
@@ -5321,6 +5343,19 @@ def _redirect_to_login():
 
 def _session_user_row():
     """Return the logged-in user row, or None if session is missing/invalid."""
+    # Staging research preview: ephemeral session identity (never a users row).
+    if _research_home is not None and _research_home.is_research_session(session):
+        if _research_home.is_active_research_session(session):
+            return _research_home.synthetic_user_row()
+        return None
+    # Home OS ephemeral preview: synthetic identity (never a users row).
+    # Authenticated Home OS mode keeps the real users row.
+    if _home_os_gate is not None and _home_os_session is not None:
+        if _home_os_gate.is_home_os_session(session):
+            if not _home_os_gate.is_active_home_os_session(session):
+                return None
+            if _home_os_gate.home_os_session_mode(session) == "ephemeral":
+                return _home_os_session.synthetic_user_row()
     uid = session.get("user_id")
     if not uid:
         return None
@@ -6383,6 +6418,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/design-system/mighty-ds.css">
 <style>
 """ + BASE_CSS + """
 .main-content{height:100vh;overflow:hidden;display:flex;flex-direction:column}
@@ -6409,8 +6445,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 .feed-tab.active{background:#ffffff;color:#1c1917;box-shadow:0 1px 3px rgba(0,0,0,0.10)}
 /* Page body — single column: intelligence strip at top, accounts below */
 .page-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:0}
-.insight-panel{width:100%;padding:24px 32px 8px;background:#ffffff;flex-shrink:0}
-.insight-inner{max-width:1600px;margin:0 auto}
+.insight-panel{width:100%;padding:24px 32px 8px;background:transparent;flex-shrink:0}
+.insight-inner{max-width:720px;margin:0 auto}
+.insight-panel:has(.home-v2){background:transparent;padding:8px 24px 32px}
 /* Dashboard hero — Executive Daily Brief */
 .dash-hero{margin-bottom:0}
 .dash-brief-card{background:transparent;border:none;border-radius:0;padding:8px 0 12px;box-shadow:none}
@@ -6782,8 +6819,8 @@ a.home-ops-note:hover{color:#a8a29e;text-decoration:underline}
       {pending_count} awaiting decision
     </div>
     <span id="global-sync-time" style="font-size:11px;color:#9ca3af;white-space:nowrap" title="{dash_global_last_updated_title}">{global_sync_label}</span>
-    <span id="worker-active-badge" style="display:none;font-size:11px;color:#059669;white-space:nowrap;padding:4px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0" title="Extension heartbeat is healthy — does not imply a verification is active">
-      Worker: Watching
+    <span id="worker-active-badge" style="display:none;font-size:11px;color:#059669;white-space:nowrap;padding:4px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0" title="Mighty in Chrome heartbeat is healthy — does not imply a verification is active">
+      Mighty in Chrome
     </span>
     <!-- Alpha: manual sync removed — extension is the primary sync mechanism. Server retry is in Settings. -->
     <a id="ext-install-link" href="/extension-setup" target="_blank"
@@ -8537,7 +8574,7 @@ def logo_icon():
 @app.route("/")
 def landing():
     if "user_id" in session:
-        return redirect("/dashboard")
+        return redirect(_default_app_home_path())
     return LANDING_HTML
 
 def _render_signup_html(error: str = "") -> str:
@@ -8552,7 +8589,7 @@ def _render_signup_html(error: str = "") -> str:
 @app.route("/signup", methods=["GET"])
 def signup_page():
     if "user_id" in session:
-        return redirect("/dashboard")
+        return redirect(_default_app_home_path())
     return _render_signup_html()
 
 @app.route("/signup", methods=["POST"])
@@ -8580,7 +8617,7 @@ def signup():
     session.permanent  = True
     session["user_id"] = uid
     session["email"]   = email
-    return redirect("/dashboard")
+    return redirect(_default_app_home_path())
 
 @app.route("/enterprise-interest", methods=["POST"])
 def enterprise_interest():
@@ -8645,6 +8682,154 @@ def logout():
     check_csrf()
     session.clear()
     return redirect("/")
+
+
+@app.route("/research/home")
+def research_home_entry():
+    """Staging research entry.
+
+    When Home OS is the default staging experience, this redirects to
+    ``/research/home-os`` so there is a single Status/Work/Coverage/Proof
+    concept. Legacy Living Calm research remains available only when Home OS
+    is not enabled.
+    """
+    if _home_os_gate is not None and _home_os_gate.home_os_is_default_landing():
+        return redirect("/research/home-os")
+    if _research_home is None or not _research_home.research_home_allowed():
+        return (
+            "<!DOCTYPE html><title>Not found</title>"
+            "<body style='font-family:sans-serif;padding:40px'>"
+            "<h1>Not found</h1>"
+            "<p>Research preview is unavailable in this environment.</p>"
+            "</body>"
+        ), 404
+    state = _research_home.normalize_state(request.args.get("state"))
+    if state is None:
+        return (
+            "<!DOCTYPE html><title>Invalid state</title>"
+            "<body style='font-family:sans-serif;padding:40px'>"
+            "<h1>Invalid research state</h1>"
+            "<p>Use state=healthy, state=attention, or state=opportunity.</p>"
+            "</body>"
+        ), 400
+    users_before = 0
+    try:
+        users_before = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    except Exception:
+        users_before = 0
+    _research_home.begin_research_session(session, state=state)
+    # Guardrail: research entry must never insert a users row.
+    try:
+        users_after = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+        if users_after != users_before:
+            session.clear()
+            return ("Research preview refused to create customer records.", 500)
+        if _research_home.count_research_customer_rows(get_db()) != 0:
+            session.clear()
+            return ("Research preview must not persist customer identities.", 500)
+    except Exception:
+        pass
+    # Legacy research Home V2 still lands on /dashboard when Home OS is off.
+    return redirect("/dashboard")
+
+
+@app.route("/research/home-os")
+def research_home_os_entry():
+    """Staging entry for Home OS Marriott auth-repair vertical slice."""
+    if _home_os_routes is None:
+        return ("Home OS preview unavailable.", 404)
+    users_before = 0
+    try:
+        users_before = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    except Exception:
+        users_before = 0
+    err = _home_os_routes.handle_research_entry(session)
+    if err is not None:
+        return err
+    try:
+        users_after = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+        if users_after != users_before:
+            session.clear()
+            return ("Home OS preview refused to create customer records.", 500)
+    except Exception:
+        pass
+    return redirect("/home")
+
+
+@app.route("/home")
+def home_os_page():
+    """Home OS shell — staging/demo only. Production /dashboard unchanged."""
+    if _home_os_routes is None:
+        return ("Home OS preview unavailable.", 404)
+    user = _session_user_row()
+    body, status = _home_os_routes.handle_home_get(
+        session,
+        csrf_token_factory=get_csrf_token,
+        db=get_db() if user and session.get("user_id") else None,
+        user_row=user,
+    )
+    return body, status
+
+
+@app.route("/home/work/<work_item_id>/<action>", methods=["POST"])
+def home_os_work_command(work_item_id: str, action: str):
+    """In-place Work Item commands for the Home OS staging slice."""
+    if _home_os_routes is None:
+        return ("Home OS preview unavailable.", 404)
+    user = _session_user_row()
+    result, status = _home_os_routes.handle_work_command(
+        session,
+        work_item_id=work_item_id,
+        action=action,
+        csrf_checker=check_csrf,
+        db=get_db() if user and session.get("user_id") else None,
+        user_row=user,
+    )
+    if status == 302 and isinstance(result, str) and result.startswith("redirect:"):
+        return redirect(result.split(":", 1)[1])
+    return result, status
+
+
+@app.route("/research/stub/<path:action>")
+def research_stub_action(action: str):
+    """Safe stub for outbound / mutating CTAs inside a research session."""
+    if _research_home is None or not _research_home.is_active_research_session(session):
+        return redirect("/login")
+    return _research_home.stub_response_body(action or "action")
+
+
+@app.before_request
+def _guard_research_session_mutations():
+    """Block outbound and mutating surfaces during a research preview session."""
+    if _research_home is None:
+        return None
+    if not _research_home.is_research_session(session):
+        return None
+    if not _research_home.is_active_research_session(session):
+        session.clear()
+        return redirect("/login")
+    path = request.path or "/"
+    if _research_home.research_request_allowed(path, request.method):
+        return None
+    # Dashboard JS may poll APIs — return empty JSON, never real data or side effects.
+    if path.startswith("/api/") and request.method in ("GET", "HEAD"):
+        return jsonify({
+            "research_preview": True,
+            "disabled": True,
+            "accounts": [],
+            "items": [],
+            "reminders": [],
+            "pending": [],
+        })
+    if request.method in ("GET", "HEAD"):
+        action = path.strip("/").replace("/", "-") or "action"
+        return _research_home.stub_response_body(action), 200
+    return jsonify({
+        "error": "disabled_in_research_preview",
+        "message": "This action is disabled in the moderated research preview.",
+        "research_preview": True,
+    }), 403
+
 
 @app.route("/openapi-chatgpt.json")
 def openapi_spec_chatgpt():
@@ -9363,7 +9548,49 @@ def _coverage_score(source: str, field_count: int) -> dict:
 @app.route("/dashboard")
 @require_login
 def dashboard():
-    _rt = _RouteTimer("/dashboard")
+    """Default app home.
+
+    When Home OS is the staging default, redirect here so there is one Status /
+    Work / Coverage / Proof surface. Legacy dashboard remains at
+    ``/dashboard/legacy`` for developers.
+    """
+    if (
+        _home_os_gate is not None
+        and _home_os_gate.home_os_is_default_landing()
+        and not request.args.get("legacy")
+    ):
+        return redirect("/home")
+    return dashboard_legacy()
+
+
+@app.route("/dashboard/legacy")
+@require_login
+def dashboard_legacy():
+    """Explicit legacy dashboard — developer/debug only when Home OS is default."""
+    _rt = _RouteTimer("/dashboard/legacy")
+    # Guarded staging research Home — fictional session, no customer DB row.
+    # Only reachable when Home OS is not the default, or via this explicit route.
+    if _research_home is not None and _research_home.is_active_research_session(session):
+        # ?state= is ignored outside /research/home entry (and here if present).
+        state = _research_home.research_state(session)
+        hero = _research_home.build_research_home_html(state, escape=he)
+        indicator = _research_home.render_research_indicator()
+        _csrf = get_csrf_token()
+        _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
+            "dashboard",
+            _research_home.RESEARCH_SIDEBAR_LABEL,
+            _csrf,
+            show_activity=False,
+        )
+        _rt.finish()
+        return _research_home.fill_dashboard_html(
+            DASHBOARD_HTML,
+            hero_html=hero,
+            indicator_html=indicator,
+            sidebar_desktop=_sidebar_desktop,
+            sidebar_mobile=_sidebar_mobile,
+            csrf=_csrf,
+        )
     expire_pending()
     if _demo_mode is not None:
         _demo_mode.handle_demo_query_param(request, session)
@@ -10350,6 +10577,24 @@ def dashboard():
                 if _ha.source == _updating_source:
                     _updating_name = _ha.display_name
                     break
+        # Gmail-first: Mighty in Chrome is only required once accounts are enrolled.
+        # Attention SYSTEM owns the interrupt when AccountState + worker signal agree;
+        # this flag backs the Home handoff CTA when enrollment exists but the
+        # Chrome extension heartbeat is missing.
+        _worker_setup_needed = False
+        if _home_account_statuses:
+            try:
+                _ext_row = get_db().execute(
+                    "SELECT extension_version, extension_last_seen_at "
+                    "FROM users WHERE id=?",
+                    (session["user_id"],),
+                ).fetchone()
+                if _ext_row is not None:
+                    _ver = (_ext_row["extension_version"] or "").strip()
+                    _seen = (_ext_row["extension_last_seen_at"] or "").strip()
+                    _worker_setup_needed = not bool(_ver or _seen)
+            except Exception:
+                _worker_setup_needed = False
         _home_result = resolve_home_state(
             accounts=_home_account_statuses,
             actions=_dashboard_actions if build_dashboard_actions is not None else None,
@@ -10360,6 +10605,7 @@ def dashboard():
             benefit_count=len(_hero_candidates),
             tracked_value_label=_tracked_value_label,
             freshness_label=_last_checked,
+            worker_setup_needed=_worker_setup_needed,
             provider_open_urls=_home_provider_urls,
             show_access_debug=_is_dev_debug(user),
             extracted_items=_truth_extracted_items,
@@ -10423,6 +10669,22 @@ def dashboard():
             )
         except Exception:
             _recent_wins = []
+        _gmail_connected = None
+        try:
+            _gmail_row = get_db().execute(
+                "SELECT 1 FROM email_connections "
+                "WHERE user_id=? AND provider='gmail' LIMIT 1",
+                (session["user_id"],),
+            ).fetchone()
+            _gmail_connected = _gmail_row is not None
+        except Exception:
+            _gmail_connected = None
+        _chrome_active = not _worker_setup_needed if _home_account_statuses else None
+        if _extension_info is not None:
+            _chrome_active = bool(
+                _extension_info.get("extension_version")
+                or _extension_info.get("extension_last_seen_at")
+            )
         return render_home_page(
             _home_result,
             first_name=_first_name,
@@ -10433,6 +10695,8 @@ def dashboard():
             attention=_attention_view,
             use_attention=_use_attention,
             recent_wins=_recent_wins,
+            gmail_connected=_gmail_connected,
+            chrome_active=_chrome_active,
         )
 
     hero_section_html = _render_home_hero()
@@ -11458,8 +11722,8 @@ def dashboard():
     </p>
     <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;margin-bottom:20px">
       <div style="font-size:13px;color:#374151;display:flex;flex-direction:column;gap:8px">
-        <div>&#128187; <strong>Worker:</strong> {user_copy.ROLE_EXTENSION_DESC}</div>
-        <div>&#128202; <strong>Control center:</strong> {user_copy.ROLE_DASHBOARD_DESC}</div>
+        <div>&#128187; <strong>Mighty in Chrome:</strong> {user_copy.ROLE_EXTENSION_DESC}</div>
+        <div>&#128202; <strong>Home:</strong> {user_copy.ROLE_DASHBOARD_DESC}</div>
         <div>&#128274; <strong>Manual step:</strong> {user_copy.MANUAL_STEP_LINE}</div>
       </div>
     </div>
@@ -16533,15 +16797,14 @@ def _build_account_center_page(user, states) -> str:
 @app.route("/account-center")
 @require_login
 def account_center_page():
-    user = get_db().execute(
-        "SELECT * FROM users WHERE id=?", (session["user_id"],),
-    ).fetchone()
-    if not user:
-        session.clear()
-        return redirect("/login")
-    db = get_db()
-    states = _load_user_account_states(user["id"], db)
-    return _build_account_center_page(user, states)
+    """Legacy Account Center — redirect to Accounts (/credentials).
+
+    Preserves backward-compatible deep links from older extension builds.
+    """
+    filt = (request.args.get("filter") or "").strip()
+    if filt in ("all", "needs_attention", "waiting", "up_to_date", "needs_login"):
+        return redirect(f"/credentials?filter={filt}")
+    return redirect("/credentials")
 
 
 @app.route("/api/extension/poll/<source>")
@@ -21988,8 +22251,9 @@ def email_gmail_callback():
     enrolled_now = set(scan_result.auto_enrolled) | set(scan_result.already_enrolled)
     visible = [s for s in visible if s["site_key"] not in enrolled_now]
 
-    if "amex" in scan_result.auto_enrolled:
-        return redirect("/credentials?connect=amex")
+    # First-data handoff: land on Home (not the connect modal).
+    if scan_result.auto_enrolled:
+        return redirect("/dashboard")
 
     return _render_email_scan_page(suggestions=visible, already_count=already_count)
 
@@ -22094,8 +22358,9 @@ def email_outlook_callback():
         and s["site_key"] not in enrolled_now
         and s["site_key"] in _CVP
     ]
-    if "amex" in scan_result.auto_enrolled:
-        return redirect("/credentials?connect=amex")
+    # First-data handoff: land on Home (not the connect modal).
+    if scan_result.auto_enrolled:
+        return redirect("/dashboard")
 
     return _render_email_scan_page(suggestions=visible, already_count=already_count)
 
@@ -23090,6 +23355,18 @@ def api_admin_amex_verification_timeline():
         provider="amex",
     )
     return jsonify(report)
+
+
+@app.route("/admin/design-system")
+@require_admin
+def admin_design_system_showcase():
+    """Admin-only Storybook-style showcase for the production design system.
+
+    Opt-in foundation preview only — does not alter customer-facing pages.
+    """
+    from mighty.design_system import render_showcase_page
+
+    return render_showcase_page()
 
 
 @app.route("/admin/pipeline-runs")
