@@ -79,6 +79,15 @@ try:
 except ImportError:
     _research_home = None
 
+try:
+    from mighty.home_os import gate as _home_os_gate
+    from mighty.home_os import routes as _home_os_routes
+    from mighty.home_os import session_state as _home_os_session
+except ImportError:
+    _home_os_gate = None
+    _home_os_routes = None
+    _home_os_session = None
+
 from mighty import user_copy
 
 import bcrypt as _bcrypt
@@ -5331,6 +5340,12 @@ def _session_user_row():
         if _research_home.is_active_research_session(session):
             return _research_home.synthetic_user_row()
         return None
+    # Home OS staging slice: ephemeral session identity (never a users row).
+    if _home_os_gate is not None and _home_os_session is not None:
+        if _home_os_gate.is_home_os_session(session):
+            if _home_os_gate.is_active_home_os_session(session):
+                return _home_os_session.synthetic_user_row()
+            return None
     uid = session.get("user_id")
     if not uid:
         return None
@@ -8697,6 +8712,56 @@ def research_home_entry():
     except Exception:
         pass
     return redirect("/dashboard")
+
+
+@app.route("/research/home-os")
+def research_home_os_entry():
+    """Staging entry for Home OS Marriott auth-repair vertical slice."""
+    if _home_os_routes is None:
+        return ("Home OS preview unavailable.", 404)
+    users_before = 0
+    try:
+        users_before = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    except Exception:
+        users_before = 0
+    err = _home_os_routes.handle_research_entry(session)
+    if err is not None:
+        return err
+    try:
+        users_after = get_db().execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+        if users_after != users_before:
+            session.clear()
+            return ("Home OS preview refused to create customer records.", 500)
+    except Exception:
+        pass
+    return redirect("/home")
+
+
+@app.route("/home")
+def home_os_page():
+    """Home OS shell — staging/demo only. Production /dashboard unchanged."""
+    if _home_os_routes is None:
+        return ("Home OS preview unavailable.", 404)
+    body, status = _home_os_routes.handle_home_get(
+        session, csrf_token_factory=get_csrf_token
+    )
+    return body, status
+
+
+@app.route("/home/work/<work_item_id>/<action>", methods=["POST"])
+def home_os_work_command(work_item_id: str, action: str):
+    """In-place Work Item commands for the Home OS staging slice."""
+    if _home_os_routes is None:
+        return ("Home OS preview unavailable.", 404)
+    result, status = _home_os_routes.handle_work_command(
+        session,
+        work_item_id=work_item_id,
+        action=action,
+        csrf_checker=check_csrf,
+    )
+    if status == 302 and isinstance(result, str) and result.startswith("redirect:"):
+        return redirect(result.split(":", 1)[1])
+    return result, status
 
 
 @app.route("/research/stub/<path:action>")
