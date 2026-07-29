@@ -133,10 +133,55 @@ def test_reload_preserves_visit_acknowledgment(db):
         repeating_user_action=True,
     )
     assert compose is not None
-    assert compose.beat in ("waiting", "repeat_ask", "non_progress")
+    assert compose.beat == "intent"
+    assert compose.evidence_tier == "intent"
     assert any(r.startswith("user_action:") for r in compose.event_refs)
+    body = (compose.body or "").lower()
+    assert "verifying access" not in body
+    assert "do not need to do anything" not in body
     cold = user_copy.home_login_body("American Express")
     assert compose.body != cold
+
+
+def test_r2_intent_alone_never_claims_verifying_or_do_nothing(db):
+    """R2: Visit intent must not unlock verifying / do-nothing claims."""
+    record_user_action(db, "u1", event_type=ACTION_PROVIDER_VISIT, provider="amex")
+    events = recent_narrative_events(db, "u1", provider="amex")
+    compose = compose_narrative_for_provider_ask(
+        provider_key="amex",
+        provider_display="American Express",
+        events=events,
+        repeating_user_action=False,
+    )
+    assert compose is not None
+    assert compose.evidence_tier == "intent"
+    assert "authorizing_evidence" in compose.__dataclass_fields__ or compose.authorizing_evidence
+    assert "user_action:provider_visit" in compose.authorizing_evidence
+    body = (compose.body or "").lower()
+    assert "verifying access" not in body
+    assert "do not need to do anything" not in body
+    assert "not confirmed" in body or "has not confirmed" in body
+
+
+def test_r2_progress_requires_verification_observation(db):
+    from mighty.journey_narrative import OBS_VERIFICATION_PROGRESS
+
+    record_user_action(db, "u1", event_type=ACTION_PROVIDER_VISIT, provider="amex")
+    record_system_observation(
+        db, "u1", event_type=OBS_VERIFICATION_PROGRESS, provider="amex"
+    )
+    events = recent_narrative_events(db, "u1", provider="amex")
+    compose = compose_narrative_for_provider_ask(
+        provider_key="amex",
+        provider_display="American Express",
+        events=events,
+        repeating_user_action=False,
+    )
+    assert compose is not None
+    assert compose.beat == "progress"
+    assert compose.evidence_tier == "observed_progress"
+    assert "verification_progress" in compose.authorizing_evidence
+    assert "verifying access" in (compose.body or "").lower()
 
 
 def test_projection_overlay_binds_events_and_avoids_cold_body(db):

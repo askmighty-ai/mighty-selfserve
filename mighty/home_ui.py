@@ -1222,6 +1222,10 @@ def render_home_projection(
         narrative_attr = (
             f' data-narrative-events="{escape(refs)}"'
             f' data-narrative-beat="{escape(projection.narrative_beat or "")}"'
+            f' data-narrative-evidence-tier="'
+            f'{escape(projection.narrative_evidence_tier or "")}"'
+            f' data-narrative-authorizing-evidence="'
+            f'{escape(projection.narrative_authorizing_evidence or "")}"'
         )
     safe_name = escape(projection.first_name)
     return (
@@ -1324,9 +1328,13 @@ def render_home_page(
                 getattr(result, "capability", None) is not None
                 and getattr(result.capability, "is_checking", False)
             )
+            # Real account-status evidence of an in-flight check (not Visit intent).
+            if not verification_active and getattr(result, "updating_display_name", None):
+                verification_active = True
             terminal_ok = projection.story_kind in ("all_clear", "first_success")
             if terminal_ok:
                 still_needs = False
+                verification_active = False
 
             if not provider_key and card and card.cta_label:
                 label = card.cta_label.lower()

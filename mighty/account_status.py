@@ -206,6 +206,8 @@ class AccountStatus:
             from mighty.customer_capability_presentation import (
                 build_timeline_correlation_record,
             )
+            from mighty.product_account_lifecycle import resolve_product_account_lifecycle
+
             cap["timeline_correlation"] = build_timeline_correlation_record(
                 self.capability,
             )
@@ -216,6 +218,29 @@ class AccountStatus:
             elif self.capability.truth_validation is not None:
                 payload["truth_validation"] = self.capability.truth_validation.to_dict()
             payload["timeline_correlation"] = cap["timeline_correlation"]
+            from mighty.product_account_lifecycle import (
+                FAILURE,
+                NEEDS_ACTION,
+                UNSUPPORTED_DATA,
+            )
+
+            product_lc = resolve_product_account_lifecycle(
+                capability_state=self.capability.state,
+                verification_lifecycle=self.verification_lifecycle,
+                last_confirmed_at=self.last_confirmed_ready_at
+                or getattr(self.capability, "last_verified", None),
+                extraction_terminal_at=getattr(self.capability, "last_verified", None),
+            )
+            payload["product_lifecycle"] = product_lc.to_dict()
+            # Lifecycle wins for terminal needs-action / unsupported / failure.
+            if product_lc.state in (UNSUPPORTED_DATA, FAILURE, NEEDS_ACTION) and (
+                product_lc.next_action
+            ):
+                payload["next_action_text"] = product_lc.next_action
+                payload["next_action_type"] = product_lc.state
+            elif product_lc.next_action and not payload.get("next_action_text"):
+                payload["next_action_text"] = product_lc.next_action
+                payload["next_action_type"] = product_lc.state
         elif self.customer_access is not None:
             payload["capability_state"] = self.customer_access.to_dict().get(
                 "capability_state",
@@ -351,9 +376,14 @@ def _user_action_for_status(
         # Never promote a Sign in CTA unless status is needs_login.
         return None, None
     if status == WAITING_FOR_EXTENSION:
-        return lifecycle.cta_label or LIFECYCLE_CTAS["waiting_for_extension"], connect_url
+        # First-verification happy path opens the provider (or Accounts), not the
+        # connect-modal ritual (/credentials?connect=). Keep connect_url for
+        # explicit enroll / repair callers.
+        url = login_url or "/credentials"
+        return lifecycle.cta_label or LIFECYCLE_CTAS["waiting_for_extension"], url
     if status == ERROR:
-        return "Retry sync", connect_url
+        # Repair may still use connect deep-link; prefer provider open when known.
+        return "Retry sync", login_url or connect_url
     return None, None
 
 
@@ -611,6 +641,46 @@ def build_account_status(
             else None
         ),
     )
+
+    # Product lifecycle is authoritative for terminal unsupported/failure next action.
+    # Legacy session "accessible → Nothing to do" must not shadow NO_ACCOUNT_DATA.
+    from mighty.capability_state import CapabilityState, CAPABILITY_STATUS_LABELS
+    from mighty.product_account_lifecycle import (
+        FAILURE,
+        NEEDS_ACTION,
+        UNSUPPORTED_DATA,
+        resolve_product_account_lifecycle,
+    )
+
+    terminal_at = None
+    if session_access is not None:
+        terminal_at = getattr(session_access, "last_verified", None) or getattr(
+            session_access, "completed_at", None
+        )
+    product_lc = resolve_product_account_lifecycle(
+        capability_state=capability.state,
+        verification_lifecycle=verification_lifecycle,
+        last_confirmed_at=readiness.last_confirmed_ready_at or terminal_at,
+        extraction_terminal_at=terminal_at,
+    )
+    if product_lc.state in (UNSUPPORTED_DATA, FAILURE, NEEDS_ACTION):
+        if product_lc.next_action:
+            next_action_text = product_lc.next_action
+            next_action_type = product_lc.state
+        if product_lc.state == UNSUPPORTED_DATA:
+            presentation = AccountPresentation(
+                key="unverified",
+                label=CAPABILITY_STATUS_LABELS.get(
+                    CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA,
+                    product_lc.label,
+                ),
+                cta_label=capability.action_label or "Open American Express",
+                cta_disabled=False,
+                extension_hint=product_lc.detail or readiness.status_copy,
+            )
+            action_label = capability.action_label or action_label
+            action_url = capability.action_url or action_url or login_url
+            verification_message = product_lc.detail or verification_message
 
     return AccountStatus(
         source=source,

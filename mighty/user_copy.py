@@ -758,8 +758,8 @@ HOME_PROVIDER_VISIT_OPENED = (
 )
 HOME_NOT_NOW_LABEL = "Not now"
 HOME_HANDOFF_VERIFYING_BODY = (
-    "Mighty is verifying access now. You do not need to do anything else — "
-    "keep this tab open or return here; Home will update when the check finishes."
+    "Mighty has an active check underway. Keep this tab open or return here — "
+    "Home will update when the check finishes."
 )
 HOME_VIEW_WAITING_LABEL = "View all accounts"
 HOME_VIEW_NEEDS_LOGIN_LABEL = "View all accounts needing login"
@@ -927,12 +927,21 @@ def home_journey_waiting_headline(provider_name: str) -> str:
     return f"Waiting on {provider_name}"
 
 
-def home_journey_waiting_body(provider_name: str, *, action_label: str = "opened") -> str:
+def home_journey_intent_headline(provider_name: str) -> str:
+    return f"You opened {provider_name}"
+
+
+def home_journey_intent_body(provider_name: str, *, action_label: str = "opened") -> str:
+    """Intent-only (R2): acknowledge Visit; do not claim verifying or do-nothing."""
     return (
-        f"You {action_label} {provider_name}. Mighty is waiting for Chrome to confirm "
-        f"you're signed in — keep the {provider_name} tab open and return here. "
-        f"Home will update when Mighty sees progress."
+        f"You {action_label} {provider_name}. Mighty has not confirmed a signed-in "
+        f"session yet — keep the {provider_name} tab open, finish signing in there if "
+        f"needed, and return here. This page will update when Mighty sees progress."
     )
+
+
+def home_journey_waiting_body(provider_name: str, *, action_label: str = "opened") -> str:
+    return home_journey_intent_body(provider_name, action_label=action_label)
 
 
 def home_journey_progress_headline(provider_name: str) -> str:
@@ -940,9 +949,18 @@ def home_journey_progress_headline(provider_name: str) -> str:
 
 
 def home_journey_progress_body(provider_name: str, *, action_label: str = "opened") -> str:
+    """Requires OBS_VERIFICATION_PROGRESS (observed_progress tier)."""
     return (
         f"You {action_label} {provider_name}. Mighty is verifying access now — "
-        f"keep this tab open."
+        f"keep this tab open. Home will update when the check finishes."
+    )
+
+
+def home_journey_verified_calm_body(provider_name: str) -> str:
+    """Requires verified_outcome tier — only place for do-nothing calm."""
+    return (
+        f"Mighty confirmed access for {provider_name}. "
+        f"You do not need to do anything else right now."
     )
 
 

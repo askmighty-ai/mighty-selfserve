@@ -28,6 +28,7 @@ from mighty.connection_state import AMEX_SOURCE
 from mighty.provider_account import (
     EXTRACTION_COMPLETE,
     EXTRACTION_FAILED,
+    EXTRACTION_NO_ACCOUNT_DATA,
     EXTRACTION_PENDING,
     EXTRACTION_NOT_STARTED,
 )
@@ -373,6 +374,10 @@ def resolve_capability_state(
         private_data_state == "extraction_failed"
         or extraction_status == EXTRACTION_FAILED
     )
+    no_account_data = (
+        private_data_state == "unsupported"
+        or extraction_status == EXTRACTION_NO_ACCOUNT_DATA
+    )
 
     # B. EXTRACTION_SUCCESS — confirmed access + publishable private data.
     # readiness==ready already encodes SWR: background recheck does not erase it.
@@ -397,6 +402,10 @@ def resolve_capability_state(
     # C. LOGIN_VISIBLE_EXTRACTION_FAILED
     if extraction_failed:
         return CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED
+
+    # Explicit unsupported-data terminal from extractor / hygiene.
+    if no_account_data and authenticated:
+        return CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA
 
     # Do not use LOGGED_IN_NO_ACCOUNT_DATA merely because extraction has not run
     # while the access cycle is still open. Once the cycle is terminal without
@@ -831,6 +840,22 @@ def build_capability_view(
     action_url = None
     if action_required:
         action_label = "Open American Express"
+        action_url = (
+            (view.user_action_url if view and view.user_action_url else None)
+            or login_url
+            or AMEX_OPEN_URL
+        )
+    elif state == CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA:
+        action_required = True
+        action_label = "Open American Express"
+        action_url = (
+            (view.user_action_url if view and view.user_action_url else None)
+            or login_url
+            or AMEX_OPEN_URL
+        )
+    elif state == CapabilityState.LOGIN_VISIBLE_EXTRACTION_FAILED:
+        action_required = True
+        action_label = "Open American Express and retry"
         action_url = (
             (view.user_action_url if view and view.user_action_url else None)
             or login_url

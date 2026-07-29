@@ -30,12 +30,15 @@ EXTRACTION_NOT_STARTED = "not_started"
 EXTRACTION_PENDING = "pending"
 EXTRACTION_COMPLETE = "complete"
 EXTRACTION_FAILED = "failed"
+# Terminal: extractor ran and found no publishable private fields (not a hang).
+EXTRACTION_NO_ACCOUNT_DATA = "no_account_data"
 
 EXTRACTION_STATUSES = (
     EXTRACTION_NOT_STARTED,
     EXTRACTION_PENDING,
     EXTRACTION_COMPLETE,
     EXTRACTION_FAILED,
+    EXTRACTION_NO_ACCOUNT_DATA,
 )
 
 _EMPTY_FIELD_VALUES = frozenset({"", "—", "–", "-", "n/a", "none", "0", "no data"})
@@ -243,6 +246,86 @@ def mark_extraction_pending(
         db, uid, source, ad_data,
         encrypt_fn=encrypt_fn,
         extraction_status=EXTRACTION_PENDING,
+        iso_fn=iso_fn,
+    )
+    db.commit()
+
+
+def mark_extraction_no_account_data(
+    db,
+    uid: str,
+    source: str,
+    *,
+    encrypt_fn: Callable,
+    decrypt_fn: Callable,
+    iso_fn: Callable,
+    reason: str | None = None,
+) -> None:
+    """Terminal: extractor finished with no publishable private fields.
+
+    Clears EXTRACTION_PENDING so UI cannot hang on Extracting.
+    """
+    row = db.execute(
+        "SELECT data_enc, extraction_status FROM account_data WHERE user_id=? AND source=?",
+        (uid, source),
+    ).fetchone()
+    if not row:
+        return
+    current = (row["extraction_status"] or "").strip()
+    if current == EXTRACTION_COMPLETE:
+        return
+    ad_data = decrypt_fn(uid, row["data_enc"] or "")
+    if has_normalized_data(ad_data.get("items") or ad_data.get("ai_items")):
+        return
+    if reason:
+        ad_data["extraction_terminal_reason"] = str(reason)[:200]
+    ad_data["extraction_terminal_at"] = iso_fn()
+    persist_provider_state(
+        db,
+        uid,
+        source,
+        ad_data,
+        encrypt_fn=encrypt_fn,
+        extraction_status=EXTRACTION_NO_ACCOUNT_DATA,
+        iso_fn=iso_fn,
+    )
+    db.commit()
+
+
+def clear_stale_extraction_pending(
+    db,
+    uid: str,
+    source: str,
+    *,
+    encrypt_fn: Callable,
+    decrypt_fn: Callable,
+    iso_fn: Callable,
+    terminal: str = EXTRACTION_FAILED,
+    reason: str | None = None,
+) -> None:
+    """If extraction is still pending after a terminal cycle, mark a terminal status."""
+    row = db.execute(
+        "SELECT data_enc, extraction_status FROM account_data WHERE user_id=? AND source=?",
+        (uid, source),
+    ).fetchone()
+    if not row:
+        return
+    if (row["extraction_status"] or "").strip() != EXTRACTION_PENDING:
+        return
+    ad_data = decrypt_fn(uid, row["data_enc"] or "")
+    if has_normalized_data(ad_data.get("items") or ad_data.get("ai_items")):
+        return
+    status = terminal if terminal in EXTRACTION_STATUSES else EXTRACTION_FAILED
+    if reason:
+        ad_data["extraction_terminal_reason"] = str(reason)[:200]
+    ad_data["extraction_terminal_at"] = iso_fn()
+    persist_provider_state(
+        db,
+        uid,
+        source,
+        ad_data,
+        encrypt_fn=encrypt_fn,
+        extraction_status=status,
         iso_fn=iso_fn,
     )
     db.commit()

@@ -430,6 +430,41 @@ def complete_access_check_after_extraction(
         )
 
 
+def clear_stale_pending_for_terminal_cycle(
+    db: Any,
+    user_id: str,
+    provider: str,
+    *,
+    encrypt_fn: Any,
+    decrypt_fn: Any,
+    iso_fn: Any,
+    terminal: str = "failed",
+    reason: str | None = None,
+) -> None:
+    """Clear EXTRACTION_PENDING after a terminal verification lifecycle."""
+    from mighty.provider_account import (
+        EXTRACTION_FAILED,
+        EXTRACTION_NO_ACCOUNT_DATA,
+        clear_stale_extraction_pending,
+    )
+
+    status = (
+        EXTRACTION_NO_ACCOUNT_DATA
+        if terminal == "no_account_data"
+        else EXTRACTION_FAILED
+    )
+    clear_stale_extraction_pending(
+        db,
+        user_id,
+        provider,
+        encrypt_fn=encrypt_fn,
+        decrypt_fn=decrypt_fn,
+        iso_fn=iso_fn,
+        terminal=status,
+        reason=reason,
+    )
+
+
 def complete_amex_cycle_no_qualifying_private_data(
     db: Any,
     user_id: str,
@@ -442,6 +477,9 @@ def complete_amex_cycle_no_qualifying_private_data(
     extraction_attempted: bool = True,
     extraction_reason: str = "no_publishable_widgets",
     now: datetime | None = None,
+    encrypt_fn: Any | None = None,
+    decrypt_fn: Any | None = None,
+    iso_fn: Any | None = None,
 ) -> dict[str, Any]:
     """Authenticated Amex cycle: extractor returned NO_ACCOUNT_DATA.
 
@@ -487,6 +525,23 @@ def complete_amex_cycle_no_qualifying_private_data(
             lifecycle == "completed"
             and error_message == "no_qualifying_private_data"
         ):
+            # Idempotent replay: still clear stale pending if present.
+            if encrypt_fn is not None and decrypt_fn is not None and iso_fn is not None:
+                try:
+                    from mighty.provider_account import mark_extraction_no_account_data
+
+                    mark_extraction_no_account_data(
+                        db,
+                        user_id,
+                        "amex",
+                        encrypt_fn=encrypt_fn,
+                        decrypt_fn=decrypt_fn,
+                        iso_fn=iso_fn,
+                        reason=str(extraction_reason or rejection_reason or "")[:200]
+                        or None,
+                    )
+                except Exception:
+                    pass
             return {
                 "ok": True,
                 "idempotent": True,
@@ -554,6 +609,37 @@ def complete_amex_cycle_no_qualifying_private_data(
         terminal_source="no_qualifying_private_data",
         now=now,
     )
+    # Bound account lifecycle: never leave EXTRACTION_PENDING after terminal
+    # NO_ACCOUNT_DATA (Learning Blocker — sticky Extracting with no data).
+    if encrypt_fn is not None and decrypt_fn is not None and iso_fn is not None:
+        try:
+            from mighty.provider_account import mark_extraction_no_account_data
+
+            mark_extraction_no_account_data(
+                db,
+                user_id,
+                "amex",
+                encrypt_fn=encrypt_fn,
+                decrypt_fn=decrypt_fn,
+                iso_fn=iso_fn,
+                reason=reason,
+            )
+        except Exception:
+            pass
+        try:
+            from mighty.amex_value_pipeline import record_pipeline_event
+
+            record_pipeline_event(
+                db,
+                user_id,
+                "dashboard_projection",
+                ok=True,
+                detail="terminal_no_account_data",
+                source="no_qualifying_private_data",
+                access_cycle_id=verification_id,
+            )
+        except Exception:
+            pass
     log_access_cycle_event(
         "readiness_result",
         provider="amex",

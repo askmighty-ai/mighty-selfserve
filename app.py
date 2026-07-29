@@ -15884,12 +15884,15 @@ def _accounts_primary_cta_html(
     *,
     session_state: str | None = None,
     login_required: bool | None = None,
+    private_data_state: str | None = None,
+    background_work: str | None = None,
 ) -> str:
     """Primary CTA for Accounts maintenance rows — blocked states only.
 
     Login CTAs come only from ProductAccountState.login_required.
     Legacy lifecycle must not independently create a login CTA.
     """
+    from mighty.customer_account_access import BG_UNSUPPORTED_DATA
     from mighty.session_access import product_state_for_session
 
     btn = (
@@ -15918,6 +15921,23 @@ def _accounts_primary_cta_html(
             f'opacity:.7;cursor:default">{he(user_copy.ACCOUNTS_STATUS_CHECKING)}</span>'
         )
     if session_state in ("unknown", "connected"):
+        # Amex unsupported-data: keep Open CTA so Accounts matches lifecycle next_action.
+        if (
+            source == "amex"
+            and (
+                private_data_state == "unsupported"
+                or background_work == BG_UNSUPPORTED_DATA
+            )
+        ):
+            open_url = _provider_login_url(source) or SITE_ENTRY_URL.get(source, "")
+            if open_url:
+                label = user_copy.home_visit_provider_cta(display_name)
+                return (
+                    f'<a href="{he(open_url)}" target="_blank" rel="noopener" '
+                    f'class="acct-maint-cta" style="{btn}" '
+                    f'data-amex-lifecycle="unsupported-data">'
+                    f'{he(label)}</a>'
+                )
         # No sign-in CTA — status/subline carry verification / connected copy.
         return ""
 
@@ -16214,6 +16234,7 @@ def _build_credentials_page(
             for row in section_rows:
                 primary = ""
                 if row.section != SECTION_UP_TO_DATE:
+                    av = row.access_view
                     primary = _accounts_primary_cta_html(
                         row.lifecycle,
                         row.source,
@@ -16221,6 +16242,12 @@ def _build_credentials_page(
                         sync_status_by_source.get(row.source, "ok"),
                         session_state=session_state_by_source.get(row.source),
                         login_required=login_required_by_source.get(row.source),
+                        private_data_state=(
+                            av.private_data_state if av is not None else None
+                        ),
+                        background_work=(
+                            av.background_work if av is not None else None
+                        ),
                     )
                 debug_html = ""
                 if show_debug and row.source in debug_by_source:

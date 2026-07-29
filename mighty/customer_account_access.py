@@ -25,8 +25,15 @@ from mighty.authentication_state import (
     AuthenticationState,
     authentication_from_product_session,
 )
-from mighty.provider_account import EXTRACTION_FAILED, EXTRACTION_PENDING
-from mighty.session_verification import ACTIVE_VERIFICATION_LIFECYCLES
+from mighty.provider_account import (
+    EXTRACTION_FAILED,
+    EXTRACTION_NO_ACCOUNT_DATA,
+    EXTRACTION_PENDING,
+)
+from mighty.session_verification import (
+    ACTIVE_VERIFICATION_LIFECYCLES,
+    TERMINAL_VERIFICATION_LIFECYCLES,
+)
 from mighty import user_copy
 
 # ── Live access (session / readiness posture) ─────────────────────────────────
@@ -40,6 +47,7 @@ PRIVATE_SEEN = "Seen"
 PRIVATE_NOT_YET_SEEN = "Not yet seen"
 PRIVATE_SAVED_ONLY = "Saved data only"
 PRIVATE_EXTRACTION_FAILED = "Extraction failed"
+PRIVATE_UNSUPPORTED = "No account data yet"
 
 # ── Background work ───────────────────────────────────────────────────────────
 BG_NONE = "None"
@@ -49,6 +57,7 @@ BG_EXTRACTING = "Extracting"
 BG_AWAITING_FIRST = "Awaiting first check"
 BG_FAILED = "Failed"
 BG_TIMED_OUT = "Timed out"
+BG_UNSUPPORTED_DATA = "No account data"
 
 # ── Discovery source (never implies Connected) ────────────────────────────────
 DISCOVERED_GMAIL = "Gmail"
@@ -203,6 +212,8 @@ def resolve_private_data_state(
         return "seen"
     if extraction_status == EXTRACTION_FAILED:
         return "extraction_failed"
+    if extraction_status == EXTRACTION_NO_ACCOUNT_DATA:
+        return "unsupported"
     if readiness is not None and readiness.cached_data_label:
         return "saved_data_only"
     if readiness is not None and readiness.extraction_ok and not readiness.extraction_correlated:
@@ -216,6 +227,7 @@ def _private_data_label(state: str) -> str:
         "not_yet_seen": PRIVATE_NOT_YET_SEEN,
         "saved_data_only": PRIVATE_SAVED_ONLY,
         "extraction_failed": PRIVATE_EXTRACTION_FAILED,
+        "unsupported": PRIVATE_UNSUPPORTED,
     }.get(state, PRIVATE_NOT_YET_SEEN)
 
 
@@ -227,7 +239,11 @@ def resolve_background_work(
     background_verification: bool = False,
     private_data_state: str = "not_yet_seen",
 ) -> str:
-    """Background work label from verification lifecycle + extraction posture."""
+    """Background work label from verification lifecycle + extraction posture.
+
+    Terminal verification lifecycles never project Extracting/Checking from a
+    stale EXTRACTION_PENDING column (Founder Session 2 Learning Blocker).
+    """
     lifecycle = (verification_lifecycle or "").strip()
     if lifecycle == "failed":
         return BG_FAILED
@@ -235,6 +251,26 @@ def resolve_background_work(
         return BG_TIMED_OUT
     if lifecycle == "requested":
         return BG_VERIFICATION_QUEUED
+    if lifecycle in TERMINAL_VERIFICATION_LIFECYCLES:
+        # Terminal cycles never project Extracting from stale EXTRACTION_PENDING.
+        if (
+            extraction_status == EXTRACTION_NO_ACCOUNT_DATA
+            or private_data_state == "unsupported"
+        ):
+            return BG_UNSUPPORTED_DATA
+        if (
+            extraction_status == EXTRACTION_FAILED
+            or private_data_state == "extraction_failed"
+        ):
+            return BG_FAILED
+        if (
+            lifecycle == "completed"
+            and extraction_status == EXTRACTION_PENDING
+            and private_data_state in ("not_yet_seen", "unsupported")
+        ):
+            # Stale pending after NO_ACCOUNT_DATA terminal — unsupported, not hang.
+            return BG_UNSUPPORTED_DATA
+        return BG_NONE
     if lifecycle == "extracting" or extraction_status == EXTRACTION_PENDING:
         if readiness == READINESS_READY or background_verification:
             # Ready retained — show Verifying rather than Extracting flip.
@@ -250,9 +286,11 @@ def resolve_background_work(
         return BG_VERIFYING
     if (
         readiness in (None, READINESS_UNVERIFIED)
-        and private_data_state in ("not_yet_seen", "saved_data_only")
-        and lifecycle in ("", "completed", None)
+        and private_data_state in ("not_yet_seen", "saved_data_only", "unsupported")
+        and lifecycle in ("", None)
     ):
+        if extraction_status == EXTRACTION_NO_ACCOUNT_DATA:
+            return BG_UNSUPPORTED_DATA
         # No confirmed access cycle yet — awaiting first check, not Connected.
         return BG_AWAITING_FIRST
     return BG_NONE
@@ -269,12 +307,16 @@ def resolve_meaning(
         return user_copy.ACCESS_MEANING_SIGNED_OUT
     if live_access == LIVE_CHECKING or readiness == READINESS_CHECKING:
         return user_copy.ACCESS_MEANING_CHECKING
+    # Terminal unsupported / extraction failure before generic "not seen yet"
+    # (Complete Amex Experience — nested meaning must match lifecycle).
+    if private_data_state == "extraction_failed":
+        return user_copy.ACCESS_MEANING_EXTRACTION_FAILED
+    if private_data_state == "unsupported":
+        return user_copy.ACCESS_MEANING_NO_ACCOUNT_DATA
     if live_access == LIVE_CONNECTED and private_data_state == "seen":
         return user_copy.ACCESS_MEANING_CONNECTED_SEEN
     if live_access == LIVE_CONNECTED and private_data_state != "seen":
         return user_copy.ACCESS_MEANING_CONNECTED_NOT_SEEN
-    if private_data_state == "extraction_failed":
-        return user_copy.ACCESS_MEANING_EXTRACTION_FAILED
     return user_copy.ACCESS_MEANING_UNKNOWN
 
 
@@ -283,14 +325,29 @@ def resolve_status_label(
     readiness: str | None,
     live_access: str,
     background_work: str,
+    private_data_state: str | None = None,
 ) -> str:
-    """Primary status chip — readiness wins; discovery never produces Connected."""
+    """Primary status chip — readiness wins; discovery never produces Connected.
+
+    Unsupported-data (Amex NO_ACCOUNT_DATA) must not fall through to
+    \"Unable to verify\" while top-level lifecycle is honest.
+    """
+    from mighty.capability_state import (
+        CAPABILITY_STATUS_LABELS,
+        CapabilityState,
+    )
+
     if readiness == READINESS_READY:
         return user_copy.READINESS_STATUS_CONNECTED
     if readiness == READINESS_SIGNED_OUT:
         return user_copy.READINESS_STATUS_SIGNED_OUT
     if readiness == READINESS_CHECKING or live_access == LIVE_CHECKING:
         return user_copy.READINESS_STATUS_CHECKING
+    if (
+        background_work == BG_UNSUPPORTED_DATA
+        or private_data_state == "unsupported"
+    ):
+        return CAPABILITY_STATUS_LABELS[CapabilityState.LOGGED_IN_NO_ACCOUNT_DATA]
     if background_work == BG_AWAITING_FIRST:
         return user_copy.ACCOUNTS_STATUS_AWAITING_FIRST
     if live_access == LIVE_UNKNOWN:
@@ -351,6 +408,7 @@ def build_customer_account_access_view(
         readiness=readiness.state,
         live_access=live_access,
         background_work=background,
+        private_data_state=private_state,
     )
 
     action_required = bool(readiness.login_required)

@@ -188,6 +188,10 @@ def _pick_waiting_account(accounts: Sequence[AccountStatus]) -> AccountStatus | 
 
 
 def _waiting_row_label(acct: AccountStatus) -> str:
+    # Prefer top-level presentation (canonical lifecycle) so Home chips
+    # cannot contradict Accounts / product_lifecycle (Complete Amex AT-08).
+    if acct.presentation_label:
+        return acct.presentation_label
     if acct.customer_access is not None:
         return acct.customer_access.status_label
     if acct.status == NEEDS_LOGIN:
@@ -414,6 +418,7 @@ def resolve_home_state(
         body = user_copy.home_handoff_body(
             needs_chrome=worker_setup_needed,
             verifying=verifying and not worker_setup_needed,
+            provider_name=wait_acct.display_name if wait_acct else None,
         )
         if worker_setup_needed:
             cta_label = user_copy.CTA_SET_UP_WORKER

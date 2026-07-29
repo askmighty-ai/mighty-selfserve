@@ -747,6 +747,17 @@ def compile_attention_candidates(
     if worker_signal is not None:
         worker_item = compile_worker_attention(worker_signal)
         if worker_item is not None:
+            # Complete Amex Experience AT-13: Amex capture requires Chrome.
+            # When worker setup is the true blocker, do not surface Amex
+            # Visit/Sign-in above Chrome setup (one coherent next step).
+            items = [
+                i
+                for i in items
+                if not (
+                    i.attention_class == AttentionClass.AUTH_BLOCKER
+                    and _normalize_provider(i.provider or "") == "amex"
+                )
+            ]
             items.append(worker_item)
     for signal in benefit_signals:
         benefit_item = compile_benefit_attention(signal)

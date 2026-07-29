@@ -71,6 +71,8 @@ class HomeCard:
     narrative_event_ids: tuple[str, ...] = ()
     narrative_event_refs: tuple[str, ...] = ()
     narrative_beat: str | None = None
+    narrative_evidence_tier: str | None = None
+    narrative_authorizing_evidence: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,8 @@ class HomeProjection:
     narrative_event_ids: tuple[str, ...] = ()
     narrative_event_refs: tuple[str, ...] = ()
     narrative_beat: str | None = None
+    narrative_evidence_tier: str | None = None
+    narrative_authorizing_evidence: str | None = None
 
     @property
     def activity_preview(self) -> tuple[HomeWin, ...]:

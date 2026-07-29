@@ -2,13 +2,15 @@
 
 **Status:** Engineering roadmap  
 **Audience:** Lead Engineer and contributors delivering milestones  
-**Related:** [Operating Model](OPERATING_MODEL.md) · [Founder Vision](founder-vision/FOUNDER_VISION.md) · [Product System](product/README.md) · [PRODUCT_ARCHITECTURE.md](PRODUCT_ARCHITECTURE.md) · [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) · [ENGINEERING_CHARTER.md](ENGINEERING_CHARTER.md) · [AI Delegation Charter](AI_DELEGATION_CHARTER.md) · [CONTRIBUTING_ENGINEERING.md](CONTRIBUTING_ENGINEERING.md)
+**Related:** [Operating Model](OPERATING_MODEL.md) · [Product Realization](PRODUCT_REALIZATION.md) · [Founder Vision](founder-vision/FOUNDER_VISION.md) · [Product System](product/README.md) · [PRODUCT_ARCHITECTURE.md](PRODUCT_ARCHITECTURE.md) · [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) · [ENGINEERING_CHARTER.md](ENGINEERING_CHARTER.md) · [AI Delegation Charter](AI_DELEGATION_CHARTER.md) · [CONTRIBUTING_ENGINEERING.md](CONTRIBUTING_ENGINEERING.md)
 
 This document is the living product and architecture roadmap for engineering milestones. Update it when a milestone starts, completes, or when parking-lot items are promoted.
 
+**Engineering mission:** [Product Realization](PRODUCT_REALIZATION.md) — cycles realize the largest documented product capability not yet fully real. Founder testing validates against documentation.
+
 Milestones are usually **capability-led**: each delivers a user-visible capability. Supporting work (internal dashboards, test reconciliation, flag deletion, isolated metrics) belongs inside the capability milestone it supports, or as focused operational work — not as standalone product milestones.
 
-**Exception — experience gates:** When Founder evidence shows the product is not yet perceived as one coherent whole, an **experience coherence milestone** may govern before the next capability expansion. Those milestones are feature-neutral and judged by user perception, not by new capabilities shipped.
+**Exception — experience gates:** When documented coherence gates (e.g. Unified Beta Experience) are not yet realized on the customer path, an **experience coherence milestone** may govern before the next capability expansion. Those milestones are feature-neutral; Founder testing validates perception against the documented gates — it does not invent new gates mid-flight.
 
 ---
 
@@ -109,7 +111,8 @@ RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_A
 | **Governing decision** | [2026-07-29-unified-beta-experience.md](product/decisions/2026-07-29-unified-beta-experience.md) · State next: [2026-07-29-ube-state-model-narrator.md](product/decisions/2026-07-29-ube-state-model-narrator.md) |
 | **Success** | First-time user believes one coherent, premium product from landing through daily use |
 | **Release gates** | One visual language · one vocabulary · one interaction model · one state model · one navigation model · one mental model · three-question exit test |
-| **Active repair (proposed)** | Journey narrator — [cycles/ube-journey-narrator/](cycles/ube-journey-narrator/) (State Model; visual migration suspended) |
+| **Active realization** | Complete American Express Experience — [cycles/complete-amex-experience/](cycles/complete-amex-experience/) (AT-00–AT-15; Amex reference implementation) |
+| **Prior slice** | Journey narrator — [cycles/ube-journey-narrator/](cycles/ube-journey-narrator/) (Audit Accept; deploy stopped) |
 | **Explicitly not success** | Page-level consistency alone; new capabilities as a substitute for coherence |
 
 ---

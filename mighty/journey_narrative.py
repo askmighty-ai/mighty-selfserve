@@ -21,20 +21,34 @@ KIND_SYSTEM_OBSERVATION = "system_observation"
 ACTION_PROVIDER_VISIT = "provider_visit"
 ACTION_PROVIDER_SIGN_IN = "provider_sign_in"
 
-OBS_AWAITING_CONFIRMATION = "awaiting_confirmation"
+OBS_AWAITING_CONFIRMATION = "awaiting_confirmation"  # legacy; do not mint from intent
 OBS_NO_PROGRESS = "no_progress"
 OBS_STILL_NEEDS_LOGIN = "still_needs_login"
 OBS_VERIFICATION_PROGRESS = "verification_progress"
 OBS_TERMINAL_OK = "terminal_ok"
 
+# Evidence tiers (R2): intent ≠ observed progress ≠ verified outcome
+TIER_INTENT = "intent"
+TIER_OBSERVED_PROGRESS = "observed_progress"
+TIER_VERIFIED_OUTCOME = "verified_outcome"
+TIER_OBSERVED_NEGATIVE = "observed_negative"  # still needs login / no progress
+
 NarrativeBeat = Literal[
-    "act_acknowledged",
+    "intent",
+    "act_acknowledged",  # alias for intent (compat)
     "waiting",
     "non_progress",
     "repeat_ask",
     "progress",
     "terminal",
     "unaffected",
+]
+
+EvidenceTier = Literal[
+    "intent",
+    "observed_progress",
+    "observed_negative",
+    "verified_outcome",
 ]
 
 # How long a Visit/Sign-in stays "active" for narration without a clearing terminal.
@@ -64,6 +78,8 @@ class NarrativeComposeResult:
     event_ids: tuple[str, ...] = ()
     event_refs: tuple[str, ...] = ()
     eyebrow: str | None = None
+    evidence_tier: EvidenceTier = TIER_INTENT
+    authorizing_evidence: str = ""  # human-readable: which events authorize this transition
 
 
 def ensure_journey_narrative_table(db: Any) -> None:
@@ -314,7 +330,13 @@ def sync_journey_observations(
     verification_active: bool = False,
     terminal_ok: bool = False,
 ) -> list[NarrativeEvent]:
-    """Record honest observations after a recent user action (no invented success)."""
+    """Record system observations only from real evidence — never from Visit intent alone.
+
+    R2: Do not mint verification_progress / awaiting_confirmation solely because the
+    user clicked Visit. Progress observations require verification_active evidence;
+    terminal requires terminal_ok; negative still_needs_login may record when AuthTruth
+    still requires the user after a Visit.
+    """
     events = recent_narrative_events(db, user_id, provider=provider, limit=40)
     action = _latest_user_action(events, provider=provider)
     if action is None or not _action_still_active(action):
@@ -326,7 +348,10 @@ def sync_journey_observations(
             user_id,
             action,
             event_type=OBS_TERMINAL_OK,
-            detail={"after_user_action_id": action.id},
+            detail={
+                "after_user_action_id": action.id,
+                "evidence": "home_terminal_ok",
+            },
             events=events,
         )
     elif verification_active:
@@ -335,40 +360,40 @@ def sync_journey_observations(
             user_id,
             action,
             event_type=OBS_VERIFICATION_PROGRESS,
-            detail={"after_user_action_id": action.id},
+            detail={
+                "after_user_action_id": action.id,
+                "evidence": "verification_or_updating_active",
+            },
             events=events,
         )
     elif still_needs_user:
-        # Prefer awaiting immediately; escalate to still_needs_login / no_progress
-        # when any observation already exists or action is not brand-new.
-        created = _parse_ts(action.created_at) or datetime.now(timezone.utc)
-        age = datetime.now(timezone.utc) - created
-        obs_after = _observations_after(events, action)
-        if not obs_after and age < timedelta(seconds=45):
-            ensure_observation_after_action(
-                db,
-                user_id,
-                action,
-                event_type=OBS_AWAITING_CONFIRMATION,
-                detail={"after_user_action_id": action.id},
-                events=events,
-            )
-        else:
-            ensure_observation_after_action(
-                db,
-                user_id,
-                action,
-                event_type=OBS_STILL_NEEDS_LOGIN
-                if still_needs_user
-                else OBS_NO_PROGRESS,
-                detail={
-                    "after_user_action_id": action.id,
-                    "expected": "confirmed_session",
-                    "outcome": "not_confirmed",
-                },
-                events=events,
-            )
+        # Honest negative observation from current access truth — not "progress."
+        ensure_observation_after_action(
+            db,
+            user_id,
+            action,
+            event_type=OBS_STILL_NEEDS_LOGIN,
+            detail={
+                "after_user_action_id": action.id,
+                "expected": "confirmed_session",
+                "outcome": "not_confirmed",
+                "evidence": "auth_or_health_still_needs_user",
+            },
+            events=events,
+        )
     return recent_narrative_events(db, user_id, provider=provider, limit=40)
+
+
+def _authorize(
+    *,
+    beat: NarrativeBeat,
+    tier: EvidenceTier,
+    events: Sequence[NarrativeEvent],
+) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    ids = tuple(e.id for e in events)
+    refs = tuple(e.ref for e in events)
+    parts = [f"tier={tier}", f"beat={beat}"] + [e.ref for e in events]
+    return ids, refs, "; ".join(parts)
 
 
 def compose_narrative_for_provider_ask(
@@ -378,18 +403,28 @@ def compose_narrative_for_provider_ask(
     events: Sequence[NarrativeEvent],
     repeating_user_action: bool,
 ) -> NarrativeComposeResult | None:
-    """Compose continuity / R1 copy when evidence still asks the user to Visit/Sign-in."""
+    """Compose continuity / R1 / R2 copy — claims gated by evidence tier."""
     action = _latest_user_action(events, provider=provider_key)
     if action is None or not _action_still_active(action):
         return None
 
     obs_after = _observations_after(events, action)
-    refs = [action.ref]
-    ids = [action.id]
-    latest_obs = obs_after[0] if obs_after else None
-    if latest_obs is not None:
-        refs.append(latest_obs.ref)
-        ids.append(latest_obs.id)
+    # Prefer strongest authorizing observation (progress > terminal > negative)
+    latest_obs = None
+    for prefer in (
+        OBS_TERMINAL_OK,
+        OBS_VERIFICATION_PROGRESS,
+        OBS_STILL_NEEDS_LOGIN,
+        OBS_NO_PROGRESS,
+    ):
+        for obs in obs_after:
+            if obs.event_type == prefer:
+                latest_obs = obs
+                break
+        if latest_obs is not None:
+            break
+    if latest_obs is None and obs_after:
+        latest_obs = obs_after[0]
 
     name = (provider_display or provider_key).strip() or "this account"
     action_label = (
@@ -398,54 +433,97 @@ def compose_narrative_for_provider_ask(
         else "started sign-in for"
     )
 
-    if latest_obs is None or latest_obs.event_type == OBS_AWAITING_CONFIRMATION:
+    # --- verified outcome ---
+    if latest_obs is not None and latest_obs.event_type == OBS_TERMINAL_OK:
+        ids, refs, auth = _authorize(
+            beat="terminal",
+            tier=TIER_VERIFIED_OUTCOME,
+            events=(action, latest_obs),
+        )
         return NarrativeComposeResult(
-            title=user_copy.home_journey_waiting_headline(name),
-            body=user_copy.home_journey_waiting_body(name, action_label=action_label),
-            cta_label=None,  # keep caller CTA
-            beat="waiting",
-            event_ids=tuple(ids),
-            event_refs=tuple(refs),
-            eyebrow="In progress",
+            beat="terminal",
+            event_ids=ids,
+            event_refs=refs,
+            evidence_tier=TIER_VERIFIED_OUTCOME,
+            authorizing_evidence=auth,
         )
 
-    if latest_obs.event_type == OBS_VERIFICATION_PROGRESS:
+    # --- observed progress (verification underway) ---
+    if latest_obs is not None and latest_obs.event_type == OBS_VERIFICATION_PROGRESS:
+        ids, refs, auth = _authorize(
+            beat="progress",
+            tier=TIER_OBSERVED_PROGRESS,
+            events=(action, latest_obs),
+        )
         return NarrativeComposeResult(
             title=user_copy.home_journey_progress_headline(name),
             body=user_copy.home_journey_progress_body(name, action_label=action_label),
             beat="progress",
-            event_ids=tuple(ids),
-            event_refs=tuple(refs),
+            event_ids=ids,
+            event_refs=refs,
             eyebrow="Checking",
+            evidence_tier=TIER_OBSERVED_PROGRESS,
+            authorizing_evidence=auth,
         )
 
-    if latest_obs.event_type == OBS_TERMINAL_OK:
-        return NarrativeComposeResult(
-            beat="terminal",
-            event_ids=tuple(ids),
-            event_refs=tuple(refs),
+    # --- observed negative (still needs login / no progress) ---
+    if latest_obs is not None and latest_obs.event_type in (
+        OBS_STILL_NEEDS_LOGIN,
+        OBS_NO_PROGRESS,
+    ):
+        if repeating_user_action:
+            ids, refs, auth = _authorize(
+                beat="repeat_ask",
+                tier=TIER_OBSERVED_NEGATIVE,
+                events=(action, latest_obs),
+            )
+            return NarrativeComposeResult(
+                title=user_copy.home_journey_repeat_ask_headline(name),
+                body=user_copy.home_journey_repeat_ask_body(
+                    name, action_label=action_label
+                ),
+                beat="repeat_ask",
+                event_ids=ids,
+                event_refs=refs,
+                eyebrow="Still needed",
+                evidence_tier=TIER_OBSERVED_NEGATIVE,
+                authorizing_evidence=auth,
+            )
+        ids, refs, auth = _authorize(
+            beat="non_progress",
+            tier=TIER_OBSERVED_NEGATIVE,
+            events=(action, latest_obs),
         )
-
-    # no_progress / still_needs_login / other — R1 when repeating the ask
-    if repeating_user_action:
         return NarrativeComposeResult(
-            title=user_copy.home_journey_repeat_ask_headline(name),
-            body=user_copy.home_journey_repeat_ask_body(
+            title=user_copy.home_journey_non_progress_headline(name),
+            body=user_copy.home_journey_non_progress_body(
                 name, action_label=action_label
             ),
-            beat="repeat_ask",
-            event_ids=tuple(ids),
-            event_refs=tuple(refs),
-            eyebrow="Still needed",
+            beat="non_progress",
+            event_ids=ids,
+            event_refs=refs,
+            eyebrow="Not confirmed yet",
+            evidence_tier=TIER_OBSERVED_NEGATIVE,
+            authorizing_evidence=auth,
         )
 
+    # --- intent only (user-action; no authorizing system observation) ---
+    # R2: must NOT claim verifying or "you do not need to do anything else."
+    ids, refs, auth = _authorize(
+        beat="intent",
+        tier=TIER_INTENT,
+        events=(action,),
+    )
     return NarrativeComposeResult(
-        title=user_copy.home_journey_non_progress_headline(name),
-        body=user_copy.home_journey_non_progress_body(name, action_label=action_label),
-        beat="non_progress",
-        event_ids=tuple(ids),
-        event_refs=tuple(refs),
-        eyebrow="Waiting on confirmation",
+        title=user_copy.home_journey_intent_headline(name),
+        body=user_copy.home_journey_intent_body(name, action_label=action_label),
+        cta_label=None,
+        beat="intent",
+        event_ids=ids,
+        event_refs=refs,
+        eyebrow="You acted",
+        evidence_tier=TIER_INTENT,
+        authorizing_evidence=auth,
     )
 
 
@@ -455,13 +533,14 @@ def apply_narrative_to_home_card(
 ) -> Any:
     """Return a replaced HomeCard with narrative copy + event binding."""
     if compose.beat == "terminal" and not compose.title:
-        # Leave success/other stories alone but stamp event ids if card supports it.
         try:
             return replace(
                 card,
                 narrative_event_ids=compose.event_ids,
                 narrative_event_refs=compose.event_refs,
                 narrative_beat=compose.beat,
+                narrative_evidence_tier=compose.evidence_tier,
+                narrative_authorizing_evidence=compose.authorizing_evidence,
             )
         except TypeError:
             return card
@@ -470,6 +549,8 @@ def apply_narrative_to_home_card(
         "narrative_event_ids": compose.event_ids,
         "narrative_event_refs": compose.event_refs,
         "narrative_beat": compose.beat,
+        "narrative_evidence_tier": compose.evidence_tier,
+        "narrative_authorizing_evidence": compose.authorizing_evidence,
     }
     if compose.title is not None:
         kwargs["title"] = compose.title
@@ -502,7 +583,20 @@ def apply_journey_narrative_to_projection(
     card = getattr(projection, "featured", None)
     key = (provider_key or getattr(card, "provider", None) or "").strip().lower()
     if not key:
-        # Infer amex as default when CTA looks like provider visit without key
+        return projection
+
+    # AT-13: Chrome-setup primary must not be overwritten by Amex Visit narrative.
+    cta_url = str(getattr(card, "cta_url", None) or "") if card is not None else ""
+    if "extension-setup" in cta_url:
+        if key:
+            sync_journey_observations(
+                db,
+                user_id,
+                provider=key,
+                still_needs_user=still_needs_user,
+                verification_active=verification_active,
+                terminal_ok=terminal_ok,
+            )
         return projection
 
     display = (provider_display or key.replace("_", " ").title()).strip()
@@ -540,6 +634,8 @@ def apply_journey_narrative_to_projection(
             narrative_event_ids=compose.event_ids,
             narrative_event_refs=compose.event_refs,
             narrative_beat=compose.beat,
+            narrative_evidence_tier=compose.evidence_tier,
+            narrative_authorizing_evidence=compose.authorizing_evidence,
             answer=compose.title or projection.answer,
         )
     except TypeError:
