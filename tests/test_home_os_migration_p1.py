@@ -107,10 +107,29 @@ class TestDefaultLanding:
         with client.session_transaction() as sess:
             sess["user_id"] = uid
         resp = client.get(LEGACY_DASHBOARD_PATH, follow_redirects=False)
+        # Home OS default → redirect into shared shell home
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/home")
+
+    def test_dashboard_serves_when_home_os_gated_off(self, client, monkeypatch):
+        """F1: production-like gate must not 404 the authenticated home."""
+        import app as mighty
+
+        monkeypatch.delenv("HOME_OS_ENABLED", raising=False)
+        monkeypatch.delenv("DEMO_MODE", raising=False)
+        monkeypatch.setenv("MIGHTY_ENV", "production")
+        uid = _seed_user(mighty)
+        with client.session_transaction() as sess:
+            sess["user_id"] = uid
+        resp = client.get("/dashboard", follow_redirects=False)
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
-        # Legacy shell still has sidebar chrome; Home OS does not.
-        assert "sidebar" in body.lower() or "Dashboard" in body
+        assert "Home OS preview is unavailable" not in body
+        assert "404" not in body[:200] or "Mighty" in body
+        # UBE: production daily home shares MDS shell (no Inter sidebar seam)
+        assert 'data-app-shell="mds"' in body
+        assert 'class="sidebar"' not in body
+        assert "family=Inter" not in body
 
     def test_login_lands_on_home(self, client):
         import app as mighty

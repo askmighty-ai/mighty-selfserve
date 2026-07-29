@@ -2319,6 +2319,137 @@ def _show_activity_nav(db, user_id: str) -> bool:
     except Exception:
         return False
 
+
+def _interpolate_user_copy(html: str) -> str:
+    """Replace `{user_copy.ATTR}` placeholders in non-f-string templates."""
+    import re as _re_uc
+
+    def _repl(match: "_re_uc.Match[str]") -> str:
+        attr = match.group(1)
+        val = getattr(user_copy, attr, None)
+        if val is None:
+            return match.group(0)
+        return str(val)
+
+    return _re_uc.sub(r"\{user_copy\.([A-Z0-9_]+)\}", _repl, html)
+
+
+def _shell_display_name(user) -> str:
+    """First name for MDS authenticated shell avatar / menu."""
+    if user is None:
+        return "Mighty"
+    try:
+        preferred = str(user["preferred_name"] or "").strip()
+    except Exception:
+        preferred = ""
+    if preferred:
+        return preferred.split()[0]
+    try:
+        email = str(user["email"] or "")
+    except Exception:
+        email = ""
+    if email and "@" in email:
+        return email.split("@", 1)[0]
+    return "Mighty"
+
+
+def _dashboard_as_mds_authenticated_document(
+    *,
+    filled_html: str,
+    display_name: str,
+    csrf_token: str,
+    show_activity: bool,
+) -> str:
+    """Re-frame legacy dashboard body in the shared MDS authenticated shell.
+
+    Component-family migration (UBE): shell, nav, brand, type — not a paint pass.
+    Preserves main-content + page scripts; removes Inter sidebar chrome from the
+    customer document. Falls back to filled_html if structure cannot be extracted.
+    """
+    import re as _re_dash
+
+    from mighty.authenticated_app_shell import (
+        NAV_HOME,
+        bridge_page_css_for_mds,
+        render_authenticated_document,
+    )
+
+    main_m = _re_dash.search(
+        r'<div class="main-content">(.*?)</div>\s*<!-- /main-content -->\s*'
+        r'</div>\s*<!-- /app-shell -->\s*',
+        filled_html,
+        _re_dash.S,
+    )
+    if not main_m:
+        return filled_html
+
+    main_html = main_m.group(1)
+    # Inter mobile drawer control — MDS shell owns navigation.
+    main_html = _re_dash.sub(
+        r'<button class="nav-hamburger"[^>]*>[\s\S]*?</button>\s*',
+        "",
+        main_html,
+        count=1,
+    )
+
+    after_shell = filled_html[main_m.end() :]
+    scripts_m = _re_dash.search(r"(<script[\s\S]*)</body>", after_shell)
+    scripts = scripts_m.group(1) if scripts_m else ""
+
+    style_m = _re_dash.search(r"<style>(.*?)</style>", filled_html, _re_dash.S)
+    page_css = style_m.group(1) if style_m else ""
+    extra_css = (
+        page_css
+        + bridge_page_css_for_mds()
+        + """
+/* UBE: home body inside shared MDS shell — continuity, not restyle theater */
+body.mds.app-auth,.mds.app-auth{
+  font-family:var(--mds-font-body),"Plus Jakarta Sans",system-ui,sans-serif!important;
+  background:var(--mds-bg,#f7f4ee)!important;
+  color:var(--mds-ink,#1a1f1c)!important;
+}
+.mds.app-auth .main-content{height:auto;overflow:visible;background:transparent}
+.mds.app-auth .topbar{
+  background:transparent;
+  border-color:var(--mds-line,rgba(26,31,28,.08));
+  color:var(--mds-ink,#1a1f1c);
+}
+.mds.app-auth .topbar-title{
+  color:var(--mds-ink,#1a1f1c);
+  font-family:var(--mds-font-display),Fraunces,Georgia,serif;
+}
+.mds.app-auth .btn-primary,.mds.app-auth .btn-connect{
+  background:var(--mds-pine,#1f4b3a)!important;color:#fff!important;border:none
+}
+.mds.app-auth .pending-pill{
+  color:var(--mds-pine,#1f4b3a);
+  background:var(--mds-pine-soft,#e8f2ef);
+  border-color:var(--mds-line,rgba(26,31,28,.12));
+}
+.mds.app-auth a#ext-install-link{
+  color:var(--mds-pine,#1f4b3a)!important;
+  background:var(--mds-pine-soft,#e8f2ef)!important;
+  border-color:var(--mds-line,rgba(26,31,28,.12))!important;
+}
+.mds.app-auth .status-pill{border-color:var(--mds-line,rgba(26,31,28,.12))}
+"""
+    )
+
+    return render_authenticated_document(
+        title="Home",
+        active=NAV_HOME,
+        display_name=display_name,
+        csrf_token=csrf_token,
+        main_html=main_html + scripts,
+        show_activity=show_activity,
+        home_href="/dashboard",
+        body_class="dashboard-app",
+        extra_css=extra_css,
+        flush_main=True,
+        escape=he,
+    )
+
+
 # ── Per-user data encryption ───────────────────────────────────────────────────
 # Key is derived from SECRET_KEY + user_id so each user's data uses a distinct key.
 # This protects against raw database theft; the server itself can decrypt (v1 trade-off).
@@ -5587,10 +5718,14 @@ def send_ntfy_notification(api_key, label, action_type, approval_url):
 
 
 def send_password_reset_email(to_email, reset_url):
-    """Send a password reset email via Postmark. Falls back to console log if not configured."""
+    """Send a password reset email via Postmark.
+
+    Returns True if a send was attempted with a configured key, False if skipped.
+    Callers must not claim email was sent when this returns False.
+    """
     if not POSTMARK_API_KEY:
         print(f"[Mighty] Password reset skipped (Postmark not configured) — configure POSTMARK_API_KEY", flush=True)
-        return
+        return False
     html_body = (
         '<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f8f7f5;font-family:Arial,sans-serif">'
         '<div style="max-width:480px;margin:40px auto;padding:0 16px">'
@@ -5619,6 +5754,7 @@ def send_password_reset_email(to_email, reset_url):
         except Exception as e:
             print(f"[Mighty] Reset email failed: {e}", flush=True)
     threading.Thread(target=_send, daemon=True).start()
+    return True
 
 
 def send_web_push(user_id, title, body, url, action_id=None):
@@ -5725,347 +5861,77 @@ LANDING_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <meta name="color-scheme" content="light">
-<meta name="description" content="Mighty adds approval checkpoints and a permanent activity log to any AI agent. Works with Claude, ChatGPT, and custom agents. Set up in 5 minutes. Free to start.">
-<title>Mighty — Your AI agents, accountable to you.</title>
+<meta name="description" content="Mighty watches the accounts you choose and lets you know when something interesting happens or needs your attention.">
+<title>Mighty</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 """ + BASE_CSS + """
-html{scroll-behavior:smooth}
-body{background:#fff;color:#1a1a1a}
-/* Nav */
-.nav{position:sticky;top:0;z-index:100;background:#fff;border-bottom:1px solid #e5e3df;height:60px;display:flex;align-items:center;padding:0 24px}
-.nav-inner{max-width:900px;margin:0 auto;width:100%;display:flex;align-items:center;justify-content:space-between}
-.logo{display:flex;align-items:center;gap:10px}
-.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:8px;overflow:hidden}
-.logo-mark img{height:32px;width:32px;object-fit:cover}
-.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.nav-actions{display:flex;align-items:center;gap:16px}
-.nav-signin{font-size:14px;font-weight:500;color:#444;text-decoration:none}
-.nav-signin:hover{color:#7c3aed;text-decoration:none}
-.btn-nav{padding:8px 18px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 0.12s}
-.btn-nav:hover{background:#6d28d9;text-decoration:none;color:#fff}
-.nav-hamburger{display:none;background:none;border:none;cursor:pointer;padding:6px;color:#444;line-height:0}
-/* Hero — full viewport */
-.hero{background:#fff;min-height:calc(100vh - 60px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:60px 24px 80px;position:relative}
-.hero-inner{max-width:600px;margin:0 auto}
-.hero h1{font-size:52px;font-weight:800;line-height:1.08;letter-spacing:-1.5px;color:#1a1a1a;margin-bottom:20px}
-.hero-sub{font-size:17px;color:#555;line-height:1.65;max-width:460px;margin:0 auto 32px}
-.hero-ctas{display:flex;flex-direction:column;align-items:center;gap:12px}
-.btn-primary-lg{padding:14px 32px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;transition:background 0.12s;display:inline-block}
-.btn-primary-lg:hover{background:#6d28d9;text-decoration:none;color:#fff}
-.hero-link{font-size:13px;color:#9ca3af;text-decoration:none;font-weight:500}
-.hero-link:hover{color:#6b7280;text-decoration:underline}
-.hero-scroll{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;color:#c4b5fd;font-size:11px;font-weight:500;letter-spacing:0.8px;text-transform:uppercase;cursor:pointer;border:none;outline:none;background:none;padding:0;transition:color 0.12s;font-family:inherit}
-.hero-scroll:hover{color:#7c3aed}
-.hero-scroll svg{animation:bounce 2s infinite}
-@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
-/* Accordion */
-.accordion{max-width:760px;margin:0 auto;padding:0 24px 80px}
-.acc-item{border-bottom:1px solid #e5e3df}
-.acc-item:first-child{border-top:1px solid #e5e3df}
-.acc-header{width:100%;display:flex;align-items:center;justify-content:space-between;padding:22px 0;background:none;border:none;cursor:pointer;text-align:left;gap:16px}
-.acc-header:hover .acc-title{color:#7c3aed}
-.acc-title{font-size:17px;font-weight:700;color:#1a1a1a;transition:color 0.12s}
-.acc-chevron{flex-shrink:0;color:#9ca3af;transition:transform 0.25s ease}
-.acc-chevron.open{transform:rotate(180deg)}
-.acc-content{max-height:0;overflow:hidden;transition:max-height 0.35s ease, opacity 0.25s ease;opacity:0}
-.acc-content.open{opacity:1}
-.acc-body{padding:0 0 28px}
-/* Steps (inside accordion) */
-.section-label{font-size:12px;font-weight:700;letter-spacing:1.5px;color:#7c3aed;text-transform:uppercase;margin-bottom:12px}
-.section-title{font-size:28px;font-weight:800;color:#1a1a1a;margin-bottom:36px}
-.steps{display:flex;flex-direction:column;gap:28px}
-.step{display:flex;align-items:flex-start;gap:20px}
-.step-num{width:36px;height:36px;border-radius:50%;background:#7c3aed;color:#fff;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
-.step-body h3{font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
-.step-body p{font-size:14px;color:#555;line-height:1.6}
-/* Feature cards (inside accordion) */
-.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
-.fcard{background:#fff;border:1.5px solid #e5e3df;border-radius:12px;padding:24px 20px}
-.fcard h3{font-size:15px;font-weight:700;color:#1a1a1a;margin-bottom:8px}
-.fcard p{font-size:13px;color:#555;line-height:1.6}
-.fcard-icon{width:32px;height:32px;border-radius:8px;background:#f3f0ff;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
-/* Enterprise form (inside accordion) */
-.ent-wrap{max-width:480px}
-.enterprise-sub{font-size:15px;color:#555;line-height:1.6;margin-bottom:28px}
-.ent-form{background:#f8f7f5;border:1.5px solid #e5e3df;border-radius:12px;padding:28px;text-align:left}
-.ent-form label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
-.ent-form input,.ent-form textarea{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px;font-family:inherit}
-.ent-form input:focus,.ent-form textarea:focus{outline:none;border-color:#7c3aed}
-.ent-form textarea{height:90px;resize:vertical}
-.btn-ent{width:100%;padding:11px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;cursor:pointer}
-.btn-ent:hover{background:#6d28d9}
-.ent-thanks{display:none;padding:16px 0;font-size:15px;color:#16a34a;font-weight:600}
-/* Footer */
-.footer-bar{background:#fff;border-top:1px solid #e5e3df;padding:24px;text-align:center;font-size:13px;color:#9ca3af}
-/* ── Mobile (≤ 640px) ────────────────────────────────────────────────────── */
+body{background:#fff;color:#0a2540;display:flex;flex-direction:column;min-height:100vh}
+.nav{height:72px;display:flex;align-items:center;padding:0 32px;background:#fff}
+.nav-inner{max-width:1080px;margin:0 auto;width:100%;display:flex;align-items:center;justify-content:space-between}
+.logo{display:flex;align-items:center;gap:12px;text-decoration:none}
+.logo:hover{text-decoration:none}
+.logo-mark{width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:#0a2540;border-radius:7px;overflow:hidden}
+.logo-mark img{height:36px;width:36px;object-fit:cover}
+.logo-name{font-size:21px;font-weight:600;letter-spacing:-0.3px;color:#0a2540}
+.nav-signin{font-size:14px;font-weight:500;color:#425466;text-decoration:none}
+.nav-signin:hover{color:#0a2540;text-decoration:none}
+.hero{flex:1;display:flex;align-items:center;justify-content:center;padding:80px 24px 96px;text-align:center}
+.hero-inner{max-width:640px;margin:48px auto 0}
+.hero h1{font-size:40px;font-weight:600;line-height:1.2;letter-spacing:-1px;color:#0a2540;margin:0 auto 20px;max-width:580px;text-wrap:pretty}
+.hero-sub{font-size:18px;font-weight:400;color:#425466;line-height:1.6;max-width:460px;margin:0 auto 36px}
+.hero-ctas{display:flex;flex-direction:column;align-items:center;gap:16px}
+.btn-primary-lg{padding:12px 28px;background:#0a2540;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 0.15s,box-shadow 0.15s;display:inline-block;box-shadow:0 1px 2px rgba(10,37,64,0.12)}
+.btn-primary-lg:hover{background:#16365d;text-decoration:none;color:#fff;box-shadow:0 2px 6px rgba(10,37,64,0.18)}
+.hero-link{font-size:14px;color:#635bff;text-decoration:none;font-weight:500}
+.hero-link:hover{color:#0a2540;text-decoration:none}
+.footer-bar{padding:28px 24px;text-align:center;font-size:13px;color:#6b7c93;background:#fff}
+.footer-bar a{color:#6b7c93;text-decoration:none}
+.footer-bar a:hover{color:#425466;text-decoration:none}
 @media(max-width:640px){
-  /* Hero */
-  .hero{min-height:calc(100vh - 60px);padding:48px 20px 72px}
-  .hero h1{font-size:36px;letter-spacing:-0.5px;margin-bottom:16px}
-  .hero-sub{font-size:16px;max-width:100%}
-  .hero-ctas{gap:10px}
-  .btn-primary-lg{width:100%;text-align:center;padding:14px 20px;font-size:16px}
-  .hero-link{font-size:14px}
-  .hero-scroll{bottom:20px;font-size:10px}
-  /* Accordion */
-  .accordion{padding:0 16px 60px}
-  .acc-header{padding:18px 0}
-  .acc-title{font-size:16px}
-  /* Steps */
-  .steps{gap:24px}
-  .step{gap:14px}
-  .step-num{width:30px;height:30px;font-size:13px;flex-shrink:0}
-  .step-body h3{font-size:15px}
-  .step-body p{font-size:14px}
-  /* Feature cards */
-  .cards{grid-template-columns:1fr}
-  /* Enterprise form */
-  .ent-form{padding:20px 16px}
-  /* Footer */
-  .footer-bar{padding:20px 16px;font-size:12px}
+  .nav{padding:0 20px;height:64px}
+  .logo-mark{width:32px;height:32px;border-radius:6px}
+  .logo-mark img{height:32px;width:32px}
+  .logo-name{font-size:18px}
+  .hero{padding:56px 20px 72px}
+  .hero-inner{margin-top:36px;max-width:100%}
+  .hero h1{font-size:30px;letter-spacing:-0.7px;margin-bottom:16px;max-width:100%}
+  .hero-sub{font-size:16px;max-width:100%;margin-bottom:28px}
+  .btn-primary-lg{width:100%;max-width:280px;text-align:center;padding:13px 20px;font-size:15px}
 }
 </style>
 </head>
 <body>
 
-<!-- Nav -->
 <nav class="nav">
   <div class="nav-inner">
-    <a href="/" class="logo" style="text-decoration:none">
+    <a href="/" class="logo">
       <div class="logo-mark"><img src="/logo-icon.png" alt="Mighty"></div>
       <div class="logo-name">Mighty</div>
     </a>
-    <div class="nav-actions">
-      <a href="/login" class="nav-signin">Sign in</a>
-      <a href="/signup" class="btn-nav">Create account</a>
-    </div>
+    <a href="/login" class="nav-signin">Sign In</a>
   </div>
 </nav>
 
-<!-- Hero -->
 <section class="hero">
   <div class="hero-inner">
-    <h1>Your AI, accountable.</h1>
-    <p class="hero-sub">Keep tabs on your agent's most consequential actions — what it did, what you approved, and when.</p>
+    <h1>Stay informed about—and make the most of—your digital life.</h1>
+    <p class="hero-sub">Mighty watches the accounts you choose and lets you know when something interesting happens or needs your attention.</p>
     <div class="hero-ctas">
-      <a href="/signup" class="btn-primary-lg">Create account &rarr;</a>
-      <a href="/login" class="hero-link">Sign in &rarr;</a>
-      <a href="#more" class="hero-link">Using Mighty for a team? &rarr;</a>
+      <a href="/signup" class="btn-primary-lg">Get Started</a>
+      <a href="/login" class="hero-link">Sign In</a>
     </div>
   </div>
-  <button class="hero-scroll" onclick="openFirst()" aria-label="Learn more">
-    <span>Learn more</span>
-    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,6 8,10 12,6"/></svg>
-  </button>
 </section>
 
-
-<!-- Accordion -->
-<div class="accordion" id="more">
-
-  <!-- How it works -->
-  <div class="acc-item">
-    <button class="acc-header" onclick="toggleAcc('hiw')" id="hiw-btn">
-      <span class="acc-title">How it works</span>
-      <svg class="acc-chevron" id="hiw-chevron" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,7 9,12 14,7"/></svg>
-    </button>
-    <div class="acc-content" id="hiw">
-      <div class="acc-body">
-        <div class="steps">
-          <div class="step">
-            <div class="step-num">1</div>
-            <div class="step-body">
-              <h3>Connect your agent</h3>
-              <p>Add the Mighty system prompt to ChatGPT, or install the MCP plugin for Claude Desktop. Works with any custom agent via API. Takes about 5 minutes.</p>
-            </div>
-          </div>
-          <div class="step">
-            <div class="step-num">2</div>
-            <div class="step-body">
-              <h3>Your agent asks before acting</h3>
-              <p>Before anything consequential — sending an email, making a purchase, editing a file — your agent checks with you first.</p>
-            </div>
-          </div>
-          <div class="step">
-            <div class="step-num">3</div>
-            <div class="step-body">
-              <h3>You decide. Mighty keeps the record.</h3>
-              <p>Your decision is logged independently — separate from your AI, which can't edit or delete it. Detailed enough to prove what happened, when you need to.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-
-  <!-- For teams -->
-  <div class="acc-item" id="enterprise">
-    <button class="acc-header" onclick="toggleAcc('teams')" id="teams-btn">
-      <span class="acc-title">Using Mighty for a team?</span>
-      <svg class="acc-chevron" id="teams-chevron" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,7 9,12 14,7"/></svg>
-    </button>
-    <div class="acc-content" id="teams">
-      <div class="acc-body">
-        <div class="ent-wrap">
-          <p class="enterprise-sub">When teams give AI agents real authority — over email, purchasing, contracts, or operations — an independent record isn't optional, it's essential. Tell us about your use case.</p>
-          <div id="ent-form-wrap">
-            <form id="ent-form" class="ent-form">
-              <label>Full name</label>
-              <input type="text" id="ent-name" placeholder="Jane Smith" required>
-              <label>Work email</label>
-              <input type="email" id="ent-email" placeholder="jane@company.com" required>
-              <label>Company</label>
-              <input type="text" id="ent-company" placeholder="Acme Corp">
-              <label>Tell us about your use case <span style="font-weight:400;color:#aaa">(optional)</span></label>
-              <textarea id="ent-message" placeholder="We are deploying agents that..."></textarea>
-              <button type="submit" class="btn-ent" id="enterprise-submit-btn">Get in touch &rarr;</button>
-            </form>
-            <div class="ent-thanks" id="ent-thanks">Thanks — we will be in touch within one business day.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-</div>
-
-<!-- Footer -->
-<div class="footer-bar">&copy; <span id="cy">2026</span> Mighty &middot; <a href="/privacy" style="color:#9ca3af;text-decoration:none">Privacy</a> &middot; <a href="/tos" style="color:#9ca3af;text-decoration:none">Terms</a></div>
+<div class="footer-bar">&copy; <span id="cy">2026</span> Mighty &middot; <a href="/privacy">Privacy</a> &middot; <a href="/tos">Terms</a></div>
 
 <script>
 document.getElementById('cy').textContent = new Date().getFullYear();
-
-function toggleNav() {
-  var nav = document.getElementById('nav-actions');
-  nav.classList.toggle('open');
-}
-document.addEventListener('click', function(e) {
-  var btn = document.getElementById('nav-menu-btn');
-  var nav = document.getElementById('nav-actions');
-  if (btn && nav && !btn.contains(e.target) && !nav.contains(e.target)) {
-    nav.classList.remove('open');
-  }
-});
-
-// Accordion
-function toggleAcc(id) {
-  var content  = document.getElementById(id);
-  var chevron  = document.getElementById(id + '-chevron');
-  var isOpen   = content.classList.contains('open');
-  // close all
-  document.querySelectorAll('.acc-content').forEach(function(el) {
-    el.classList.remove('open');
-    el.style.maxHeight = '0';
-  });
-  document.querySelectorAll('.acc-chevron').forEach(function(el) {
-    el.classList.remove('open');
-  });
-  // open clicked if it was closed
-  if (!isOpen) {
-    content.classList.add('open');
-    content.style.maxHeight = content.scrollHeight + 'px';
-    chevron.classList.add('open');
-  }
-}
-
-function openFirst() {
-  var btn = document.querySelector('.hero-scroll');
-  if (btn) btn.style.display = 'none';
-  var first = document.querySelector('.acc-item');
-  if (first) first.scrollIntoView({behavior: 'smooth', block: 'start'});
-}
-
-document.getElementById("ent-form").addEventListener("submit", function(e) {
-  e.preventDefault();
-  var name    = document.getElementById("ent-name").value.trim();
-  var email   = document.getElementById("ent-email").value.trim();
-  var company = document.getElementById("ent-company").value.trim();
-  var message = document.getElementById("ent-message").value.trim();
-  var btn     = document.getElementById("enterprise-submit-btn");
-  if (btn) { btn.disabled = true; btn.textContent = "Sending..."; }
-  fetch("/enterprise-interest", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({name: name, email: email, company: company, message: message})
-  }).then(function(r) { return r.json(); }).then(function(d) {
-    if (d.ok) {
-      document.getElementById("ent-form").style.display = "none";
-      document.getElementById("ent-thanks").style.display = "block";
-      // re-measure accordion height
-      var tc = document.getElementById('teams');
-      if (tc && tc.classList.contains('open')) tc.style.maxHeight = tc.scrollHeight + 'px';
-    } else {
-      btn.textContent = "Error — please try again";
-      btn.disabled = false;
-    }
-  }).catch(function() {
-    btn.textContent = "Error — please try again";
-    btn.disabled = false;
-  });
-});
 </script>
 
-</body>
-</html>"""
-
-SIGNUP_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<meta name="color-scheme" content="light">
-<title>Create account — Mighty</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>
-""" + BASE_CSS + """
-body{display:flex;align-items:center;justify-content:center;min-height:100vh;overflow-y:auto;padding:24px}
-.card{background:#fff;border:1px solid #e5e3df;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 4px 24px rgba(0,0,0,0.06)}
-.logo{display:flex;align-items:center;gap:10px;margin-bottom:28px}
-.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:#080a10;border-radius:8px;overflow:hidden}
-.logo-mark img{height:32px;width:32px;object-fit:cover}
-.logo-name{font-size:18px;font-weight:800;letter-spacing:0.5px;background:linear-gradient(135deg,#7c3aed,#6d28d9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-h1{font-size:22px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
-.sub{font-size:14px;color:#666;margin-bottom:24px;line-height:1.5}
-label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;letter-spacing:0.3px}
-input[type=email],input[type=password]{width:100%;padding:10px 12px;border:1.5px solid #e5e3df;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;transition:border-color 0.12s;margin-bottom:14px}
-input:focus{outline:none;border-color:#7c3aed}
-.btn-primary{width:100%;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;transition:background 0.12s;margin-top:4px}
-.btn-primary:hover{background:#6d28d9}
-.err{font-size:13px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:9px 12px;margin-bottom:14px}
-.footer{text-align:center;margin-top:20px;font-size:13px;color:#888}
-.back{display:block;font-size:13px;color:#888;margin-bottom:20px;text-decoration:none}
-.back:hover{color:#7c3aed;text-decoration:none}
-</style>
-</head>
-<body>
-<div class="card">
-  <a href="/" class="back">&larr; Home</a>
-  <div class="logo">
-    <div class="logo-mark">
-      <img src="/logo-icon.png" alt="Mighty">
-    </div>
-    <div class="logo-name">Mighty</div>
-  </div>
-  <h1>Create your account</h1>
-  <p class="sub">{signup_sub}</p>
-  {error}
-  <form method="POST" action="/signup">
-<input type="hidden" name="_csrf" value="{csrf_token}">
-    <label>Email</label>
-    <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
-    <label>Password</label>
-    <input type="password" name="password" placeholder="Choose a password" required autocomplete="new-password" minlength="6" maxlength="128">
-    <button class="btn-primary" type="submit">Create account &rarr;</button>
-  </form>
-  <div class="footer">Already have an account? <a href="/login">Sign in</a></div>
-  <div style="text-align:center;margin-top:8px;font-size:12px;color:#9ca3af">By signing up you agree to our <a href="/tos" style="color:#9ca3af">Terms</a> and <a href="/privacy" style="color:#9ca3af">Privacy Policy</a>.</div>
-</div>
 </body>
 </html>"""
 
@@ -6113,7 +5979,7 @@ input:focus{outline:none;border-color:#7c3aed}
   {error}
   <form method="POST" action="/login">
 <input type="hidden" name="_csrf" value="{csrf_token}">
-    <input type="hidden" name="next" id="next-field" value="">
+    <input type="hidden" name="next" id="next-field" value="{next}">
     <label>Email</label>
     <input type="email" name="email" placeholder="you@example.com" required autocomplete="email">
     <label>Password</label>
@@ -6123,11 +5989,12 @@ input:focus{outline:none;border-color:#7c3aed}
   <div style="text-align:center;margin-top:12px;font-size:12px;color:#9ca3af">
     Forgot your password? <a href="/forgot-password" style="color:#7c3aed">Reset it here</a>
   </div>
-  <div class="footer">No account? <a href="/signup">Sign up free</a></div>
+  <div class="footer">No account? <a href="/signup">Sign up free</a>
+  · <a href="/beta/restart">Factory reset</a></div>
 </div>
 <script>
 var nf = document.getElementById('next-field');
-if (nf) nf.value = new URLSearchParams(window.location.search).get('next') || '';
+if (nf && !nf.value) nf.value = new URLSearchParams(window.location.search).get('next') || '';
 </script>
 </body>
 </html>"""
@@ -7207,10 +7074,16 @@ var _truthRefreshIdentity = null;
 function _truthIdentityFromAccount(acct) {
   if (!acct) return null;
   var cap = acct.capability || {};
+  var plc = acct.product_lifecycle || {};
+  var access = acct.customer_access || {};
   return {
     verification_id: acct.access_cycle_id || cap.current_verification_id || cap.verification_id || null,
     lifecycle: acct.verification_lifecycle || null,
     snapshot_id: acct.snapshot_id || null,
+    capability_state: acct.capability_state || cap.capability_state || null,
+    product_lifecycle: plc.state || null,
+    background_work: access.background_work || null,
+    session_state: acct.session_state || null,
     is_checking: !!(cap.is_refreshing || acct.session_state === 'checking'
       || acct.presentation_key === 'checking' || acct.status === 'checking'),
     last_verified: (cap.last_verified || acct.last_confirmed_ready_at || null),
@@ -7225,6 +7098,8 @@ function _logDashboardRefreshReason(prev, next, reason) {
       new_lifecycle: next && next.lifecycle,
       previous_snapshot_id: prev && prev.snapshot_id,
       new_snapshot_id: next && next.snapshot_id,
+      previous_capability_state: prev && prev.capability_state,
+      new_capability_state: next && next.capability_state,
       reason: reason,
     });
   } catch (e) {}
@@ -7241,6 +7116,10 @@ function _maybeReloadTruthDashboard(amexAcct) {
   if (prev.verification_id !== next.verification_id) reason = 'verification_id_changed';
   else if (prev.lifecycle !== next.lifecycle) reason = 'verification_lifecycle_changed';
   else if (prev.snapshot_id !== next.snapshot_id) reason = 'snapshot_id_changed';
+  else if (prev.capability_state !== next.capability_state) reason = 'capability_state_changed';
+  else if (prev.product_lifecycle !== next.product_lifecycle) reason = 'product_lifecycle_changed';
+  else if (prev.background_work !== next.background_work) reason = 'background_work_changed';
+  else if (prev.session_state !== next.session_state) reason = 'session_state_changed';
   if (!reason) {
     // Update in-place Checking label / Last checked without full reload.
     var btn = document.getElementById('amex-check-now-btn');
@@ -7736,9 +7615,26 @@ function checkForUpdates() {
   }).catch(function() {});
 }
 setInterval(checkForUpdates, 4000);
-// Immediately check when user switches back to this tab
+// Immediately check when user switches back to this tab (Mighty = home base).
 document.addEventListener('visibilitychange', function() {
-  if (document.visibilityState === 'visible') checkForUpdates();
+  if (document.visibilityState === 'visible') {
+    checkForUpdates();
+    if (typeof _pollAccountStatus === 'function') _pollAccountStatus();
+  }
+});
+window.addEventListener('focus', function() {
+  if (typeof _pollAccountStatus === 'function') _pollAccountStatus();
+});
+// Provider visit: reinforce that Mighty stays active after opening a new tab.
+document.addEventListener('click', function(ev) {
+  var a = ev.target && ev.target.closest ? ev.target.closest('a[data-provider-visit="1"]') : null;
+  if (!a) return;
+  var note = document.getElementById('home-visit-stay-note');
+  if (!note) return;
+  var opened = note.getAttribute('data-opened-text');
+  if (opened) note.textContent = opened;
+  note.hidden = false;
+  note.classList.add('home-v2__visit-helper--opened');
 });
 
 // Sync is driven by the background alarm (hourly) or explicit Sync button clicks.
@@ -7946,63 +7842,40 @@ var BASE_URL = _d.base_url;
 </body>
 </html>"""
 
-SETTINGS_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<meta name="color-scheme" content="light">
-<title>Settings — Mighty</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-""" + BASE_CSS + """
-.main-content{height:100vh;overflow-y:auto}
-.page-wrap{max-width:600px;margin:0 auto;padding:32px 36px;display:flex;flex-direction:column;gap:16px}
-.page-title{font-size:20px;font-weight:700;color:#1c1917;margin-bottom:4px}
-.card{background:#ffffff;border:1px solid #e8e4de;border-radius:12px;padding:24px;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06)}
-.section-title{font-size:11px;font-weight:700;color:#9ca3af;margin-bottom:16px;text-transform:uppercase;letter-spacing:0.7px}
+SETTINGS_PAGE_CSS = """
+.page-wrap{max-width:600px;margin:0 auto;padding:0 0 2rem;display:flex;flex-direction:column;gap:16px}
+.page-title{font-size:1.75rem;font-weight:600;color:var(--mds-ink,#1a1f1c);margin-bottom:4px;font-family:Fraunces,Georgia,serif;letter-spacing:-0.03em}
+.card{background:var(--mds-surface,#fffefb);border:1px solid var(--mds-line,rgba(26,31,28,.08));border-radius:var(--mds-radius,14px);padding:24px;box-shadow:none}
+.section-title{font-size:11px;font-weight:700;color:var(--mds-muted,#5c6b5a);margin-bottom:16px;text-transform:uppercase;letter-spacing:0.7px}
 .toggle-row{display:flex;align-items:flex-start;gap:12px;padding:12px 0}
-.toggle-row+.toggle-row{border-top:1px solid #f5f2ed}
-.toggle-label{font-size:13px;font-weight:600;color:#1c1917;margin-bottom:3px}
-.toggle-hint{font-size:12px;color:#6b7280;line-height:1.5}
+.toggle-row+.toggle-row{border-top:1px solid var(--mds-line,rgba(26,31,28,.08))}
+.toggle-label{font-size:13px;font-weight:600;color:var(--mds-ink,#1a1f1c);margin-bottom:3px}
+.toggle-hint{font-size:12px;color:var(--mds-muted,#5c6b5a);line-height:1.5}
 .api-key-wrap{display:flex;align-items:center;gap:8px;margin-top:4px}
-.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:#6b7280;background:#f5f2ed;border:1px solid #e8e4de;border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.btn-sm{font-size:12px;font-weight:600;padding:6px 12px;background:#ffffff;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;white-space:nowrap;cursor:pointer;transition:all 0.12s;font-family:inherit}
-.btn-sm:hover{background:#f5f2ed;border-color:#6366f1}
-.push-status{font-size:12px;color:#6b7280;margin-top:6px;min-height:16px}
-.push-btn{font-size:12px;font-weight:600;padding:6px 12px;background:#ffffff;color:#6366f1;border:1px solid #e8e4de;border-radius:6px;cursor:pointer;transition:all 0.12s;display:none;margin-top:6px;font-family:inherit}
-.push-btn:hover{background:#f5f2ed;border-color:#6366f1}
-.btn-danger{font-size:12px;font-weight:600;padding:8px 16px;background:transparent;color:#dc2626;border:1px solid rgba(220,38,38,0.2);border-radius:6px;cursor:pointer;transition:all 0.12s;text-align:center;font-family:inherit;width:100%}
+.api-key-val{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:var(--mds-muted,#5c6b5a);background:var(--mds-surface-soft,#f3f0ea);border:1px solid var(--mds-line,rgba(26,31,28,.08));border-radius:6px;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-sm{font-size:12px;font-weight:600;padding:6px 12px;background:var(--mds-surface,#fffefb);color:var(--mds-pine,#1f4b3a);border:1px solid var(--mds-line,rgba(26,31,28,.14));border-radius:var(--mds-radius-sm,10px);white-space:nowrap;cursor:pointer;transition:all 0.12s;font-family:inherit}
+.btn-sm:hover{background:var(--mds-pine-soft,#e8f2ef)}
+.push-status{font-size:12px;color:var(--mds-muted,#5c6b5a);margin-top:6px;min-height:16px}
+.push-btn{font-size:12px;font-weight:600;padding:6px 12px;background:var(--mds-surface,#fffefb);color:var(--mds-pine,#1f4b3a);border:1px solid var(--mds-line,rgba(26,31,28,.14));border-radius:var(--mds-radius-sm,10px);cursor:pointer;transition:all 0.12s;display:none;margin-top:6px;font-family:inherit}
+.push-btn:hover{background:var(--mds-pine-soft,#e8f2ef)}
+.btn-danger{font-size:12px;font-weight:600;padding:8px 16px;background:transparent;color:#dc2626;border:1px solid rgba(220,38,38,0.2);border-radius:var(--mds-radius-sm,10px);cursor:pointer;transition:all 0.12s;text-align:center;font-family:inherit;width:100%}
 .btn-danger:hover{background:rgba(220,38,38,0.06);border-color:#dc2626}
 .btn-danger-severe{background:#dc2626;color:#fff;border-color:#dc2626}
 .btn-danger-severe:hover{background:#b91c1c;border-color:#b91c1c;color:#fff}
-.btn-settings-primary{font-size:13px;font-weight:600;padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;transition:background 0.12s;font-family:inherit}
-.btn-settings-primary:hover{background:#4f46e5}
-.ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:#6366f1;background:#f5f2ed;border:1px solid #e8e4de;border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
-.ntfy-link:hover{border-color:#6366f1;text-decoration:none}
-.toggle-row input[type=checkbox]{-webkit-appearance:none;appearance:none;width:16px;height:16px;border:1.5px solid #e8e4de;border-radius:4px;background:#ffffff;cursor:pointer;position:relative;flex-shrink:0;margin-top:2px;transition:border-color 0.12s,background 0.12s}
-.toggle-row input[type=checkbox]:checked{background:#6366f1;border-color:#6366f1}
-.toggle-row input[type=checkbox]:checked::after{content:\'\';position:absolute;left:3px;top:1px;width:5px;height:9px;border:2px solid #fff;border-top:none;border-left:none;transform:rotate(45deg)}
-.settings-input{width:100%;padding:10px 14px;border:1.5px solid #e8e4de;border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#1c1917;background:#ffffff;transition:border-color 0.12s}
-.settings-input:focus{border-color:#6366f1}
+.btn-settings-primary{font-size:13px;font-weight:600;padding:8px 16px;background:var(--mds-pine,#1f4b3a);color:#fff;border:none;border-radius:var(--mds-radius-sm,10px);cursor:pointer;transition:background 0.12s;font-family:inherit}
+.btn-settings-primary:hover{filter:brightness(1.08)}
+.ntfy-link{display:inline-block;margin-top:6px;font-size:12px;font-family:ui-monospace,monospace;color:var(--mds-pine,#1f4b3a);background:var(--mds-surface-soft,#f3f0ea);border:1px solid var(--mds-line,rgba(26,31,28,.08));border-radius:6px;padding:6px 10px;text-decoration:none;word-break:break-all}
+.ntfy-link:hover{text-decoration:none}
+.toggle-row input[type=checkbox]{-webkit-appearance:none;appearance:none;width:16px;height:16px;border:1.5px solid var(--mds-line,rgba(26,31,28,.14));border-radius:4px;background:var(--mds-surface,#fffefb);cursor:pointer;position:relative;flex-shrink:0;margin-top:2px;transition:border-color 0.12s,background 0.12s}
+.toggle-row input[type=checkbox]:checked{background:var(--mds-pine,#1f4b3a);border-color:var(--mds-pine,#1f4b3a)}
+.toggle-row input[type=checkbox]:checked::after{content:'';position:absolute;left:3px;top:1px;width:5px;height:9px;border:2px solid #fff;border-top:none;border-left:none;transform:rotate(45deg)}
+.settings-input{width:100%;padding:10px 14px;border:1.5px solid var(--mds-line,rgba(26,31,28,.14));border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:var(--mds-ink,#1a1f1c);background:var(--mds-surface,#fffefb);transition:border-color 0.12s}
+.settings-input:focus{border-color:var(--mds-pine,#1f4b3a)}
 .settings-input::placeholder{color:#c0bbb5}
-.settings-label{display:block;font-size:11px;font-weight:600;color:#9ca3af;margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase}
-</style>
-</head>
-<body>
-<div class="app-shell">
-{_SIDEBAR_DESKTOP_}
+.settings-label{display:block;font-size:11px;font-weight:600;color:var(--mds-muted,#5c6b5a);margin-bottom:6px;letter-spacing:0.3px;text-transform:uppercase}
+"""
 
-<div class="main-content">
-<div style="display:none;align-items:center;gap:10px;padding:12px 16px;border-bottom:0.5px solid rgba(0,0,0,0.07);background:#eee9e2;position:sticky;top:0;z-index:2" id="mobile-topbar-settings">
-  <button class="nav-hamburger" onclick="openMobileDrawer()" aria-label="Open menu" style="display:none">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-  </button>
-  <span style="font-size:15px;font-weight:700;color:#1c1917">Settings</span>
-</div>
-<script>(function(){var t=document.getElementById('mobile-topbar-settings');if(t&&window.innerWidth<=768)t.style.display='flex';})();</script>
+SETTINGS_MAIN = """
 <div class="page-wrap">
   <div class="page-title">Settings</div>
 
@@ -8175,7 +8048,9 @@ SETTINGS_HTML = """<!DOCTYPE html>
   <div class="card">
     <div class="section-title">Account discovery</div>
     <div style="font-size:13px;color:#6b7280;margin-bottom:14px;line-height:1.5">
-      Scan your email inbox to find accounts you might want to add to Mighty. Only sender addresses are checked — no email content is read.
+      Scan your email inbox to find accounts you might want to add to Mighty.
+      Mighty uses sender addresses and related header signals from Gmail to
+      recognize known programs — it does not send mail or manage your inbox.
     </div>
     <a href="/email-scan" class="btn-sm" style="display:inline-block;text-decoration:none">🔍 Find accounts from email</a>
   </div>
@@ -8192,7 +8067,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
     </div>
     <div style="background:rgba(220,38,38,0.04);border:1px solid rgba(220,38,38,0.15);border-radius:8px;padding:14px;margin-top:8px">
       <div style="font-size:13px;font-weight:600;color:#dc2626;margin-bottom:4px">Permanently delete account</div>
-      <div style="font-size:12px;color:#9ca3af;margin-bottom:12px;line-height:1.5">Deletes your account and all data immediately. This cannot be undone.</div>
+      <div style="font-size:12px;color:#9ca3af;margin-bottom:12px;line-height:1.5">Deletes your account and all Mighty data immediately. For invite-only beta, <a href="/beta/restart" style="color:#059669">Factory reset</a> does the same for an email you still know the password for, then returns you to Create account. This cannot be undone.</div>
       <div id="del-acct-btn-wrap">
         <button class="btn-danger btn-danger-severe" onclick="showDelConfirm()">Delete my account</button>
       </div>
@@ -8208,10 +8083,6 @@ SETTINGS_HTML = """<!DOCTYPE html>
     </div>
   </div>
 </div>
-</div><!-- /main-content -->
-</div><!-- /app-shell -->
-{_SIDEBAR_MOBILE_}
-
 
 <script>
 var CSRF = '{csrf_token}';
@@ -8488,19 +8359,22 @@ function hideDelConfirm() {
 function deleteAccount() {
   var pw = document.getElementById('del-acct-pw').value;
   var errEl = document.getElementById('del-acct-err');
-  if (!pw) { errEl.textContent = 'Please enter your password to confirm.'; errEl.style.display = 'block'; return; }
-  fetch('/settings/delete-account', {
+  if (!pw) {{ errEl.textContent = 'Please enter your password to confirm.'; errEl.style.display = 'block'; return; }}
+  fetch('/settings/delete-account', {{
     method: 'POST',
-    headers: {'Content-Type': 'application/json','X-CSRF-Token': CSRF},
-    body: JSON.stringify({password: pw})
-  }).then(function(r) { return r.json(); }).then(function(d) {
-    if (d.ok) { window.location.href = '/'; }
-    else { errEl.textContent = d.error || 'Incorrect password.'; errEl.style.display = 'block'; }
-  }).catch(function() { errEl.textContent = 'Network error — please try again.'; errEl.style.display = 'block'; });
-}
+    headers: {{'Content-Type': 'application/json','X-CSRF-Token': CSRF}},
+    body: JSON.stringify({{password: pw}})
+  }}).then(function(r) {{ return r.json(); }}).then(function(d) {{
+    if (d.ok) {{
+      var q = '/?factory_reset=1';
+      if (d.email) q += '&email=' + encodeURIComponent(d.email);
+      window.location.href = q;
+    }}
+    else {{ errEl.textContent = d.error || 'Incorrect password.'; errEl.style.display = 'block'; }}
+  }}).catch(function() {{ errEl.textContent = 'Network error — please try again.'; errEl.style.display = 'block'; }});
+}}
 </script>
-</body>
-</html>"""
+"""
 
 APPROVE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -8575,14 +8449,45 @@ def logo_icon():
 def landing():
     if "user_id" in session:
         return redirect(_default_app_home_path())
-    return LANDING_HTML
+    html = LANDING_HTML
+    if request.args.get("factory_reset") == "1":
+        from urllib.parse import quote
 
-def _render_signup_html(error: str = "") -> str:
-    return (
-        SIGNUP_HTML
-        .replace("{signup_sub}", user_copy.SIGNUP_SUB)
-        .replace("{error}", error)
-        .replace("{csrf_token}", get_csrf_token())
+        email = (request.args.get("email") or "").strip().lower()
+        signup_href = "/signup"
+        if email:
+            signup_href = f"/signup?email={quote(email, safe='')}"
+        banner = (
+            '<div role="status" style="max-width:640px;margin:16px auto 0;padding:12px 16px;'
+            "background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:14px;"
+            'color:#065f46;line-height:1.5;text-align:center">'
+            f"{he(user_copy.SIGNUP_FACTORY_RESET_DONE)} "
+            f'<a href="{he(signup_href)}" style="color:#065f46;font-weight:600">'
+            "Create account</a>"
+            "</div>"
+        )
+        html = html.replace('<section class="hero">', banner + '\n<section class="hero">', 1)
+        # Point primary CTA at signup with email prefilled when available.
+        html = html.replace(
+            'href="/signup" class="btn-primary-lg"',
+            f'href="{he(signup_href)}" class="btn-primary-lg"',
+            1,
+        )
+    return html
+
+def _render_signup_html(
+    error: str = "",
+    email_value: str = "",
+    info: str = "",
+) -> str:
+    """CP-002A signup presentation — auth/validation/routing unchanged."""
+    from mighty.signup_ui import render_signup_page
+
+    return render_signup_page(
+        csrf_token=get_csrf_token(),
+        error_html=error,
+        email_value=email_value,
+        info_html=info,
     )
 
 
@@ -8590,7 +8495,13 @@ def _render_signup_html(error: str = "") -> str:
 def signup_page():
     if "user_id" in session:
         return redirect(_default_app_home_path())
-    return _render_signup_html()
+    email = (request.args.get("email") or "").strip().lower()
+    info = ""
+    if request.args.get("factory_reset") == "1":
+        info = (
+            f'<div class="info">{he(user_copy.SIGNUP_FACTORY_RESET_DONE)}</div>'
+        )
+    return _render_signup_html(email_value=email, info=info)
 
 @app.route("/signup", methods=["POST"])
 def signup():
@@ -8602,11 +8513,15 @@ def signup():
     password = request.form.get("password", "")
     if not email or "@" not in email or not password or len(password) < 6 or len(password) > 128:
         err = '<div class="err">Please enter a valid email and a password (6–128 characters).</div>'
-        return _render_signup_html(err)
+        return _render_signup_html(err, email_value=email)
     db = get_db()
     if db.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
-        err = '<div class="err">An account with that email already exists. <a href="/login">Sign in</a></div>'
-        return _render_signup_html(err)
+        from mighty.beta_restart_ui import signup_duplicate_account_error_html
+
+        return _render_signup_html(
+            signup_duplicate_account_error_html(email),
+            email_value=email,
+        )
     uid = secrets.token_hex(16)
     key = "mk_" + secrets.token_hex(20)
     db.execute(
@@ -8617,7 +8532,9 @@ def signup():
     session.permanent  = True
     session["user_id"] = uid
     session["email"]   = email
-    return redirect(_default_app_home_path())
+    # First-run: enter Discover My Accounts (CP-003). Returning logins use
+    # _default_app_home_path() via /login — do not conflate the two.
+    return redirect("/email-scan")
 
 @app.route("/enterprise-interest", methods=["POST"])
 def enterprise_interest():
@@ -8642,6 +8559,35 @@ def enterprise_interest():
         db.commit()
     return jsonify({"ok": True})
 
+def _login_next_value() -> str:
+    """Durable deep-link target for /login (query or form). Escaped for HTML attr."""
+    raw = (request.form.get("next") or request.args.get("next") or "").strip()
+    if not raw:
+        return ""
+    from urllib.parse import urlparse
+    from html import escape as _html_escape
+
+    try:
+        parsed = urlparse(raw)
+        if parsed.netloc or not raw.startswith("/") or raw.startswith("//"):
+            return ""
+        safe = raw
+    except Exception:
+        return ""
+    return _html_escape(safe, quote=True)
+
+
+def _render_login_html(*, error: str = "", status: int | None = None):
+    html = (
+        LOGIN_HTML.replace("{error}", error)
+        .replace("{csrf_token}", get_csrf_token())
+        .replace("{next}", _login_next_value())
+    )
+    if status is None:
+        return html
+    return html, status
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
@@ -8650,19 +8596,19 @@ def login():
             return redirect(_safe_redirect_path(request.args.get("next", "")))
         if request.args.get("reset") == "1":
             info = '<div style="font-size:13px;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:7px;padding:9px 12px;margin-bottom:14px">Password updated successfully. Sign in with your new password.</div>'
-            return LOGIN_HTML.replace("{error}", info).replace("{csrf_token}", get_csrf_token())
-        return LOGIN_HTML.replace("{error}", "").replace("{csrf_token}", get_csrf_token())
+            return _render_login_html(error=info)
+        return _render_login_html()
     # Rate limit: 10 attempts per minute per IP
     if not _rate_limit(request.remote_addr, "login", limit=10):
         err = '<div class="err">Too many attempts. Please wait a minute and try again.</div>'
-        return LOGIN_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token()), 429
+        return _render_login_html(error=err, status=429)
     check_csrf()
     email    = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
     row = get_db().execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
     if not row or not check_pw(row["password_hash"], password):
         err = '<div class="err">Incorrect email or password.</div>'
-        return LOGIN_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token())
+        return _render_login_html(error=err)
     session.permanent  = True
     session["user_id"] = row["id"]
     session["email"]   = row["email"]
@@ -9075,19 +9021,41 @@ def forgot_password():
     if request.method == "GET":
         return FORGOT_HTML.replace("{message}", "").replace("{csrf_token}", get_csrf_token())
     if not _rate_limit(request.remote_addr, "forgot", limit=5):
-        success = '<div class="info">If an account exists for that email, a reset link is on its way. Check your inbox (and spam folder).</div>'
-        return FORGOT_HTML.replace("{message}", success).replace("{csrf_token}", get_csrf_token())
+        # Same generic copy as success path when mailer is configured — avoid enumeration.
+        if not POSTMARK_API_KEY:
+            msg = (
+                '<div class="err">Password reset email is temporarily unavailable. '
+                "Please try again later or contact beta support.</div>"
+            )
+        else:
+            msg = (
+                '<div class="info">If an account exists for that email, a reset link is on its way. '
+                "Check your inbox (and spam folder).</div>"
+            )
+        return FORGOT_HTML.replace("{message}", msg).replace("{csrf_token}", get_csrf_token())
     check_csrf()
     email = request.form.get("email", "").strip().lower()
-    # Always show success message — prevents user enumeration
-    success = '<div class="info">If an account exists for that email, a reset link is on its way. Check your inbox (and spam folder).</div>'
+    if not POSTMARK_API_KEY:
+        # Do not claim a link was sent when the mailer is not configured.
+        msg = (
+            '<div class="err">Password reset email is temporarily unavailable. '
+            "Please try again later or contact beta support.</div>"
+        )
+        return FORGOT_HTML.replace("{message}", msg).replace("{csrf_token}", get_csrf_token())
+    # Always show success message when mailer is configured — prevents user enumeration
+    success = (
+        '<div class="info">If an account exists for that email, a reset link is on its way. '
+        "Check your inbox (and spam folder).</div>"
+    )
     if email:
         db = get_db()
         user = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if user:
             token = secrets.token_urlsafe(32)
-            db.execute("INSERT INTO password_resets (token, user_id, created_at) VALUES (?,?,?)",
-                       (token, user["id"], iso()))
+            db.execute(
+                "INSERT INTO password_resets (token, user_id, created_at) VALUES (?,?,?)",
+                (token, user["id"], iso()),
+            )
             db.commit()
             reset_url = f"{base_url()}/reset-password/{token}"
             send_password_reset_email(email, reset_url)
@@ -9615,8 +9583,26 @@ def dashboard():
 @app.route("/dashboard/legacy")
 @require_login
 def dashboard_legacy():
-    """Explicit legacy dashboard — developer/debug only when Home OS is default."""
+    """Authenticated daily home when Home OS is not the default landing.
+
+    Customer path (production): body is re-framed in the shared MDS authenticated
+    shell (UBE component-family migration) so Home shares chrome with Accounts /
+    Activity / Settings. When Home OS *is* the default landing, redirect to
+    ``/home`` (or research Home OS). Developer escape: ``?keep=1`` serves the
+    legacy Inter sidebar document for debug comparison.
+    """
     _rt = _RouteTimer("/dashboard/legacy")
+    _keep_legacy_chrome = bool(request.args.get("keep"))
+    if not _keep_legacy_chrome:
+        if (
+            _home_os_gate is not None
+            and _home_os_gate.home_os_is_default_landing()
+        ):
+            if _research_home is not None and _research_home.is_active_research_session(session):
+                _rt.finish()
+                return redirect("/research/home-os")
+            _rt.finish()
+            return redirect("/home")
     # Guarded staging research Home — fictional session, no customer DB row.
     # Only reachable when Home OS is not the default, or via this explicit route.
     if _research_home is not None and _research_home.is_active_research_session(session):
@@ -10122,11 +10108,9 @@ def dashboard_legacy():
     except Exception:
         pass
 
-    _suppress_demo_content = (
-        _has_synced_data
-        or _account_count > 0
-        or _email_suggestion_count > 0
-    )
+    # CP-006: customer dashboard never fabricates demo recommendations by default.
+    # Explicit demo mode uses a separate presentation path (?demo=1 / DEMO_MODE).
+    _suppress_demo_content = True
 
     # ── Action items: persistent + session-access needs-login accounts ──
     _open_items = []
@@ -10734,6 +10718,57 @@ def dashboard_legacy():
                 _extension_info.get("extension_version")
                 or _extension_info.get("extension_last_seen_at")
             )
+        # CP-005: one-shot first-success beat before ambient all-clear.
+        _fs_provider = None
+        _fs_partial = False
+        try:
+            from mighty.account_status import UP_TO_DATE as _UP_TO_DATE_FS
+            from mighty.home_state import HomeState as _HomeStateFS
+
+            _attn_clear = (
+                _attention_view is None
+                or getattr(_attention_view, "primary", None) is None
+            )
+            _health = getattr(_home_result, "health", None)
+            _portfolio_needs_user = bool(
+                _health is not None
+                and (
+                    getattr(_health, "needs_login", 0)
+                    or getattr(_health, "needs_attention", 0)
+                )
+            )
+            if (
+                _attn_clear
+                and not _portfolio_needs_user
+                and _home_result.state
+                not in (
+                    _HomeStateFS.EMPTY,
+                    _HomeStateFS.WAITING,
+                    _HomeStateFS.UPDATE,
+                )
+                and not session.get("home_first_success_seen")
+            ):
+                _connected = list(_home_result.health.connected_names or [])
+                if not _connected and _home_account_statuses:
+                    _connected = [
+                        getattr(a, "display_name", None) or getattr(a, "source", "")
+                        for a in _home_account_statuses
+                        if getattr(a, "status", None) == _UP_TO_DATE_FS
+                    ]
+                    _connected = [n for n in _connected if n]
+                if _connected:
+                    _fs_provider = _connected[0]
+                    _enrolled = len(_home_account_statuses or [])
+                    _up = sum(
+                        1
+                        for a in (_home_account_statuses or [])
+                        if getattr(a, "status", None) == _UP_TO_DATE_FS
+                    )
+                    _fs_partial = bool(_enrolled and _up < _enrolled)
+                    session["home_first_success_seen"] = "1"
+        except Exception:
+            _fs_provider = None
+            _fs_partial = False
         return render_home_page(
             _home_result,
             first_name=_first_name,
@@ -10746,6 +10781,9 @@ def dashboard_legacy():
             recent_wins=_recent_wins,
             gmail_connected=_gmail_connected,
             chrome_active=_chrome_active,
+            csrf_token=get_csrf_token(),
+            first_success_provider=_fs_provider,
+            first_success_partial=_fs_partial,
         )
 
     hero_section_html = _render_home_hero()
@@ -11758,46 +11796,20 @@ def dashboard_legacy():
     else:
         new_accounts_banner = ""
 
+    # Legacy "How Mighty works" dashboard modal retired. First-run orientation is
+    # Discover My Accounts (CP-003) via signup → /email-scan. The users.onboarded
+    # column remains for schema compatibility but no longer gates customer UI.
     onboarding_modal = ""
-    if not user["onboarded"]:
-        onboarding_modal = f"""
-<div id="onboarding-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px">
-  <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:28px 28px 24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
-    <div style="font-size:28px;text-align:center;margin-bottom:12px">&#128272;</div>
-    <h2 style="font-size:20px;font-weight:700;text-align:center;color:#111;margin:0 0 8px">{user_copy.ONBOARDING_TITLE}</h2>
-    <p style="font-size:14px;color:#4b5563;text-align:center;margin:0 0 20px;line-height:1.6">
-      {user_copy.ONBOARDING_BODY}
-      {user_copy.ONBOARDING_CHROME_LINE}
-    </p>
-    <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;margin-bottom:20px">
-      <div style="font-size:13px;color:#374151;display:flex;flex-direction:column;gap:8px">
-        <div>&#128187; <strong>Mighty in Chrome:</strong> {user_copy.ROLE_EXTENSION_DESC}</div>
-        <div>&#128202; <strong>Home:</strong> {user_copy.ROLE_DASHBOARD_DESC}</div>
-        <div>&#128274; <strong>Manual step:</strong> {user_copy.MANUAL_STEP_LINE}</div>
-      </div>
-    </div>
-    <button onclick="dismissOnboarding()" style="width:100%;padding:12px;background:#111;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">
-      Got it &mdash; take me to my dashboard
-    </button>
-  </div>
-</div>
-<script>
-function dismissOnboarding() {{
-  document.getElementById('onboarding-overlay').style.display = 'none';
-  var csrf = (document.querySelector('input[name="_csrf"]') || {{}}).value || '';
-  fetch('/api/onboarding/complete', {{
-    method: 'POST',
-    headers: {{'X-CSRF-Token': csrf, 'Content-Type': 'application/json'}},
-    credentials: 'same-origin'
-  }}).catch(function(){{}});
-}}
-</script>"""
 
     _csrf = get_csrf_token()
     _show_activity = _show_activity_nav(db, uid)
-    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
-        'dashboard', user["email"], _csrf, show_activity=_show_activity,
-    )
+    if _keep_legacy_chrome:
+        _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
+            "dashboard", user["email"], _csrf, show_activity=_show_activity,
+        )
+    else:
+        # Customer path: Inter sidebar removed; MDS shell owns navigation.
+        _sidebar_desktop, _sidebar_mobile = "", ""
 
     demo_mode_banner = ""
     if demo_mode_active:
@@ -11848,7 +11860,7 @@ function dismissOnboarding() {{
     _awaiting_sync_poll = "true" if _account_count > 0 else "false"
 
     _rt.finish()
-    return (DASHBOARD_HTML
+    filled = (DASHBOARD_HTML
             .replace("{_SIDEBAR_DESKTOP_}",        _sidebar_desktop)
             .replace("{_SIDEBAR_MOBILE_}",         _sidebar_mobile)
             .replace("{email}",                   he(user["email"]))
@@ -11895,6 +11907,14 @@ function dismissOnboarding() {{
             .replace("{dash_mobile_worker_toast}", user_copy.MOBILE_WORKER_TOAST)
             .replace("{dash_ext_install_toast}", user_copy.EXT_INSTALL_TOAST)
             .replace("{dash_status_label_updating}", user_copy.STATUS_LABEL_UPDATING))
+    if _keep_legacy_chrome:
+        return filled
+    return _dashboard_as_mds_authenticated_document(
+        filled_html=filled,
+        display_name=_shell_display_name(user),
+        csrf_token=_csrf,
+        show_activity=_show_activity,
+    )
 
 @app.route("/settings")
 @require_login
@@ -11916,13 +11936,12 @@ def settings():
     _csrf = get_csrf_token()
     notif_pref = user["notification_pref"] if user["notification_pref"] else "quiet"
     _show_activity = _show_activity_nav(db, user["id"])
-    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
-        'settings', user["email"], _csrf, show_activity=_show_activity,
+    from mighty.authenticated_app_shell import (
+        NAV_SETTINGS,
+        bridge_page_css_for_mds,
+        render_authenticated_document,
     )
-    _rt.finish()
-    return (SETTINGS_HTML
-            .replace("{_SIDEBAR_DESKTOP_}",        _sidebar_desktop)
-            .replace("{_SIDEBAR_MOBILE_}",         _sidebar_mobile)
+    main = _interpolate_user_copy(SETTINGS_MAIN
             .replace("{email}",                   he(user["email"]))
             .replace("{api_key}",                 raw_key)
             .replace("{api_key_masked}",          he(api_key_masked))
@@ -11938,6 +11957,191 @@ def settings():
             .replace("{notification_pref}",       notif_pref)
             .replace("{preferred_name}",          he(user["preferred_name"] or ""))
             .replace("{csrf_token}",              _csrf))
+    _rt.finish()
+    return render_authenticated_document(
+        title="Settings",
+        active=NAV_SETTINGS,
+        display_name=_shell_display_name(user),
+        csrf_token=_csrf,
+        main_html=main,
+        show_activity=_show_activity,
+        home_href=_default_app_home_path(),
+        body_class="settings-app",
+        extra_css=SETTINGS_PAGE_CSS + bridge_page_css_for_mds() + """
+.mds.app-auth input[type=radio]{accent-color:var(--mds-pine,#1f4b3a)!important}
+.mds.app-auth a[href="/extension-setup"],
+.mds.app-auth a[href="/beta/restart"]{color:var(--mds-pine,#1f4b3a)!important;background:var(--mds-pine-soft,#e8f2ef)!important;border-color:var(--mds-line,rgba(26,31,28,.14))!important}
+""",
+        escape=he,
+    )
+
+@app.route("/download/mighty-in-chrome.zip")
+@require_login
+def download_mighty_in_chrome():
+    """Sideload package already pointed at this environment's BASE_URL."""
+    from mighty.extension_package import build_extension_zip
+
+    target = base_url()
+    payload = build_extension_zip(target)
+    resp = make_response(payload)
+    resp.headers["Content-Type"] = "application/zip"
+    resp.headers["Content-Disposition"] = (
+        'attachment; filename="mighty-in-chrome.zip"'
+    )
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/api/extension/setup-status")
+@require_login
+def api_extension_setup_status():
+    """Whether Mighty in Chrome has heartbeated recently for this user.
+
+    Used by /extension-setup so an already-installed extension can unlock
+    without relying solely on sessionStorage injection.
+    """
+    from datetime import timedelta
+
+    from mighty.admin_local_time import parse_admin_timestamp
+
+    row = get_db().execute(
+        "SELECT extension_version, extension_last_seen_at FROM users WHERE id=?",
+        (session["user_id"],),
+    ).fetchone()
+    last_seen = None
+    version = None
+    connected = False
+    if row is not None:
+        version = (row["extension_version"] or "").strip() or None
+        raw_seen = (row["extension_last_seen_at"] or "").strip() or None
+        if raw_seen:
+            dt = parse_admin_timestamp(raw_seen)
+            if dt is not None:
+                last_seen = dt.isoformat().replace("+00:00", "Z")
+                # Fresh enough for setup handoff (covers already-installed + reload).
+                age = datetime.now(timezone.utc) - (
+                    dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                )
+                connected = age <= timedelta(minutes=30)
+    if connected:
+        try:
+            from mighty.extension_setup_diagnostics import record_handshake_event
+
+            record_handshake_event(
+                get_db(),
+                session["user_id"],
+                "ui_connected",
+                ok=True,
+                detail="setup-status connected=true",
+                source="setup-status",
+            )
+        except Exception:
+            pass
+    return jsonify(
+        {
+            "connected": connected,
+            "extension_version": version,
+            "extension_last_seen_at": last_seen,
+        }
+    )
+
+
+@app.route("/api/amex/value-pipeline-diagnostics")
+@require_login
+def api_amex_value_pipeline_diagnostics():
+    """Beta: Amex value-pipeline stage report (Session 2 Learning Blocker)."""
+    from mighty.amex_value_pipeline import summarize_pipeline
+
+    return jsonify(summarize_pipeline(get_db(), session["user_id"]))
+
+
+@app.route("/api/extension/setup-diagnostics")
+@require_login
+def api_extension_setup_diagnostics():
+    """Beta: full handshake stage report for Founder detection debugging."""
+    from mighty.extension_setup_diagnostics import build_diagnostics_payload
+
+    db = get_db()
+    uid = session["user_id"]
+    row = db.execute(
+        "SELECT api_key, email FROM users WHERE id=?", (uid,)
+    ).fetchone()
+    payload = build_diagnostics_payload(
+        db,
+        uid,
+        api_key=row["api_key"] if row else None,
+        session_email=row["email"] if row else session.get("email"),
+    )
+    # Page-side can mark meta present when calling this with ?meta=1
+    if request.args.get("meta") == "1":
+        from mighty.extension_setup_diagnostics import record_handshake_event
+
+        record_handshake_event(
+            db,
+            uid,
+            "page_meta_present",
+            ok=bool(row and row["api_key"]),
+            detail="meta tag rendered for session user",
+            source="setup-page",
+        )
+        payload = build_diagnostics_payload(
+            db,
+            uid,
+            api_key=row["api_key"] if row else None,
+            session_email=row["email"] if row else session.get("email"),
+        )
+    return jsonify(payload)
+
+
+@app.route("/api/extension/setup-handshake", methods=["POST"])
+def api_extension_setup_handshake():
+    """Beta: extension (or page) reports a handshake stage.
+
+    Auth: X-Mighty-Key (extension) or logged-in session (page).
+    """
+    from mighty.extension_setup_diagnostics import record_handshake_event
+
+    user = None
+    source = "unknown"
+    # Prefer API key so the extension can report before cookies exist.
+    data = request.get_json(force=True, silent=True) or {}
+    key = (
+        (request.headers.get("X-Mighty-Key") or "").strip()
+        or str(data.get("api_key") or "").strip()
+    )
+    if key:
+        user = get_db().execute(
+            "SELECT * FROM users WHERE api_key=?", (key,)
+        ).fetchone()
+        source = "extension"
+    if user is None and session.get("user_id"):
+        user = get_db().execute(
+            "SELECT * FROM users WHERE id=?", (session["user_id"],)
+        ).fetchone()
+        source = "page"
+    if user is None:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    stage = (data.get("stage") or "").strip()
+    if not stage:
+        return jsonify({"error": "stage required"}), 400
+    ok = data.get("ok", True)
+    if isinstance(ok, str):
+        ok = ok.lower() not in ("0", "false", "no")
+    detail = data.get("detail")
+    client_source = (data.get("source") or source or "unknown")[:40]
+    event = record_handshake_event(
+        get_db(),
+        user["id"],
+        stage,
+        ok=bool(ok),
+        detail=str(detail) if detail is not None else None,
+        source=client_source,
+    )
+    # Heartbeat path: accepting a version header here is not enough; accounts
+    # endpoint remains the canonical heartbeat. This only logs the stage.
+    return jsonify({"ok": True, "event": event})
+
 
 @app.route("/extension-setup")
 @require_login
@@ -11946,60 +12150,16 @@ def extension_setup():
     Contains the key in a machine-readable meta tag so the extension can
     extract it without user copy-paste.
     """
+    from mighty.extension_setup_ui import render_extension_setup_page
+
     user = get_db().execute("SELECT api_key FROM users WHERE id=?", (session["user_id"],)).fetchone()
-    key  = user["api_key"] if user else ""
-    return f"""<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8">
-<meta name="mighty-api-key" content="{he(key)}">
-<title>Mighty Extension Setup</title>
-<style>
-  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-    display:flex;flex-direction:column;align-items:center;justify-content:center;
-    min-height:100vh;margin:0;background:#f0fdf4;color:#1c1917}}
-  .card{{background:#fff;border:1px solid #bbf7d0;border-radius:16px;
-    padding:40px 48px;text-align:center;max-width:440px;
-    box-shadow:0 4px 24px rgba(5,150,105,0.1)}}
-  .icon{{font-size:48px;margin-bottom:16px}}
-  h1{{font-size:20px;font-weight:700;margin:0 0 8px;color:#065f46}}
-  p{{font-size:14px;color:#6b7280;line-height:1.6;margin:0 0 24px}}
-  .status{{font-size:13px;font-weight:600;padding:10px 16px;border-radius:8px;
-    background:#f0fdf4;border:1px solid #bbf7d0;color:#059669}}
-  .spinner{{display:inline-block;width:14px;height:14px;border:2px solid #bbf7d0;
-    border-top-color:#059669;border-radius:50%;animation:spin 0.7s linear infinite;
-    margin-right:8px;vertical-align:middle}}
-  @keyframes spin{{to{{transform:rotate(360deg)}}}}
-</style>
-</head><body>
-<div class="card">
-  <div class="icon">🔌</div>
-  <h1>{user_copy.EXT_SETUP_TITLE}</h1>
-  <p>{user_copy.EXT_SETUP_BODY}</p>
-  <div class="status" id="status">
-    <span class="spinner"></span> {user_copy.EXT_SETUP_WAITING}
-  </div>
-</div>
-<script>
-  // Extension sets mighty_setup_done in sessionStorage when it reads the key
-  const check = setInterval(() => {{
-    if (sessionStorage.getItem('mighty_setup_done')) {{
-      clearInterval(check);
-      document.getElementById('status').innerHTML = '✓ {user_copy.EXT_SETUP_SUCCESS}';
-      document.getElementById('status').style.background = '#f0fdf4';
-    }}
-  }}, 500);
-  // Fallback: if extension never confirms, show actionable guidance (not a false success)
-  setTimeout(() => {{
-    if (!sessionStorage.getItem('mighty_setup_done')) {{
-      document.getElementById('status').innerHTML =
-        '⚠ {user_copy.EXT_SETUP_NOT_DETECTED}';
-      document.getElementById('status').style.background = '#fffbeb';
-      document.getElementById('status').style.borderColor = '#fde68a';
-      document.getElementById('status').style.color = '#92400e';
-    }}
-  }}, 8000);
-</script>
-</body></html>""", 200, {"Content-Type": "text/html"}
+    key = user["api_key"] if user else ""
+    html = render_extension_setup_page(
+        api_key=key or "",
+        home_href=_default_app_home_path(),
+        diagnostics=True,
+    )
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 @app.route("/settings/export-csv")
@@ -12118,31 +12278,180 @@ def delete_account():
     user     = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     if not user or not check_pw(user["password_hash"], password):
         return jsonify({"error": "Incorrect password."}), 403
-    db.execute("DELETE FROM push_subscriptions WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM actions WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM password_resets WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM account_credentials WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM account_data WHERE user_id=?", (user_id,))
-    # Orphan cleanup — tables added after the original delete_account was written
-    db.execute("DELETE FROM field_history WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM field_observations WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM approved_domains WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM privacy_audit_log WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM field_candidates WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM reminder_snoozes WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM intent_history WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM benefit_feedback WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM notifications_sent WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM archived_benefits WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM action_items WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM benefit_corrections WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM email_connections WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM email_suggestions WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM pending_2fa WHERE user_id=?", (user_id,))
-    db.execute("DELETE FROM users WHERE id=?", (user_id,))
+    email = (user["email"] or "").strip().lower()
+    _wipe_user_rows(db, user_id)
     db.commit()
     session.clear()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "email": email})
+
+
+def _wipe_user_rows(db, user_id: str) -> None:
+    """Delete all rows owned by a user. Caller commits."""
+    for table in (
+        "push_subscriptions",
+        "actions",
+        "password_resets",
+        "account_credentials",
+        "account_data",
+        "field_history",
+        "field_observations",
+        "approved_domains",
+        "privacy_audit_log",
+        "field_candidates",
+        "reminder_snoozes",
+        "intent_history",
+        "benefit_feedback",
+        "notifications_sent",
+        "archived_benefits",
+        "action_items",
+        "benefit_corrections",
+        "email_connections",
+        "email_suggestions",
+        "pending_2fa",
+        # Best-effort for tables that may not exist on older DBs
+        "account_discovery",
+        "discovery_candidates",
+        "discovery_events",
+        "action_execution_receipts",
+        "account_snapshots",
+        "account_changes",
+        "attention_overlays",
+        "recovery_cases",
+        "provider_session_state",
+        "user_policies",
+        "user_policy",
+    ):
+        try:
+            db.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+        except Exception:
+            pass
+    db.execute("DELETE FROM users WHERE id=?", (user_id,))
+
+
+def _render_beta_restart_html(email: str = "", error: str = "") -> str:
+    from mighty.beta_restart_ui import render_beta_restart_page
+
+    return render_beta_restart_page(
+        csrf_token=get_csrf_token(),
+        email=email,
+        error_html=error,
+    )
+
+
+@app.route("/beta/restart", methods=["GET", "POST"])
+def beta_restart():
+    """Factory reset: delete Mighty account/data, end session, return to public landing."""
+    if request.method == "GET":
+        if "user_id" in session and not request.args.get("email"):
+            # Signed-in testers can reset their own account without retyping email.
+            email = (session.get("email") or "").strip().lower()
+        else:
+            email = (request.args.get("email") or "").strip().lower()
+        return _render_beta_restart_html(email=email)
+
+    if not _rate_limit(request.remote_addr, "beta_restart", limit=5):
+        err = '<div class="err">Too many attempts. Please wait a minute and try again.</div>'
+        return _render_beta_restart_html(error=err), 429
+    check_csrf()
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+    confirmed = request.form.get("confirm_wipe") == "1"
+    if not email or "@" not in email or not password or len(password) < 6 or len(password) > 128:
+        err = '<div class="err">Enter a valid email and your current Mighty password.</div>'
+        return _render_beta_restart_html(email=email, error=err)
+    if not confirmed:
+        err = f'<div class="err">{he(user_copy.BETA_RESTART_NEED_CONFIRM)}</div>'
+        return _render_beta_restart_html(email=email, error=err)
+
+    db = get_db()
+    row = db.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+    if not row:
+        err = (
+            f'<div class="err">{he(user_copy.BETA_RESTART_NO_ACCOUNT)} '
+            f'<a href="/signup">Create account</a></div>'
+        )
+        return _render_beta_restart_html(email=email, error=err)
+    # Password ownership is the gate — including ADMIN_EMAIL (Founder dogfood).
+    if not check_pw(row["password_hash"], password):
+        err = (
+            f'<div class="err">{he(user_copy.BETA_RESTART_WRONG_PASSWORD)} '
+            f'<a href="/forgot-password">Forgot password</a></div>'
+        )
+        return _render_beta_restart_html(email=email, error=err)
+
+    _wipe_user_rows(db, row["id"])
+    db.commit()
+    session.clear()
+    # Factory reset: public beginning — Create account as if never seen.
+    from urllib.parse import quote
+
+    return redirect(f"/?factory_reset=1&email={quote(email, safe='')}")
+
+
+@app.route("/admin/founder-reset")
+@require_admin
+def admin_founder_reset_page():
+    """Operator UI: wipe a Founder test account without repository access."""
+    csrf = get_csrf_token()
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Founder reset — Mighty</title>
+<style>
+body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:480px;margin:48px auto;padding:0 16px;color:#1c1917}}
+h1{{font-size:20px;margin:0 0 8px}}
+p{{font-size:14px;color:#6b7280;line-height:1.5}}
+label{{display:block;font-size:12px;font-weight:600;margin:16px 0 6px}}
+input{{width:100%;padding:10px 12px;border:1px solid #e8e4de;border-radius:8px;font-size:14px;box-sizing:border-box}}
+button{{margin-top:16px;width:100%;padding:12px;border:none;border-radius:8px;background:#dc2626;color:#fff;font-weight:700;font-size:14px;cursor:pointer}}
+#msg{{margin-top:12px;font-size:13px}}
+a{{color:#059669}}
+</style></head><body>
+<h1>Founder test reset</h1>
+<p>Wipe one Mighty account and all of its data on this environment. Prefer asking the tester to use <a href="/beta/restart">Factory reset</a> when they still know their password — that signs them out and returns them to Create account.</p>
+<label>Account email to wipe</label>
+<input id="email" type="email" placeholder="founder@example.com" autocomplete="off">
+<button type="button" onclick="wipe()">Wipe account</button>
+<div id="msg"></div>
+<p style="margin-top:24px"><a href="/admin/">← Admin</a></p>
+<script>
+const CSRF = {json.dumps(csrf)};
+function wipe() {{
+  const email = (document.getElementById('email').value || '').trim();
+  const msg = document.getElementById('msg');
+  if (!email) {{ msg.textContent = 'Enter an email.'; msg.style.color='#dc2626'; return; }}
+  if (!confirm('Permanently wipe ' + email + ' on this environment?')) return;
+  msg.textContent = 'Working…'; msg.style.color='#6b7280';
+  fetch('/api/admin/wipe-user', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json', 'X-CSRF-Token': CSRF}},
+    body: JSON.stringify({{email: email}})
+  }}).then(r => r.json().then(d => ({{ok: r.ok, status: r.status, d}})))
+    .then(({{ok, d}}) => {{
+      msg.style.color = ok ? '#059669' : '#dc2626';
+      msg.textContent = ok ? ('Wiped ' + email + '. They can create a new account.') : (d.error || 'Failed');
+    }}).catch(() => {{ msg.style.color='#dc2626'; msg.textContent='Network error'; }});
+}}
+</script>
+</body></html>"""
+
+
+@app.route("/api/admin/wipe-user", methods=["POST"])
+@require_admin
+def api_admin_wipe_user():
+    check_csrf()
+    data = request.get_json(force=True, silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return jsonify({"error": "Valid email required."}), 400
+    db = get_db()
+    row = db.execute("SELECT id, email FROM users WHERE lower(email)=?", (email,)).fetchone()
+    if not row:
+        return jsonify({"error": "No account with that email on this environment."}), 404
+    if _is_admin_user(row) and row["id"] == session.get("user_id"):
+        return jsonify({"error": "Refusing to wipe the signed-in admin account."}), 400
+    _wipe_user_rows(db, row["id"])
+    db.commit()
+    return jsonify({"ok": True, "email": email})
+
 
 @app.route("/download/mighty_mcp.py")
 @require_login
@@ -12207,43 +12516,38 @@ def activity_page():
         )
         error = "We couldn’t load Activity right now. Try again in a moment."
 
-    # On /activity itself, keep the nav item visible so the active page is labeled.
-    sidebar_desktop, sidebar_mobile, _ = _sidebar_parts(
-        "activity", user["email"], csrf, show_activity=True,
+    from mighty.authenticated_app_shell import (
+        NAV_ACTIVITY,
+        bridge_page_css_for_mds,
+        render_authenticated_document,
     )
+
+    # On /activity itself, keep the nav item visible so the active page is labeled.
     main = render_activity_main(
         projection, escape=he, csrf_token=csrf, error=error,
     )
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<meta name="color-scheme" content="light">
-<title>Activity — Mighty</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-{BASE_CSS}
-.main-content{{height:100vh;overflow:hidden;display:flex;flex-direction:column}}
-{ACTIVITY_CSS}
-#mighty-toast{{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c1917;color:#fff;font-size:13px;font-weight:500;padding:10px 18px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.18);z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.2s}}
-#mighty-toast.show{{opacity:1}}
-#mighty-toast.hide{{opacity:0}}
-</style>
-</head>
-<body>
-<div class="app-shell">
-{sidebar_desktop}
-<div class="main-content">
-{main}
-</div>
-</div>
-{sidebar_mobile}
-</body>
-</html>"""
-    return html
+    extra_css = (
+        ACTIVITY_CSS
+        + bridge_page_css_for_mds()
+        + """
+#mighty-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c1917;color:#fff;font-size:13px;font-weight:500;padding:10px 18px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.18);z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.2s}
+#mighty-toast.show{opacity:1}
+#mighty-toast.hide{opacity:0}
+.mds.app-auth .activity-page{padding:0;background:transparent}
+"""
+    )
+    return render_authenticated_document(
+        title="Activity",
+        active=NAV_ACTIVITY,
+        display_name=_shell_display_name(user),
+        csrf_token=csrf,
+        main_html=main,
+        show_activity=True,
+        home_href=_default_app_home_path(),
+        body_class="activity-app",
+        extra_css=extra_css,
+        escape=he,
+    )
 
 
 @app.route("/api/activity")
@@ -12861,6 +13165,31 @@ def api_attention_snooze(attention_id):
     except Exception as e:
         print(f"[AttentionAPI] snooze error: {e}", flush=True)
         return jsonify({"error": "attention_command_failed"}), 503
+
+
+@app.route("/attention/<attention_id>/snooze", methods=["POST"])
+@require_login
+def attention_snooze_form(attention_id):
+    """Form-friendly Not now — snooze Attention and return to Home."""
+    from datetime import datetime, timezone
+
+    from mighty.attention_commands import command_snooze
+    from mighty.attention_store import AttentionStoreCommandError
+
+    check_csrf()
+    user = _session_user_row()
+    try:
+        command_snooze(
+            get_db(),
+            user["id"],
+            attention_id,
+            now=datetime.now(timezone.utc),
+        )
+    except AttentionStoreCommandError:
+        pass
+    except Exception as e:
+        print(f"[AttentionForm] snooze error: {e}", flush=True)
+    return redirect("/dashboard")
 
 
 @app.route("/api/attention/<attention_id>/dismiss", methods=["POST"])
@@ -14937,8 +15266,6 @@ function clearAndRediscoverDash(source) {{
 }}
 document.addEventListener('keydown', function(e) {{
   if (e.key === 'Escape') {{
-    var oo = document.getElementById('onboarding-overlay');
-    if (oo && oo.style.display !== 'none') dismissOnboarding();
     var co = document.getElementById('dash-modal-overlay');
     if (co && co.classList.contains('open')) closeDashConnectModal();
     var fo = document.getElementById('dash-field-overlay');
@@ -15069,119 +15396,38 @@ function restoreArchivedBenefit(idx) {{
 }}
 </script>
 
-<!-- Credential edit modal -->
+<!-- Provider access guidance (no password into Mighty) -->
 <div id="dash-cred-overlay" onclick="if(event.target===this)closeCredModal()"
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:310;align-items:center;justify-content:center"></div>
 <div id="dash-cred-modal"
      style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
             background:#fff;border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,0.18);
-            width:min(400px,92vw);padding:24px;z-index:311">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
-    <h3 id="dash-cred-title" style="font-size:15px;font-weight:700;color:#1c1917;margin:0">Edit login</h3>
+            width:min(420px,92vw);padding:24px;z-index:311">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+    <h3 id="dash-cred-title" style="font-size:15px;font-weight:700;color:#1c1917;margin:0">Sign in at the provider</h3>
     <button onclick="closeCredModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:2px 6px">&times;</button>
   </div>
-  <div style="margin-bottom:12px">
-    <label for-field="dash-cred-username" style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Username or email</label>
-    <input id="dash-cred-username" type="text" autocomplete="off" placeholder="Username or email"
-           style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:9px 11px;font-size:14px;color:#1c1917;outline:none">
-  </div>
-  <div style="margin-bottom:12px">
-    <label for-field="dash-cred-password" style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:4px">Password</label>
-    <input id="dash-cred-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"
-           style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:9px 11px;font-size:14px;color:#1c1917;outline:none">
-  </div>
-  <details style="margin-bottom:16px">
-    <summary style="font-size:12px;color:#9ca3af;cursor:pointer;user-select:none">Authenticator app 2FA (optional)</summary>
-    <input id="dash-cred-totp" type="text" placeholder="TOTP secret key"
-           style="width:100%;box-sizing:border-box;border:1px solid #e5e7eb;border-radius:7px;padding:9px 11px;font-size:14px;margin-top:8px">
-    <div style="font-size:11px;color:#9ca3af;margin-top:4px">Disable &amp; re-enable 2FA on the site, choose "Enter key manually", paste the string here.</div>
-  </details>
+  <p id="dash-cred-body" style="font-size:14px;color:#4b5563;line-height:1.55;margin:0 0 16px">
+    Mighty never asks for provider passwords. Open the site in Chrome while Mighty in Chrome
+    is enabled — you sign in there; Mighty watches and updates Home.
+  </p>
   <input id="dash-cred-source" type="hidden">
-  <div style="display:flex;gap:8px;justify-content:flex-end">
-    <button onclick="closeCredModal()" style="padding:8px 16px;border:1px solid #e5e7eb;border-radius:7px;background:#fff;font-size:13px;color:#6b7280;cursor:pointer">Cancel</button>
-    <button onclick="saveCredModal()" style="padding:8px 18px;border:none;border-radius:7px;background:#6366f1;color:#fff;font-size:13px;font-weight:600;cursor:pointer">Save &amp; Sync</button>
+  <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+    <button onclick="closeCredModal()" style="padding:8px 16px;border:1px solid #e5e7eb;border-radius:7px;background:#fff;font-size:13px;color:#6b7280;cursor:pointer">Close</button>
+    <a id="dash-cred-open" href="/extension-setup" style="padding:8px 18px;border:none;border-radius:7px;background:#059669;color:#fff;font-size:13px;font-weight:600;text-decoration:none;display:inline-block">Set up Mighty in Chrome</a>
   </div>
-  <div id="dash-cred-error" style="display:none;margin-top:10px;font-size:12px;color:#ef4444"></div>
 </div>
 <script>
 function openCredModal(src, displayName) {{
-  document.getElementById('dash-cred-title').textContent = (displayName || src) + ' — Edit login';
+  document.getElementById('dash-cred-title').textContent =
+    (displayName || src) + ' — sign in on their site';
   document.getElementById('dash-cred-source').value = src;
-  document.getElementById('dash-cred-password').value = '';
-  document.getElementById('dash-cred-totp').value = '';
-  document.getElementById('dash-cred-error').style.display = 'none';
-  // Apply per-site credential labels from LOGIN_HINTS
-  var hints = (typeof _LOGIN_HINTS !== 'undefined' && _LOGIN_HINTS[src]) || {{}};
-  var uLabel = hints.u || 'Username or email';
-  var pLabel = hints.p || 'Password';
-  var uType  = hints.u_type || 'text';
-  document.querySelector('label[for-field="dash-cred-username"]').textContent = uLabel.toUpperCase();
-  document.querySelector('label[for-field="dash-cred-password"]').textContent = pLabel.toUpperCase();
-  var uInput = document.getElementById('dash-cred-username');
-  uInput.type = uType;
-  uInput.placeholder = uLabel;
-  uInput.value = 'Loading…';
   document.getElementById('dash-cred-overlay').style.display = 'flex';
   document.getElementById('dash-cred-modal').style.display = 'block';
-  fetch('/api/credentials/' + encodeURIComponent(src) + '/username')
-    .then(function(r) {{ return r.json(); }})
-    .then(function(d) {{
-      document.getElementById('dash-cred-username').value = d.username || '';
-    }}).catch(function() {{
-      document.getElementById('dash-cred-username').value = '';
-    }});
 }}
 function closeCredModal() {{
   document.getElementById('dash-cred-overlay').style.display = 'none';
   document.getElementById('dash-cred-modal').style.display = 'none';
-}}
-function saveCredModal() {{
-  try {{
-    var src  = document.getElementById('dash-cred-source').value;
-    var user = document.getElementById('dash-cred-username').value.trim();
-    var pass = document.getElementById('dash-cred-password').value;
-    var totp = document.getElementById('dash-cred-totp').value.trim();
-    var err  = document.getElementById('dash-cred-error');
-    var saveBtn = document.querySelector('#dash-cred-modal button:last-of-type');
-    if (err) err.style.display = 'none';
-    if (!user) {{
-      if (err) {{ err.textContent = 'Username is required.'; err.style.display = 'block'; }}
-      return;
-    }}
-    if (saveBtn) {{ saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }}
-    var params = {{_csrf: _DASH_CSRF, source: src, username: user}};
-    if (pass) params.password = pass;          // only send if re-entered; blank = keep existing
-    if (totp) params.totp_secret = totp;
-    var body = new URLSearchParams(params);
-    fetch('/credentials/save', {{
-      method: 'POST',
-      headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-      body: body
-    }})
-      .then(function(r) {{
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-      }})
-      .then(function(d) {{
-        if (!d.ok) {{
-          if (saveBtn) {{ saveBtn.textContent = 'Save account'; saveBtn.disabled = false; }}
-          if (err) {{ err.textContent = d.error || 'Save failed.'; err.style.display = 'block'; }}
-          return;
-        }}
-        closeCredModal();
-        if (saveBtn) {{ saveBtn.textContent = 'Save account'; saveBtn.disabled = false; }}
-        var t = document.getElementById('mighty-toast');
-        if (t) {{ t.textContent = 'Credentials saved — syncing…'; t.classList.add('show'); setTimeout(function(){{t.classList.remove('show');}}, 3000); }}
-        setTimeout(function(){{ location.reload(); }}, 2000);
-      }})
-      .catch(function(e) {{
-        if (saveBtn) {{ saveBtn.textContent = 'Save account'; saveBtn.disabled = false; }}
-        if (err) {{ err.textContent = 'Error: ' + (e.message || 'Network error'); err.style.display = 'block'; }}
-      }});
-  }} catch(e) {{
-    var err2 = document.getElementById('dash-cred-error');
-    if (err2) {{ err2.textContent = 'JS error: ' + e.message; err2.style.display = 'block'; }}
-  }}
 }}
 </script>
 
@@ -15856,10 +16102,6 @@ def _build_credentials_page(
     active_filter = normalize_filter(filter_key)
     csrf = get_csrf_token()
     _show_activity = _show_activity_nav(get_db(), user["id"])
-    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
-        'accounts', user["email"], csrf, show_activity=_show_activity,
-    )
-    _cred_styles = BASE_CSS + _CREDENTIALS_PAGE_CSS
 
     from mighty.accounts_ui import apply_access_view_to_row
     from mighty.customer_account_access import connected_summary_label
@@ -15976,7 +16218,22 @@ def _build_credentials_page(
             connect_source.replace("_", " ").title(), "🌐", "#e5e7eb",
         ]
     _site_info_json = _cred_json.dumps(_site_info_map)
-    _connect_auto_json = _cred_json.dumps(connect_source) if connect_source else "null"
+    # CP-005: do not auto-open connect-modal theater for accounts already watched.
+    # Fresh enroll (?connect= for a new source) may still open the modal.
+    _already_watching = bool(
+        connect_source
+        and (
+            connect_source in configured
+            or connect_source in lifecycle_by_source
+            or connect_source in sync_status_by_source
+            or connect_source in access_view_by_source
+        )
+    )
+    _connect_auto_json = (
+        _cred_json.dumps(connect_source)
+        if connect_source and not _already_watching
+        else "null"
+    )
 
     _dev_discover_html = ""
     _dev_discover_js = ""
@@ -16008,31 +16265,13 @@ function runAutoDiscover() {
 }
 """
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<meta name="color-scheme" content="light">
-<title>Accounts — Mighty</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-{_cred_styles}
-</style>
-</head>
-<body>
-<div class="app-shell">
-{_sidebar_desktop}
-<div class="main-content">
-<div style="display:none;align-items:center;gap:10px;padding:12px 16px;border-bottom:0.5px solid rgba(0,0,0,0.07);background:#eee9e2;position:sticky;top:0;z-index:2" id="mobile-topbar-accounts">
-  <button class="nav-hamburger" onclick="openMobileDrawer()" aria-label="Open menu" style="display:none">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-  </button>
-  <span style="font-size:15px;font-weight:700;color:#1c1917">Accounts</span>
-</div>
-<script>(function(){{var t=document.getElementById('mobile-topbar-accounts');if(t&&window.innerWidth<=768)t.style.display='flex';}})();</script>
+    from mighty.authenticated_app_shell import (
+        NAV_ACCOUNTS,
+        bridge_page_css_for_mds,
+        render_authenticated_document,
+    )
+
+    main_html = f"""
 <div class="page">
   <div class="page-header">
     <div class="page-header-text">
@@ -16105,7 +16344,7 @@ function runAutoDiscover() {
             </button>
           </div>
           <div id="modal-ext-no-ext" style="display:none;margin-top:16px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:#92400e;text-align:left">
-            💡 <strong>{user_copy.EXT_NOT_DETECTED_SHORT}</strong> Install the Mighty worker from
+            💡 <strong>{user_copy.EXT_NOT_DETECTED_SHORT}</strong> Install {user_copy.EXT_PRODUCT_NAME} from
             <a href="/extension-setup" target="_blank" style="color:#b45309">Settings → {user_copy.EXT_SETUP_LINK}</a>,
             then click Retry above.
           </div>
@@ -16123,14 +16362,14 @@ function runAutoDiscover() {
     <div id="screen-progress" style="display:none;flex-direction:column;flex:1;align-items:center;justify-content:center;padding:40px 32px;gap:16px">
       <div style="font-size:15px;font-weight:700;color:#1c1917;margin-bottom:8px" id="sync-progress-title">Connecting account…</div>
       <div style="width:100%;max-width:300px;display:flex;flex-direction:column;gap:12px">
-        <div id="sync-step-1" data-label="Saving credentials" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
-          <span style="margin-right:6px">○</span>Saving credentials
+        <div id="sync-step-1" data-label="Connecting account" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
+          <span style="margin-right:6px">○</span>Connecting account
         </div>
-        <div id="sync-step-2" data-label="Updating account" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
-          <span style="margin-right:6px">○</span>Updating account
+        <div id="sync-step-2" data-label="Updating Home" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
+          <span style="margin-right:6px">○</span>Updating Home
         </div>
-        <div id="sync-step-3" data-label="Discovering fields" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
-          <span style="margin-right:6px">○</span>Discovering fields
+        <div id="sync-step-3" data-label="Finishing setup" style="font-size:13px;color:#9ca3af;display:flex;align-items:center">
+          <span style="margin-right:6px">○</span>Finishing setup
         </div>
       </div>
       <div id="sync-progress-error" style="display:none;margin-top:8px;font-size:12px;color:#ef4444;text-align:center"></div>
@@ -16140,9 +16379,6 @@ function runAutoDiscover() {
 </div>
 
 <div class="toast" id="toast"></div>
-</div><!-- /main-content -->
-</div><!-- /app-shell -->
-{_sidebar_mobile}
 
 <script>
 var CSRF = '{csrf}';
@@ -16468,8 +16704,42 @@ function removeCred(key, name) {{
   }}
 }})();
 </script>
-</body>
-</html>"""
+"""
+    # MDS modal/token bridge for indigo → pine continuity on reused list chrome.
+    _mds_accounts_css = (
+        _CREDENTIALS_PAGE_CSS
+        + bridge_page_css_for_mds()
+        + """
+.mds.app-auth .acct-maint-cta{background:var(--mds-pine-soft,#e8f2ef);color:var(--mds-pine,#1f4b3a);border:1px solid var(--mds-line,rgba(26,31,28,.14))}
+.mds.app-auth .acct-maint-cta--urgent{background:#fef2f2;color:#dc2626;border-color:#fecaca}
+.mds.app-auth .acct-maint-cta--primary{background:var(--mds-pine,#1f4b3a)!important;color:#fff!important;border-color:var(--mds-pine,#1f4b3a)!important}
+.mds.app-auth .acct-maint-cta--secondary{background:var(--mds-surface,#fffefb);color:var(--mds-pine,#1f4b3a);border:1px solid var(--mds-line,rgba(26,31,28,.14));cursor:pointer}
+.mds.app-auth .acct-maint-view{color:var(--mds-pine,#1f4b3a)}
+.mds.app-auth .acct-add-coverage-actions a,.mds.app-auth .acct-add-coverage-actions button{color:var(--mds-pine,#1f4b3a)!important}
+.mds.app-auth .acct-filter-empty a{color:var(--mds-pine,#1f4b3a)}
+.mds.app-auth .page{max-width:40rem;margin:0 auto;padding:0 0 2rem}
+.mds.app-auth .page-header h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:1.75rem;letter-spacing:-0.03em}
+.mds.app-auth .acct-portfolio{background:transparent;top:0}
+.mds.app-auth .acct-portfolio-chip--active{background:var(--mds-pine-soft,#e8f2ef);border-color:var(--mds-pine,#1f4b3a);color:var(--mds-pine,#1f4b3a)}
+.mds.app-auth .modal-search:focus,.mds.app-auth .modal-cred-body input:focus{border-color:var(--mds-pine,#1f4b3a)}
+.mds.app-auth .modal-connect-btn{color:var(--mds-pine,#1f4b3a)}
+.mds.app-auth .modal-connect-btn:hover{border-color:var(--mds-pine,#1f4b3a);background:var(--mds-pine-soft,#e8f2ef)}
+.mds.app-auth .modal-back-btn{color:var(--mds-pine,#1f4b3a)}
+.mds.app-auth .acct-empty-actions{display:flex;flex-wrap:wrap;gap:0.75rem;justify-content:center;margin-top:1rem}
+"""
+    )
+    return render_authenticated_document(
+        title="Accounts",
+        active=NAV_ACCOUNTS,
+        display_name=_shell_display_name(user),
+        csrf_token=csrf,
+        main_html=main_html,
+        show_activity=_show_activity,
+        home_href=_default_app_home_path(),
+        body_class="accounts-app",
+        extra_css=_mds_accounts_css,
+        escape=he,
+    )
 
 
 @app.route("/credentials")
@@ -16480,6 +16750,9 @@ def credentials_page():
     user = get_db().execute(
         "SELECT * FROM users WHERE id=?", (session["user_id"],)
     ).fetchone()
+    if not user:
+        session.clear()
+        return redirect("/login")
     _t0 = time.perf_counter()
     rows = get_db().execute(
         "SELECT source, username_enc, extra_enc FROM account_credentials WHERE user_id=?",
@@ -20204,9 +20477,71 @@ def api_extension_accounts():
     if reported_version:
         try:
             from mighty.extension_version import record_extension_version
-            record_extension_version(get_db(), user["id"], reported_version)
+            from mighty.extension_setup_diagnostics import record_handshake_event
+
+            updated = record_extension_version(get_db(), user["id"], reported_version)
+            record_handshake_event(
+                get_db(),
+                user["id"],
+                "heartbeat_request",
+                ok=True,
+                detail=f"GET /api/extension/accounts v={reported_version}",
+                source="extension-accounts",
+            )
+            record_handshake_event(
+                get_db(),
+                user["id"],
+                "heartbeat_accepted",
+                ok=True,
+                detail=f"record_extension_version updated={updated}",
+                source="extension-accounts",
+            )
+            record_handshake_event(
+                get_db(),
+                user["id"],
+                "account_associated",
+                ok=True,
+                detail=f"api_key matched user_id={user['id'][:8]}…",
+                source="extension-accounts",
+            )
         except Exception as _ext_ver_err:
             print(f"[ExtensionVersion] record failed: {_ext_ver_err}", flush=True)
+            try:
+                from mighty.extension_setup_diagnostics import record_handshake_event
+
+                record_handshake_event(
+                    get_db(),
+                    user["id"],
+                    "heartbeat_accepted",
+                    ok=False,
+                    detail=str(_ext_ver_err)[:200],
+                    source="extension-accounts",
+                )
+            except Exception:
+                pass
+    else:
+        # Auth succeeded but no version header — still a weak heartbeat signal.
+        try:
+            from mighty.extension_setup_diagnostics import record_handshake_event
+
+            record_handshake_event(
+                get_db(),
+                user["id"],
+                "heartbeat_request",
+                ok=True,
+                detail="GET /api/extension/accounts (no version header)",
+                source="extension-accounts",
+            )
+            record_handshake_event(
+                get_db(),
+                user["id"],
+                "account_associated",
+                ok=True,
+                detail="api_key matched user (no version)",
+                source="extension-accounts",
+            )
+        except Exception:
+            pass
 
     db = get_db()
     rows = db.execute(
@@ -20739,7 +21074,7 @@ def forbidden(e):
             '<div class="err">Your session expired (often after a server restart). '
             "Please sign in again.</div>"
         )
-        return LOGIN_HTML.replace("{error}", err).replace("{csrf_token}", get_csrf_token()), 403
+        return _render_login_html(error=err, status=403)
     if request.path.startswith("/api/") or request.path.startswith("/credentials/"):
         return jsonify({"ok": False, "error": "Session expired — please refresh the page"}), 403
     return NOT_FOUND_HTML.replace("Page not found", "Forbidden").replace(
@@ -21360,6 +21695,15 @@ def _provider_login_url(source: str) -> str:
     )
 
 
+def _lifecycle_provider_open_href(source: str) -> str:
+    """Provider-open URL for first-verify / waiting CTAs — not connect-modal."""
+    return (
+        _provider_login_url(source)
+        or SITE_ENTRY_URL.get(source, "")
+        or "/credentials"
+    )
+
+
 def _lifecycle_primary_cta_html(
     lifecycle: AccountLifecycle,
     source: str,
@@ -21378,16 +21722,21 @@ def _lifecycle_primary_cta_html(
         "font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;"
         "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca"
     )
+    open_href = _lifecycle_provider_open_href(source)
+    open_external = open_href.startswith("http")
+    open_target = ' target="_blank" rel="noopener"' if open_external else ""
     if lifecycle.state == LC_NEEDS_LOGIN:
         # Login CTAs are owned by session_access / _accounts_primary_cta_html.
         # Legacy lifecycle must not independently emit a Sign in button.
         return ""
     if lifecycle.state == LC_WAITING:
-        if surface == "dashboard":
+        # Happy path: open provider (or Accounts), not connect-modal theater.
+        if surface == "dashboard" or open_external:
             return (
-                f'<a href="/credentials?connect={he(source)}" '
+                f'<a href="{he(open_href)}"{open_target} '
                 f'style="{btn_style}">{he(cta)}</a>'
             )
+        # Explicit Add / repair on Accounts may still open the modal.
         return (
             f'<button type="button" onclick="openCredForm(\'{he(source)}\',\'{he(name)}\','
             f'\'{icon}\',\'{he(color)}\')" style="{btn_style}">{he(cta)}</button>'
@@ -21407,7 +21756,7 @@ def _lifecycle_primary_cta_html(
                 f'{he(user_copy.CTA_RETRY_UPDATE)}</button>'
             )
         return (
-            f'<a href="/credentials?connect={he(source)}" '
+            f'<a href="{he(open_href)}"{open_target} '
             f'style="{btn_style};background:#ecfdf5;color:#059669;border-color:#6ee7b7">'
             f'{he(cta)}</a>'
         )
@@ -21417,9 +21766,9 @@ def _lifecycle_primary_cta_html(
             f'style="{btn_style}">{he(cta)}</a>'
         )
     if lifecycle.state == LC_ADDED:
-        if surface == "dashboard":
+        if surface == "dashboard" or open_external:
             return (
-                f'<a href="/credentials?connect={he(source)}" '
+                f'<a href="{he(open_href)}"{open_target} '
                 f'style="{btn_style}">{he(cta)}</a>'
             )
         return (
@@ -21428,7 +21777,7 @@ def _lifecycle_primary_cta_html(
         )
     if surface == "dashboard":
         return (
-            f'<a href="/credentials?connect={he(source)}" '
+            f'<a href="{he(open_href)}"{open_target} '
             f'style="{btn_style}">{he(cta)}</a>'
         )
     return (
@@ -21451,8 +21800,10 @@ def _lifecycle_dashboard_hero(
     )
     secondary = ""
     if lifecycle.secondary_cta_label and lifecycle.state == LC_WAITING:
+        _sec_href = _lifecycle_provider_open_href(source)
+        _sec_target = ' target="_blank" rel="noopener"' if _sec_href.startswith("http") else ""
         secondary = (
-            f'<a href="/credentials?connect={he(source)}" '
+            f'<a href="{he(_sec_href)}"{_sec_target} '
             f'style="margin-left:8px;padding:5px 10px;background:none;border:1px solid #d1d5db;'
             f'color:#6b7280;border-radius:6px;font-size:11px;font-weight:500;text-decoration:none;'
             f'display:inline-block">{he(lifecycle.secondary_cta_label)}</a>'
@@ -21667,461 +22018,48 @@ def _load_dashboard_email_subjects(uid: str, db) -> list[str]:
     """Deprecated alias — dashboard render must use _cached_dashboard_email_subjects only."""
     return _cached_dashboard_email_subjects(uid, db)
 
-_EMAIL_SCAN_PAGE = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Find accounts — Mighty</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-{base_css}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#f7f5f2;color:#1a1a1a;min-height:100vh}
-.page{max-width:860px;margin:0 auto;padding:32px 24px 60px}
-h1{font-size:22px;font-weight:700;margin-bottom:6px}
-.sub{color:#6b6b6b;font-size:14px;margin-bottom:32px}
-.provider-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:32px}
-.provider-card{background:#fff;border:1.5px solid #e8e3dc;border-radius:12px;padding:20px;cursor:pointer;
-  transition:border-color .15s,box-shadow .15s;text-align:center}
-.provider-card:hover{border-color:#a8a29e;box-shadow:0 2px 8px rgba(0,0,0,.06)}
-.provider-card.active{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.12)}
-.provider-icon{font-size:28px;margin-bottom:8px}
-.provider-name{font-size:14px;font-weight:600;margin-bottom:3px}
-.provider-desc{font-size:12px;color:#6b6b6b}
-.imap-form{background:#fff;border:1px solid #e8e3dc;border-radius:12px;padding:24px;margin-bottom:24px;display:none}
-.imap-form.visible{display:block}
-.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
-.form-row.single{grid-template-columns:1fr}
-label{display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px}
-input,select{width:100%;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:7px;font-size:13px;
-  font-family:inherit;background:#fafafa}
-input:focus,select:focus{outline:none;border-color:#3b82f6;background:#fff}
-.scan-btn{background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:10px 24px;
-  font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s}
-.scan-btn:hover{background:#2563eb}
-.scan-btn:disabled{background:#9ca3af;cursor:not-allowed}
-.status-msg{font-size:13px;color:#6b7280;margin-left:12px;display:none}
-.results-section{margin-top:8px}
-.results-header{font-size:16px;font-weight:700;margin-bottom:4px}
-.results-sub{font-size:13px;color:#6b7280;margin-bottom:20px}
-.category-block{margin-bottom:28px}
-.cat-label{font-size:11px;font-weight:700;color:#9ca3af;letter-spacing:.06em;text-transform:uppercase;
-  margin-bottom:10px}
-.suggestion-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
-.sugg-card{background:#fff;border:1.5px solid #e8e3dc;border-radius:10px;padding:14px 16px;
-  display:flex;align-items:center;gap:12px;transition:border-color .15s}
-.sugg-card.added{border-color:#c7d2fe;background:#f8faff}
-.sugg-state{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6366f1;margin-bottom:2px}
-.sugg-state.discovered{color:#6b7280}
-.sugg-name{flex:1;font-size:13px;font-weight:600}
-.sugg-count{font-size:11px;color:#9ca3af;margin-top:1px}
-.sugg-actions{display:flex;gap:6px;flex-shrink:0;align-items:center}
-.btn-add{background:#ecfdf5;color:#059669;border:1.5px solid #6ee7b7;border-radius:6px;
-  padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;
-  transition:background .12s}
-.btn-add:hover{background:#d1fae5}
-.btn-connect-sm{background:#eef2ff;color:#4338ca;border:1.5px solid #c7d2fe;border-radius:6px;
-  padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
-.btn-connect-sm:hover{background:#e0e7ff}
-.btn-dismiss{background:none;border:none;color:#d1d5db;font-size:16px;cursor:pointer;
-  padding:4px;line-height:1;transition:color .12s}
-.btn-dismiss:hover{color:#6b7280}
-.btn-add-all{background:#059669;color:#fff;border:none;border-radius:6px;
-  padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
-  transition:background .12s}
-.btn-add-all:hover:not(:disabled){background:#047857}
-.btn-add-all:disabled{opacity:.6;cursor:default}
-.btn-connect{background:#1d4ed8;color:#fff;border:none;border-radius:6px;
-  padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
-  transition:background .12s,opacity .12s}
-.btn-connect:hover:not(:disabled){background:#1e40af}
-.btn-connect:disabled{cursor:default}
-.empty-state{text-align:center;padding:48px;color:#9ca3af;font-size:14px}
-.already-note{font-size:12px;color:#9ca3af;margin-top:8px;margin-bottom:12px}
-.note-box{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;
-  font-size:13px;color:#92400e;margin-bottom:24px;display:none}
-.note-box.visible{display:block}
-.connect-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center}
-.connect-overlay.visible{display:flex}
-.connect-box{background:#fff;border-radius:12px;padding:28px 32px;max-width:360px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.15)}
-.connect-box h2{font-size:16px;font-weight:700;margin-bottom:8px}
-.connect-status{font-size:14px;color:#6366f1;font-weight:600;margin-top:12px;min-height:20px}
-.connect-sub{font-size:12px;color:#9ca3af;margin-top:6px;line-height:1.5}
-</style>
-</head>
-<body>
-<input type="hidden" id="csrf-token" value="{csrf_token}">
-<div class="app-shell">
-{_SIDEBAR_DESKTOP_}
-<div class="main-content">
-<div class="page">
-  {oauth_error_banner}
-  <h1>Find accounts from your email</h1>
-  <p class="sub">Mighty scans only sender addresses — never email content or attachments.</p>
-  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 16px;margin-bottom:20px;font-size:13px;color:#166534;line-height:1.6">
-    <strong>How Mighty uses your email:</strong> We only look at who sent you email — never what it says. This tells us which accounts you have. Your actual balances, points, and benefits are always pulled directly from each site when you connect, not from email content.
-  </div>
-
-  <div class="provider-grid" id="providerGrid">
-    {gmail_card}
-    {outlook_card}
-    <div class="provider-card" id="card-imap" onclick="selectProvider('imap')">
-      <div class="provider-icon">📬</div>
-      <div class="provider-name">Any email (IMAP)</div>
-      <div class="provider-desc">Gmail app password, Yahoo, iCloud, or any IMAP server</div>
-    </div>
-  </div>
-
-  <div class="note-box" id="noteConfigure">
-    Gmail OAuth is not configured on this server yet. Use IMAP with a Gmail App Password instead,
-    or ask the server admin to set <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>.
-  </div>
-
-  <div class="imap-form" id="imapForm">
-    <div class="form-row">
-      <div>
-        <label for="imapProvider">Email provider</label>
-        <select id="imapProvider" onchange="onImapProviderChange()">
-          <option value="gmail">Gmail (app password)</option>
-          <option value="outlook">Outlook / Hotmail</option>
-          <option value="yahoo">Yahoo Mail</option>
-          <option value="icloud">iCloud Mail</option>
-          <option value="custom">Custom IMAP server…</option>
-        </select>
-      </div>
-      <div id="imapHostField" style="display:none">
-        <label for="imapHost">IMAP host</label>
-        <input type="text" id="imapHost" placeholder="imap.example.com">
-      </div>
-    </div>
-    <div class="form-row">
-      <div>
-        <label for="imapUser">Email address</label>
-        <input type="email" id="imapUser" placeholder="you@example.com">
-      </div>
-      <div>
-        <label for="imapPass">Password / App password</label>
-        <input type="password" id="imapPass" placeholder="••••••••••••">
-      </div>
-    </div>
-    <button class="scan-btn" id="imapScanBtn" onclick="runImapScan()">Scan inbox</button>
-    <span class="status-msg" id="imapStatus">Scanning…</span>
-  </div>
-
-  <div class="results-section" id="resultsSection" style="display:none">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-      <div>
-        <div class="results-header" id="resultsHeader"></div>
-        <div class="results-sub" id="resultsSub"></div>
-      </div>
-      <div id="addAllBar" style="display:none;align-items:center;gap:10px">
-        <button id="btnAddAll" class="btn-add-all">Add all to Mighty</button>
-      </div>
-    </div>
-    <p class="already-note" id="alreadyNote" style="display:none"></p>
-    <div id="resultsBody"></div>
-  </div>
-</div>
-</div><!-- /main-content -->
-</div><!-- /app-shell -->
-{_SIDEBAR_MOBILE_}
-
-<script>
-var _CSRF = (document.getElementById('csrf-token') || {}).value || '';
-function _jsonHeaders() {
-  return {'Content-Type':'application/json', 'X-CSRF-Token': _CSRF};
-}
-var _selectedProvider = null;
-var _alreadyConnected = {already_connected_json};
-
-function selectProvider(p) {
-  _selectedProvider = p;
-  document.querySelectorAll('.provider-card').forEach(function(c){ c.classList.remove('active'); });
-  var card = document.getElementById('card-' + p);
-  if (card) card.classList.add('active');
-  document.getElementById('imapForm').classList.toggle('visible', p === 'imap');
-  if (p === 'gmail') startGmailOAuth();
-  if (p === 'outlook') startOutlookOAuth();
-}
-
-function onImapProviderChange() {
-  var v = document.getElementById('imapProvider').value;
-  document.getElementById('imapHostField').style.display = v === 'custom' ? 'block' : 'none';
-}
-
-function startGmailOAuth() {
-  window.location.href = '/email/gmail/auth';
-}
-function startOutlookOAuth() {
-  window.location.href = '/email/outlook/auth';
-}
-
-function runImapScan() {
-  var btn = document.getElementById('imapScanBtn');
-  var status = document.getElementById('imapStatus');
-  btn.disabled = true;
-  status.style.display = 'inline';
-  var provider = document.getElementById('imapProvider').value;
-  var host = document.getElementById('imapHost').value.trim();
-  var user = document.getElementById('imapUser').value.trim();
-  var pass = document.getElementById('imapPass').value;
-  fetch('/api/email/scan/imap', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({provider: provider, host: host, username: user, password: pass})
-  }).then(function(r){ return r.json(); }).then(function(data){
-    btn.disabled = false; status.style.display = 'none';
-    if (data.error) { alert('Scan failed: ' + data.error); return; }
-    renderResults(data.suggestions, data.already_connected_count);
-  }).catch(function(e){
-    btn.disabled = false; status.style.display = 'none';
-    alert('Connection error: ' + e.message);
-  });
-}
-
-function renderResults(suggestions, alreadyCount) {
-  var sec = document.getElementById('resultsSection');
-  var body = document.getElementById('resultsBody');
-  sec.style.display = 'block';
-  window._allSuggestions = suggestions;
-  window._addedSiteKeys = new Set();
-  suggestions.forEach(function(s) {
-    if (s.added) window._addedSiteKeys.add(s.site_key);
-  });
-
-  document.getElementById('resultsHeader').textContent =
-    suggestions.length > 0 ? 'Found ' + suggestions.length + ' accounts' : 'No new accounts found';
-  document.getElementById('resultsSub').textContent =
-    suggestions.length > 0
-      ? 'These services emailed you. Add each to Mighty, then connect to verify your provider session.'
-      : 'All detected accounts are already connected, or no matching emails were found.';
-
-  // Add All bar
-  var addAllBar = document.getElementById('addAllBar');
-  if (suggestions.length > 0) {
-    addAllBar.style.display = 'flex';
-    document.getElementById('btnAddAll').onclick = addAll;
-  }
-
-  if (alreadyCount > 0) {
-    var note = document.getElementById('alreadyNote');
-    note.style.display = 'block';
-    note.textContent = alreadyCount + ' account' + (alreadyCount !== 1 ? 's' : '') + ' already connected — not shown.';
-  }
-  if (suggestions.length === 0) {
-    body.innerHTML = '<div class="empty-state">✓ Nothing new to add</div>';
-    return;
-  }
-  // Group by category
-  var cats = {};
-  suggestions.forEach(function(s){
-    if (!cats[s.category]) cats[s.category] = [];
-    cats[s.category].push(s);
-  });
-  var catOrder = ['airline','hotel','credit_card','bank','investment','payment',
-                  'telecom','streaming','car_rental','retail','dining','gas','health','insurance','tech'];
-  var html = '';
-  catOrder.forEach(function(cat){
-    if (!cats[cat]) return;
-    html += '<div class="category-block">';
-    html += '<div class="cat-label">' + (window._catLabels[cat] || cat) + '</div>';
-    html += '<div class="suggestion-grid">';
-    cats[cat].forEach(function(s){
-      var isAdded = s.added || window._addedSiteKeys.has(s.site_key);
-      html += '<div class="sugg-card' + (isAdded ? ' added' : '') + '" id="sc-' + s.site_key + '">';
-      html += '<div style="flex:1">';
-      html += '<div class="sugg-state ' + (isAdded ? '' : 'discovered') + '">' + (isAdded ? 'Added' : 'Discovered') + '</div>';
-      html += '<div class="sugg-name">' + escHtml(s.display_name) + '</div>';
-      html += '<div class="sugg-count">Found from Gmail · ' + s.email_count + ' email' + (s.email_count !== 1 ? 's' : '') + '</div>';
-      html += '</div>';
-      html += '<div class="sugg-actions" id="actions-' + s.site_key + '">';
-      if (isAdded) {
-        html += '<button class="btn-connect-sm" onclick="connectOne(\'' + s.site_key + '\')">Open provider</button>';
-      } else {
-        html += '<button class="btn-add" id="btn-add-' + s.site_key + '" onclick="addSuggestion(\'' + s.site_key + '\',\'' + escHtml(s.display_name) + '\')">Add to Mighty</button>';
-      }
-      html += '<button class="btn-dismiss" onclick="dismissSuggestion(\'' + s.site_key + '\')" title="Dismiss">✕</button>';
-      html += '</div></div>';
-    });
-    html += '</div></div>';
-  });
-  body.innerHTML = html;
-  suggestions.forEach(function(s) {
-    if (s.added || window._addedSiteKeys.has(s.site_key)) _markAdded(s.site_key, false);
-  });
-}
-
-function _markAdded(siteKey, fromClick) {
-  window._addedSiteKeys.add(siteKey);
-  var card = document.getElementById('sc-' + siteKey);
-  if (card) card.classList.add('added');
-  var actions = document.getElementById('actions-' + siteKey);
-  if (actions && fromClick !== false) {
-    var nameEl = card ? card.querySelector('.sugg-name') : null;
-    var dname = nameEl ? nameEl.textContent : siteKey;
-    actions.innerHTML = '<button class="btn-connect-sm" onclick="connectOne(\'' + siteKey + '\')">Open provider</button>'
-      + '<button class="btn-dismiss" onclick="dismissSuggestion(\'' + siteKey + '\')" title="Dismiss">✕</button>';
-    var stateEl = card ? card.querySelector('.sugg-state') : null;
-    if (stateEl) { stateEl.textContent = 'Added'; stateEl.classList.remove('discovered'); }
-  }
-}
-
-function connectOne(siteKey) {
-  window._addedSiteKeys = window._addedSiteKeys || new Set();
-  window._addedSiteKeys.add(siteKey);
-  connectAdded();
-}
-
-function addAll() {
-  if (!window._allSuggestions) return;
-  var pending = window._allSuggestions.filter(function(s){ return !window._addedSiteKeys.has(s.site_key); });
-  if (pending.length === 0) return;
-  // Fire all add requests in parallel, then mark cards
-  var fetches = pending.map(function(s){
-    return fetch('/api/email/suggestions/add', {
-      method:'POST', headers: _jsonHeaders(),
-      body: JSON.stringify({site_key: s.site_key})
-    }).then(function(){ _markAdded(s.site_key); });
-  });
-  var btn = document.getElementById('btnAddAll');
-  btn.disabled = true;
-  btn.textContent = 'Adding…';
-  Promise.all(fetches).then(function(){
-    btn.textContent = '✓ All added to Mighty';
-  });
-}
-
-function connectAdded() {
-  var keys = Array.from(window._addedSiteKeys || []);
-  if (keys.length === 0) return;
-  var siteKey = keys[keys.length - 1];
-  window.location.href = '/credentials?connect=' + encodeURIComponent(siteKey);
-}
-
-window._catLabels = {already_cat_labels_json};
-
-function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-function addSuggestion(siteKey, displayName) {
-  fetch('/api/email/suggestions/add', {
-    method:'POST', headers: _jsonHeaders(),
-    body: JSON.stringify({site_key: siteKey})
-  }).then(function(){ _markAdded(siteKey, true); });
-}
-
-function dismissSuggestion(siteKey) {
-  fetch('/api/email/suggestions/dismiss', {
-    method:'POST', headers: _jsonHeaders(),
-    body: JSON.stringify({site_key: siteKey})
-  });
-  var card = document.getElementById('sc-' + siteKey);
-  if (card) { card.style.opacity='0'; card.style.transition='opacity .2s'; setTimeout(function(){ card.remove(); },200); }
-}
-
-// Auto-render if suggestions were injected server-side (after OAuth callback)
-var _injectedSuggestions = {injected_suggestions_json};
-var _injectedAlreadyCount = {injected_already_count};
-if (_injectedSuggestions !== null) {
-  renderResults(_injectedSuggestions, _injectedAlreadyCount);
-}
-
-// Show config note if Gmail OAuth not configured
-if ({gmail_not_configured}) {
-  document.getElementById('noteConfigure').classList.add('visible');
-}
-</script>
-</body>
-</html>"""
+def _discover_home_href() -> str:
+    return _default_app_home_path()
 
 
-def _render_email_scan_page(suggestions=None, already_count=0, provider_triggered=None, oauth_error=None):
-    """Render the /email-scan page, optionally with pre-populated scan results."""
-    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
+def _render_discover_accounts_page(
+    *,
+    phase: str,
+    oauth_error: str | None = None,
+    candidates=None,
+):
+    """CP-003 Discover My Accounts host renderer (preface / review / empty)."""
+    from mighty.discover_accounts_ui import (
+        PHASE_CONFIRM_DEFERRED,
+        PHASE_EMPTY,
+        PHASE_PREFACE,
+        render_confirm_deferred_page,
+        render_empty_discovery_page,
+        render_preface_page,
+        render_review_page,
+    )
 
-    db  = get_db()
-    uid = session["user_id"]
-    user = db.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+    home = _discover_home_href()
+    manual = "/credentials"
     csrf = get_csrf_token()
-    _show_activity = _show_activity_nav(db, uid)
-    _sidebar_desktop, _sidebar_mobile, _ = _sidebar_parts(
-        "email-scan", user["email"] if user else "", csrf, show_activity=_show_activity,
-    )
-
-    # Already-connected site keys
-    acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
-    connected = {r["source"] for r in acts if not r["source"].startswith("_")}
-
-    # Customer surface: only show Amex suggestions for now.
-    if suggestions:
-        suggestions = [
-            s for s in suggestions
-            if s.get("site_key") in CUSTOMER_VISIBLE_PROVIDERS
-        ]
-    gmail_configured = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
-    outlook_configured = bool(MS_CLIENT_ID and MS_CLIENT_SECRET)
-
-    gmail_card = (
-        '<div class="provider-card" id="card-gmail" onclick="selectProvider(\'gmail\')">'
-        '<div class="provider-icon">📧</div>'
-        '<div class="provider-name">Gmail</div>'
-        '<div class="provider-desc">Connect with Google — fast, no password needed</div>'
-        '</div>'
-        if gmail_configured else
-        '<div class="provider-card" id="card-gmail" style="opacity:.45;cursor:default" title="Not configured on this server">'
-        '<div class="provider-icon">📧</div>'
-        '<div class="provider-name">Gmail</div>'
-        '<div class="provider-desc">OAuth not configured (use IMAP below)</div>'
-        '</div>'
-    )
-    outlook_card = (
-        '<div class="provider-card" id="card-outlook" onclick="selectProvider(\'outlook\')">'
-        '<div class="provider-icon">📨</div>'
-        '<div class="provider-name">Outlook</div>'
-        '<div class="provider-desc">Connect with Microsoft — Hotmail, Live, Office 365</div>'
-        '</div>'
-        if outlook_configured else
-        '<div class="provider-card" id="card-outlook" style="opacity:.45;cursor:default" title="Not configured on this server">'
-        '<div class="provider-icon">📨</div>'
-        '<div class="provider-name">Outlook</div>'
-        '<div class="provider-desc">OAuth not configured (use IMAP below)</div>'
-        '</div>'
-    )
-
-    import json as _json
-    if suggestions:
-        keys = [s["site_key"] for s in suggestions]
-        placeholders = ",".join("?" * len(keys))
-        added_rows = db.execute(
-            f"SELECT site_key, added FROM email_suggestions WHERE user_id=? AND site_key IN ({placeholders})",
-            [uid, *keys],
-        ).fetchall()
-        added_map = {r["site_key"]: bool(r["added"]) for r in added_rows}
-        for s in suggestions:
-            s["added"] = added_map.get(s["site_key"], False)
-
-    page = _EMAIL_SCAN_PAGE
-    oauth_error_banner = ""
-    if oauth_error:
-        oauth_error_banner = (
-            '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;'
-            'padding:12px 16px;margin-bottom:20px;font-size:13px;color:#991b1b;line-height:1.5">'
-            '<strong>Could not connect your email.</strong> Please try again or use IMAP below.</div>'
+    if phase == PHASE_PREFACE:
+        return render_preface_page(
+            csrf_token=csrf,
+            home_href=home,
+            manual_href=manual,
+            oauth_error=oauth_error,
+            gmail_configured=bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
         )
-    page = page.replace("{oauth_error_banner}", oauth_error_banner)
-    page = page.replace("{base_css}", BASE_CSS)
-    page = page.replace("{_SIDEBAR_DESKTOP_}", _sidebar_desktop)
-    page = page.replace("{_SIDEBAR_MOBILE_}", _sidebar_mobile)
-    page = page.replace("{gmail_card}", gmail_card)
-    page = page.replace("{outlook_card}", outlook_card)
-    page = page.replace("{already_connected_json}", _json.dumps(list(connected)))
-    page = page.replace("{already_cat_labels_json}", _json.dumps(CATEGORY_LABELS))
-    page = page.replace("{injected_suggestions_json}", _json.dumps(suggestions))
-    page = page.replace("{injected_already_count}", str(already_count))
-    page = page.replace("{gmail_not_configured}", "true" if not gmail_configured else "false")
-    page = page.replace("{csrf_token}", get_csrf_token())
-    return page
+    if phase == PHASE_EMPTY:
+        return render_empty_discovery_page(home_href=home, manual_href=manual)
+    if phase == PHASE_CONFIRM_DEFERRED:
+        return render_confirm_deferred_page(home_href=home)
+    return render_review_page(
+        candidates=candidates or [],
+        csrf_token=csrf,
+        home_href=home,
+    )
+
 
 
 def _store_suggestions(uid: str, suggestions: list, db):
@@ -22175,17 +22113,112 @@ def _process_discovery_scan(
 @app.route("/email-scan")
 @require_login
 def email_scan_page():
+    """CP-003 host: preface (first-run) or review/empty when Gmail already connected."""
+    from mighty.discover_accounts_ui import (
+        PHASE_EMPTY,
+        PHASE_PREFACE,
+        PHASE_REVIEW,
+        gmail_is_connected,
+        load_review_candidates,
+    )
+
     _rt = _RouteTimer("/email-scan")
     oauth_error = request.args.get("error")
-    result = _render_email_scan_page(oauth_error=oauth_error)
+    db = get_db()
+    uid = session["user_id"]
+
+    if not gmail_is_connected(db, uid):
+        result = _render_discover_accounts_page(
+            phase=PHASE_PREFACE, oauth_error=oauth_error
+        )
+        _rt.finish()
+        return result
+
+    candidates = load_review_candidates(db, uid)
+    phase = PHASE_REVIEW if candidates else PHASE_EMPTY
+    result = _render_discover_accounts_page(phase=phase, candidates=candidates)
     _rt.finish()
     return result
+
+
+@app.route("/email-scan/continue", methods=["POST"])
+@require_login
+def email_scan_continue():
+    """Explicit preface acknowledgment → Gmail OAuth."""
+    check_csrf()
+    session["discover_preface_ack"] = True
+    return redirect("/email/gmail/auth")
+
+
+@app.route("/email-scan/confirm", methods=["POST"])
+@require_login
+def email_scan_confirm():
+    """After Review: enroll selected customer-visible providers, then Enable Monitoring.
+
+    Explicit Confirm is the Operator Sovereignty gate (found ≠ watching until here).
+    Only CUSTOMER_VISIBLE_PROVIDERS are enrolled; unknown keys are ignored.
+    """
+    check_csrf()
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
+    from mighty.discovery_enrollment import enroll_from_discovery
+
+    uid = session["user_id"]
+    db = get_db()
+    selected = [
+        (v or "").strip().lower()
+        for v in request.form.getlist("watch")
+        if (v or "").strip()
+    ]
+    enrolled_any = False
+    for key in selected:
+        if key not in CUSTOMER_VISIBLE_PROVIDERS:
+            continue
+        result = enroll_from_discovery(
+            db,
+            uid,
+            key,
+            register_fn=_register_account_source,
+            now=datetime.now(timezone.utc),
+            require_eligible=True,
+        )
+        if result.enrolled or result.already_enrolled:
+            enrolled_any = True
+    # Empty selection: skip Enable Monitoring theater — nothing to watch yet.
+    if not enrolled_any:
+        return redirect(_discover_home_href())
+    return redirect("/enable-monitoring")
+
+
+@app.route("/enable-monitoring")
+@require_login
+def enable_monitoring():
+    """CP-004 — explain how Mighty stays up to date before the Chrome handoff."""
+    from mighty.enable_monitoring_ui import (
+        STATE_DEFAULT,
+        STATE_READY,
+        render_enable_monitoring_page,
+    )
+
+    state = STATE_READY if request.args.get("ready") == "1" else STATE_DEFAULT
+    return render_enable_monitoring_page(
+        home_href=_discover_home_href(),
+        enable_href="/extension-setup",
+        state=state,
+    )
 
 
 @app.route("/email/gmail/auth")
 @require_login
 def email_gmail_auth():
+    from mighty.discover_accounts_ui import gmail_is_connected
+
     if not GOOGLE_CLIENT_ID:
+        return redirect("/email-scan")
+    # First-run: require preface Continue. Reconnect (already connected) may skip.
+    db = get_db()
+    if not gmail_is_connected(db, session["user_id"]) and not session.get(
+        "discover_preface_ack"
+    ):
         return redirect("/email-scan")
     import urllib.parse
     state = secrets.token_urlsafe(16)
@@ -22206,6 +22239,12 @@ def email_gmail_auth():
 @app.route("/email/gmail/callback")
 @require_login
 def email_gmail_callback():
+    from mighty.discover_accounts_ui import (
+        PHASE_EMPTY,
+        PHASE_REVIEW,
+        load_review_candidates,
+    )
+
     import urllib.parse
     error = request.args.get("error")
     if error:
@@ -22214,7 +22253,7 @@ def email_gmail_callback():
     code  = request.args.get("code", "")
     state = request.args.get("state", "")
     if state != session.pop("gmail_oauth_state", None):
-        return "Invalid state", 400
+        return redirect("/email-scan?error=oauth")
 
     # Exchange code for tokens
     token_data = {
@@ -22234,12 +22273,12 @@ def email_gmail_callback():
         )
         with _ur.urlopen(req, timeout=15) as resp:
             token_resp = json.loads(resp.read())
-    except Exception as e:
-        return f"Token exchange failed: {e}", 500
+    except Exception:
+        return redirect("/email-scan?error=oauth")
 
     access_token = token_resp.get("access_token", "")
     if not access_token:
-        return "No access token received", 500
+        return redirect("/email-scan?error=oauth")
 
     # Get the user's email address
     try:
@@ -22273,38 +22312,28 @@ def email_gmail_callback():
 
     _refresh_dashboard_email_subjects_bg(uid, provider="gmail")
 
-    # Run the scan — do not pre-filter enrolled sites; discovery pipeline classifies.
-    acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
-    connected = {r["source"] for r in acts if not r["source"].startswith("_")}
+    # Synchronous scan — persist candidates only; never auto-enroll / auto-watch.
     try:
         suggestions = scan_gmail(access_token, already_connected=set())
-    except Exception as e:
+    except Exception:
         suggestions = []
 
-    already_count = sum(1 for s in suggestions if s["site_key"] in connected)
-    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS as _CVP
-    scan_result = _process_discovery_scan(
+    _process_discovery_scan(
         uid,
         suggestions,
         db,
         source_type="gmail_sender",
         source_ref="gmail",
-        auto_enroll=True,
+        auto_enroll=False,
     )
-    visible = [
-        s
-        for s in suggestions
-        if s["site_key"] not in connected and s["site_key"] in _CVP
-    ]
-    # Drop providers that were just auto-enrolled from the picker.
-    enrolled_now = set(scan_result.auto_enrolled) | set(scan_result.already_enrolled)
-    visible = [s for s in visible if s["site_key"] not in enrolled_now]
+    session.pop("discover_preface_ack", None)
 
-    # First-data handoff: land on Home (not the connect modal).
-    if scan_result.auto_enrolled:
-        return redirect("/dashboard")
-
-    return _render_email_scan_page(suggestions=visible, already_count=already_count)
+    candidates = load_review_candidates(db, uid)
+    if not candidates:
+        return _render_discover_accounts_page(phase=PHASE_EMPTY)
+    return _render_discover_accounts_page(
+        phase=PHASE_REVIEW, candidates=candidates
+    )
 
 
 @app.route("/email/outlook/auth")
@@ -22337,7 +22366,7 @@ def email_outlook_callback():
     code  = request.args.get("code", "")
     state = request.args.get("state", "")
     if state != session.pop("outlook_oauth_state", None):
-        return "Invalid state", 400
+        return redirect("/email-scan?error=oauth")
 
     token_data = {
         "client_id":     MS_CLIENT_ID,
@@ -22358,11 +22387,12 @@ def email_outlook_callback():
         with _ur.urlopen(req, timeout=15) as resp:
             token_resp = json.loads(resp.read())
     except Exception as e:
-        return f"Token exchange failed: {e}", 500
+        print(f"[Mighty] Outlook token exchange failed: {e}", flush=True)
+        return redirect("/email-scan?error=oauth")
 
     access_token = token_resp.get("access_token", "")
     if not access_token:
-        return "No access token received", 500
+        return redirect("/email-scan?error=oauth")
 
     db  = get_db()
     uid = session["user_id"]
@@ -22382,36 +22412,21 @@ def email_outlook_callback():
 
     _refresh_dashboard_email_subjects_bg(uid, provider="outlook")
 
-    acts = db.execute("SELECT source FROM account_credentials WHERE user_id=?", (uid,)).fetchall()
-    connected = {r["source"] for r in acts if not r["source"].startswith("_")}
     try:
         suggestions = scan_outlook(access_token, already_connected=set())
     except Exception:
         suggestions = []
 
-    already_count = sum(1 for s in suggestions if s["site_key"] in connected)
-    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS as _CVP
-    scan_result = _process_discovery_scan(
+    # Outlook is out of beta UX; still persist candidates without auto-enroll.
+    _process_discovery_scan(
         uid,
         suggestions,
         db,
         source_type="outlook_sender",
         source_ref="outlook",
-        auto_enroll=True,
+        auto_enroll=False,
     )
-    enrolled_now = set(scan_result.auto_enrolled) | set(scan_result.already_enrolled)
-    visible = [
-        s
-        for s in suggestions
-        if s["site_key"] not in connected
-        and s["site_key"] not in enrolled_now
-        and s["site_key"] in _CVP
-    ]
-    # First-data handoff: land on Home (not the connect modal).
-    if scan_result.auto_enrolled:
-        return redirect("/dashboard")
-
-    return _render_email_scan_page(suggestions=visible, already_count=already_count)
+    return redirect("/email-scan")
 
 
 @app.route("/api/email/scan/imap", methods=["POST"])
@@ -22463,7 +22478,7 @@ def api_email_scan_imap():
         db,
         source_type="imap_sender",
         source_ref="imap",
-        auto_enroll=True,
+        auto_enroll=False,
     )
     enrolled_now = set(scan_result.auto_enrolled) | set(scan_result.already_enrolled) | connected
     visible = [
@@ -23152,9 +23167,26 @@ def api_extension_amex_no_qualifying_private_data():
         extraction_reason=str(
             body.get("extraction_reason") or body.get("reason") or "no_publishable_widgets"
         ),
+        encrypt_fn=encrypt_account_data,
+        decrypt_fn=decrypt_account_data,
+        iso_fn=iso,
     )
     if not result.get("ok"):
         status = int(result.get("status_code") or 409)
+        try:
+            from mighty.amex_value_pipeline import record_pipeline_event
+
+            record_pipeline_event(
+                get_db(),
+                user["id"],
+                "payload_accepted",
+                ok=False,
+                detail=str(result.get("error") or "rejected")[:200],
+                source="no_qualifying_private_data",
+                access_cycle_id=verification_id,
+            )
+        except Exception:
+            pass
         return jsonify({
             "ok": False,
             "error": result.get("error") or "rejected",
@@ -23162,6 +23194,29 @@ def api_extension_amex_no_qualifying_private_data():
             "verification_id": verification_id,
             "access_cycle_id": verification_id,
         }), status
+    try:
+        from mighty.amex_value_pipeline import record_pipeline_event
+
+        db = get_db()
+        uid = user["id"]
+        for stage, ok, detail in (
+            ("payload_accepted", True, "no_qualifying_private_data"),
+            ("account_associated", True, "amex"),
+            ("extraction_terminal", True, "NO_ACCOUNT_DATA"),
+            ("normalized_data_persisted", False, "no_publishable_fields"),
+            ("dashboard_projection", True, "unsupported-data"),
+        ):
+            record_pipeline_event(
+                db,
+                uid,
+                stage,
+                ok=ok,
+                detail=detail,
+                source="no_qualifying_private_data",
+                access_cycle_id=verification_id,
+            )
+    except Exception:
+        pass
     return jsonify({
         "ok": True,
         "extraction": result.get("extraction") or "no_account_data",
