@@ -1,10 +1,11 @@
 # Cycle Report — One Daily Product (UBE)
 
 **Status:** Packaged — Independent Audit **Accept for Founder review** (perception) — **deploy stopped**  
+**Visual migration:** **Suspended** after this cycle per Founder UBE reopen (State Model next) — see [../ube-gap-assessment/EXECUTIVE_REVIEW.md](../ube-gap-assessment/EXECUTIVE_REVIEW.md) · decision `2026-07-29-ube-state-model-narrator.md`  
 **Started:** 2026-07-29  
 **Charter:** [CYCLE_CHARTER.md](CYCLE_CHARTER.md) (**Accepted & frozen**) · **Plan:** [CYCLE_PLAN.md](CYCLE_PLAN.md) · **Executive:** [EXECUTIVE_REVIEW.md](EXECUTIVE_REVIEW.md) · **Audit:** [INDEPENDENT_AUDIT.md](INDEPENDENT_AUDIT.md) · **Parent:** [MILESTONE_UNIFIED_BETA_EXPERIENCE.md](../../milestones/MILESTONE_UNIFIED_BETA_EXPERIENCE.md)
 
-**Deploy:** **stopped** until Founder go-ahead after review.
+**Deploy:** **stopped** until Founder go-ahead after review. **Next UBE cycle:** `ube-journey-narrator` (Proposed) — not further visual work.
 
 ---
 

@@ -619,16 +619,44 @@ def _cta_html(card: HomeCard, *, escape: Callable[[Any], str], primary: bool) ->
     )
 
 
+def _render_secondary_action(
+    card: HomeCard,
+    *,
+    escape: Callable[[Any], str],
+    csrf_token: str = "",
+) -> str:
+    """Secondary CTA: link, or Attention snooze (Not now)."""
+    if card.secondary_action == "snooze" and card.secondary_label and card.attention_id:
+        aid = escape(card.attention_id)
+        token = escape(csrf_token)
+        btn = render_button(
+            card.secondary_label,
+            variant="ghost",
+            type="submit",
+            class_name="home-v2__not-now",
+        )
+        return (
+            f'<form method="post" action="/attention/{aid}/snooze" '
+            f'class="home-v2__not-now-form">'
+            f'<input type="hidden" name="_csrf" value="{token}">'
+            f"{btn}"
+            f"</form>"
+        )
+    if card.secondary_label and card.secondary_url:
+        return render_button(
+            card.secondary_label,
+            variant="ghost",
+            href=card.secondary_url,
+        )
+    return ""
+
+
 def _render_featured_card(card: HomeCard, *, escape: Callable[[Any], str]) -> str:
     eyebrow = ""
     if card.eyebrow:
         eyebrow = f'<p class="home-card-eyebrow">{escape(card.eyebrow)}</p>'
-    secondary = ""
-    if card.secondary_label and card.secondary_url:
-        secondary = (
-            f'<a href="{escape(card.secondary_url)}" class="home-card-secondary-link">'
-            f"{escape(card.secondary_label)}</a>"
-        )
+    # Featured card path (attention panel) — CSRF optional; primary Home passes token.
+    secondary = _render_secondary_action(card, escape=escape)
     attrs = [
         f'data-tone="{escape(card.tone)}"',
         f'data-kind="{escape(card.kind)}"',
@@ -975,8 +1003,8 @@ def _render_primary_actions(
     projection: HomeProjection,
     *,
     escape: Callable[[Any], str],
+    csrf_token: str = "",
 ) -> str:
-    del escape
     card = projection.featured
     if card is None:
         return ""
@@ -990,21 +1018,47 @@ def _render_primary_actions(
             )
         )
     elif card.cta_label and card.cta_url:
+        external = str(card.cta_url).startswith("http")
+        extra = None
+        if external:
+            # System of engagement: provider is a temporary workspace — Mighty stays.
+            extra = {
+                "target": "_blank",
+                "rel": "noopener noreferrer",
+                "data-provider-visit": "1",
+            }
+            if card.provider:
+                extra["data-provider"] = str(card.provider)
+            # Distinguish Visit vs Sign-in for narrative event_type.
+            label_l = (card.cta_label or "").lower()
+            action = (
+                "provider_sign_in"
+                if "sign in" in label_l
+                else "provider_visit"
+            )
+            extra["data-journey-action"] = action
         parts.append(
             render_button(
                 card.cta_label,
                 variant="primary",
                 href=card.cta_url,
+                extra_attrs=extra,
             )
         )
-    if card.secondary_label and card.secondary_url:
-        parts.append(
-            render_button(
-                card.secondary_label,
-                variant="ghost",
-                href=card.secondary_url,
+        if external:
+            helper = escape(user_copy.HOME_PROVIDER_VISIT_HELPER)
+            opened = escape(user_copy.HOME_PROVIDER_VISIT_OPENED)
+            parts.append(
+                f'<p class="mds-meta home-v2__visit-helper" '
+                f'id="home-visit-stay-note" '
+                f'data-opened-text="{opened}">'
+                f"{helper}</p>"
             )
-        )
+    secondary = _render_secondary_action(
+        card, escape=escape, csrf_token=csrf_token
+    )
+    if secondary:
+        parts.append(secondary)
     return "".join(parts)
 
 
@@ -1012,6 +1066,7 @@ def _render_primary_message(
     projection: HomeProjection,
     *,
     escape: Callable[[Any], str],
+    csrf_token: str = "",
 ) -> str:
     safe_name = escape(projection.first_name)
     hero_state = (
@@ -1063,7 +1118,9 @@ def _render_primary_message(
         lede=_primary_lede(projection),
         variant="home",
         eyebrow=_primary_eyebrow(projection),
-        actions_html=_render_primary_actions(projection, escape=escape),
+        actions_html=_render_primary_actions(
+            projection, escape=escape, csrf_token=csrf_token
+        ),
         meta_html=meta_html,
         state=hero_state,
         heading_level=1,
@@ -1147,6 +1204,7 @@ def render_home_projection(
     escape: Callable[[Any], str],
     result: HomeStateResult | None = None,
     extension_info: dict[str, Any] | None = None,
+    csrf_token: str = "",
 ) -> str:
     """Render Home V2 Living Calm — Quiet Field, message, evidence, activity."""
     truth = ""
@@ -1158,6 +1216,13 @@ def render_home_projection(
         if projection.attention_silence
         else ""
     )
+    narrative_attr = ""
+    if projection.narrative_event_refs:
+        refs = ",".join(projection.narrative_event_refs)
+        narrative_attr = (
+            f' data-narrative-events="{escape(refs)}"'
+            f' data-narrative-beat="{escape(projection.narrative_beat or "")}"'
+        )
     safe_name = escape(projection.first_name)
     return (
         f'{_HOME_V2_STYLES}'
@@ -1166,9 +1231,9 @@ def render_home_projection(
         f'data-enrollment="{escape(projection.enrollment_state.value)}" '
         f'data-story="{escape(projection.story_kind)}" '
         f'data-interrupt="{"1" if projection.attention_interrupt else "0"}"'
-        f"{silence_attr}>"
+        f"{silence_attr}{narrative_attr}>"
         f"{_render_quiet_field_region(projection, escape=escape)}"
-        f"{_render_primary_message(projection, escape=escape)}"
+        f"{_render_primary_message(projection, escape=escape, csrf_token=csrf_token)}"
         f"{_render_evidence_region(projection.evidence, escape=escape)}"
         f"{_render_activity_preview(projection.activity_preview, escape=escape, visual_state=projection.visual_state)}"
         f"{truth}"
@@ -1197,6 +1262,11 @@ def render_home_page(
     recent_wins: Sequence[Any] | None = None,
     gmail_connected: bool | None = None,
     chrome_active: bool | None = None,
+    csrf_token: str = "",
+    first_success_provider: str | None = None,
+    first_success_partial: bool = False,
+    db: Any | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Render Home V2 from existing platform projections."""
     checked = last_checked
@@ -1218,10 +1288,69 @@ def render_home_page(
         recent_wins=recent_wins,
         gmail_connected=gmail_connected,
         chrome_active=chrome_active,
+        first_success_provider=first_success_provider,
+        first_success_partial=first_success_partial,
     )
+    if db is not None and user_id:
+        try:
+            from mighty.attention import AttentionClass
+            from mighty.journey_narrative import apply_journey_narrative_to_projection
+
+            card = projection.featured
+            provider_key = getattr(card, "provider", None) if card else None
+            provider_display = None
+            if attention is not None and attention.primary is not None:
+                provider_key = provider_key or attention.primary.provider
+
+            still_needs = False
+            health = getattr(result, "health", None)
+            if health is not None and (
+                getattr(health, "needs_login", 0)
+                or getattr(health, "needs_attention", 0)
+            ):
+                still_needs = True
+            if attention is not None and attention.primary is not None:
+                if attention.primary.attention_class == AttentionClass.AUTH_BLOCKER:
+                    still_needs = True
+            if (
+                projection.story_kind in ("attention", "handoff")
+                and card
+                and card.cta_url
+                and str(card.cta_url).startswith("http")
+            ):
+                still_needs = True
+
+            verification_active = bool(
+                getattr(result, "capability", None) is not None
+                and getattr(result.capability, "is_checking", False)
+            )
+            terminal_ok = projection.story_kind in ("all_clear", "first_success")
+            if terminal_ok:
+                still_needs = False
+
+            if not provider_key and card and card.cta_label:
+                label = card.cta_label.lower()
+                if "american express" in label or "amex" in label:
+                    provider_key = "amex"
+            if provider_key == "amex":
+                provider_display = "American Express"
+
+            projection = apply_journey_narrative_to_projection(
+                projection,
+                db,
+                user_id,
+                still_needs_user=still_needs,
+                provider_key=provider_key,
+                provider_display=provider_display,
+                verification_active=verification_active,
+                terminal_ok=terminal_ok,
+            )
+        except Exception:
+            pass
     return render_home_projection(
         projection,
         escape=escape,
         result=result,
         extension_info=extension_info,
+        csrf_token=csrf_token,
     )

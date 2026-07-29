@@ -31,7 +31,14 @@ HomeCardKind = Literal[
     "enrollment",
     "story",
 ]
-HomeStoryKind = Literal["attention", "opportunity", "all_clear", "empty", "handoff"]
+HomeStoryKind = Literal[
+    "attention",
+    "opportunity",
+    "all_clear",
+    "empty",
+    "handoff",
+    "first_success",
+]
 HomeVisualState = Literal[
     "healthy",
     "attention",
@@ -54,9 +61,16 @@ class HomeCard:
     cta_url: str | None = None
     secondary_label: str | None = None
     secondary_url: str | None = None
+    # "snooze" → Not now via Attention snooze API (no navigation URL).
+    secondary_action: str | None = None
     disabled_cta_label: str | None = None
     attention_id: str | None = None
     attention_class: str | None = None
+    provider: str | None = None
+    # Journey narrator (UBE): which narrative event(s) this card reflects.
+    narrative_event_ids: tuple[str, ...] = ()
+    narrative_event_refs: tuple[str, ...] = ()
+    narrative_beat: str | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +119,9 @@ class HomeProjection:
     attention_silence: str | None = None
     attention_interrupt: bool = False
     show_truth_debug: bool = False
+    narrative_event_ids: tuple[str, ...] = ()
+    narrative_event_refs: tuple[str, ...] = ()
+    narrative_beat: str | None = None
 
     @property
     def activity_preview(self) -> tuple[HomeWin, ...]:
@@ -151,10 +168,17 @@ def project_home(
     recent_wins: Sequence[Mapping[str, Any] | HomeWin] | None = None,
     gmail_connected: bool | None = None,
     chrome_active: bool | None = None,
+    first_success_provider: str | None = None,
+    first_success_partial: bool = False,
 ) -> HomeProjection:
     """Compose HomeProjection from enrollment + Attention + connection evidence."""
     attn = attention if use_attention else None
-    featured, story_kind = _compose_story(result, attn)
+    featured, story_kind = _compose_story(
+        result,
+        attn,
+        first_success_provider=first_success_provider,
+        first_success_partial=first_success_partial,
+    )
     answer = _compose_answer(result, attn, story_kind, featured)
     visual_state = _visual_state(story_kind)
     silence = (
@@ -195,7 +219,7 @@ def project_home(
 
 
 def _visual_state(story_kind: HomeStoryKind) -> HomeVisualState:
-    if story_kind == "all_clear":
+    if story_kind in ("all_clear", "first_success"):
         return "healthy"
     if story_kind in ("attention", "opportunity", "empty", "handoff"):
         return story_kind
@@ -215,9 +239,17 @@ def _watched_count(result: HomeStateResult) -> int:
     )
 
 
+def _portfolio_needs_user(result: HomeStateResult) -> bool:
+    """True when watched accounts prove the user is needed (Attention may be silent)."""
+    return bool(result.health.needs_login or result.health.needs_attention)
+
+
 def _compose_story(
     result: HomeStateResult,
     attention: AttentionView | None,
+    *,
+    first_success_provider: str | None = None,
+    first_success_partial: bool = False,
 ) -> tuple[HomeCard | None, HomeStoryKind]:
     if result.state == HomeState.EMPTY:
         return (
@@ -235,13 +267,74 @@ def _compose_story(
     # First-data handoff: WAITING owns the hero when Attention is silent.
     # Do not say "You're good" while enrollment setup is incomplete (D1).
     if result.state == HomeState.WAITING:
+        provider = None
+        if result.capability is not None:
+            provider = getattr(result.capability, "provider", None)
+        return (
+            _from_featured(
+                result.featured,
+                tone="progress",
+                kind="enrollment",
+                provider=provider,
+            ),
+            "handoff",
+        )
+
+    # CP-006: Attention silence ≠ all-clear when portfolio health proves need.
+    # Prefer Attention when available; this is the honesty fallback only.
+    if _portfolio_needs_user(result):
+        return _honesty_needs_user_story(result), "attention"
+
+    # Honest waiting: refresh in flight is not Permission to Leave.
+    if result.state == HomeState.UPDATE:
         return (
             _from_featured(result.featured, tone="progress", kind="enrollment"),
             "handoff",
         )
 
-    # Update with existing data may stay calm; evidence carries refresh notes.
+    # One-shot first-success beat (CP-005) before ambient all-clear.
+    if first_success_provider:
+        return (
+            _first_success_story(
+                first_success_provider, partial=first_success_partial
+            ),
+            "first_success",
+        )
+
     return _all_clear_story(result), "all_clear"
+
+
+def _honesty_needs_user_story(result: HomeStateResult) -> HomeCard:
+    """One earned ask when Attention is silent but portfolio health needs the user."""
+    count = result.health.needs_login or result.health.needs_attention
+    return HomeCard(
+        kind="story",
+        title=user_copy.HOME_PRIORITY_LOGIN,
+        body=user_copy.home_steady_needs_sign_in_body(count),
+        tone="interrupt",
+        cta_label=user_copy.HOME_VIEW_NEEDS_LOGIN_LABEL,
+        cta_url="/credentials?filter=needs_login",
+        secondary_label=None,
+        secondary_url=None,
+    )
+
+
+def _first_success_story(provider_name: str, *, partial: bool) -> HomeCard:
+    body = (
+        user_copy.home_first_success_partial_body(provider_name)
+        if partial
+        else user_copy.home_first_success_body(provider_name)
+    )
+    return HomeCard(
+        kind="story",
+        title="",
+        body=body,
+        tone="calm",
+        cta_label=None,
+        cta_url=None,
+        secondary_label=user_copy.HOME_VIEW_ACCOUNTS_LABEL,
+        secondary_url="/credentials",
+    )
 
 
 def _all_clear_story(result: HomeStateResult) -> HomeCard:
@@ -280,6 +373,7 @@ def _compose_answer(
         if featured and featured.title:
             return featured.title
         return user_copy.HOME_BRIEFING_ANSWER_HANDOFF
+    # first_success and all_clear share the You're good answer line.
     return user_copy.HOME_BRIEFING_ANSWER_GOOD
 
 
@@ -304,11 +398,12 @@ def _compose_evidence(
             items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_CHROME_ACTIVE, ok=True))
         return tuple(items)
 
+    healthy_story = story_kind in ("all_clear", "first_success")
     if watched_count > 0:
         items.append(
             HomeEvidenceItem(
                 label=user_copy.home_evidence_watching(watched_count),
-                ok=True if story_kind == "all_clear" else None,
+                ok=True if healthy_story else None,
             )
         )
 
@@ -316,13 +411,13 @@ def _compose_evidence(
         items.append(
             HomeEvidenceItem(
                 label=user_copy.home_freshness_label(last_checked),
-                ok=True if story_kind == "all_clear" else None,
+                ok=True if healthy_story else None,
             )
         )
 
     if gmail_connected is True:
         items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_CONNECTED, ok=True))
-    elif gmail_connected is False and story_kind in ("handoff", "all_clear"):
+    elif gmail_connected is False and story_kind in ("handoff", "all_clear", "first_success"):
         items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_NEEDED, ok=False))
 
     if chrome_active is True:
@@ -371,8 +466,10 @@ def _compose_ops(
                 )
             )
 
+    # Needs-login is the hero when story_kind == attention (honesty fallback);
+    # do not duplicate it as an ops footnote under the same ask.
     if (
-        story_kind != "attention"
+        story_kind not in ("attention", "opportunity")
         and result.health.needs_login
         and (attention is None or attention.primary is None)
     ):
@@ -429,6 +526,13 @@ def attention_to_card(item: AttentionPresentation, *, kind: HomeCardKind = "feat
 
 def _from_attention(item: AttentionPresentation, *, kind: HomeCardKind) -> HomeCard:
     tone = _tone_for_class(item.attention_class)
+    secondary_label = None
+    secondary_action = None
+    # First-success / auth ask: defer is first-class (CP-005). AUTH_BLOCKER only —
+    # do not offer Not now on approvals that require an explicit decision.
+    if item.attention_class == AttentionClass.AUTH_BLOCKER:
+        secondary_label = user_copy.HOME_NOT_NOW_LABEL
+        secondary_action = "snooze"
     return HomeCard(
         kind=kind,
         title=item.title,
@@ -437,8 +541,11 @@ def _from_attention(item: AttentionPresentation, *, kind: HomeCardKind) -> HomeC
         eyebrow=None,
         cta_label=item.cta_label,
         cta_url=item.cta_url,
+        secondary_label=secondary_label,
+        secondary_action=secondary_action,
         attention_id=item.attention_id,
         attention_class=item.attention_class.value,
+        provider=item.provider,
     )
 
 
@@ -447,6 +554,7 @@ def _from_featured(
     *,
     tone: HomeCardTone,
     kind: HomeCardKind,
+    provider: str | None = None,
 ) -> HomeCard:
     return HomeCard(
         kind=kind,
@@ -458,6 +566,7 @@ def _from_featured(
         secondary_label=featured.secondary_label,
         secondary_url=featured.secondary_url,
         disabled_cta_label=featured.disabled_cta_label,
+        provider=provider,
     )
 
 

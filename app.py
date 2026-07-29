@@ -896,6 +896,11 @@ def init_db():
             ensure_customer_capability_presentation_tables(db)
         except Exception:
             pass
+        try:
+            from mighty.journey_narrative import ensure_journey_narrative_table
+            ensure_journey_narrative_table(db)
+        except Exception:
+            pass
 
 init_db()
 
@@ -7630,11 +7635,28 @@ document.addEventListener('click', function(ev) {
   var a = ev.target && ev.target.closest ? ev.target.closest('a[data-provider-visit="1"]') : null;
   if (!a) return;
   var note = document.getElementById('home-visit-stay-note');
-  if (!note) return;
-  var opened = note.getAttribute('data-opened-text');
-  if (opened) note.textContent = opened;
-  note.hidden = false;
-  note.classList.add('home-v2__visit-helper--opened');
+  if (note) {
+    var opened = note.getAttribute('data-opened-text');
+    if (opened) note.textContent = opened;
+    note.hidden = false;
+    note.classList.add('home-v2__visit-helper--opened');
+  }
+  // Journey narrator: persist user-action event (UBE continuity / R1).
+  try {
+    var csrf = (document.querySelector('input[name="_csrf"]') || {}).value || '';
+    var provider = a.getAttribute('data-provider') || 'amex';
+    var action = a.getAttribute('data-journey-action') || 'provider_visit';
+    fetch('/api/journey/user-action', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrf,
+      },
+      body: JSON.stringify({ provider: provider, action: action }),
+      credentials: 'same-origin',
+      keepalive: true,
+    }).catch(function(){});
+  } catch (e) {}
 });
 
 // Sync is driven by the background alarm (hourly) or explicit Sync button clicks.
@@ -10784,6 +10806,8 @@ def dashboard_legacy():
             csrf_token=get_csrf_token(),
             first_success_provider=_fs_provider,
             first_success_partial=_fs_partial,
+            db=get_db(),
+            user_id=session["user_id"],
         )
 
     hero_section_html = _render_home_hero()
@@ -13116,6 +13140,55 @@ def api_record():
         "record_id": action.action_id,
         "receipt": receipt.to_dict() if receipt else None,
     })
+
+@app.route("/api/journey/user-action", methods=["POST"])
+@require_login
+def api_journey_user_action():
+    """Record a Home user-action narrative event (Visit / Sign-in CTA)."""
+    check_csrf()
+    user = _session_user_row()
+    if not user:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    payload = request.get_json(silent=True) or {}
+    provider = str(payload.get("provider") or "amex").strip().lower()[:64] or "amex"
+    action = str(payload.get("action") or "provider_visit").strip()[:80]
+    from mighty.journey_narrative import (
+        ACTION_PROVIDER_SIGN_IN,
+        ACTION_PROVIDER_VISIT,
+        record_user_action,
+    )
+
+    if action not in (ACTION_PROVIDER_VISIT, ACTION_PROVIDER_SIGN_IN):
+        if "sign" in action:
+            action = ACTION_PROVIDER_SIGN_IN
+        else:
+            action = ACTION_PROVIDER_VISIT
+    try:
+        ev = record_user_action(
+            get_db(),
+            user["id"],
+            event_type=action,
+            provider=provider,
+            detail={"surface": "home"},
+            source="client",
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "event": {
+                    "id": ev.id,
+                    "kind": ev.kind,
+                    "event_type": ev.event_type,
+                    "provider": ev.provider,
+                    "ref": ev.ref,
+                    "created_at": ev.created_at,
+                },
+            }
+        )
+    except Exception as e:
+        print(f"[JourneyNarrative] user-action error: {e}", flush=True)
+        return jsonify({"ok": False, "error": "record_failed"}), 503
+
 
 @app.route("/api/attention/view", methods=["GET"])
 @require_login

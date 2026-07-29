@@ -135,6 +135,9 @@ ACCESS_MEANING_UNKNOWN = "Mighty has not confirmed access yet."
 ACCESS_MEANING_EXTRACTION_FAILED = (
     "Mighty reached the account but could not read private data."
 )
+ACCESS_MEANING_NO_ACCOUNT_DATA = (
+    "Mighty can tell you are signed in, but no account details were available yet."
+)
 
 ACCESS_DISCOVERED_FROM_PREFIX = "Discovered from"
 ACCESS_PRIVATE_DATA_PREFIX = "Private data"
@@ -218,15 +221,67 @@ EXT_PRODUCT_NAME = "Mighty in Chrome"
 EXT_SETUP_LINK = "Set up Mighty in Chrome"
 EXT_SETUP_TITLE = "Connect Mighty in Chrome"
 EXT_SETUP_BODY = (
-    "The Chrome extension reads this page to configure itself automatically. "
-    "You can close this tab once it confirms."
+    "Mighty in Chrome only works in a normal Chrome window — not Incognito or Guest. "
+    "Confirm that first, install, then ask Mighty to check."
 )
+EXT_SETUP_CONTEXT_HEADING = "Before you install"
+EXT_SETUP_CONTEXT_LEDE = (
+    "Use the same normal Chrome window for this page, chrome://extensions, "
+    "and later Amex. Incognito and Guest windows block extensions by default, "
+    "so Mighty cannot see this page or send a heartbeat."
+)
+EXT_SETUP_CONTEXT_CONFIRM = (
+    "I’m in a normal Chrome window (not Incognito, not Guest)"
+)
+EXT_SETUP_CONTEXT_BLOCKED = (
+    "This looks like Incognito or a restricted window. "
+    "Open Mighty in a normal Chrome window, sign in again if needed, "
+    "then return here. Chrome — not Mighty — is blocking the extension."
+)
+EXT_SETUP_CONTEXT_NOT_CHROME = (
+    "Mighty in Chrome requires desktop Google Chrome. "
+    "Open this page in Chrome to continue. This is a browser requirement, not a Mighty outage."
+)
+EXT_SETUP_INSTALL_HEADING = "Install (desktop Chrome)"
+EXT_SETUP_DOWNLOAD_LABEL = "Download Mighty in Chrome"
+EXT_SETUP_INSTALL_STEPS: tuple[str, ...] = (
+    "Stay in this normal Chrome window. Download Mighty in Chrome (zip) and unzip it.",
+    "In this same window, open chrome://extensions → turn on Developer mode.",
+    "Click Load unpacked and select the unzipped mighty-in-chrome folder "
+    "(the folder that contains manifest.json).",
+    "Pin Mighty from the puzzle-piece menu. If it was already installed, "
+    "click Reload on chrome://extensions first.",
+)
+EXT_SETUP_RELOAD_HINT = (
+    "Already installed? Reload Mighty on chrome://extensions in this same "
+    "normal window, then use I’ve installed Mighty."
+)
+EXT_SETUP_HEARTBEAT_LISTENING = "Listening for Mighty in Chrome…"
+EXT_SETUP_HEARTBEAT_SEEN = "Heartbeat received"
+EXT_SETUP_HEARTBEAT_NONE = "No heartbeat yet"
+EXT_SETUP_VERIFY_CTA = "I've installed Mighty"
+EXT_SETUP_VERIFYING = "Checking for Mighty in Chrome…"
 EXT_SETUP_WAITING = "Waiting for Mighty in Chrome…"
-EXT_SETUP_SUCCESS = "Mighty in Chrome is connected — you can close this tab"
+EXT_SETUP_SUCCESS = "Mighty in Chrome is connected"
+EXT_SETUP_CONTINUE = "Continue to Home"
+EXT_SETUP_CONTINUE_HINT = "You can go to Home and finish this later."
 EXT_SETUP_NOT_DETECTED = (
-    "Chrome extension not detected — install Mighty in Chrome, enable it, "
-    "then reload this page."
+    "Mighty still doesn’t see a heartbeat from the extension."
 )
+EXT_SETUP_FAIL_CHROME = (
+    "Chrome context — Stay in a normal Chrome window (not Incognito/Guest). "
+    "Extensions can’t reach this page there."
+)
+EXT_SETUP_FAIL_EXTENSION = (
+    "Extension — On chrome://extensions, confirm Mighty is loaded and enabled, "
+    "then click Reload and try again."
+)
+EXT_SETUP_FAIL_MIGHTY = (
+    "Mighty — If Chrome and the extension look correct, reload this page and try again. "
+    "If it still fails, tell support the Live connection panel stayed on “No heartbeat yet.”"
+)
+EXT_SETUP_TRY_AGAIN = "Try again"
+EXT_SETUP_GO_HOME = "Go to Home"
 EXT_NOT_DETECTED_SHORT = "Mighty in Chrome not detected."
 EXT_INSTALL_TOAST = "Install Mighty in Chrome to update your accounts."
 MOBILE_WORKER_TOAST = "Use desktop Chrome with Mighty in Chrome to update your accounts."
@@ -508,10 +563,124 @@ ONBOARDING_CHROME_LINE = (
     "Use <strong>desktop Chrome</strong> — Mighty in Chrome updates accounts while you browse. "
     "Home shows what needs you."
 )
+SIGNUP_HEADLINE = "Let's get started."
 SIGNUP_SUB = (
-    "You'll be connected in about 5 minutes. "
-    "Account updates use desktop Chrome with Mighty in Chrome."
+    "Create your Mighty account. You’ll choose what Mighty monitors next."
 )
+SIGNUP_CTA = "Create account"
+SIGNUP_REASSURE = (
+    "Mighty does not monitor anything until you choose which accounts to watch."
+)
+SIGNUP_PASSWORD_HELPER = "At least 6 characters."
+SIGNUP_DUPLICATE_TITLE = "An account with that email already exists."
+SIGNUP_DUPLICATE_RESTART_LINK = "Delete account and start over"
+SIGNUP_DUPLICATE_HINT = (
+    "Factory reset deletes your Mighty account for this email. "
+    "You’ll return to the public landing and create a new account — "
+    "as if Mighty has never seen you."
+)
+SIGNUP_FACTORY_RESET_DONE = (
+    "Your Mighty account was deleted. Create a new account to begin — "
+    "Mighty will treat this like the first time."
+)
+
+# ── Invite-only factory reset (same email) ────────────────────────────────────
+BETA_RESTART_HEADLINE = "Factory reset"
+BETA_RESTART_LEDE = (
+    "Delete this Mighty account and all Mighty data for this email. "
+    "You’ll return to the public landing and can create a new account — "
+    "as if Mighty has never seen you. Your Gmail and Amex logins are unchanged."
+)
+BETA_RESTART_CTA = "Delete data and start over"
+BETA_RESTART_PASSWORD_HELPER = (
+    "Enter the password for this Mighty account to confirm it’s yours."
+)
+BETA_RESTART_CONFIRM = (
+    "I understand this permanently deletes my Mighty account and all Mighty data "
+    "for this email. I will create a new account to begin again."
+)
+BETA_RESTART_REASSURE = (
+    "This only deletes Mighty. It does not change your Google or American Express accounts."
+)
+BETA_RESTART_SIGN_IN_PROMPT = "Want to keep your account instead?"
+BETA_RESTART_WRONG_PASSWORD = (
+    "That email and password don’t match. Try again, or reset your password first."
+)
+BETA_RESTART_NO_ACCOUNT = (
+    "No Mighty account uses that email. You can create one instead."
+)
+BETA_RESTART_NEED_CONFIRM = "Check the confirmation box to continue."
+
+# ── Enable Monitoring (CP-004) ────────────────────────────────────────────────
+ENABLE_MONITORING_EYEBROW = "Accounts selected · Set up updates next"
+ENABLE_MONITORING_HEADLINE = "Keep your accounts current while you browse"
+ENABLE_MONITORING_LEDE = (
+    "You chose what Mighty should watch. Updates start after Mighty in Chrome "
+    "is connected — then when you visit those accounts signed in, Mighty can "
+    "refresh what Home shows. You sign in yourself."
+)
+ENABLE_MONITORING_TEACH_1_TITLE = "You chose what to watch"
+ENABLE_MONITORING_TEACH_1_BODY = (
+    "Mighty only follows the accounts you confirmed. Live updates still need "
+    "Mighty in Chrome."
+)
+ENABLE_MONITORING_TEACH_2_TITLE = "Updates happen while you browse"
+ENABLE_MONITORING_TEACH_2_BODY = (
+    "When Mighty in Chrome is connected and you open a watched account signed in, "
+    "Mighty can refresh what Home shows."
+)
+ENABLE_MONITORING_TEACH_3_TITLE = "You stay the operator"
+ENABLE_MONITORING_TEACH_3_BODY = (
+    "Mighty never signs in as you. Sign-in is the only manual step."
+)
+ENABLE_MONITORING_WHY_LABEL = "Why the browser"
+ENABLE_MONITORING_WHY_BODY = (
+    "Balances live on provider sites. The browser is how Mighty can refresh what "
+    "you already see when you’re signed in — then show it calmly on Home."
+)
+ENABLE_MONITORING_ROLE_YOU = "You sign in when needed"
+ENABLE_MONITORING_ROLE_MIGHTY = "Mighty refreshes Home from pages you open"
+ENABLE_MONITORING_CTA = "Enable updates"
+ENABLE_MONITORING_SECONDARY = "Not now — go to Home"
+ENABLE_MONITORING_REASSURE = (
+    "Takes a moment in a normal desktop Chrome window (not Incognito). "
+    "You’ll sign into providers yourself when needed."
+)
+ENABLE_MONITORING_MOBILE_NOTE = (
+    "Use desktop Chrome to keep accounts current while you browse. "
+    "On this device you can continue to Home and finish updates later."
+)
+ENABLE_MONITORING_DETAILS_SUMMARY = "What updates involve"
+ENABLE_MONITORING_DETAILS_WHEN = (
+    "Updates run when you visit a watched account page in Chrome while signed in — "
+    "not as a remote login into your providers."
+)
+ENABLE_MONITORING_DETAILS_SEES = (
+    "Mighty can read account information on pages you open for programs it’s watching, "
+    "enough to update balances and status for Home. It is not a recorder of everything "
+    "you do online."
+)
+ENABLE_MONITORING_DETAILS_OFF = (
+    "You can turn updates off anytime by disabling or removing Mighty in Chrome. "
+    "What Mighty watches stays yours to change."
+)
+ENABLE_MONITORING_DETAILS_SKIP = (
+    "If you skip for now, Mighty still remembers what you chose to watch. "
+    "Verified numbers wait until updates are enabled and you visit a provider signed in."
+)
+ENABLE_MONITORING_DETAILS_HOME = (
+    "Home shows what needs you and what’s already verified. "
+    "Mighty in Chrome is how account facts stay current while you browse. "
+    "Home never logs into provider sites for you."
+)
+ENABLE_MONITORING_READY_EYEBROW = "Updates ready"
+ENABLE_MONITORING_READY_HEADLINE = "Mighty in Chrome is ready"
+ENABLE_MONITORING_READY_LEDE = (
+    "Next, visit one of your watched accounts while signed in so Home can show "
+    "your first update — or go to Home and do it when you’re ready."
+)
+ENABLE_MONITORING_READY_CTA = "Go to Home"
+ENABLE_MONITORING_PAGE_TITLE = "Enable updates"
 
 # ── Daily brief / actions ─────────────────────────────────────────────────────
 ACTION_SURFACED_FROM = "Surfaced from {source} during your latest update."
@@ -580,12 +749,17 @@ HOME_HANDOFF_NEEDS_CHROME_BODY = (
     "Set up Mighty in Chrome so Mighty can verify access while you browse. "
     "This is the only setup step left before your first update."
 )
-HOME_HANDOFF_NEEDS_VISIT_BODY = (
-    "Mighty is ready to verify access. Visit the provider in Chrome while signed in — "
-    "that is the only step you need to do."
+HOME_PROVIDER_VISIT_HELPER = (
+    "Mighty stays open in this tab while the provider is open."
 )
+HOME_PROVIDER_VISIT_OPENED = (
+    "Opened in another tab. Mighty is still active here — this page will update when "
+    "Mighty sees progress. No sync button needed."
+)
+HOME_NOT_NOW_LABEL = "Not now"
 HOME_HANDOFF_VERIFYING_BODY = (
-    "Mighty is verifying access now. You do not need to do anything else."
+    "Mighty is verifying access now. You do not need to do anything else — "
+    "keep this tab open or return here; Home will update when the check finishes."
 )
 HOME_VIEW_WAITING_LABEL = "View all accounts"
 HOME_VIEW_NEEDS_LOGIN_LABEL = "View all accounts needing login"
@@ -679,13 +853,29 @@ def home_waiting_headline(count: int, provider_name: str | None = None) -> str:
     )
 
 
-def home_handoff_body(*, needs_chrome: bool = False, verifying: bool = False) -> str:
+def home_handoff_needs_visit_body(provider_name: str | None = None) -> str:
+    """Orientation for Visit provider — Mighty stays home base (system of engagement)."""
+    name = (provider_name or "the provider").strip() or "the provider"
+    return (
+        f"Mighty is ready to verify access. {name} opens in a new tab — "
+        f"keep this Mighty tab open. Sign in yourself on {name}; Mighty watches and "
+        f"does not sign in as you. Return here afterward — Home updates when Mighty "
+        f"can verify access."
+    )
+
+
+def home_handoff_body(
+    *,
+    needs_chrome: bool = False,
+    verifying: bool = False,
+    provider_name: str | None = None,
+) -> str:
     """Lightweight enrollment confirmation body — not a permanent Home section."""
     if needs_chrome:
         return HOME_HANDOFF_NEEDS_CHROME_BODY
     if verifying:
         return HOME_HANDOFF_VERIFYING_BODY
-    return HOME_HANDOFF_NEEDS_VISIT_BODY
+    return home_handoff_needs_visit_body(provider_name)
 
 
 def home_visit_provider_cta(provider_name: str) -> str:
@@ -699,15 +889,87 @@ def home_login_headline(provider_name: str, *, plural: bool = False, count: int 
 
 
 def home_login_body(provider_name: str) -> str:
-    del provider_name  # Provider is named in the title / CTA.
+    """Role-split body for first / routine provider sign-in (CP-005)."""
     return (
-        "This is the only step we can't complete for you. "
-        "Once you sign in, we'll take care of the rest."
+        f"{provider_name} needs your sign-in so Mighty can keep this account current. "
+        f"{provider_name} opens in a new tab — keep this Mighty tab open. "
+        f"You'll sign in on {provider_name}'s site; Mighty does not sign in as you. "
+        f"Return here afterward — Home updates when Mighty sees progress."
+    )
+
+
+def home_login_mfa_body(provider_name: str) -> str:
+    return (
+        f"Finish the {provider_name} sign-in challenge on {provider_name}'s site. "
+        "Mighty does not sign in as you — once you finish, Mighty can keep watching."
+    )
+
+
+def home_login_captcha_body(provider_name: str) -> str:
+    return (
+        f"Complete the {provider_name} security check on {provider_name}'s site. "
+        "Mighty does not sign in as you."
+    )
+
+
+def home_login_consent_body(provider_name: str) -> str:
+    return (
+        f"Approve access for {provider_name} on {provider_name}'s site. "
+        "Mighty does not sign in as you."
     )
 
 
 def home_login_cta(provider_name: str) -> str:
-    return f"Log in to {provider_name}"
+    return f"Sign in to {provider_name}"
+
+
+def home_journey_waiting_headline(provider_name: str) -> str:
+    return f"Waiting on {provider_name}"
+
+
+def home_journey_waiting_body(provider_name: str, *, action_label: str = "opened") -> str:
+    return (
+        f"You {action_label} {provider_name}. Mighty is waiting for Chrome to confirm "
+        f"you're signed in — keep the {provider_name} tab open and return here. "
+        f"Home will update when Mighty sees progress."
+    )
+
+
+def home_journey_progress_headline(provider_name: str) -> str:
+    return f"Checking {provider_name}"
+
+
+def home_journey_progress_body(provider_name: str, *, action_label: str = "opened") -> str:
+    return (
+        f"You {action_label} {provider_name}. Mighty is verifying access now — "
+        f"keep this tab open."
+    )
+
+
+def home_journey_non_progress_headline(provider_name: str) -> str:
+    return f"Still waiting on {provider_name}"
+
+
+def home_journey_non_progress_body(provider_name: str, *, action_label: str = "opened") -> str:
+    return (
+        f"You {action_label} {provider_name}, but Mighty has not confirmed a signed-in "
+        f"session yet. Keep the {provider_name} tab open, finish signing in there if needed, "
+        f"then return here."
+    )
+
+
+def home_journey_repeat_ask_headline(provider_name: str) -> str:
+    return f"Sign in to {provider_name} still needed"
+
+
+def home_journey_repeat_ask_body(provider_name: str, *, action_label: str = "opened") -> str:
+    """R1: explain why previous attempt did not produce the expected outcome."""
+    return (
+        f"You already {action_label} {provider_name}, but Mighty still does not have a "
+        f"confirmed signed-in session — that is why we are asking again. "
+        f"Open {provider_name} in a new tab, complete sign-in yourself, keep this Mighty "
+        f"tab open, and return here afterward."
+    )
 
 
 def home_open_provider_cta(provider_name: str) -> str:
@@ -749,10 +1011,26 @@ def home_briefing_all_clear_body(account_count: int = 0) -> str:
 
 
 def home_v2_healthy_body() -> str:
-    """Living Calm healthy lede — permission to leave."""
+    """Ambient all-clear — permission to leave (after first-success settles)."""
     return (
-        "Mighty verified your accounts and will watch quietly from here. "
-        "Nothing needs your attention right now."
+        "Nothing needs your attention right now. "
+        "Mighty will watch quietly and let you know if anything changes."
+    )
+
+
+def home_first_success_body(provider_name: str) -> str:
+    """One-shot return-to-Home after first verification (CP-005)."""
+    return (
+        f"Mighty verified {provider_name} and will watch quietly from here. "
+        "Nothing else needs you right now."
+    )
+
+
+def home_first_success_partial_body(provider_name: str) -> str:
+    """Access verified; first data still arriving."""
+    return (
+        f"Access verified for {provider_name}. "
+        "Balances will show as Mighty finishes the first update."
     )
 
 
@@ -780,6 +1058,19 @@ def home_ops_setting_up_provider(provider_name: str) -> str:
 def home_ops_needs_login(count: int) -> str:
     del count
     return "A sign-in is needed"
+
+
+def home_steady_needs_sign_in_body(count: int = 1) -> str:
+    """Honesty fallback when Attention is silent but portfolio needs sign-in (CP-006)."""
+    if count > 1:
+        return (
+            f"{count} accounts need your sign-in so Mighty can keep watching. "
+            "You’ll sign in on each provider’s site — Mighty does not sign in as you."
+        )
+    return (
+        "An account needs your sign-in so Mighty can keep watching. "
+        "You’ll sign in on the provider’s site — Mighty does not sign in as you."
+    )
 
 
 def home_freshness_label(when: str) -> str:

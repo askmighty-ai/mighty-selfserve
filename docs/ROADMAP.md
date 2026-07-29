@@ -1,22 +1,24 @@
 # Mighty Engineering Roadmap
 
-**Status:** Canonical  
+**Status:** Engineering roadmap  
 **Audience:** Lead Engineer and contributors delivering milestones  
-**Related:** [PRODUCT_MANIFESTO.md](PRODUCT_MANIFESTO.md) · [PRODUCT_ARCHITECTURE.md](PRODUCT_ARCHITECTURE.md) · [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) · [ENGINEERING_CHARTER.md](ENGINEERING_CHARTER.md) · [CONTRIBUTING_ENGINEERING.md](CONTRIBUTING_ENGINEERING.md)
+**Related:** [Operating Model](OPERATING_MODEL.md) · [Founder Vision](founder-vision/FOUNDER_VISION.md) · [Product System](product/README.md) · [PRODUCT_ARCHITECTURE.md](PRODUCT_ARCHITECTURE.md) · [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) · [ENGINEERING_CHARTER.md](ENGINEERING_CHARTER.md) · [AI Delegation Charter](AI_DELEGATION_CHARTER.md) · [CONTRIBUTING_ENGINEERING.md](CONTRIBUTING_ENGINEERING.md)
 
 This document is the living product and architecture roadmap for engineering milestones. Update it when a milestone starts, completes, or when parking-lot items are promoted.
 
-Milestones are **capability-led**: each delivers a user-visible capability. Supporting work (internal dashboards, test reconciliation, flag deletion, isolated metrics) belongs inside the capability milestone it supports, or as focused operational work — not as standalone product milestones.
+Milestones are usually **capability-led**: each delivers a user-visible capability. Supporting work (internal dashboards, test reconciliation, flag deletion, isolated metrics) belongs inside the capability milestone it supports, or as focused operational work — not as standalone product milestones.
+
+**Exception — experience gates:** When Founder evidence shows the product is not yet perceived as one coherent whole, an **experience coherence milestone** may govern before the next capability expansion. Those milestones are feature-neutral and judged by user perception, not by new capabilities shipped.
 
 ---
 
 ## Product vision
 
-Mighty is a quiet co-pilot for financial and loyalty life. It watches accounts the user already has, keeps them current in the background, and speaks up only when something is worth their time.
+Product intent is owned by the [Founder Vision](founder-vision/FOUNDER_VISION.md). Operational identity and surfaces live in the [Product System](product/README.md).
 
 Home answers one question in five seconds: *Does anything need me?* Login is the only manual step. Discovery, session detection, extraction, and refresh are Mighty’s job. Healthy accounts stay silent.
 
-Canonical product north star: [PRODUCT_MANIFESTO.md](PRODUCT_MANIFESTO.md). Long-horizon surface and question model: [PRODUCT_ARCHITECTURE.md](PRODUCT_ARCHITECTURE.md).
+Highest product authority: [FOUNDER_VISION.md](founder-vision/FOUNDER_VISION.md). Operational placement: [07_product_architecture.md](product/07_product_architecture.md).
 
 ---
 
@@ -86,18 +88,29 @@ Failure / access facts
 | 11 | Trusted Agent Authorization | Agents act only with verified, inspectable human approval | Complete | [milestones/MILESTONE_11.md](milestones/MILESTONE_11.md) |
 | 12 | Trust, Privacy, and Control | Users understand and control what Mighty can see and do | Complete | [milestones/MILESTONE_12.md](milestones/MILESTONE_12.md) |
 
+### Experience coherence (governing)
+
+| Milestone | User outcome | Status | Record |
+|-----------|--------------|--------|--------|
+| Unified Beta Experience | A first-time user believes they are using one coherent, premium product from landing through daily use | **Current** | [milestones/MILESTONE_UNIFIED_BETA_EXPERIENCE.md](milestones/MILESTONE_UNIFIED_BETA_EXPERIENCE.md) |
+
 RFC phase mapping (P0–P5) for Attention foundations lives in [AUTHENTICATION_ATTENTION_PLATFORM.md](AUTHENTICATION_ATTENTION_PLATFORM.md) Part XIII. Living reports under `docs/milestones/` are authoritative for what shipped.
 
 ---
 
 ## Current milestone
 
-**None (planning).** Milestone 12 — Trust, Privacy, and User Governance is complete. Capability roadmap M6–M12 delivered.
+**Unified Beta Experience** — experience coherence gate (feature-neutral). Capability roadmap M6–M12 remains complete; new providers / major capabilities wait until this gate passes (or Founder override).
 
 | Field | Value |
 |-------|-------|
-| **Last completed** | M12 — [milestones/MILESTONE_12.md](milestones/MILESTONE_12.md) |
-| **Next** | Post-roadmap evolution (see M12 recommendations / parking lot) |
+| **Current** | [milestones/MILESTONE_UNIFIED_BETA_EXPERIENCE.md](milestones/MILESTONE_UNIFIED_BETA_EXPERIENCE.md) |
+| **Last completed capability** | M12 — [milestones/MILESTONE_12.md](milestones/MILESTONE_12.md) |
+| **Governing decision** | [2026-07-29-unified-beta-experience.md](product/decisions/2026-07-29-unified-beta-experience.md) · State next: [2026-07-29-ube-state-model-narrator.md](product/decisions/2026-07-29-ube-state-model-narrator.md) |
+| **Success** | First-time user believes one coherent, premium product from landing through daily use |
+| **Release gates** | One visual language · one vocabulary · one interaction model · one state model · one navigation model · one mental model · three-question exit test |
+| **Active repair (proposed)** | Journey narrator — [cycles/ube-journey-narrator/](cycles/ube-journey-narrator/) (State Model; visual migration suspended) |
+| **Explicitly not success** | Page-level consistency alone; new capabilities as a substitute for coherence |
 
 ---
 
