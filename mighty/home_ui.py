@@ -1175,18 +1175,19 @@ def _render_activity_preview(
         for win in wins:
             body = escape(win.message)
             if win.href:
+                href = escape(win.href)
                 items.append(
-                    f'<li class="home-v2__activity-item">'
-                    f'<a href="{escape(win.href)}">{body}</a></li>'
+                    '<li class="home-v2__activity-item">'
+                    '<a href="' + href + '">' + body + '</a></li>'
                 )
             else:
-                items.append(f'<li class="home-v2__activity-item">{body}</li>')
-        joined_items = "".join(items)
-        content = f'<ul class="home-v2__activity-list">{joined_items}</ul>'
+                items.append('<li class="home-v2__activity-item">' + body + '</li>')
+        content = '<ul class="home-v2__activity-list">' + "".join(items) + '</ul>'
     elif visual_state == "healthy":
         content = (
-            f'<p class="home-v2__activity-empty">'
-            f"{escape(user_copy.HOME_V2_ACTIVITY_EMPTY)}</p>"
+            '<p class="home-v2__activity-empty">'
+            + escape(user_copy.HOME_V2_ACTIVITY_EMPTY)
+            + '</p>'
         )
     else:
         return ""
