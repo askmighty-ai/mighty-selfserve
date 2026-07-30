@@ -13661,15 +13661,21 @@ def health():
         user_count = None
         db_ok = False
     from mighty.verification_timeline_diagnostics import deployment_sha
+    from mighty.readiness_build import compute_readiness_content_sha
 
     # Env metadata only — do not call git inside the container.
     sha = deployment_sha()
+    try:
+        readiness_content_sha = compute_readiness_content_sha()
+    except Exception:
+        readiness_content_sha = "unavailable"
     return jsonify({
         "ok":             True,
         "db_ok":          db_ok,
         "user_count":     user_count,
         "deployment_sha": sha,
         "git_sha":        sha,  # alias for older consumers
+        "readiness_content_sha": readiness_content_sha,
     })
 
 

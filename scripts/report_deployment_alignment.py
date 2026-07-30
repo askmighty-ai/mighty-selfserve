@@ -79,13 +79,16 @@ def main() -> int:
         },
     }
 
+    git_aligned = bool(prod_git) and head.startswith(prod_git)
     aligned = (
         not dirty
         and upstream
         and remote_sha == head
         and ahead_behind == "0\t0"
-        and prod_sha == local_sha
         and remote_health.get("ok") is True
+        and git_aligned
+        and bool(prod_sha)
+        and prod_sha == local_sha
     )
     report = {
         "aligned": aligned,
