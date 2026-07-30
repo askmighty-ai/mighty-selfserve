@@ -2,6 +2,8 @@
 FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
 
 WORKDIR /app
+ARG CHROME_FIRST_BUILD=5aeae337
+ENV CHROME_FIRST_BUILD=$CHROME_FIRST_BUILD
 
 # System dependencies (bcrypt, cryptography need build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
