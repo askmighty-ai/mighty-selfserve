@@ -4,50 +4,32 @@
 from __future__ import annotations
 
 import html as html_lib
-import json
-import sqlite3
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs" / "pr-screenshots" / "amex-extension-first-onboarding"
 DS = ROOT / "static" / "design-system"
-FIXTURES = ROOT / "tests" / "fixtures" / "amex" / "rental-status"
 
+README = """# Amex first-insight onboarding — PR screenshots
 
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    from mighty.intelligence.schema import ensure_intelligence_tables
+Anticipation path: Add Mighty → Visit Amex → checking → first insight. Infrastructure stays quiet. Gmail is optional after first intelligence.
 
-    ensure_intelligence_tables(conn, commit=True)
-    return conn
+**Do not embed these images in chat.** Open files from the repository.
 
+| File | What it shows |
+|------|----------------|
+| `attention.png` | Add Mighty to Chrome (`/extension-setup`) — install means, Visit Amex next |
+| `all-clear.png` | Home — Visit American Express (no insight claimed yet) |
+| `opportunity.png` | First insight on Home plus optional Find more accounts from Gmail |
 
-def _ingest(db: sqlite3.Connection) -> None:
-    from mighty.intelligence.refresh import ingest_amex_rental_observations
+## Notes
 
-    cards = json.loads((FIXTURES / "cards_overview.json").read_text(encoding="utf-8"))
-    rental = json.loads((FIXTURES / "car_rental_privileges.json").read_text(encoding="utf-8"))
-    ingest_amex_rental_observations(
-        db,
-        user_id="demo",
-        observations=[
-            {
-                "observation_type": "amex_cards",
-                "source_url": cards["source_url"],
-                "observed_at": cards["observed_at"],
-                "payload": cards,
-            },
-            {
-                "observation_type": "amex_car_rental_privileges",
-                "source_url": rental["source_url"],
-                "account_identity": rental["account_id"],
-                "observed_at": rental["observed_at"],
-                "payload": rental,
-            },
-        ],
-    )
+- Capture script: `scripts/capture_amex_extension_first_onboarding_screenshots.py`
+- Signup redirects to `/extension-setup` and auto-enrolls Amex
+- No heartbeat / diagnostics on the customer path (`?debug=1` admin only)
+- CTA language stays action-true: Visit American Express — never “continue to your first insight”
+"""
 
 
 def main() -> int:
@@ -58,7 +40,6 @@ def main() -> int:
     from mighty.extension_setup_ui import render_extension_setup_page
     from mighty.home_state import resolve_home_state
     from mighty.home_ui import render_home_page
-    from mighty.intelligence.ui import INTEL_INSIGHT_CSS
 
     css = "\n".join(
         (DS / name).read_text(encoding="utf-8")
@@ -70,7 +51,6 @@ def main() -> int:
             "mighty-ds.css",
         )
     )
-    css = f"{css}\n{INTEL_INSIGHT_CSS}"
 
     def _acct(source: str, display_name: str, status: str) -> AccountStatus:
         presentation_key = {
@@ -91,16 +71,12 @@ def main() -> int:
             user_action_url="https://global.americanexpress.com/overview",
         )
 
-    db = _db()
-
-    # attention: Chrome setup (primary onboarding step)
     attention_html = render_extension_setup_page(
         api_key="mk_demo",
         home_href="/dashboard",
         diagnostics=False,
     )
 
-    # all-clear: Visit Amex handoff after Chrome is ready
     all_clear_html = render_home_page(
         resolve_home_state(
             accounts=[_acct("amex", "American Express", "waiting_for_extension")],
@@ -114,12 +90,8 @@ def main() -> int:
         escape=html_lib.escape,
         gmail_connected=False,
         chrome_active=True,
-        db=db,
-        user_id="demo",
     )
 
-    # opportunity: first insight + optional Gmail enhancement
-    _ingest(db)
     opportunity_html = render_home_page(
         resolve_home_state(
             accounts=[_acct("amex", "American Express", "up_to_date")],
@@ -132,8 +104,6 @@ def main() -> int:
         chrome_active=True,
         first_success_provider="American Express",
         first_success_partial=False,
-        db=db,
-        user_id="demo",
     )
 
     frames = {
@@ -161,27 +131,7 @@ def main() -> int:
             print(f"wrote {OUT / name}")
         browser.close()
 
-    (OUT / "README.md").write_text(
-        """# Amex extension-first onboarding — PR screenshots
-
-Chrome extension is the primary Amex beta discovery path. Gmail is optional after first intelligence.
-
-**Do not embed these images in chat.** Open files from the repository.
-
-| File | What it shows |
-|------|----------------|
-| `attention.png` | Install Mighty in Chrome (`/extension-setup`) — first onboarding step |
-| `all-clear.png` | Home handoff after Chrome is ready — Visit American Express |
-| `opportunity.png` | First insight on Home plus optional Find more accounts from Gmail |
-
-## Notes
-
-- Capture script: `scripts/capture_amex_extension_first_onboarding_screenshots.py`
-- Signup redirects to `/extension-setup` and auto-enrolls Amex
-- Gmail `/email-scan` remains available as an optional enhancement only after first intelligence
-""",
-        encoding="utf-8",
-    )
+    (OUT / "README.md").write_text(README, encoding="utf-8")
     print(f"wrote {OUT / 'README.md'}")
     return 0
 

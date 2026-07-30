@@ -467,6 +467,7 @@ def main() -> int:
         plc1.get("state") == "unsupported-data"
         and (
             "beginning to manage" in home_l
+            or "first insight" in home_l
             or ("visit american express" in home_l and not home_shows_unsupported)
         )
     )

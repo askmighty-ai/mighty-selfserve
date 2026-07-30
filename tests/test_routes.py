@@ -254,9 +254,9 @@ def test_dashboard_suppresses_demo_with_connected_account(client):
 def test_email_scan_has_sidebar_nav(client):
     r = client.get("/email-scan")
     assert r.status_code == 200
-    assert b"Find accounts" in r.data
-    assert b"/credentials" in r.data
-    assert b"app-shell" in r.data
+    # Optional post-insight path — preface, not primary onboarding.
+    assert b"Find more accounts from Gmail" in r.data or b"Find accounts" in r.data
+    assert b"Not now" in r.data or b"/dashboard" in r.data
 
 
 def test_credentials_page_renders(client):

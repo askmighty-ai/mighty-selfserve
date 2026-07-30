@@ -12182,12 +12182,23 @@ def extension_setup():
     """
     from mighty.extension_setup_ui import render_extension_setup_page
 
-    user = get_db().execute("SELECT api_key FROM users WHERE id=?", (session["user_id"],)).fetchone()
+    user = get_db().execute(
+        "SELECT api_key, email FROM users WHERE id=?",
+        (session["user_id"],),
+    ).fetchone()
     key = user["api_key"] if user else ""
+    visit_href = (
+        SOURCE_CAPABILITIES.get("amex", {}).get("login_url")
+        or SITE_ENTRY_URL.get("amex")
+        or "https://www.americanexpress.com/en-us/account/login"
+    )
+    # Handshake diagnostics are admin/debug only — not part of the customer path.
     html = render_extension_setup_page(
         api_key=key or "",
         home_href=_default_app_home_path(),
-        diagnostics=True,
+        visit_href=visit_href,
+        visit_label=user_copy.home_visit_provider_cta("American Express"),
+        diagnostics=_is_dev_debug(user),
     )
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
@@ -15493,13 +15504,13 @@ function restoreArchivedBenefit(idx) {{
     <button onclick="closeCredModal()" style="background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:2px 6px">&times;</button>
   </div>
   <p id="dash-cred-body" style="font-size:14px;color:#4b5563;line-height:1.55;margin:0 0 16px">
-    Mighty never asks for provider passwords. Open the site in Chrome while Mighty in Chrome
-    is enabled — you sign in there; Mighty watches and updates Home.
+    Mighty never asks for provider passwords. Open the site in Chrome with the helper
+    enabled — you sign in there; Mighty finds useful account information on Home.
   </p>
   <input id="dash-cred-source" type="hidden">
   <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
     <button onclick="closeCredModal()" style="padding:8px 16px;border:1px solid #e5e7eb;border-radius:7px;background:#fff;font-size:13px;color:#6b7280;cursor:pointer">Close</button>
-    <a id="dash-cred-open" href="/extension-setup" style="padding:8px 18px;border:none;border-radius:7px;background:#059669;color:#fff;font-size:13px;font-weight:600;text-decoration:none;display:inline-block">Set up Mighty in Chrome</a>
+    <a id="dash-cred-open" href="/extension-setup" style="padding:8px 18px;border:none;border-radius:7px;background:#059669;color:#fff;font-size:13px;font-weight:600;text-decoration:none;display:inline-block">{user_copy.CTA_SET_UP_WORKER}</a>
   </div>
 </div>
 <script>

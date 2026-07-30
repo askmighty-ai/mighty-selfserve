@@ -216,83 +216,72 @@ WORKER_NEXT_UPDATE_PREFIX = "Next update in"
 WORKER_ACCOUNTS_UPDATED = "{n} account{s} updated"
 WORKER_ACCOUNTS_UPDATED_PARTIAL = "{ok} of {total} accounts updated"
 
-# ── Mighty in Chrome setup (Chrome extension install / troubleshooting) ───────
+# ── Mighty in Chrome setup (means to first Amex visit — not the product) ───────
 EXT_PRODUCT_NAME = "Mighty in Chrome"
-EXT_SETUP_LINK = "Set up Mighty in Chrome"
-EXT_SETUP_TITLE = "Connect Mighty in Chrome"
+EXT_SETUP_LINK = "Add Mighty to Chrome"
+EXT_SETUP_TITLE = "Add Mighty to Chrome"
 EXT_SETUP_BODY = (
-    "Mighty in Chrome is how American Express account intelligence starts. "
-    "It only works in a normal Chrome window — not Incognito or Guest. "
-    "Confirm that first, install, then ask Mighty to check."
+    "Then open American Express while signed in. "
+    "Mighty looks for things worth knowing about your account."
 )
-EXT_SETUP_CONTEXT_HEADING = "Before you install"
+EXT_SETUP_CONTEXT_HEADING = "Open in Chrome"
 EXT_SETUP_CONTEXT_LEDE = (
-    "Use the same normal Chrome window for this page, chrome://extensions, "
-    "and later Amex. Incognito and Guest windows block extensions by default, "
-    "so Mighty cannot see this page or send a heartbeat."
+    "Use a normal Chrome window — not Incognito or Guest."
 )
 EXT_SETUP_CONTEXT_CONFIRM = (
     "I’m in a normal Chrome window (not Incognito, not Guest)"
 )
-EXT_SETUP_CONTEXT_UNLOCK = (
-    "Check this to unlock download and install steps."
-)
+EXT_SETUP_CONTEXT_UNLOCK = ""
 EXT_SETUP_CONTEXT_BLOCKED = (
-    "This looks like Incognito or a restricted window. "
-    "Open Mighty in a normal Chrome window, sign in again if needed, "
-    "then return here. Chrome — not Mighty — is blocking the extension."
+    "Open this page in a normal Chrome window (not Incognito or Guest), then try again."
 )
 EXT_SETUP_CONTEXT_NOT_CHROME = (
-    "Mighty in Chrome requires desktop Google Chrome. "
-    "Open this page in Chrome to continue. This is a browser requirement, not a Mighty outage."
+    "Open this page in desktop Google Chrome to continue."
 )
-EXT_SETUP_INSTALL_HEADING = "Install (desktop Chrome)"
-EXT_SETUP_DOWNLOAD_LABEL = "Download Mighty in Chrome"
+EXT_SETUP_INSTALL_HEADING = "Three quick steps"
+EXT_SETUP_DOWNLOAD_LABEL = "Download Mighty"
 EXT_SETUP_INSTALL_STEPS: tuple[str, ...] = (
-    "Stay in this normal Chrome window. Download Mighty in Chrome (zip) and unzip it.",
-    "In this same window, open chrome://extensions → turn on Developer mode.",
-    "Click Load unpacked and select the unzipped mighty-in-chrome folder "
-    "(the folder that contains manifest.json).",
-    "Pin Mighty from the puzzle-piece menu. If it was already installed, "
-    "click Reload on chrome://extensions first.",
+    "Download and unzip.",
+    "In Chrome, open chrome://extensions and turn on Developer mode.",
+    "Load unpacked and choose the unzipped folder.",
 )
 EXT_SETUP_RELOAD_HINT = (
-    "Already installed? Reload Mighty on chrome://extensions in this same "
-    "normal window, then use I’ve installed Mighty."
+    "Already added? Reload Mighty on chrome://extensions, then continue."
 )
-EXT_SETUP_CONNECTION_LABEL = "Mighty in Chrome"
-EXT_SETUP_HEARTBEAT_LISTENING = "Listening for Mighty in Chrome…"
-EXT_SETUP_HEARTBEAT_SEEN = "Heartbeat received"
-EXT_SETUP_HEARTBEAT_NONE = "No heartbeat yet"
-EXT_SETUP_VERIFY_CTA = "I've installed Mighty"
-EXT_SETUP_VERIFYING = "Checking for Mighty in Chrome…"
-EXT_SETUP_WAITING = "Waiting for Mighty in Chrome…"
-EXT_SETUP_SUCCESS = "Mighty in Chrome is connected"
-EXT_SETUP_CONTINUE = "Continue to Home"
-EXT_SETUP_CONTINUE_HINT = (
-    "Next on Home: visit American Express while signed in to see your first insight. "
-    "You can finish Chrome setup later if needed."
-)
+# Connection strings kept for admin diagnostics / silent JS — not customer UI.
+EXT_SETUP_CONNECTION_LABEL = "Status"
+EXT_SETUP_HEARTBEAT_LISTENING = "Waiting…"
+EXT_SETUP_HEARTBEAT_SEEN = "Ready"
+EXT_SETUP_HEARTBEAT_NONE = "Not yet"
+EXT_SETUP_VERIFY_CTA = "I've added Mighty"
+EXT_SETUP_VERIFYING = "One moment…"
+EXT_SETUP_WAITING = "One moment…"
+EXT_SETUP_SUCCESS = "Next: open American Express while signed in."
+EXT_SETUP_CONTINUE = "Not now"
+EXT_SETUP_CONTINUE_HINT = ""
 EXT_SETUP_NOT_DETECTED = (
-    "Mighty still doesn’t see a heartbeat from the extension."
+    "Mighty isn’t seeing the add-on yet. Reload it on chrome://extensions, then try again."
 )
 EXT_SETUP_FAIL_CHROME = (
-    "Chrome context — Stay in a normal Chrome window (not Incognito/Guest). "
-    "Extensions can’t reach this page there."
+    "Stay in a normal Chrome window (not Incognito or Guest)."
 )
 EXT_SETUP_FAIL_EXTENSION = (
-    "Extension — On chrome://extensions, confirm Mighty is loaded and enabled, "
-    "then click Reload and try again."
+    "On chrome://extensions, confirm Mighty is loaded, then Reload."
 )
 EXT_SETUP_FAIL_MIGHTY = (
-    "Mighty — If Chrome and the extension look correct, reload this page and try again. "
-    "If it still fails, tell support the Live connection panel stayed on “No heartbeat yet.”"
+    "Reload this page and try again."
 )
 EXT_SETUP_TRY_AGAIN = "Try again"
-EXT_SETUP_GO_HOME = "Go to Home"
-EXT_NOT_DETECTED_SHORT = "Mighty in Chrome not detected."
-EXT_INSTALL_TOAST = "Install Mighty in Chrome to update your accounts."
-MOBILE_WORKER_TOAST = "Use desktop Chrome with Mighty in Chrome to update your accounts."
+EXT_SETUP_GO_HOME = "Visit American Express"
+EXT_SETUP_VISIT_HINT = (
+    "Leave this tab open. After you sign in at American Express, come back — "
+    "Mighty will be looking."
+)
+EXT_SETUP_VERIFY_TITLE = ""
+EXT_SETUP_VERIFY_IDLE = "When you’ve added it, continue below."
+EXT_NOT_DETECTED_SHORT = "Add Mighty to Chrome to continue."
+EXT_INSTALL_TOAST = "Add Mighty to Chrome, then open American Express."
+MOBILE_WORKER_TOAST = "Use desktop Chrome to open American Express with Mighty."
 
 # ── How updates work (Accounts page) ──────────────────────────────────────────
 HOW_UPDATES_TITLE = "How Mighty works"
@@ -414,7 +403,7 @@ CTA_LOG_IN = "Log in"
 CTA_LOG_IN_TO_PROVIDER = "Log in to provider"
 CTA_VIEW_ACCOUNT = "View account"
 CTA_RETRY_UPDATE = "Retry update"
-CTA_SET_UP_WORKER = "Set up Mighty in Chrome"
+CTA_SET_UP_WORKER = "Add Mighty to Chrome"
 
 LIFECYCLE_CTAS: dict[str, str] = {
     "discovered": CTA_ADD_TO_MIGHTY,
@@ -573,12 +562,11 @@ ONBOARDING_CHROME_LINE = (
 )
 SIGNUP_HEADLINE = "Let's get started."
 SIGNUP_SUB = (
-    "Create your Mighty account. Next you’ll install Mighty in Chrome, "
-    "visit American Express, and see your first insight."
+    "Create an account — Mighty finds things worth knowing about American Express."
 )
 SIGNUP_CTA = "Create account"
 SIGNUP_REASSURE = (
-    "You sign in at American Express in Chrome — Mighty never asks for your Amex password."
+    "You sign in at American Express yourself — Mighty never asks for your Amex password."
 )
 SIGNUP_PASSWORD_HELPER = "At least 6 characters."
 SIGNUP_DUPLICATE_TITLE = "An account with that email already exists."
@@ -737,16 +725,15 @@ def connect_steps_html(*, step2_extra: str = "") -> str:
 
 
 # ── Home (attention inbox) ───────────────────────────────────────────────────
-HOME_EMPTY_HEADLINE = "Set up Mighty in Chrome."
+HOME_EMPTY_HEADLINE = "Add Mighty to Chrome."
 HOME_EMPTY_BODY = (
-    "Install Mighty in Chrome, visit American Express while signed in, "
-    "and see your first account insight. Gmail is optional later."
+    "Add Mighty, then open American Express while signed in. "
+    "Gmail is optional later."
 )
 HOME_EMPTY_WORKER_NOTE = (
-    "Use desktop Chrome with Mighty in Chrome when an account needs a visit. "
-    "Home shows results; it never logs into provider sites for you."
+    "Use desktop Chrome when American Express needs a visit."
 )
-HOME_EMPTY_CTA = "Set up Mighty in Chrome"
+HOME_EMPTY_CTA = "Add Mighty to Chrome"
 HOME_EMPTY_SECONDARY = "Add an account manually"
 HOME_OPTIONAL_GMAIL_CTA = "Find more accounts from Gmail"
 HOME_OPTIONAL_GMAIL_BODY = (
@@ -754,25 +741,22 @@ HOME_OPTIONAL_GMAIL_BODY = (
 )
 
 HOME_WAITING_BODY = (
-    "Visit your account page in Chrome while signed in — Mighty in Chrome captures "
-    "your balances and perks. Usually takes one visit; no sync button needed."
+    "Open American Express while signed in. Leave this tab open — "
+    "Mighty will look for things worth knowing."
 )
-HOME_BRIEFING_ANSWER_HANDOFF = "Getting your first update."
+HOME_BRIEFING_ANSWER_HANDOFF = "American Express is next."
 HOME_HANDOFF_NEEDS_CHROME_BODY = (
-    "Set up Mighty in Chrome so Mighty can verify access while you browse. "
-    "This is the only setup step left before your first update."
+    "Add Mighty to Chrome, then open American Express while signed in."
 )
 HOME_PROVIDER_VISIT_HELPER = (
-    "Mighty stays open in this tab while the provider is open."
+    "Leave this tab open while American Express is open."
 )
 HOME_PROVIDER_VISIT_OPENED = (
-    "Opened in another tab. Mighty is still active here — this page will update when "
-    "Mighty sees progress. No sync button needed."
+    "Opened in another tab. Leave this page open — Mighty will look while you sign in."
 )
 HOME_NOT_NOW_LABEL = "Not now"
 HOME_HANDOFF_VERIFYING_BODY = (
-    "Mighty has an active check underway. Keep this tab open or return here — "
-    "Home will update when the check finishes."
+    "We're checking your American Express account…"
 )
 HOME_VIEW_WAITING_LABEL = "View all accounts"
 HOME_VIEW_NEEDS_LOGIN_LABEL = "View all accounts needing login"
@@ -787,7 +771,7 @@ HOME_UPDATING_CTA = "Updating…"
 HOME_ALL_CLEAR_HEADLINE = "You're good."
 HOME_ALL_CLEAR_FOR_NOW_HEADLINE = "Everything looks current."
 
-HOME_PRIORITY_WAITING = "Getting your first update."
+HOME_PRIORITY_WAITING = "American Express is next."
 HOME_PRIORITY_LOGIN = "One thing needs you."
 HOME_PRIORITY_UPDATE = "Almost there."
 HOME_PRIORITY_ALL_CLEAR = "You're good."
@@ -814,8 +798,8 @@ HOME_V2_VALUE_WAITING = "Value waiting"
 HOME_V2_GETTING_READY = "Getting ready"
 HOME_EVIDENCE_GMAIL_CONNECTED = "Gmail connected"
 HOME_EVIDENCE_GMAIL_NEEDED = "Gmail not connected"
-HOME_EVIDENCE_CHROME_ACTIVE = "Chrome active"
-HOME_EVIDENCE_CHROME_NEEDED = "Set up Mighty in Chrome"
+HOME_EVIDENCE_CHROME_ACTIVE = "Chrome ready"
+HOME_EVIDENCE_CHROME_NEEDED = "Add Mighty to Chrome"
 
 HOME_FOOTER_WORKER = "Mighty runs in Chrome"
 HOME_FOOTER_LAST_CHECKED = "Last checked {time}"
@@ -859,21 +843,16 @@ def accounts_last_checked(relative_time: str) -> str:
 
 def home_waiting_headline(count: int, provider_name: str | None = None) -> str:
     if count == 1 and provider_name:
-        return f"Mighty is beginning to manage {provider_name}."
-    return (
-        f"Mighty is beginning to manage {count} "
-        f"account{'s' if count != 1 else ''}."
-    )
+        return f"Visit {provider_name}."
+    return "Visit your account."
 
 
 def home_handoff_needs_visit_body(provider_name: str | None = None) -> str:
-    """Orientation for Visit provider — Mighty stays home base (system of engagement)."""
+    """One ask: open the provider so Mighty can look — no insight claimed yet."""
     name = (provider_name or "the provider").strip() or "the provider"
     return (
-        f"Mighty is ready to verify access. {name} opens in a new tab — "
-        f"keep this Mighty tab open. Sign in yourself on {name}; Mighty watches and "
-        f"does not sign in as you. Return here afterward — Home updates when Mighty "
-        f"can verify access."
+        f"Open {name} while signed in. Leave this tab open — "
+        f"Mighty will look for things worth knowing."
     )
 
 
@@ -1050,18 +1029,17 @@ def home_v2_healthy_body() -> str:
 
 
 def home_first_success_body(provider_name: str) -> str:
-    """One-shot return-to-Home after first verification (CP-005)."""
+    """Only after an insight exists — never promise this earlier."""
     return (
-        f"Mighty verified {provider_name} and will watch quietly from here. "
-        "Nothing else needs you right now."
+        f"We found your first insight from {provider_name}. "
+        "Mighty will watch quietly from here."
     )
 
 
 def home_first_success_partial_body(provider_name: str) -> str:
-    """Access verified; first data still arriving."""
+    """Observation started; insight not ready yet — still checking, not claiming find."""
     return (
-        f"Access verified for {provider_name}. "
-        "Balances will show as Mighty finishes the first update."
+        f"We're checking your {provider_name} account…"
     )
 
 

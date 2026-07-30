@@ -73,11 +73,11 @@ Orient a stranger. Explain what Mighty does, why Chrome matters, and the one ste
 
 Mighty finds airlines, hotels, and card programs from your Gmail and keeps them current while you browse in Chrome. You sign in when asked — Mighty handles the rest.
 
-Use **desktop Chrome** with the Mighty worker installed. The dashboard shows results; it never logs into provider sites for you.
+Use **desktop Chrome** with Mighty added. Home shows results; it never logs into provider sites for you.
 
 ### Primary CTA
 
-**Set up Mighty in Chrome**
+**Add Mighty to Chrome**
 
 ### Secondary CTA
 

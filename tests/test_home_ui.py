@@ -138,9 +138,9 @@ class TestHomeV2Ui:
             today_label="Friday, July 3",
             escape=_escape,
         )
-        assert "Set up Mighty in Chrome." in rendered
+        assert "Add Mighty to Chrome." in rendered
         assert "Gmail is optional later" in rendered
-        assert "Set up Mighty in Chrome" in rendered
+        assert "Add Mighty to Chrome" in rendered
         assert "Connect Gmail" not in rendered
         assert "home-v2" in rendered
         assert 'data-state="empty"' in rendered
@@ -171,7 +171,7 @@ class TestHomeV2Ui:
         assert "Watching 1 account" in rendered
         assert "Last verified 2 minutes ago" in rendered or "Updated 2 minutes ago" in rendered
         assert "Gmail connected" in rendered
-        assert "Chrome active" in rendered
+        assert "Chrome ready" in rendered
         assert "Evidence" in rendered
         assert "Activity" in rendered
         assert "mds-btn--primary" not in rendered
@@ -211,9 +211,6 @@ class TestHomeV2Ui:
         assert 'data-state="attention"' in rendered
         assert attention.primary is not None
         assert attention.primary.title in rendered
-        assert "only step we can&#x27;t complete for you" in rendered or (
-            "only step we can't complete for you" in rendered
-        )
         assert "https://amex.test/login" in rendered
         assert "mds-btn--primary" in rendered
         assert 'mds-field-point is-signal' in rendered or "is-signal" in rendered
@@ -272,8 +269,8 @@ class TestHomeV2Ui:
         )
         assert "You're good." not in rendered and "You&#x27;re good." not in rendered
         assert 'data-state="handoff"' in rendered
-        assert "beginning to manage" in rendered
         assert "Visit American Express" in rendered
+        assert "Continue to your first insight" not in rendered
         assert "mds-btn--primary" in rendered
         assert "Getting ready" in rendered
 

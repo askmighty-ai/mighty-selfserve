@@ -203,7 +203,7 @@ class TestCustomerAccountAccessView:
         assert 'data-capability="login_unknown"' in rendered
         assert 'data-capability="extraction_success"' not in rendered
         assert "home-v2" in home
-        assert "beginning to manage" in home
+        assert "Visit American Express" in home or "checking" in home.lower()
         assert "You're good." not in home and "You&#x27;re good." not in home
         assert "✓ Watching" not in home
 

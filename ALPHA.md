@@ -21,22 +21,22 @@ Gmail is **not** required to complete the Amex beta path.
 
 ## The flow (~10–15 minutes)
 
-### 1. Set up Mighty in Chrome
+### 1. Add Mighty to Chrome (infrastructure)
 
-- After signup you land on **Set up Mighty in Chrome** (`/extension-setup`).
-- Confirm you’re in a **normal Chrome window** (not Incognito or Guest).
-- Download → unzip → `chrome://extensions` → Developer mode → **Load unpacked** → pin Mighty.
-- Click **I’ve installed Mighty** and wait until it confirms connected.
+- After signup you land on **Add Mighty to Chrome** (`/extension-setup`).
+- Use a **normal Chrome window** (not Incognito or Guest).
+- Download → unzip → `chrome://extensions` → Developer mode → **Load unpacked**.
+- Click **I’ve added Mighty** → **Visit American Express**.
 
-**What should happen:** American Express is already enrolled for watching. Chrome is ready before your first visit.
+**What should happen:** Anticipation for Amex — not connection status, heartbeats, or diagnostics. The add-on is a means; the first insight is the product.
 
 ### 2. Visit American Express
 
-- Continue to **Home**. Primary ask: **Visit American Express**.
-- Open Amex in Chrome and sign in on americanexpress.com (including 2FA).
-- Keep the Mighty tab available in the background.
+- Primary CTA: **Visit American Express** (from setup or Home).
+- Sign in on americanexpress.com (including 2FA).
+- Leave the Mighty tab open.
 
-**What should happen:** Mighty discovers useful account information (for example rental-car status benefits) and shows your first insight on Home. You are not asked for an Amex password inside Mighty.
+**What should happen:** Home shows **We’re checking your American Express account…**, then your first insight. You are not asked for an Amex password inside Mighty.
 
 ### 3. See your first insight
 

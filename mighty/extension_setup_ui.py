@@ -1,7 +1,7 @@
-"""Extension-setup page — interactive verification with browser-context gate.
+"""Extension-setup page — means to Visit Amex, not the product.
 
-Mental model: confirm normal Chrome window → install → “I’ve installed Mighty”
-→ Mighty checks. Incognito/Guest is a Chrome block, not a Mighty outage.
+Customer path: add Mighty → Visit American Express.
+No heartbeat, connection status, or diagnostics on the primary path.
 Auth and API key remain owned by app.py.
 """
 
@@ -12,20 +12,34 @@ from html import escape
 
 from mighty import user_copy
 
+# Default Amex entry used when caller omits visit_href (login → overview).
+_DEFAULT_VISIT_HREF = "https://www.americanexpress.com/en-us/account/login"
+
 
 def render_extension_setup_page(
     *,
     api_key: str,
     home_href: str = "/",
+    visit_href: str | None = None,
+    visit_label: str | None = None,
     diagnostics: bool = False,
 ) -> str:
-    """Render /extension-setup with context gate + verify-on-demand.
+    """Render /extension-setup for anticipation → Visit Amex.
 
     Diagnostics stay off the customer path; enable only for founder/debug.
     """
     key = escape(api_key or "")
     home = escape(home_href or "/")
-    key_prefix = escape(((api_key or "")[:10] + "…") if api_key and len(api_key) > 10 else (api_key or "—"))
+    visit = escape((visit_href or _DEFAULT_VISIT_HREF).strip() or _DEFAULT_VISIT_HREF)
+    visit_cta = escape(
+        (visit_label or user_copy.EXT_SETUP_GO_HOME).strip()
+        or user_copy.home_visit_provider_cta("American Express")
+    )
+    key_prefix = escape(
+        ((api_key or "")[:10] + "…")
+        if api_key and len(api_key) > 10
+        else (api_key or "—")
+    )
     storage_key = f"mighty_setup_done:{(api_key or '')[:24]}"
     install_steps = "".join(
         f"<li>{escape(step)}</li>" for step in user_copy.EXT_SETUP_INSTALL_STEPS
@@ -47,9 +61,6 @@ def render_extension_setup_page(
   </details>
 """
     copy = {
-        "listening": user_copy.EXT_SETUP_HEARTBEAT_LISTENING,
-        "seen": user_copy.EXT_SETUP_HEARTBEAT_SEEN,
-        "none": user_copy.EXT_SETUP_HEARTBEAT_NONE,
         "verifying": user_copy.EXT_SETUP_VERIFYING,
         "success": user_copy.EXT_SETUP_SUCCESS,
         "notDetected": user_copy.EXT_SETUP_NOT_DETECTED,
@@ -58,13 +69,100 @@ def render_extension_setup_page(
         "failMighty": user_copy.EXT_SETUP_FAIL_MIGHTY,
         "verifyCta": user_copy.EXT_SETUP_VERIFY_CTA,
         "tryAgain": user_copy.EXT_SETUP_TRY_AGAIN,
-        "continue": user_copy.EXT_SETUP_CONTINUE,
-        "goHome": user_copy.EXT_SETUP_GO_HOME,
+        "visitHint": user_copy.EXT_SETUP_VISIT_HINT,
+        "idle": user_copy.EXT_SETUP_VERIFY_IDLE,
         "contextBlocked": user_copy.EXT_SETUP_CONTEXT_BLOCKED,
         "contextNotChrome": user_copy.EXT_SETUP_CONTEXT_NOT_CHROME,
         "storageKey": storage_key,
     }
     copy_json = json.dumps(copy)
+    diag_script = ""
+    if diagnostics:
+        diag_script = """
+  var diagOrigin = document.getElementById('diag-origin');
+  var diagFirst = document.getElementById('diag-first-fail');
+  var diagStages = document.getElementById('diag-stages');
+  var diagEvents = document.getElementById('diag-events');
+  var diagRefresh = document.getElementById('diag-refresh');
+  if (diagOrigin) diagOrigin.textContent = location.origin;
+
+  function renderDiagnostics(payload) {
+    if (!diagStages || !payload) return;
+    var stages = payload.stages || [];
+    diagStages.innerHTML = stages.map(function (s) {
+      var cls = 'st-' + (s.state || 'unknown');
+      var mark = s.state === 'pass' ? 'PASS' : (s.state === 'fail' ? 'FAIL' : '····');
+      var detail = (s.event && s.event.detail) ? (' — ' + s.event.detail) : '';
+      return '<li class="' + cls + '"><strong>' + mark + '</strong> ' + s.label + detail + '</li>';
+    }).join('');
+    if (diagFirst) {
+      if (payload.connected) {
+        diagFirst.textContent = 'Ready (internal).';
+        diagFirst.className = 'ext-diag__hint is-ok';
+      } else if (payload.first_failure_stage) {
+        diagFirst.textContent = 'First incomplete stage: ' + payload.first_failure_stage;
+        diagFirst.className = 'ext-diag__hint';
+      } else {
+        diagFirst.textContent = 'No handshake progress yet.';
+        diagFirst.className = 'ext-diag__hint';
+      }
+    }
+    if (diagEvents) {
+      var lines = (payload.recent_events || []).map(function (e) {
+        return (e.created_at || '') + ' [' + (e.ok ? 'ok' : 'FAIL') + '] ' +
+          e.stage + ' · ' + (e.source || '') + ' · ' + (e.detail || '');
+      });
+      diagEvents.textContent = lines.length ? lines.join('\\n') : 'No events yet.';
+    }
+  }
+
+  function refreshDiagnostics() {
+    if (!diagStages) return Promise.resolve();
+    return fetch('/api/extension/setup-diagnostics?meta=1', {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    }).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (payload) {
+        if (!payload) return;
+        if (extPresentSignal) {
+          payload.stages = (payload.stages || []).map(function (s) {
+            if (s.id === 'service_worker_alive' && s.state === 'unknown') {
+              return Object.assign({}, s, {
+                state: 'pass',
+                event: { ok: true, detail: 'page signal', source: 'page' }
+              });
+            }
+            return s;
+          });
+        }
+        renderDiagnostics(payload);
+      }).catch(function () {});
+  }
+
+  window.addEventListener('message', function (event) {
+    if (event.source !== window) return;
+    if (event.origin !== location.origin) return;
+    if (!event.data || event.data.type !== '__mighty_setup_ext__') return;
+    extPresentSignal = true;
+    refreshDiagnostics();
+  });
+
+  fetch('/api/extension/setup-handshake', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({
+      stage: 'page_meta_present',
+      ok: !!document.querySelector('meta[name="mighty-api-key"]'),
+      detail: 'setup page self-check',
+      source: 'setup-page'
+    })
+  }).catch(function () {});
+
+  if (diagRefresh) diagRefresh.addEventListener('click', refreshDiagnostics);
+  refreshDiagnostics();
+  setInterval(refreshDiagnostics, 2000);
+"""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -103,7 +201,7 @@ def render_extension_setup_page(
   }}
   .ext-card h1 {{
     margin: 0;
-    font-size: 1.35rem;
+    font-size: 1.45rem;
     font-weight: var(--mds-weight-semibold, 600);
     color: var(--mds-pine-ink);
     text-align: center;
@@ -111,26 +209,23 @@ def render_extension_setup_page(
   }}
   .ext-lede {{
     margin: 0;
-    font-size: 0.98rem;
+    font-size: 1.02rem;
     line-height: 1.55;
     color: var(--mds-muted);
     text-align: center;
   }}
   .ext-context {{
-    display: grid;
+    display: none;
     gap: 0.65rem;
     padding: 1rem 1.05rem;
     border-radius: var(--mds-radius-sm);
     border: 1px solid var(--mds-line);
     background: var(--mds-surface-soft);
   }}
+  .ext-context.is-visible {{ display: grid; }}
   .ext-context.is-warn {{
     background: var(--mds-waiting-soft);
     border-color: #e8d5a8;
-  }}
-  .ext-context.is-ok {{
-    border-color: #c5dfd0;
-    background: var(--mds-success-soft);
   }}
   .ext-context h2 {{
     margin: 0;
@@ -154,21 +249,8 @@ def render_extension_setup_page(
     font-weight: 600;
   }}
   .ext-context__alert[hidden] {{ display: none; }}
-  .ext-confirm {{
-    display: flex;
-    align-items: flex-start;
-    gap: 0.55rem;
-    font-size: 0.9rem;
-    line-height: 1.4;
-    color: var(--mds-ink);
-    cursor: pointer;
-  }}
-  .ext-confirm input {{
-    margin-top: 0.2rem;
-    flex-shrink: 0;
-  }}
   .ext-install-block[hidden],
-  .ext-verify[hidden] {{ display: none !important; }}
+  .ext-ready[hidden] {{ display: none !important; }}
   .ext-dl {{
     display: inline-flex;
     align-items: center;
@@ -208,92 +290,33 @@ def render_extension_setup_page(
     color: var(--mds-muted);
     text-align: center;
   }}
-  .ext-heartbeat {{
-    display: grid;
-    gap: 0.35rem;
-    padding: 0.85rem 1rem;
-    border-radius: var(--mds-radius-sm);
-    border: 1px solid var(--mds-line);
-    background: var(--mds-surface-soft);
-  }}
-  .ext-heartbeat__label {{
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--mds-muted);
-  }}
-  .ext-heartbeat__row {{
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    font-size: 0.92rem;
-    font-weight: 600;
-    color: var(--mds-pine-ink);
-  }}
-  .ext-heartbeat__dot {{
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: var(--mds-waiting);
-    flex-shrink: 0;
-  }}
-  .ext-heartbeat.is-live .ext-heartbeat__dot {{
-    background: var(--mds-success);
-    box-shadow: 0 0 0 3px rgba(47, 107, 69, 0.18);
-  }}
-  .ext-heartbeat.is-live .ext-heartbeat__row {{ color: var(--mds-success); }}
-  .ext-heartbeat__meta {{
-    font-size: 0.8rem;
-    color: var(--mds-muted);
-    line-height: 1.4;
-  }}
-  .ext-verify {{
-    display: grid;
-    gap: 0.7rem;
-    padding-top: 0.25rem;
-    border-top: 1px solid var(--mds-line);
-  }}
-  .ext-verify__title {{
-    margin: 0;
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: var(--mds-pine-ink);
-    text-align: center;
-  }}
   .ext-status {{
-    font-size: 0.88rem;
+    font-size: 0.92rem;
     font-weight: 600;
     padding: 0.7rem 0.95rem;
     border-radius: var(--mds-radius-sm);
-    background: var(--mds-pine-soft);
-    border: 1px solid var(--mds-line);
-    color: var(--mds-pine-ink);
-    text-align: left;
-    line-height: 1.45;
-  }}
-  .ext-status.is-idle {{
     background: var(--mds-surface-soft);
+    border: 1px solid var(--mds-line);
     color: var(--mds-muted);
-    font-weight: 500;
     text-align: center;
+    line-height: 1.45;
   }}
   .ext-status.is-progress {{
     background: var(--mds-waiting-soft);
     border-color: #e8d5a8;
     color: var(--mds-waiting);
-    text-align: center;
   }}
   .ext-status.is-warn {{
     background: var(--mds-waiting-soft);
     border-color: #e8d5a8;
     color: var(--mds-ink);
+    text-align: left;
+    font-weight: 500;
   }}
   .ext-status.is-ok {{
     background: var(--mds-success-soft);
     border-color: #c5dfd0;
-    color: var(--mds-success);
-    text-align: center;
+    color: var(--mds-pine-ink);
   }}
   .ext-fail-list {{
     margin: 0.55rem 0 0;
@@ -304,7 +327,6 @@ def render_extension_setup_page(
     line-height: 1.45;
   }}
   .ext-fail-list li {{ margin-bottom: 0.35rem; }}
-  .ext-fail-list strong {{ color: var(--mds-pine-ink); }}
   .ext-spinner {{
     display: inline-block;
     width: 14px;
@@ -333,11 +355,11 @@ def render_extension_setup_page(
     font-weight: var(--mds-weight-semibold, 600);
     cursor: pointer;
     font-family: inherit;
+    text-decoration: none;
   }}
-  .ext-btn-primary:hover {{ background: var(--mds-pine-hover); }}
+  .ext-btn-primary:hover {{ background: var(--mds-pine-hover); color: #fff; text-decoration: none; }}
   .ext-btn-primary:disabled {{ opacity: 0.65; cursor: wait; }}
   .ext-btn-primary.is-hidden {{ display: none; }}
-  .ext-continue a,
   .ext-btn-secondary {{
     display: inline-flex;
     align-items: center;
@@ -355,16 +377,27 @@ def render_extension_setup_page(
     cursor: pointer;
     font-family: inherit;
   }}
-  .ext-continue a:hover,
   .ext-btn-secondary:hover {{ background: var(--mds-surface-soft); }}
-  .ext-continue-hint {{
-    margin: 0;
-    font-size: 0.78rem;
-    color: var(--mds-muted);
-    text-align: center;
+  .ext-continue {{
+    display: grid;
+    gap: 0.35rem;
+    justify-items: center;
   }}
-  .ext-success-actions {{ display: none; grid-gap: 0.55rem; }}
-  .ext-success-actions.is-visible {{ display: grid; }}
+  .ext-continue a {{
+    width: auto;
+    padding: 0.35rem 0.5rem;
+    border: none;
+    background: transparent;
+    color: var(--mds-muted);
+    font-size: 0.82rem;
+    font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }}
+  .ext-continue a:hover {{
+    background: transparent;
+    color: var(--mds-pine-ink);
+  }}
   .ext-diag {{
     border: 1px dashed var(--mds-line-strong);
     border-radius: var(--mds-radius-sm);
@@ -437,11 +470,6 @@ def render_extension_setup_page(
     <h2>{escape(user_copy.EXT_SETUP_CONTEXT_HEADING)}</h2>
     <p>{escape(user_copy.EXT_SETUP_CONTEXT_LEDE, quote=False)}</p>
     <p class="ext-context__alert" id="context-alert" hidden></p>
-    <label class="ext-confirm">
-      <input type="checkbox" id="context-confirm">
-      <span>{escape(user_copy.EXT_SETUP_CONTEXT_CONFIRM, quote=False)}</span>
-    </label>
-    <p class="ext-hint" id="context-unlock-hint">{escape(user_copy.EXT_SETUP_CONTEXT_UNLOCK, quote=False)}</p>
   </div>
 
   <div class="ext-install-block" id="install-block" hidden>
@@ -449,57 +477,46 @@ def render_extension_setup_page(
     <h2 class="ext-section">{escape(user_copy.EXT_SETUP_INSTALL_HEADING)}</h2>
     <ol class="ext-install">{install_steps}</ol>
     <p class="ext-hint">{escape(user_copy.EXT_SETUP_RELOAD_HINT, quote=False)}</p>
-  </div>
-
-  <div class="ext-heartbeat" id="heartbeat" aria-live="polite">
-    <div class="ext-heartbeat__label">{escape(user_copy.EXT_SETUP_CONNECTION_LABEL)}</div>
-    <div class="ext-heartbeat__row">
-      <span class="ext-heartbeat__dot" aria-hidden="true"></span>
-      <span id="heartbeat-label">{escape(user_copy.EXT_SETUP_HEARTBEAT_LISTENING)}</span>
-    </div>
-    <div class="ext-heartbeat__meta" id="heartbeat-meta">{escape(user_copy.EXT_SETUP_HEARTBEAT_NONE)}</div>
-  </div>
-
-  <div class="ext-verify" id="verify-block" hidden>
-    <p class="ext-verify__title">Finished installing?</p>
-    <div class="ext-status is-idle" id="status" role="status">
-      Tell Mighty when you’re done — it will check right away.
-    </div>
-    <div class="ext-actions">
+    <div class="ext-actions" style="margin-top:0.35rem">
       <button type="button" class="ext-btn-primary" id="verify-btn">{escape(user_copy.EXT_SETUP_VERIFY_CTA)}</button>
       <button type="button" class="ext-btn-secondary" id="retry-btn" hidden>{escape(user_copy.EXT_SETUP_TRY_AGAIN)}</button>
-      <div class="ext-success-actions" id="success-actions">
-        <a class="ext-btn-primary" href="{home}" id="go-home-success">{escape(user_copy.EXT_SETUP_GO_HOME)}</a>
-      </div>
+    </div>
+    <div class="ext-status" id="status" role="status" hidden></div>
+  </div>
+
+  <div class="ext-ready" id="ready-block" hidden>
+    <div class="ext-status is-ok" id="ready-status" role="status">
+      {escape(user_copy.EXT_SETUP_SUCCESS, quote=False)}
+    </div>
+    <div class="ext-actions">
+      <a class="ext-btn-primary" href="{visit}" target="_blank" rel="noopener" id="visit-cta">{visit_cta}</a>
+    </div>
+    <p class="ext-hint">{escape(user_copy.EXT_SETUP_VISIT_HINT, quote=False)}</p>
+    <div class="ext-continue">
+      <a href="{home}" id="continue-home">Back to Mighty</a>
     </div>
   </div>
 
   <div class="ext-continue" id="continue-wrap">
-    <a href="{home}" id="continue-home">{escape(user_copy.EXT_SETUP_CONTINUE)}</a>
-    <p class="ext-continue-hint">{escape(user_copy.EXT_SETUP_CONTINUE_HINT, quote=False)}</p>
+    <a href="{home}" id="skip-home">{escape(user_copy.EXT_SETUP_CONTINUE)}</a>
   </div>
   {diag_block}
 </div>
 <script>
 (function () {{
   var C = {copy_json};
-  var connected = false;
+  var ready = false;
   var verifying = false;
   var contextOk = false;
   var extPresentSignal = false;
 
   var contextPanel = document.getElementById('context-panel');
   var contextAlert = document.getElementById('context-alert');
-  var contextConfirm = document.getElementById('context-confirm');
   var installBlock = document.getElementById('install-block');
-  var verifyBlock = document.getElementById('verify-block');
-  var heartbeatEl = document.getElementById('heartbeat');
-  var heartbeatLabel = document.getElementById('heartbeat-label');
-  var heartbeatMeta = document.getElementById('heartbeat-meta');
+  var readyBlock = document.getElementById('ready-block');
   var statusEl = document.getElementById('status');
   var verifyBtn = document.getElementById('verify-btn');
   var retryBtn = document.getElementById('retry-btn');
-  var successActions = document.getElementById('success-actions');
   var continueWrap = document.getElementById('continue-wrap');
 
   function isChromeDesktop() {{
@@ -512,8 +529,6 @@ def render_extension_setup_page(
   }}
 
   function probeLikelyIncognito() {{
-    // Best-effort only — Chrome intentionally makes this unreliable.
-    // Used to warn; confirmation checkbox remains the product gate.
     return new Promise(function (resolve) {{
       var settled = false;
       function done(v) {{
@@ -525,7 +540,6 @@ def render_extension_setup_page(
         if (navigator.storage && navigator.storage.estimate) {{
           navigator.storage.estimate().then(function (est) {{
             var quota = (est && est.quota) || 0;
-            // Normal profiles usually report a large quota; Incognito is often tiny.
             if (quota > 0 && quota < 120 * 1024 * 1024) done(true);
             else done(false);
           }}).catch(function () {{ done(null); }});
@@ -545,96 +559,46 @@ def render_extension_setup_page(
     }});
   }}
 
-  function setContextUnlocked(unlocked) {{
+  function setInstallVisible(unlocked) {{
     contextOk = !!unlocked;
-    installBlock.hidden = !unlocked;
-    verifyBlock.hidden = !unlocked;
-    var unlockHint = document.getElementById('context-unlock-hint');
-    if (unlockHint) unlockHint.hidden = !!unlocked;
-    if (unlocked) contextPanel.classList.add('is-ok');
-    else contextPanel.classList.remove('is-ok');
+    installBlock.hidden = !unlocked || ready;
   }}
 
   function showContextWarning(msg) {{
-    contextPanel.classList.add('is-warn');
+    contextPanel.classList.add('is-visible', 'is-warn');
     contextAlert.hidden = false;
     contextAlert.textContent = msg;
-    contextConfirm.checked = false;
-    setContextUnlocked(false);
+    setInstallVisible(false);
   }}
 
   function clearContextWarning() {{
     contextPanel.classList.remove('is-warn');
     contextAlert.hidden = true;
     contextAlert.textContent = '';
-  }}
-
-  function formatSeen(iso) {{
-    if (!iso) return C.none;
-    try {{
-      var d = new Date(iso);
-      if (isNaN(d.getTime())) return C.none;
-      var sec = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
-      if (sec < 5) return 'Just now';
-      if (sec < 60) return sec + 's ago';
-      if (sec < 3600) return Math.round(sec / 60) + 'm ago';
-      return d.toLocaleTimeString([], {{ hour: 'numeric', minute: '2-digit' }});
-    }} catch (e) {{
-      return C.none;
+    if (!contextPanel.classList.contains('is-visible')) {{
+      // keep hidden on happy path
     }}
   }}
 
-  function setHeartbeat(payload) {{
-    var ok = !!(payload && payload.connected);
-    heartbeatEl.classList.toggle('is-live', ok);
-    if (ok) {{
-      heartbeatLabel.textContent = C.seen;
-      var bits = [];
-      if (payload.extension_version) bits.push('v' + payload.extension_version);
-      bits.push(formatSeen(payload.extension_last_seen_at));
-      heartbeatMeta.textContent = bits.join(' · ');
-    }} else {{
-      heartbeatLabel.textContent = C.listening;
-      heartbeatMeta.textContent = C.none;
-    }}
-    return ok;
-  }}
-
-  function markConnected() {{
-    connected = true;
+  function markReady() {{
+    ready = true;
     verifying = false;
     try {{ sessionStorage.setItem(C.storageKey, '1'); }} catch (e) {{}}
-    // Live heartbeat: bypass install instructions entirely (existing extension).
-    contextOk = true;
-    contextConfirm.checked = true;
-    contextPanel.classList.add('is-ok');
-    contextPanel.classList.remove('is-warn');
+    contextPanel.classList.remove('is-visible', 'is-warn');
     contextAlert.hidden = true;
     installBlock.hidden = true;
-    verifyBlock.hidden = true;
-    statusEl.className = 'ext-status is-ok';
-    statusEl.textContent = '✓ ' + C.success;
-    verifyBtn.classList.add('is-hidden');
-    verifyBtn.disabled = true;
-    retryBtn.hidden = true;
-    successActions.classList.add('is-visible');
+    readyBlock.hidden = false;
     continueWrap.style.display = 'none';
-  }}
-
-  function markIdle() {{
-    if (connected || verifying) return;
-    statusEl.className = 'ext-status is-idle';
-    statusEl.textContent = 'Tell Mighty when you’re done — it will check right away.';
-    verifyBtn.classList.remove('is-hidden');
-    verifyBtn.disabled = false;
-    verifyBtn.textContent = C.verifyCta;
-    retryBtn.hidden = true;
+    if (statusEl) statusEl.hidden = true;
   }}
 
   function markVerifying() {{
     verifying = true;
-    statusEl.className = 'ext-status is-progress';
-    statusEl.innerHTML = '<span class="ext-spinner"></span> ' + C.verifying;
+    if (statusEl) {{
+      statusEl.hidden = false;
+      statusEl.className = 'ext-status is-progress';
+      statusEl.innerHTML = '<span class="ext-spinner"></span> ' + C.verifying;
+    }}
     verifyBtn.disabled = true;
     verifyBtn.textContent = C.verifying;
     retryBtn.hidden = true;
@@ -642,14 +606,17 @@ def render_extension_setup_page(
 
   function markNotDetected() {{
     verifying = false;
-    statusEl.className = 'ext-status is-warn';
-    statusEl.innerHTML =
-      '<div>' + C.notDetected + '</div>' +
-      '<ol class="ext-fail-list">' +
-      '<li><strong>Chrome:</strong> ' + C.failChrome + '</li>' +
-      '<li><strong>Extension:</strong> ' + C.failExtension + '</li>' +
-      '<li><strong>Mighty:</strong> ' + C.failMighty + '</li>' +
-      '</ol>';
+    if (statusEl) {{
+      statusEl.hidden = false;
+      statusEl.className = 'ext-status is-warn';
+      statusEl.innerHTML =
+        '<div>' + C.notDetected + '</div>' +
+        '<ol class="ext-fail-list">' +
+        '<li>' + C.failChrome + '</li>' +
+        '<li>' + C.failExtension + '</li>' +
+        '<li>' + C.failMighty + '</li>' +
+        '</ol>';
+    }}
     verifyBtn.classList.add('is-hidden');
     retryBtn.hidden = false;
     retryBtn.textContent = C.tryAgain;
@@ -667,64 +634,58 @@ def render_extension_setup_page(
 
   function pollOnce() {{
     return fetchStatus().then(function (payload) {{
-      var ok = setHeartbeat(payload);
-      if (ok && !connected) markConnected();
+      var ok = !!(payload && payload.connected);
+      if (ok && !ready) markReady();
       return ok;
     }});
   }}
 
   function startVerify() {{
-    if (connected || verifying) return;
+    if (ready || verifying) return;
     if (!contextOk) {{
       showContextWarning(C.contextBlocked);
       return;
     }}
+    // Optimistic unlock: don't make the user watch connection theater.
+    // Brief status poll; if already present, great — otherwise still advance
+    // so the next true action is Visit American Express.
     markVerifying();
-    var deadline = Date.now() + 8000;
+    var deadline = Date.now() + 2500;
     function tick() {{
       fetchStatus().then(function (payload) {{
-        var ok = setHeartbeat(payload);
-        if (ok) {{
-          markConnected();
+        if (payload && payload.connected) {{
+          markReady();
           return;
         }}
         if (Date.now() >= deadline) {{
-          markNotDetected();
+          markReady();
           return;
         }}
-        setTimeout(tick, 500);
+        setTimeout(tick, 400);
       }});
     }}
     tick();
   }}
 
-  contextConfirm.addEventListener('change', function () {{
-    if (contextConfirm.checked) {{
-      if (!isChromeDesktop()) {{
-        showContextWarning(C.contextNotChrome);
-        return;
-      }}
-      clearContextWarning();
-      setContextUnlocked(true);
-      markIdle();
-    }} else {{
-      setContextUnlocked(false);
-    }}
-  }});
-
   verifyBtn.addEventListener('click', startVerify);
   retryBtn.addEventListener('click', startVerify);
 
-  // Soft Incognito / non-Chrome probe — warn before the user wastes an install.
   if (!isChromeDesktop()) {{
     showContextWarning(C.contextNotChrome);
   }} else {{
     probeLikelyIncognito().then(function (likely) {{
-      if (likely === true) showContextWarning(C.contextBlocked);
+      if (likely === true) {{
+        showContextWarning(C.contextBlocked);
+        return;
+      }}
+      if (!ready) {{
+        clearContextWarning();
+        setInstallVisible(true);
+      }}
     }});
   }}
 
-  // Continuous background heartbeat — still runs; success unlocks the page.
+  // Silent readiness — never shown as a connection panel.
   pollOnce().then(function (ok) {{
     if (!ok) {{
       try {{
@@ -735,97 +696,10 @@ def render_extension_setup_page(
     }}
   }});
   setInterval(function () {{
-    if (connected) return;
+    if (ready) return;
     pollOnce();
-  }}, 1500);
-
-  // ── Beta handshake diagnostics ───────────────────────────────────────────
-  var diagOrigin = document.getElementById('diag-origin');
-  var diagFirst = document.getElementById('diag-first-fail');
-  var diagStages = document.getElementById('diag-stages');
-  var diagEvents = document.getElementById('diag-events');
-  var diagRefresh = document.getElementById('diag-refresh');
-  if (diagOrigin) diagOrigin.textContent = location.origin;
-
-  function renderDiagnostics(payload) {{
-    if (!diagStages || !payload) return;
-    var stages = payload.stages || [];
-    diagStages.innerHTML = stages.map(function (s) {{
-      var cls = 'st-' + (s.state || 'unknown');
-      var mark = s.state === 'pass' ? 'PASS' : (s.state === 'fail' ? 'FAIL' : '····');
-      var detail = (s.event && s.event.detail) ? (' — ' + s.event.detail) : '';
-      return '<li class="' + cls + '"><strong>' + mark + '</strong> ' + s.label + detail + '</li>';
-    }}).join('');
-    if (diagFirst) {{
-      if (payload.connected) {{
-        diagFirst.textContent = 'Handshake complete — Mighty sees this account’s extension heartbeat.';
-        diagFirst.className = 'ext-diag__hint is-ok';
-      }} else if (payload.first_failure_stage) {{
-        diagFirst.textContent = 'First incomplete stage: ' + payload.first_failure_stage +
-          (extPresentSignal ? '' : ' · page has not received __mighty_setup_ext__ from the extension yet');
-        diagFirst.className = 'ext-diag__hint';
-      }} else {{
-        diagFirst.textContent = 'No handshake progress yet — reload the extension on chrome://extensions, then refresh.';
-        diagFirst.className = 'ext-diag__hint';
-      }}
-    }}
-    if (diagEvents) {{
-      var lines = (payload.recent_events || []).map(function (e) {{
-        return (e.created_at || '') + ' [' + (e.ok ? 'ok' : 'FAIL') + '] ' +
-          e.stage + ' · ' + (e.source || '') + ' · ' + (e.detail || '');
-      }});
-      diagEvents.textContent = lines.length ? lines.join('\\n') : 'No events yet.';
-    }}
-  }}
-
-  function refreshDiagnostics() {{
-    if (!diagStages) return Promise.resolve();
-    return fetch('/api/extension/setup-diagnostics?meta=1', {{
-      credentials: 'same-origin',
-      headers: {{ 'Accept': 'application/json' }}
-    }}).then(function (r) {{ return r.ok ? r.json() : null; }})
-      .then(function (payload) {{
-        if (!payload) return;
-        // Overlay client-observed content-script presence.
-        if (extPresentSignal) {{
-          payload.stages = (payload.stages || []).map(function (s) {{
-            if (s.id === 'service_worker_alive' && s.state === 'unknown') {{
-              return Object.assign({{}}, s, {{
-                state: 'pass',
-                event: {{ ok: true, detail: 'page received __mighty_setup_ext__', source: 'page' }}
-              }});
-            }}
-            return s;
-          }});
-        }}
-        renderDiagnostics(payload);
-      }}).catch(function () {{}});
-  }}
-
-  window.addEventListener('message', function (event) {{
-    if (event.source !== window) return;
-    if (event.origin !== location.origin) return;
-    if (!event.data || event.data.type !== '__mighty_setup_ext__') return;
-    extPresentSignal = true;
-    refreshDiagnostics();
-  }});
-
-  // Page reports meta present via session-auth handshake (no extension required).
-  fetch('/api/extension/setup-handshake', {{
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {{ 'Content-Type': 'application/json', 'Accept': 'application/json' }},
-    body: JSON.stringify({{
-      stage: 'page_meta_present',
-      ok: !!document.querySelector('meta[name="mighty-api-key"]'),
-      detail: 'setup page self-check',
-      source: 'setup-page'
-    }})
-  }}).catch(function () {{}});
-
-  if (diagRefresh) diagRefresh.addEventListener('click', refreshDiagnostics);
-  refreshDiagnostics();
-  setInterval(refreshDiagnostics, 2000);
+  }}, 2000);
+{diag_script}
 }})();
 </script>
 </body>

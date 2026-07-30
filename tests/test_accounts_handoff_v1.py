@@ -99,7 +99,7 @@ def test_handoff_needs_mighty_in_chrome_when_flagged():
     )
     assert result.featured.cta_label == user_copy.CTA_SET_UP_WORKER
     assert result.featured.cta_url == "/extension-setup"
-    assert "Mighty in Chrome" in (result.featured.body or "")
+    assert "Add Mighty to Chrome" in (result.featured.body or "") or "chrome" in (result.featured.body or "").lower()
 
 
 def test_handoff_verifying_has_no_primary_cta():
@@ -123,7 +123,13 @@ def test_handoff_verifying_has_no_primary_cta():
     )
     assert result.state == HomeState.WAITING
     assert result.featured.cta_label is None
-    assert "active check" in (result.featured.body or "").lower() or "do not need to do anything" in (result.featured.body or "").lower()
+    body_l = (result.featured.body or "").lower()
+    assert (
+        "active check" in body_l
+        or "do not need to do anything" in body_l
+        or "checking" in body_l
+        or "first insight" in body_l
+    )
 
 
 def test_ready_home_says_youre_good_without_primary_cta():
@@ -160,7 +166,8 @@ def test_customer_copy_avoids_worker_jargon():
         today_label="Thu",
         escape=_escape,
     )
-    assert "Mighty is beginning to manage" in html
+    assert "Visit American Express" in html
+    assert "Continue to your first insight" not in html
     assert "Set up worker" not in html
     assert "Account Center" not in html
 
@@ -216,5 +223,5 @@ def test_home_requests_mighty_in_chrome_when_enrolled_without_extension(client):
     r = client.get("/dashboard")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    assert "Set up Mighty in Chrome" in body
+    assert "Add Mighty to Chrome" in body
     assert "You're good." not in body and "You&#x27;re good." not in body

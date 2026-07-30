@@ -61,13 +61,16 @@ def _insert_account(client, source, *, sync_status="ok", connection_status=None)
         if connection_status:
             payload["connection_status"] = connection_status
         stub = mighty.encrypt_account_data(uid, payload)
+        # Signup may already enroll Amex — replace rather than fail on UNIQUE.
         db.execute(
-            "INSERT INTO account_credentials (user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
+            "INSERT OR REPLACE INTO account_credentials "
+            "(user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
             "VALUES (?,?,?,?,?,?,?)",
             (uid, source, "", "", "", now, now),
         )
         db.execute(
-            "INSERT INTO account_data (user_id, source, display_name, icon, color, data_enc, synced_at, connection_status) "
+            "INSERT OR REPLACE INTO account_data "
+            "(user_id, source, display_name, icon, color, data_enc, synced_at, connection_status) "
             "VALUES (?,?,?,?,?,?,?,?)",
             (uid, source, source.title(), "?", "#eee", stub, now, connection_status or ""),
         )
@@ -238,7 +241,11 @@ def test_extension_setup_embeds_api_key_meta(client):
     r = client.get("/extension-setup")
     assert r.status_code == 200
     assert b'name="mighty-api-key"' in r.data
-    assert b"Chrome extension not detected" in r.data or b"Mighty in Chrome not detected" in r.data
+    assert b"Add Mighty to Chrome" in r.data
+    assert b"Visit American Express" in r.data
+    assert b"Continue to your first insight" not in r.data
+    assert b"heartbeat" not in r.data.lower()
+    assert b"Setup diagnostics (internal)" not in r.data
     assert b"should be configured now" not in r.data
 
 
@@ -255,7 +262,7 @@ def test_signup_mentions_chrome_requirement(client):
         sess.clear()
     r = client.get("/signup")
     assert r.status_code == 200
-    assert b"desktop Chrome" in r.data
+    assert b"American Express" in r.data
 
 
 def test_onboarding_modal_mentions_chrome(client):
