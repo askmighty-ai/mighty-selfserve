@@ -182,6 +182,7 @@ def project_home(
         attn,
         first_success_provider=first_success_provider,
         first_success_partial=first_success_partial,
+        gmail_connected=gmail_connected,
     )
     answer = _compose_answer(result, attn, story_kind, featured)
     visual_state = _visual_state(story_kind)
@@ -254,6 +255,7 @@ def _compose_story(
     *,
     first_success_provider: str | None = None,
     first_success_partial: bool = False,
+    gmail_connected: bool | None = None,
 ) -> tuple[HomeCard | None, HomeStoryKind]:
     if result.state == HomeState.EMPTY:
         return (
@@ -300,7 +302,9 @@ def _compose_story(
     if first_success_provider:
         return (
             _first_success_story(
-                first_success_provider, partial=first_success_partial
+                first_success_provider,
+                partial=first_success_partial,
+                offer_gmail=gmail_connected is False,
             ),
             "first_success",
         )
@@ -323,12 +327,29 @@ def _honesty_needs_user_story(result: HomeStateResult) -> HomeCard:
     )
 
 
-def _first_success_story(provider_name: str, *, partial: bool) -> HomeCard:
+def _first_success_story(
+    provider_name: str,
+    *,
+    partial: bool,
+    offer_gmail: bool = False,
+) -> HomeCard:
     body = (
         user_copy.home_first_success_partial_body(provider_name)
         if partial
         else user_copy.home_first_success_body(provider_name)
     )
+    if offer_gmail:
+        body = f"{body} {user_copy.HOME_OPTIONAL_GMAIL_BODY}"
+        return HomeCard(
+            kind="story",
+            title="",
+            body=body,
+            tone="calm",
+            cta_label=None,
+            cta_url=None,
+            secondary_label=user_copy.HOME_OPTIONAL_GMAIL_CTA,
+            secondary_url="/email-scan",
+        )
     return HomeCard(
         kind="story",
         title="",
@@ -394,12 +415,11 @@ def _compose_evidence(
     items: list[HomeEvidenceItem] = []
 
     if story_kind == "empty":
-        if gmail_connected is False:
-            items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_NEEDED, ok=False))
-        elif gmail_connected is True:
-            items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_CONNECTED, ok=True))
+        # Chrome-first empty: do not treat missing Gmail as a failure signal.
         if chrome_active is True:
             items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_CHROME_ACTIVE, ok=True))
+        elif chrome_active is False:
+            items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_CHROME_NEEDED, ok=False))
         return tuple(items)
 
     healthy_story = story_kind in ("all_clear", "first_success")
@@ -419,10 +439,10 @@ def _compose_evidence(
             )
         )
 
+    # Gmail is an optional enhancement after first intelligence — never a
+    # handoff blocker. Show connected proof when present; omit "needed" elsewhere.
     if gmail_connected is True:
         items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_CONNECTED, ok=True))
-    elif gmail_connected is False and story_kind in ("handoff", "all_clear", "first_success"):
-        items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_GMAIL_NEEDED, ok=False))
 
     if chrome_active is True:
         items.append(HomeEvidenceItem(label=user_copy.HOME_EVIDENCE_CHROME_ACTIVE, ok=True))

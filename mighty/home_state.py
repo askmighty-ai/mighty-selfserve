@@ -394,7 +394,7 @@ def resolve_home_state(
                 headline=user_copy.HOME_EMPTY_HEADLINE,
                 body=body,
                 cta_label=user_copy.HOME_EMPTY_CTA,
-                cta_url="/email-scan",
+                cta_url="/extension-setup",
                 secondary_label=user_copy.HOME_EMPTY_SECONDARY,
                 secondary_url="/credentials",
             ),

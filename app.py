@@ -8551,12 +8551,18 @@ def signup():
         (uid, email, hash_pw(password), key, iso()),
     )
     db.commit()
+    # Amex beta: enroll the customer-visible provider so Visit Amex works
+    # without Gmail. Gmail discovery is optional after first intelligence.
+    from mighty.capability_state import CUSTOMER_VISIBLE_PROVIDERS
+
+    for _src in sorted(CUSTOMER_VISIBLE_PROVIDERS):
+        _register_account_source(uid, _src, db)
     session.permanent  = True
     session["user_id"] = uid
     session["email"]   = email
-    # First-run: enter Discover My Accounts (CP-003). Returning logins use
-    # _default_app_home_path() via /login — do not conflate the two.
-    return redirect("/email-scan")
+    # First-run: Install extension → Visit Amex → first insight.
+    # Returning logins use _default_app_home_path() via /login.
+    return redirect("/extension-setup")
 
 @app.route("/enterprise-interest", methods=["POST"])
 def enterprise_interest():
@@ -10632,7 +10638,7 @@ def dashboard_legacy():
                 if _ha.source == _updating_source:
                     _updating_name = _ha.display_name
                     break
-        # Gmail-first: Mighty in Chrome is only required once accounts are enrolled.
+        # Extension-first Amex beta: Chrome is required before first insight.
         # Attention SYSTEM owns the interrupt when AccountState + worker signal agree;
         # this flag backs the Home handoff CTA when enrollment exists but the
         # Chrome extension heartbeat is missing.
@@ -11821,8 +11827,8 @@ def dashboard_legacy():
         new_accounts_banner = ""
 
     # Legacy "How Mighty works" dashboard modal retired. First-run orientation is
-    # Discover My Accounts (CP-003) via signup → /email-scan. The users.onboarded
-    # column remains for schema compatibility but no longer gates customer UI.
+    # signup → /extension-setup → Visit Amex. Gmail (/email-scan) is optional after
+    # first intelligence. The users.onboarded column remains for schema compat.
     onboarding_modal = ""
 
     _csrf = get_csrf_token()

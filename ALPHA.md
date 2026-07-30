@@ -1,99 +1,67 @@
-# Mighty Alpha — American Express
+# Mighty Alpha / Invite cohort — American Express
 
-**For trusted testers only.** This guide walks you through the one flow we're validating: Gmail → Amex discovery → login → real data on Home.
+**For invite-only testers.** One vertical: **Install Mighty in Chrome → Visit Amex → see your first insight.** Gmail discovery is an optional enhancement after that first insight — not required for onboarding.
 
-**App:** https://mighty-selfserve-production.up.railway.app
+**App:** https://mighty-selfserve-production.up.railway.app  
+**Founder one-pager:** [docs/FOUNDER_TEST_CARD.md](docs/FOUNDER_TEST_CARD.md)  
+**Limitations:** See [docs/BETA_INVITE_BRIEF.md](docs/BETA_INVITE_BRIEF.md) and [docs/BETA_MLP.md](docs/BETA_MLP.md) §7.
 
 ---
 
 ## Before you start
 
-1. **Desktop Chrome** (not mobile Safari — the extension is required).
-2. **Install Mighty Sync** — load the unpacked extension from the repo's `extension/` folder (ask Jonathan for the latest build if needed).
-3. **Sign up** at the app URL above.
-4. **Configure the extension once:** after login, visit **Settings → Setup Chrome Extension** (or go to `/extension-setup`). The page auto-configures your API key.
+1. **Desktop Chrome** (not mobile Safari — Mighty in Chrome is required for updates).
+2. **Sign up** at the app URL with the email you were invited with.
+3. Keep this guide open for the Chrome install steps (also shown in-product on `/extension-setup`).
+4. Have your **American Express** login ready (User ID + password + 2FA as required).
 
-You need a Gmail account that receives **American Express** emails (statements, alerts, marketing — any message from `@americanexpress.com` counts).
-
----
-
-## The flow (~5 minutes)
-
-### 1. Connect Gmail
-
-- Go to **Accounts** → **Scan Gmail to find accounts** (or `/email-scan`).
-- Click **Gmail** and approve read-only access.
-
-**What should happen:** Mighty scans your inbox, finds Amex, and **automatically** opens the Amex connect screen. You should **not** need to click Add or pick Amex from a list.
-
-### 2. Connect American Express
-
-- The connect modal opens for **American Express**.
-- Click **Open in Chrome →** and log into Amex normally (User ID + password, 2FA if prompted).
-- Keep the Mighty tab open in the background.
-
-**What should happen:** The modal moves from "Waiting for extension…" → **Connected** → redirects to **Home**.
-
-### 3. See your real data on Home
-
-- On **Home** (`/dashboard`), find the **American Express** account card.
-- It should show **Membership Rewards Points** with your actual balance (e.g. `142,500`).
-- The Daily Brief at the top should show **your real data** — no fake Marriott free nights, demo dollar totals, or "Demo" tags.
-
-**What should happen:** Home reloads automatically within ~8 seconds of extraction. You should not need to click Sync or refresh manually.
+Gmail is **not** required to complete the Amex beta path.
 
 ---
 
-## What we're testing
+## The flow (~10–15 minutes)
 
-| Step | Success looks like |
-|------|-------------------|
-| Gmail scan | Redirects straight to Amex connect |
-| Amex login | Modal shows "Connected" without entering password into Mighty |
-| Extraction | MR points appear on the account card |
-| Home | Truthful brief — no placeholder/demo content |
-| Auto-update | Home refreshes when extraction completes |
+### 1. Set up Mighty in Chrome
 
----
+- After signup you land on **Set up Mighty in Chrome** (`/extension-setup`).
+- Confirm you’re in a **normal Chrome window** (not Incognito or Guest).
+- Download → unzip → `chrome://extensions` → Developer mode → **Load unpacked** → pin Mighty.
+- Click **I’ve installed Mighty** and wait until it confirms connected.
 
-## If something breaks
+**What should happen:** American Express is already enrolled for watching. Chrome is ready before your first visit.
 
-**Gmail card is greyed out**  
-OAuth isn't configured on the server. Tell Jonathan — don't use IMAP for this test.
+### 2. Visit American Express
 
-**"Waiting for extension…" never resolves**  
-- Confirm the extension is installed and you visited `/extension-setup` while logged in.
-- Chrome → Extensions → Mighty Sync → **Reload** after any update.
+- Continue to **Home**. Primary ask: **Visit American Express**.
+- Open Amex in Chrome and sign in on americanexpress.com (including 2FA).
+- Keep the Mighty tab available in the background.
 
-**Amex modal says "Needs login"**  
-Finish logging in on the Amex tab. Make sure you're on `americanexpress.com`, not a third-party wallet app.
+**What should happen:** Mighty discovers useful account information (for example rental-car status benefits) and shows your first insight on Home. You are not asked for an Amex password inside Mighty.
 
-**Connected but no points on Home**  
-- Visit your Amex account home or Membership Rewards page while logged in.
-- Wait ~30 seconds; Home should auto-reload.
-- If still empty, note the Amex URL you landed on and send a screenshot to Jonathan.
+### 3. See your first insight
 
-**Home shows demo content (Marriott cert, $1,240, "Demo" tag)**  
-That's a bug — screenshot and report. Real data should suppress all demo content.
+- Return to Home. Expect a clear insight card (or “Checking American Express…” while a refresh runs).
+- If refresh fails, previous information stays; use **Refresh from American Express** if offered.
 
----
+### 4. Optional — Find more from Gmail
 
-## What to send back
+- Only after your first insight, Home may offer **Find more accounts from Gmail**.
+- Open `/email-scan` if you want mail-based discovery of other programs.
+- Skip this entirely if Amex is all you care about for the beta.
 
-After completing the flow, reply with:
+### 5. Return later
 
-1. **Did the magic moment land?** (yes/no — MR points on Home without manual refresh)
-2. **Your MR balance** as shown (or "missing")
-3. **Any step that confused you**
-4. **Screenshots** of Home and the connect modal if anything failed
+- Open Home again. Expect either **You’re good** or **one clear ask** — not a stack of equal primaries.
 
 ---
 
-## Out of scope for this alpha
+## If something stalls
 
-- Other providers (Delta, Marriott, Chase, etc.)
-- Mobile app
-- Credits, balances, or payment due dates (only MR points for now)
-- Notifications or Activity feed
+| Symptom | Try |
+|---------|-----|
+| Extension not detected | Finish install steps on `/extension-setup`, reload that page |
+| Home asks to visit Amex | Sign in at americanexpress.com in the same Chrome profile with Mighty loaded |
+| Optional Gmail OAuth cancel | Return later via Home’s optional CTA or `/email-scan` — not required |
+| Locked out of Mighty password | Contact beta support (invite brief) — do not expect reset if mailer is down |
 
-Thank you for testing.
+**Support:** See invite brief for the named channel.

@@ -138,12 +138,15 @@ class TestHomeV2Ui:
             today_label="Friday, July 3",
             escape=_escape,
         )
-        assert "Your accounts, watched quietly." in rendered
-        assert "Connect Gmail" in rendered
+        assert "Set up Mighty in Chrome." in rendered
+        assert "Gmail is optional later" in rendered
+        assert "Set up Mighty in Chrome" in rendered
+        assert "Connect Gmail" not in rendered
         assert "home-v2" in rendered
         assert 'data-state="empty"' in rendered
         assert "mds-quiet-field" in rendered
         assert "mds-btn--primary" in rendered
+        assert 'href="/extension-setup"' in rendered
 
     def test_healthy_state_calm_earned_evidence(self):
         view = build_customer_account_access_view(

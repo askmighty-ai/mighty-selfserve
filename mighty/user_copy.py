@@ -565,11 +565,12 @@ ONBOARDING_CHROME_LINE = (
 )
 SIGNUP_HEADLINE = "Let's get started."
 SIGNUP_SUB = (
-    "Create your Mighty account. You’ll choose what Mighty monitors next."
+    "Create your Mighty account. Next you’ll install Mighty in Chrome, "
+    "visit American Express, and see your first insight."
 )
 SIGNUP_CTA = "Create account"
 SIGNUP_REASSURE = (
-    "Mighty does not monitor anything until you choose which accounts to watch."
+    "You sign in at American Express in Chrome — Mighty never asks for your Amex password."
 )
 SIGNUP_PASSWORD_HELPER = "At least 6 characters."
 SIGNUP_DUPLICATE_TITLE = "An account with that email already exists."
@@ -728,17 +729,21 @@ def connect_steps_html(*, step2_extra: str = "") -> str:
 
 
 # ── Home (attention inbox) ───────────────────────────────────────────────────
-HOME_EMPTY_HEADLINE = "Your accounts, watched quietly."
+HOME_EMPTY_HEADLINE = "Set up Mighty in Chrome."
 HOME_EMPTY_BODY = (
-    "Mighty finds airlines, hotels, and card programs from your Gmail and keeps them current "
-    "while you browse in Chrome. You sign in when asked — Mighty handles the rest."
+    "Install Mighty in Chrome, visit American Express while signed in, "
+    "and see your first account insight. Gmail is optional later."
 )
 HOME_EMPTY_WORKER_NOTE = (
-    "Use desktop Chrome with Mighty in Chrome when it is time to verify access. "
+    "Use desktop Chrome with Mighty in Chrome when an account needs a visit. "
     "Home shows results; it never logs into provider sites for you."
 )
-HOME_EMPTY_CTA = "Connect Gmail"
+HOME_EMPTY_CTA = "Set up Mighty in Chrome"
 HOME_EMPTY_SECONDARY = "Add an account manually"
+HOME_OPTIONAL_GMAIL_CTA = "Find more accounts from Gmail"
+HOME_OPTIONAL_GMAIL_BODY = (
+    "Optional: connect Gmail so Mighty can suggest other programs you already use."
+)
 
 HOME_WAITING_BODY = (
     "Visit your account page in Chrome while signed in — Mighty in Chrome captures "

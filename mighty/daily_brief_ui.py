@@ -466,8 +466,9 @@ def render_executive_briefing_hero(
     if briefing.show_onboard_cta:
         onboard_html = (
             f'<div class="dash-brief-onboard-cta">'
-            f'<a href="/email-scan" class="dash-brief-onboard-primary">Connect Gmail</a>'
-            f'<a href="/credentials" class="dash-brief-onboard-secondary">Connect manually</a>'
+            f'<a href="/extension-setup" class="dash-brief-onboard-primary">'
+            f'Set up Mighty in Chrome</a>'
+            f'<a href="/credentials" class="dash-brief-onboard-secondary">Add an account manually</a>'
             f'</div>'
         )
 

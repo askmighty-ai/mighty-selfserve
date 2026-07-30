@@ -77,7 +77,7 @@ Use **desktop Chrome** with the Mighty worker installed. The dashboard shows res
 
 ### Primary CTA
 
-**Connect Gmail**
+**Set up Mighty in Chrome**
 
 ### Secondary CTA
 
@@ -493,17 +493,13 @@ Mighty works quietly. Notifications extend Home — they do not replace it or na
 
 ```mermaid
 flowchart LR
-    A[Sign up] --> B[Empty]
-    B -->|Connect Gmail| C[Waiting]
-    C -->|Set up worker if needed| C
-    C -->|Visit provider logged in| D[Update]
-    D -->|Data captured| E{Value surfaced?}
-    E -->|Yes| F[Recommendation]
-    E -->|No| G[All clear]
-    F -->|Dismiss / act| G
-    G -->|Session expires| H[Login]
-    H -->|Log in| D
-    D --> G
+    A[Sign up] --> B[Extension setup]
+    B -->|Chrome ready| C[Waiting]
+    C -->|Visit Amex signed in| D[First insight]
+    D -->|Optional Gmail| E[Find more accounts]
+    D --> F[All clear]
+    F -->|Session expires| G[Login]
+    G -->|Log in| C
 ```
 
 **Success criteria for onboarding:** User sees real data on Home without clicking Sync, understands Chrome's role, and knows that login is the only manual step.

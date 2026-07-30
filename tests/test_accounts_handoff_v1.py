@@ -63,12 +63,19 @@ def client(tmp_path, monkeypatch):
     return c
 
 
-def test_empty_home_is_gmail_first_not_chrome_setup():
+def test_empty_home_is_chrome_first_not_gmail():
     result = resolve_home_state(accounts=[])
     assert result.state == HomeState.EMPTY
     assert result.featured.cta_label == user_copy.HOME_EMPTY_CTA
-    assert result.featured.cta_url == "/email-scan"
-    assert "extension-setup" not in (result.featured.cta_url or "")
+    assert result.featured.cta_url == "/extension-setup"
+    assert "email-scan" not in (result.featured.cta_url or "")
+    assert "Gmail" not in (result.featured.cta_label or "")
+
+
+def test_empty_home_copy_is_extension_first():
+    result = resolve_home_state(accounts=[])
+    assert "Chrome" in (result.featured.headline or "")
+    assert "Gmail is optional" in (result.featured.body or "")
 
 
 def test_handoff_confirmation_names_account_and_next_step():
@@ -116,7 +123,7 @@ def test_handoff_verifying_has_no_primary_cta():
     )
     assert result.state == HomeState.WAITING
     assert result.featured.cta_label is None
-    assert "do not need to do anything" in (result.featured.body or "").lower()
+    assert "active check" in (result.featured.body or "").lower() or "do not need to do anything" in (result.featured.body or "").lower()
 
 
 def test_ready_home_says_youre_good_without_primary_cta():
@@ -185,13 +192,13 @@ def test_home_requests_mighty_in_chrome_when_enrolled_without_extension(client):
             uid, {"items": [], "sync_status": "needs_first_visit"},
         )
         db.execute(
-            "INSERT INTO account_credentials "
+            "INSERT OR IGNORE INTO account_credentials "
             "(user_id, source, username_enc, password_enc, extra_enc, created_at, updated_at) "
             "VALUES (?,?,?,?,?,?,?)",
             (uid, "amex", "", "", "", now, now),
         )
         db.execute(
-            "INSERT INTO account_data "
+            "INSERT OR REPLACE INTO account_data "
             "(user_id, source, display_name, icon, color, data_enc, synced_at, "
             "connection_status, sync_status) VALUES (?,?,?,?,?,?,?,?,?)",
             (

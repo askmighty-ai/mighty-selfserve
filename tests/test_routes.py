@@ -110,6 +110,39 @@ def test_all_app_href_targets_are_registered(client):
     assert not missing, f"Navigation links to unregistered routes: {missing}"
 
 
+def test_signup_redirects_to_extension_setup(client, monkeypatch):
+    import secrets
+    import app as mighty
+
+    monkeypatch.setattr(mighty, "GOOGLE_CLIENT_ID", "test-client")
+    monkeypatch.setattr(mighty, "GOOGLE_CLIENT_SECRET", "test-secret")
+    with client.session_transaction() as sess:
+        sess.clear()
+    client.get("/signup")
+    with client.session_transaction() as sess:
+        csrf = sess["_csrf"]
+    r = client.post(
+        "/signup",
+        data={
+            "email": f"signup_chrome_{secrets.token_hex(4)}@test.local",
+            "password": "pass12345",
+            "_csrf": csrf,
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code in (301, 302, 303, 307, 308)
+    assert (r.headers.get("Location") or "").endswith("/extension-setup")
+    with mighty.app.app_context():
+        with client.session_transaction() as sess:
+            uid = sess["user_id"]
+        db = mighty.get_db()
+        row = db.execute(
+            "SELECT 1 FROM account_credentials WHERE user_id=? AND source='amex'",
+            (uid,),
+        ).fetchone()
+        assert row is not None
+
+
 def test_signup_redirects_to_dashboard(client):
     r = client.get("/dashboard", follow_redirects=False)
     assert r.status_code == 200
