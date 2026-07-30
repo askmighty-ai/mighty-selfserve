@@ -221,7 +221,8 @@ EXT_PRODUCT_NAME = "Mighty in Chrome"
 EXT_SETUP_LINK = "Set up Mighty in Chrome"
 EXT_SETUP_TITLE = "Connect Mighty in Chrome"
 EXT_SETUP_BODY = (
-    "Mighty in Chrome only works in a normal Chrome window — not Incognito or Guest. "
+    "Mighty in Chrome is how American Express account intelligence starts. "
+    "It only works in a normal Chrome window — not Incognito or Guest. "
     "Confirm that first, install, then ask Mighty to check."
 )
 EXT_SETUP_CONTEXT_HEADING = "Before you install"
@@ -232,6 +233,9 @@ EXT_SETUP_CONTEXT_LEDE = (
 )
 EXT_SETUP_CONTEXT_CONFIRM = (
     "I’m in a normal Chrome window (not Incognito, not Guest)"
+)
+EXT_SETUP_CONTEXT_UNLOCK = (
+    "Check this to unlock download and install steps."
 )
 EXT_SETUP_CONTEXT_BLOCKED = (
     "This looks like Incognito or a restricted window. "
@@ -256,6 +260,7 @@ EXT_SETUP_RELOAD_HINT = (
     "Already installed? Reload Mighty on chrome://extensions in this same "
     "normal window, then use I’ve installed Mighty."
 )
+EXT_SETUP_CONNECTION_LABEL = "Mighty in Chrome"
 EXT_SETUP_HEARTBEAT_LISTENING = "Listening for Mighty in Chrome…"
 EXT_SETUP_HEARTBEAT_SEEN = "Heartbeat received"
 EXT_SETUP_HEARTBEAT_NONE = "No heartbeat yet"
@@ -264,7 +269,10 @@ EXT_SETUP_VERIFYING = "Checking for Mighty in Chrome…"
 EXT_SETUP_WAITING = "Waiting for Mighty in Chrome…"
 EXT_SETUP_SUCCESS = "Mighty in Chrome is connected"
 EXT_SETUP_CONTINUE = "Continue to Home"
-EXT_SETUP_CONTINUE_HINT = "You can go to Home and finish this later."
+EXT_SETUP_CONTINUE_HINT = (
+    "Next on Home: visit American Express while signed in to see your first insight. "
+    "You can finish Chrome setup later if needed."
+)
 EXT_SETUP_NOT_DETECTED = (
     "Mighty still doesn’t see a heartbeat from the extension."
 )
