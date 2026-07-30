@@ -154,7 +154,7 @@ def _render_historical(
         )
     return (
         f'<section class="dash-truth-historical" aria-label="Previous confirmed result">'
-        f'{"".join(parts)}'
+        f'{str().join(parts)}'
         f"</section>"
     )
 
@@ -279,7 +279,7 @@ def _render_timeline_sections(
     return (
         f'<details class="dash-truth-timeline">'
         f"<summary>Truth Timeline</summary>"
-        f'{"".join(bodies)}'
+        f'{str().join(bodies)}'
         f"</details>"
     )
 
@@ -359,7 +359,7 @@ def _render_extension_diagnostics(
     return (
         f'<div class="dash-truth-tech-block" data-extension-diagnostics="1">'
         f'<p class="dash-truth-section-label">Extension</p>'
-        f'{"".join(lines)}'
+        f'{str().join(lines)}'
         f"</div>"
     )
 
@@ -409,7 +409,7 @@ def _render_technical_details(
         pipeline_html = (
             f'<div class="dash-truth-tech-block dash-truth-pipeline">'
             f'<p class="dash-truth-section-label">Pipeline</p>'
-            f'{"".join(body_parts)}'
+            f'{str().join(body_parts)}'
             f"</div>"
         )
 
@@ -958,7 +958,7 @@ def _render_quiet_field_region(
         f'data-field-state="{escape(state)}">'
         f'<div class="mds-quiet-field{breathe}">'
         f'<div class="mds-quiet-field__horizon"></div>'
-        f'<div class="mds-quiet-field__points">{"".join(points)}</div>'
+        f'<div class="mds-quiet-field__points">{str().join(points)}</div>'
         f'<p class="mds-meta home-v2__field-meta" '
         f'style="position:relative;z-index:1;margin:0;color:rgba(244,239,230,0.72)">'
         f"{escape(meta)}</p>"
@@ -1128,7 +1128,7 @@ def _render_primary_message(
     )
     return (
         f'<section class="home-v2__message" aria-label="Primary message">'
-        f'<div class="home-v2__chrome" aria-label="Status">{"".join(chrome)}</div>'
+        f'<div class="home-v2__chrome" aria-label="Status">{str().join(chrome)}</div>'
         f"{hero}"
         f"</section>"
     )
@@ -1154,7 +1154,7 @@ def _render_evidence_region(
             f"<span>{escape(item.label)}</span>"
             f"</li>"
         )
-    content = f'<ul class="home-v2__evidence-list">{"".join(rows)}</ul>'
+    content = f'<ul class="home-v2__evidence-list">{str().join(rows)}</ul>'
     return render_section(
         title=user_copy.HOME_V2_EVIDENCE_LABEL,
         content=content,
@@ -1181,7 +1181,8 @@ def _render_activity_preview(
                 )
             else:
                 items.append(f'<li class="home-v2__activity-item">{body}</li>')
-        content = f'<ul class="home-v2__activity-list">{"".join(items)}</ul>'
+        joined_items = "".join(items)
+        content = f'<ul class="home-v2__activity-list">{joined_items}</ul>'
     elif visual_state == "healthy":
         content = (
             f'<p class="home-v2__activity-empty">'
